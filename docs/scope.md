@@ -82,9 +82,9 @@ The tool runs as root on a fresh box, so we must think about how *it* could hurt
 
 | Threat | Mitigation |
 |---|---|
-| Malicious or compromised release binary | Cosign keyless signatures, SLSA L3 provenance, immutable GitHub releases, reproducible builds ([the release doc](release.md)) |
+| Malicious or compromised release binary | Cosign keyless signatures, SLSA provenance (L2 today, L3 the target), immutable GitHub releases, reproducible builds ([the release doc](release.md)) |
 | Compromised install script | Script generated per release with hashes embedded; recommend download → read → run |
-| Compromised dependency | Small allowlist of crates, `cargo-deny` + `cargo-audit` (RustSec) in CI, Dependabot with a `cooldown` period, 2-maintainer CODEOWNERS on critical paths |
+| Compromised dependency | Small allowlist of crates, `cargo-deny` + `cargo-audit` (RustSec) in CI, Dependabot with a `cooldown` period, 2-maintainer CODEOWNERS on critical paths (once there are two maintainers) |
 | The tool locks the user out (availability) | Invariants plus dead-man switch plus VM tests of the revert path |
 | The tool *weakens* security by mistake (e.g. a firewall rule that's too open) | Post-apply audit re-runs every control; snapshot tests (`insta`) of rendered configs |
 | Secrets leaking in logs or backups | Backups in `/var/lib/vps-ready` with mode `0700`; never log private key material; redact tokens (e.g. Tailscale auth keys) |

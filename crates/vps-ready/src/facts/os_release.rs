@@ -2,7 +2,7 @@
 //!
 //! The format is a list of `KEY=VALUE` lines. Values may be unquoted, or
 //! enclosed in single or double quotes; inside double quotes and in unquoted
-//! values the escapes `\"`, `\\`, `\$` and `` \` `` are honoured, following
+//! values the escapes `\"`, `\\`, `\$` and `` \` `` are honored, following
 //! shell rules. Blank lines and lines starting with `#` are ignored, as are
 //! malformed lines (bad key, unterminated quote), so a single odd line never
 //! hides the rest of the file.

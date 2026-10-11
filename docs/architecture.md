@@ -4,7 +4,7 @@
 
 | | Rust | Go | Bash | Python |
 |---|---|---|---|---|
-| Static binary incl. Alpine/musl + arm64 | Yes: `x86_64-` / `aarch64-unknown-linux-musl` targets; arm64 needs a cross linker or an arm64 runner | Yes: `CGO_ENABLED=0 GOARCH=arm64` | n/a (but bash is missing on Alpine; busybox vs GNU differences) | No: not present on Alpine/minimal Debian |
+| Static binary incl. Alpine/musl + arm64 | Yes: `x86_64-` / `aarch64-unknown-linux-musl` targets; both targets link with `rust-lld` and the bundled musl CRT; no cross toolchain or arm64 runner needed | Yes: `CGO_ENABLED=0 GOARCH=arm64` | n/a (but bash is missing on Alpine; busybox vs GNU differences) | No: not present on Alpine/minimal Debian |
 | TUI | `inquire` (forms), `ratatui` (plan/diff view) | Charm `huh` (forms), `bubbletea` | whiptail (not everywhere) | textual (needs a runtime) |
 | Who can read and contribute | Smaller among sysadmins, growing (sudo-rs, uutils coreutils) | Large infra crowd (Docker, k8s, Terraform, Tailscale, CrowdSec are Go) | Everyone, but quality varies | Ansible people |
 | Plan/diff/rollback/state machine | Best fit: exhaustive `match` means a new state or label doesn't compile until every use handles it | Comfortable, but a missing `switch` case compiles silently | Collapses at this size | Comfortable |
@@ -24,7 +24,7 @@
 - **Slower compiles** than Go. Mitigation: one app crate, a short dependency list, `cargo check` in the inner loop.
 - **Release tooling is less turnkey** than GoReleaser. We hand-write the release workflow (see [the release doc](release.md) and [D16](decisions.md)).
 
-**Shell is used for exactly one thing:** the ~100-line POSIX `install.sh`.
+**Shell is used only for** the POSIX `install.sh` (about 150 lines) and the fixture-capture script under `test/`.
 
 > Learning note: this project exercises the core of Rust without the hard corners: traits and trait objects (`Box<dyn Resource>`), enums with data plus `match`, error types with `thiserror`, `std::process::Command`, compile-time templates with `askama`, and testing with fakes behind a Cargo feature. No async, no lifetimes beyond the simple ones.
 
@@ -48,6 +48,8 @@ Each layer only calls the one below it. The bottom layer, `sys`, is the only cod
 
 Two traits, and nothing else in the codebase is allowed to run a process or touch a file directly:
 
+Target design. Today `Fs` is read-only (`read`, `exists`, `read_dir`, `metadata`; see `crates/vps-ready/src/sys/mod.rs`); writes arrive with the engine in M2.
+
 ```rust
 pub trait Runner {
     fn run(&self, cmd: &Cmd) -> Result<Output, SysError>;   // Cmd = program, args, env, timeout
@@ -61,16 +63,16 @@ pub trait Fs {                                              // every path is res
     // ... remove, read_dir
 }
 ```
-- `RealRunner` uses `std::process::Command` and kills the child if it exceeds its timeout. `RealFs` is rooted at `/` and uses `rustix` for `fsync` and `flock`.
-- `FakeRunner` (matches argv, returns canned output) and `FakeFs` (rooted at a temp dir) live behind the `testing` Cargo feature, so integration tests can use them but release binaries don't contain them.
+- `RealRunner` uses `std::process::Command` and kills the child if it exceeds its timeout. `RealFs` is rooted at `/`; `rustix` for `fsync` and `flock` is planned with the engine.
+- `FakeRunner` (matches argv, returns canned output) and `FakeFs` (an in-memory map of paths to contents) live behind the `testing` Cargo feature, so integration tests can use them but release binaries don't contain them.
 - `Sys` bundles both, so higher layers take one `&dyn Sys` argument.
 
 ### Facts (`src/facts`)
 Detection runs once, read-only, into a typed `Facts` struct (`serde` `Serialize`, so `detect --json` is free):
 - OS family from `/etc/os-release` (`ID`, `ID_LIKE`, `VERSION_ID`)
 - init from `/proc/1/comm`
-- virtualization and container (`systemd-detect-virt`, `/.dockerenv`, DMI)
-- cloud provider (`cloud-id`, `/run/cloud-init/instance-data.json`, DMI vendor strings)
+- virtualization and container (`systemd-detect-virt`, `/.dockerenv`, DMI (planned))
+- cloud provider (`cloud-id`, `/run/cloud-init/instance-data.json`, DMI vendor strings) (planned)
 - effective sshd config (`sshd -T`), listening sockets, admin IP from `SSH_CONNECTION`, Docker present
 
 `Facts` is plain data with no methods that touch the system, so a test can build one by hand for any distro.
@@ -248,7 +250,7 @@ Commands that read this: `history`, `rollback [--txn|--last]`, `drift`.
 
 ## CLI surface (v1)
 
-Commands are `clap` derive structs in `src/cli`. At M0 only `version` and `detect` exist; the rest arrive with their milestones (see the GitHub milestones).
+Commands are `clap` derive structs in `src/cli`. Today `version`, `detect` and `audit` exist; the rest arrive with their milestones (see the GitHub milestones).
 
 ```
 vps-ready                      interactive wizard (default when a TTY)
@@ -310,17 +312,19 @@ crates/
     src/cli/               clap derive commands
     src/sys/               Runner + Fs traits; RealRunner/RealFs; FakeRunner/FakeFs (feature "testing")
     src/facts/             read-only detection into a `Facts` struct (serde)
-    src/platform/          PkgManager, ServiceManager, Firewall, Sshd traits + per-family data tables
-    src/resource/          Resource trait (id, current, diff, snapshot, apply, restore, reversibility)
-    src/engine/            plan, diff, txn, journal, deadman, lock
+    src/platform/          PkgManager, ServiceManager, Firewall, Sshd traits + per-family data tables (planned)
+    src/resource/          Resource trait (id, current, diff, snapshot, apply, restore, reversibility) (planned)
+    src/engine/            plan, diff, txn, journal, deadman, lock (planned)
     src/audit/             controls catalog (controls/*.toml), evaluation, report
-    src/modules/<name>/    mod.rs + templates/
-    src/config/            TOML profiles, strict deserialize (deny_unknown_fields), JSON Schema via schemars
-    src/report/            text | json | sarif | junit
-    src/tui/               (M4) inquire forms, ratatui plan/diff view
-  sshd-config/             (added at M3) parser + linter for sshd_config and `sshd -T`; publishable to crates.io
-profiles/                  minimal.toml  web.toml  paranoid.toml
-test/                      images/<distro>/Containerfile  integration/  vm/
+    src/modules/<name>/    mod.rs + templates/ (planned)
+    src/config/            TOML profiles, strict deserialize (deny_unknown_fields), JSON Schema via schemars (planned)
+    src/report/            text | json | sarif | junit (planned)
+    src/tui/               (planned, M4) inquire forms, ratatui plan/diff view
+  vpsready/                alias crate: the same command under the name `vpsready`
+  sshd-config/             (planned, M3) parser + linter for sshd_config and `sshd -T`; publishable to crates.io
+profiles/                  (planned) minimal.toml  web.toml  paranoid.toml
+test/                      images/Containerfile (one file, `BASE` build arg)  capture-host-fixtures.sh
+                           (planned: integration/  vm/)
 scripts/                   install.sh.tmpl
 docs/
 .github/workflows/         ci.yml codeql.yml scorecard.yml release.yml

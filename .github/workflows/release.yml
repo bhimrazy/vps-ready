@@ -133,10 +133,8 @@ jobs:
           gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
 
   # crates.io trusted publishing: the auth action trades GitHub's OIDC identity
-  # for a short-lived token, so no long-lived secret is stored. A new crate's
-  # first version cannot use it, so if the crates-io environment has a
-  # CARGO_REGISTRY_TOKEN secret, that is used instead; delete the secret once
-  # trusted publishing is configured on crates.io.
+  # for a short-lived token, so no secret is stored. It cannot create a crate;
+  # each crate's first version was published by hand (see docs/release.md).
   crates:
     needs: release
     runs-on: ubuntu-latest
@@ -144,8 +142,6 @@ jobs:
     permissions:
       contents: read
       id-token: write # trusted publishing
-    env:
-      HAS_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN != '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -155,8 +151,7 @@ jobs:
           toolchain: stable
       - uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
         id: auth
-        if: env.HAS_TOKEN != 'true'
       # Publishes vps-ready first, then the vpsready alias that depends on it.
       - run: cargo publish --workspace --locked
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN || steps.auth.outputs.token }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

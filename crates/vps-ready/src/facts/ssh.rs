@@ -99,7 +99,7 @@ pub(super) fn detect(runner: &dyn Runner, notices: &mut Vec<String>) -> Ssh {
 }
 
 /// `ssh -V` prints e.g. `OpenSSH_9.6p1 Ubuntu-3ubuntu13.19, OpenSSL ...` to
-/// stderr. The client and server come from the same package on every
+/// stderr. The client and server come from the same source package and version on every
 /// supported distro, so this is also the server version.
 fn version(runner: &dyn Runner, notices: &mut Vec<String>) -> Option<String> {
     match probe(runner, &Cmd::new("ssh").arg("-V"), notices) {
@@ -111,7 +111,7 @@ fn version(runner: &dyn Runner, notices: &mut Vec<String>) -> Option<String> {
             };
             let version = parse_version(&String::from_utf8_lossy(text));
             if version.is_none() {
-                notices.push("unrecognised `ssh -V` output; OpenSSH version is unknown".to_owned());
+                notices.push("unrecognized `ssh -V` output; OpenSSH version is unknown".to_owned());
             }
             version
         }

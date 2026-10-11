@@ -92,7 +92,7 @@ AllowGroups sshusers        # add admin + deploy to the group FIRST
 
 ### Firewall
 
-**Policy:** deny inbound, allow outbound, allow established/loopback/ICMP. **Never block ICMPv6** (neighbour discovery and path-MTU discovery need it). **Allow SSH before enabling.**
+**Policy:** deny inbound, allow outbound, allow established/loopback/ICMP. **Never block ICMPv6** (neighbor discovery and path-MTU discovery need it). **Allow SSH before enabling.**
 
 | Family | How | Safety net |
 |---|---|---|

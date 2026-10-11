@@ -143,7 +143,7 @@ main() {
 	chmod 0755 "$prefix/.vps-ready.new"
 	mv -f "$prefix/.vps-ready.new" "$prefix/vps-ready"
 	# The same command without the hyphen.
-	ln -sf vps-ready "$prefix/vpsready"
+	ln -sfn vps-ready "$prefix/vpsready"
 	say "installed $prefix/vps-ready (also available as vpsready)"
 	"$prefix/vps-ready" version
 }

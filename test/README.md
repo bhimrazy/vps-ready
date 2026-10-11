@@ -1,15 +1,7 @@
 # Tests
 
-`vps-ready` is tested in four layers, from fastest to most realistic:
-
-1. **Unit tests** (`cargo test`): parsers and planners against the fakes in
-   `crates/vps-ready/src/sys/fake.rs`, plus `insta` snapshots.
-2. **Fixture tests**: `detect`/`audit` against file trees under
-   `crates/vps-ready/testdata/`, read through a rooted `RealFs`.
-3. **Container tests**: the static binary inside distro containers, for
-   anything that reads or changes the system without touching SSH or the network.
-4. **VM tests**: full VMs for SSH, firewall, the engine and the dead-man switch,
-   where a lockout must be observable and recoverable.
+The test layers are described in [docs/testing.md](../docs/testing.md). This
+directory holds the host fixtures and the tooling to re-capture them.
 
 ## Host fixtures
 
@@ -25,4 +17,4 @@ test/capture-host-fixtures.sh debian-13
 ```
 
 Re-capture when a probe's argv changes, then review the snapshot diff with
-`cargo insta review`. Running the container tests in CI comes next; VM tests in M3.
+`cargo insta review`.

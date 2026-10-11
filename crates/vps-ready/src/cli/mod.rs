@@ -24,7 +24,7 @@ pub const EXIT_AUDIT_FAILED: u8 = 1;
 /// Exit code for errors, the same code clap uses for usage errors.
 pub const EXIT_ERROR: u8 = 2;
 
-/// Detect, audit and safely harden a fresh Linux VPS.
+/// Command-line arguments of `vps-ready`.
 #[derive(Debug, Parser)]
 #[command(name = "vps-ready", version, about, long_about = None)]
 pub struct Cli {
@@ -36,7 +36,7 @@ pub struct Cli {
     #[arg(short, long, global = true, action = ArgAction::Count)]
     pub verbose: u8,
 
-    /// Disable colored output (also honoured: the `NO_COLOR` environment variable).
+    /// Disable colored output (also honored: the `NO_COLOR` environment variable).
     #[arg(long, global = true)]
     pub no_color: bool,
 

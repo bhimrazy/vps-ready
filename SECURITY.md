@@ -39,7 +39,7 @@ Once released, the latest minor version receives security fixes.
 ## Verifying a release
 
 Every release ships `checksums.txt`, a Sigstore bundle for it, and a GitHub
-build-provenance attestation for each tarball.
+build-provenance attestation for each tarball and for `install.sh`.
 
 ```sh
 # 1. Checksums

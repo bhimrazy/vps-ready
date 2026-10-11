@@ -1,11 +1,10 @@
 //! `vps-ready`: make a fresh Linux VPS ready for production, safely.
 //!
 //! `vps-ready` is a single static binary that runs as root on a freshly
-//! provisioned Linux server. It detects the system, audits it against a
-//! catalogue of controls, plans hardening changes, and applies them with
-//! snapshots and rollback. Changes that can lock you out (SSH, firewall) are
-//! guarded by a dead-man switch: they are reverted automatically unless you
-//! confirm them from a *new* SSH session.
+//! provisioned Linux server. Today it detects the system and audits it
+//! against a catalog of controls. Planned: plan and apply hardening with
+//! snapshots and rollback, with a dead-man switch for changes that can lock you
+//! out (SSH, firewall).
 //!
 //! Non-goals: fleet management, a web UI, and self-update.
 //!

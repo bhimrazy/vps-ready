@@ -1,6 +1,6 @@
 [package]
 name = "vps-ready"
-description = "Detect, audit and safely harden a fresh Linux VPS, with snapshots, rollback and an SSH dead-man switch."
+description = "Detect and audit a fresh Linux VPS. Safe hardening with rollback is planned."
 categories = ["command-line-utilities"]
 keywords = ["vps", "hardening", "security", "ssh", "linux"]
 readme = "../../README.md"

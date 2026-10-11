@@ -1,6 +1,6 @@
 # Decisions and open questions
 
-## Decided (recommended; revisit if you disagree)
+## Decided
 
 | # | Decision | Why | Alternative considered |
 |---|---|---|---|
@@ -14,9 +14,9 @@
 | D8 | **Read-only `audit` ships first** (v0.1) | Useful immediately, zero risk, builds trust | Ship apply first |
 | D9 | **Ubuntu/Debian → RHEL → Alpine** | Most VPS images are Ubuntu/Debian | All at once |
 | D10 | **MIT OR Apache-2.0, DCO, no CLA** | Rust-standard dual license: Apache patent grant, MIT for GPLv2 compatibility, embeddable by providers | Apache-2.0 only, GPL-3.0 |
-| D11 | **Signed + reproducible releases, SLSA L3, immutable releases, no self-update** | Root tool → trust is the product | Plain GitHub releases |
+| D11 | **Signed + reproducible releases, SLSA provenance (L2 today, L3 the target), immutable releases, no self-update** | Root tool → trust is the product | Plain GitHub releases |
 | D12 | **Caddy** default reverse proxy | Auto HTTPS, minimal config | Nginx, Traefik |
-| D13 | **Rust main; Go companion optional and unscheduled** | One language done well beats two done halfway; the M3 `sshd-config` crate already gives a standalone library to practise publishing | Build the first slice in both languages, then pick (dropped) |
+| D13 | **Rust main; Go companion optional and unscheduled** | One language done well beats two done halfway; the M3 `sshd-config` crate already gives a standalone library to practice publishing | Build the first slice in both languages, then pick (dropped) |
 | D14 | **Name `vps-ready` everywhere** (repo, crate, command); `vpsready` is a published alias crate and an install-time command shortcut | One name to remember; owning `vpsready` too (and `vps_ready`, which crates.io treats as the same as `vps-ready`) blocks look-alike crates. Both were free on crates.io as of 2026-10-11 | Different names for repo and command; coined names such as `battenup` (research kept in the planning notes) |
 | D15 | **GitHub owner: personal account `bhimrazy`**; repo private until v0.1.0 | Nothing to show until v0.1.0; no org overhead for a solo project | A new org now. Move to one later if co-maintainers join |
 | D16 | **Release pipeline hand-written** (not cargo-dist) | With only two musl targets, a generated several-hundred-line workflow isn't justified, and every release step of a root tool should be auditable line by line | cargo-dist: still a valid option to revisit if installers or targets multiply |
@@ -30,10 +30,10 @@
 - A Go companion (for example a small `goss`-style checker) stays optional and has no milestone. Start it only if there's time and interest after v0.1.0.
 - The architecture in [the architecture doc](architecture.md) is language-neutral, so nothing in the design depends on this choice.
 
-## Open: you decide
+## Open questions
 
 1. **How opinionated is the default?** One recommended profile ("just make it safe") vs always showing the module picker. *Suggestion:* recommended by default, with "Customize" one keypress away.
 2. **Brute-force default for the web profile:** fail2ban (simple, local) vs CrowdSec (stronger, phones home). *Suggestion:* fail2ban by default, CrowdSec opt-in.
 3. **Should we bundle or call out to ssh-audit/Lynis?** *Suggestion:* port the essential SSH checks natively, and call Lynis only if it's installed.
 4. **Is Tailscale a first-class module** (third-party control plane), or do we offer only WireGuard? *Suggestion:* both, with Tailscale as the easy path.
-5. **Fork or contribute instead?** If hostveil or koncreet look closer to your goals after the labs, contributing is a legitimate choice. The research says the gap is in *trust and quality*, not features.
+5. **Fork or contribute instead?** If hostveil or koncreet look closer to your goals once the first milestones are done, contributing is a legitimate choice. The research says the gap is in *trust and quality*, not features.

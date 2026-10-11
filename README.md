@@ -9,7 +9,7 @@
   <a href="https://github.com/bhimrazy/vps-ready/actions/workflows/ci.yml"><img src="https://github.com/bhimrazy/vps-ready/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="License: MIT OR Apache-2.0"></a>
   <img src="https://img.shields.io/badge/rust-stable%20(MSRV%201.98)-orange.svg" alt="Rust stable, MSRV 1.98">
-  <img src="https://img.shields.io/badge/status-M0%20skeleton-lightgrey.svg" alt="Status: M0 skeleton">
+  <img src="https://img.shields.io/badge/status-M1%20in%20progress-lightgrey.svg" alt="Status: M1 in progress">
 </p>
 
 **vps-ready** is a single static binary you run on a fresh Linux server. It detects what the machine is, audits what is insecure, shows you exactly what it will change, applies the changes safely, and cannot lock you out.
@@ -37,9 +37,11 @@ Auditors like Lynis tell you what is wrong but fix nothing. Ansible roles fix th
 
 ## What it does
 
+Only `version`, `detect` and `audit` exist today; the other commands are planned.
+
 | Command | What happens |
 |---|---|
-| `vps-ready detect` | Read-only facts: distro, init system, virtualization, cloud provider, effective SSH config, listening ports, whether Docker is present |
+| `vps-ready detect` | Read-only facts: distro, init system, virtualization, effective SSH config, listening ports, whether Docker is present |
 | `vps-ready audit` | Checks the host against controls with stable IDs (for example `SSH-002`), each with the reason it matters. Text or JSON; exits 0 only when every control passes |
 | `vps-ready plan` | A diff of every file and setting that would change, with a one-line reason for each |
 | `vps-ready apply` | Snapshots originals, validates, writes atomically, reloads services, and arms a dead-man timer for anything that could lock you out |
@@ -85,7 +87,7 @@ $ ssh root@203.0.113.10
   Auto-revert in 180s if not confirmed.
 ```
 
-The command is also installed as `vpsready`, without the hyphen. Rust users and CI can also use `cargo install vps-ready --locked` (builds from source) or `cargo binstall vps-ready` (fetches the release binary). Signed packages for apt, dnf and apk follow at v0.5. Details and the trust model of each channel are in [the release doc](docs/release.md).
+The command is also installed as `vpsready`, without the hyphen. Rust users and CI can also use `cargo install vps-ready --locked` (builds from source). Signed packages for apt, dnf and apk follow at v0.5. Details and the trust model of each channel are in [the release doc](docs/release.md).
 
 ## How a run works
 
@@ -135,7 +137,7 @@ The roadmap lives in the [GitHub milestones](https://github.com/bhimrazy/vps-rea
 
 ## Development
 
-Install the stable Rust toolchain with [rustup](https://rustup.rs). The repo pins it in `rust-toolchain.toml` (edition 2024, MSRV 1.98) and adds the two musl targets.
+Install [rustup](https://rustup.rs). `rust-toolchain.toml` pins the stable channel plus clippy, rustfmt and the two musl targets; `Cargo.toml` sets edition 2024 and MSRV 1.98.
 
 ```sh
 git clone https://github.com/bhimrazy/vps-ready.git
@@ -146,12 +148,12 @@ cargo run -- detect
 
 | Target | What it does |
 |---|---|
-| `make check` | Everything CI gates on: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, `cargo deny check` |
+| `make check` | The local pre-push check: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, `cargo deny check`. CI also builds the docs, checks the MSRV and builds the musl targets |
 | `make test` | The test suite: unit tests with the fake `Runner` and `Fs`, snapshot tests with `insta` |
 | `make build-musl` | Static release builds for `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` |
 | `make deny` | Dependency checks: advisories, licenses, banned crates and allowed sources |
 
-The code is a Cargo workspace with one app crate (`crates/vps-ready`, library plus thin binary) and, from M3, a standalone `sshd-config` parser crate. All system access goes through two traits, `Runner` and `Fs`, so every module is tested against fakes before it ever touches a real machine. The layout and the reasoning are in [the architecture doc](docs/architecture.md#repo-layout).
+The code is a Cargo workspace with two crates today: `crates/vps-ready` (library plus thin binary) and `crates/vpsready` (the same command under the alias name). A standalone `sshd-config` parser crate is planned for M3. All system access goes through two traits, `Runner` and `Fs`, so every module is tested against fakes before it ever touches a real machine. The layout and the reasoning are in [the architecture doc](docs/architecture.md#repo-layout).
 
 ## Contributing and security
 

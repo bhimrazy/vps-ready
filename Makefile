@@ -1,4 +1,4 @@
-# Developer shortcuts. CI runs the same commands (see .github/workflows/ci.yml).
+# Developer shortcuts. CI runs these checks too, plus more (see .github/workflows/ci.yml).
 MUSL_TARGETS := x86_64-unknown-linux-musl aarch64-unknown-linux-musl
 
 .PHONY: fmt lint test deny check build-musl clean
