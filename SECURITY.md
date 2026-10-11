@@ -32,9 +32,9 @@ require an attacker who is already root.
 
 | Version | Supported |
 | ------- | --------- |
-| none yet (pre-0.1.0) | - |
+| `0.1.0-alpha.x` (pre-release) | best effort: fixes ship in the next pre-release |
 
-Once released, the latest minor version receives security fixes.
+Once v0.1.0 is released, the latest minor version receives security fixes.
 
 ## Verifying a release
 

@@ -32,7 +32,7 @@ body:
     id: applied
     attributes:
       label: What was applied
-      description: The command, profile or plan, and the `--deadman` setting.
+      description: The command, profile or plan, and the `--deadman` setting (once available).
     validations:
       required: true
   - type: textarea
@@ -53,5 +53,5 @@ body:
     id: logs
     attributes:
       label: Logs
-      description: Output of `vps-ready history` and the journal around the change, if available.
+      description: Output of `vps-ready history` (once available) and the journal around the change, if available.
       render: text

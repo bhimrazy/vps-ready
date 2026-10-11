@@ -24,7 +24,7 @@ Someone buys a $5 VPS, gets `root@ip` access with a password or one key, and wan
 
 ## Prior art: what already exists (Oct 2026)
 
-> Summary only; the detailed per-tool research is kept in the maintainer's planning notes.
+> Summary only.
 
 | Category | Examples | Good at | Missing |
 |---|---|---|---|

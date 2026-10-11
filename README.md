@@ -5,29 +5,61 @@
   </picture>
 </p>
 
-<p align="center">
-  <a href="https://github.com/bhimrazy/vps-ready/actions/workflows/ci.yml"><img src="https://github.com/bhimrazy/vps-ready/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="License: MIT OR Apache-2.0"></a>
-  <img src="https://img.shields.io/badge/rust-stable%20(MSRV%201.98)-orange.svg" alt="Rust stable, MSRV 1.98">
-  <img src="https://img.shields.io/badge/status-M1%20in%20progress-lightgrey.svg" alt="Status: M1 in progress">
+<h3 align="center">Make a fresh Linux VPS secure and ready to deploy, without locking yourself out.</h3>
+
+<div align="center">
+
+<table>
+<tr>
+<td valign="top">
+
+**Detect and audit**
+
+✅ OS, init system, VM or container<br>
+✅ Effective SSH config from `sshd -T`<br>
+✅ Open ports and the processes behind them<br>
+✅ Controls with stable IDs and reasons<br>
+✅ Text or JSON, exit codes for CI
+
+</td>
+<td valign="top">
+
+**Harden safely**
+
+⬜ A readable plan before any change<br>
+⬜ Snapshots, journal and rollback<br>
+⬜ Dead-man switch for SSH and firewall<br>
+⬜ A firewall that also covers Docker<br>
+⬜ Export to cloud-init for new servers
+
+</td>
+<td valign="top">
+
+**Built to be trusted**
+
+✅ One static binary, x86_64 and arm64<br>
+✅ Signed releases with build provenance<br>
+✅ No telemetry, no self-update<br>
+✅ MIT or Apache-2.0<br>
+⬜ apt, dnf and apk packages
+
+</td>
+</tr>
+</table>
+
+✅ available now &nbsp;&middot;&nbsp; ⬜ planned
+
+<p>
+<a href="https://github.com/bhimrazy/vps-ready/actions/workflows/ci.yml"><img src="https://github.com/bhimrazy/vps-ready/actions/workflows/ci.yml/badge.svg" alt="CI"></a> <a href="https://crates.io/crates/vps-ready"><img src="https://img.shields.io/crates/v/vps-ready.svg" alt="crates.io"></a> <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="License: MIT OR Apache-2.0"></a> <img src="https://img.shields.io/badge/rust-stable%20(MSRV%201.98)-orange.svg" alt="Rust stable, MSRV 1.98">
 </p>
 
-**vps-ready** is a single static binary you run on a fresh Linux server. It detects what the machine is, audits what is insecure, shows you exactly what it will change, applies the changes safely, and cannot lock you out.
+<p>
+<a href="#quick-start">Quick start</a> &bull; <a href="#how-a-run-works">How it works</a> &bull; <a href="#safety-guarantees">Safety</a> &bull; <a href="#supported-platforms">Platforms</a> &bull; <a href="#documentation">Docs</a> &bull; <a href="#contributing-and-security">Contributing</a>
+</p>
 
-> **Status:** early development. The repo is private until the first read-only release (v0.1.0). Today the binary has `vps-ready version`, `vps-ready detect` and a first `vps-ready audit` with five SSH controls; the rest arrives milestone by milestone.
+</div>
 
-## Table of contents
-
-- [Why](#why)
-- [What it does](#what-it-does)
-- [Quick start](#quick-start)
-- [How a run works](#how-a-run-works)
-- [Safety guarantees](#safety-guarantees)
-- [Supported platforms](#supported-platforms)
-- [Documentation](#documentation)
-- [Development](#development)
-- [Contributing and security](#contributing-and-security)
-- [License](#license)
+> **Status: alpha.** `detect` and `audit` (five SSH controls so far) work today; hardening arrives milestone by milestone. Expect breaking changes before 1.0.
 
 ## Why
 
@@ -35,74 +67,50 @@ You buy a VPS, get `root@ip`, and want to deploy something. Before that you shou
 
 Auditors like Lynis tell you what is wrong but fix nothing. Ansible roles fix things but need a control node and offer no rollback. Bash "first hour" scripts have the right idea but are hard to verify and usually cover only Debian and Ubuntu. vps-ready combines the useful parts into one tool whose headline feature is that it proves you can still log in before it commits.
 
-## What it does
-
-Only `version`, `detect` and `audit` exist today; the other commands are planned.
-
-| Command | What happens |
-|---|---|
-| `vps-ready detect` | Read-only facts: distro, init system, virtualization, effective SSH config, listening ports, whether Docker is present |
-| `vps-ready audit` | Checks the host against controls with stable IDs (for example `SSH-002`), each with the reason it matters. Text or JSON; exits 0 only when every control passes |
-| `vps-ready plan` | A diff of every file and setting that would change, with a one-line reason for each |
-| `vps-ready apply` | Snapshots originals, validates, writes atomically, reloads services, and arms a dead-man timer for anything that could lock you out |
-| `vps-ready confirm` | Run from a **new** SSH session to prove the new configuration works. Without it, the change reverts automatically |
-| `vps-ready rollback` | Restores the previous state from the transaction journal |
-| `vps-ready export cloud-init` | Turns the profile you chose interactively into `user-data` for the next fifty servers |
-
-Hardening is grouped into modules you can toggle: base system, admin user, SSH, firewall, brute-force protection, automatic updates, sysctl, logging, and deployment readiness (Docker done right, deploy user, reverse proxy, Tailscale, backups). Three profiles cover most people: **minimal**, **web** and **paranoid**.
-
 ## Quick start
 
-This is the target experience for v0.1 and later. Installation is three steps on purpose: download, read, run.
+On the server, as root. Installation is three steps on purpose: download, read, run.
 
 ```console
-$ ssh root@203.0.113.10
-# curl -fsSLO https://github.com/bhimrazy/vps-ready/releases/download/v0.1.0/install.sh
+# curl -fsSLO https://github.com/bhimrazy/vps-ready/releases/download/v0.1.0-alpha.2/install.sh
 # less install.sh
-# sh install.sh                              # verifies checksum and signature, installs to /usr/local/bin
-
+# sh install.sh        # checks the SHA-256, verifies the signature if gh or cosign is installed
 # vps-ready detect
-  OS        Ubuntu 24.04 LTS (debian family), systemd, KVM, Hetzner Cloud
-  SSH       OpenSSH 9.6, ssh.socket activation, port 22, passwords ENABLED (via 50-cloud-init.conf)
-  Firewall  ufw installed, inactive
-  You       connected from 198.51.100.7 as root
-
 # vps-ready audit
-  Audit of Ubuntu 24.04.5 LTS: 23 controls
-
-  STATUS   ID       SEVERITY  CONTROL
-  FAIL     SSH-002  high      Password authentication disabled
-                              passwordauthentication is yes, expected no
-                              Passwords can be guessed or reused from leaks; SSH keys cannot be
-                              brute-forced.
-  FAIL     FW-001   high      Host firewall active
-  FAIL     UPD-001  medium    Automatic security updates enabled
-  PASS     MAC-001  medium    AppArmor enforcing
-  ...
-  14 passed, 9 failed, 0 unknown
-
-# vps-ready plan --profile web               # review the diff
-# vps-ready apply
-  Open a NEW terminal and run:  ssh admin@203.0.113.10 sudo vps-ready confirm 7F3K
-  Auto-revert in 180s if not confirmed.
 ```
 
-The command is also installed as `vpsready`, without the hyphen. Rust users and CI can also use `cargo install vps-ready --locked` (builds from source). Signed packages for apt, dnf and apk follow at v0.5. Details and the trust model of each channel are in [the release doc](docs/release.md).
+<p align="center">
+  <img src="assets/demo.png" alt="vps-ready detect and vps-ready audit on Ubuntu 24.04: OS, init, virtualization, SSH and port facts, then five SSH controls with 2 passed and 3 failed, each failure showing the value found and why it matters" width="88%">
+  <br><sub>Real output on Ubuntu 24.04, in a systemd test container.</sub>
+</p>
+
+The command is also installed as `vpsready`, without the hyphen. With Rust installed you can build from source instead: `cargo install vps-ready --version 0.1.0-alpha.2 --locked`. Signed packages for apt, dnf and apk are planned for v0.5. The trust model of each install channel is in [the release doc](docs/release.md).
+
+## What it does
+
+| Command | What happens | Status |
+|---|---|---|
+| `vps-ready detect` | Read-only facts: distro, init system, virtualization, effective SSH config, listening ports, whether Docker is present | available |
+| `vps-ready audit` | Checks the host against controls with stable IDs (for example `SSH-002`), each with the reason it matters. Text or JSON; exits 0 only when every control passes | available |
+| `vps-ready plan` | A diff of every file and setting that would change, with a one-line reason for each | M2 |
+| `vps-ready apply` | Snapshots originals, validates, writes atomically, reloads services, and arms a dead-man timer for anything that could lock you out | M2, M3 |
+| `vps-ready confirm` | Run from a **new** SSH session to prove the new configuration works. Without it, the change reverts automatically | M3 |
+| `vps-ready rollback` | Restores the previous state from the transaction journal | M2 |
+| `vps-ready export cloud-init` | Turns the profile you chose into `user-data` for your next servers | M5 |
+
+Hardening will be grouped into modules you can toggle: base system, admin user, SSH, firewall, brute-force protection, automatic updates, sysctl, logging, and deployment readiness (Docker done right, deploy user, reverse proxy, Tailscale, backups). Three profiles cover most people: **minimal**, **web** and **paranoid**.
 
 ## How a run works
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/how-it-works.svg">
-    <img src="assets/how-it-works-light.svg" alt="Flow: detect, audit, plan, then apply as one transaction (snapshot, validate, write, reload). The change is confirmed from a new SSH session or reverted by the dead-man timer, then verified and reported." width="100%">
-  </picture>
+  <img src="assets/how-it-works.png" alt="Three phases. 1, detect and audit (available now): reads live state, reports controls, read-only. 2, plan and apply (planned, M2): a readable diff, then snapshot, validate, atomic write and reload, rolled back on any failure. 3, confirm or revert (planned, M3): SSH and firewall changes arm a dead-man timer and are reverted unless confirmed from a new SSH login." width="100%">
 </p>
 
 If any step inside `apply` fails, the engine restores the snapshots in reverse order before it ever reaches the confirm step. The full design is in [the architecture doc](docs/architecture.md).
 
 ## Safety guarantees
 
-These are enforced by the engine, not left to each module.
+The engine (M2 and M3) is built around these rules, so they hold for every module rather than being left to each one. Today the tool is read-only.
 
 - **Never lock the user out.** Passwords and root login are not disabled until a keyed sudo user has logged in from a fresh session. The firewall always allows the SSH port that is actually in use.
 - **Confirm from a new connection.** Your open terminal proves nothing, because sshd reloads and conntrack keep existing sessions alive. The dead-man timer reverts SSH and firewall changes unless you confirm from a new session, even if the tool or the terminal is gone, and even across a reboot.
@@ -143,7 +151,7 @@ Install [rustup](https://rustup.rs). `rust-toolchain.toml` pins the stable chann
 git clone https://github.com/bhimrazy/vps-ready.git
 cd vps-ready
 make check          # fmt, clippy with warnings denied, tests, cargo-deny
-cargo run -- detect
+cargo run -p vps-ready -- detect
 ```
 
 | Target | What it does |
@@ -157,7 +165,7 @@ The code is a Cargo workspace with two crates today: `crates/vps-ready` (library
 
 ## Contributing and security
 
-Contributions are welcome once the repo is public. [CONTRIBUTING.md](CONTRIBUTING.md) covers setup, the DCO sign-off, how a module is added, and what tests each kind of change needs. Lint policy: clippy defaults, plus `unwrap`, `expect` and `panic` denied outside tests.
+Contributions are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers setup, the DCO sign-off, how a module is added, and what tests each kind of change needs. Lint policy: clippy defaults, plus `unwrap`, `expect` and `panic` denied outside tests.
 
 Please report security issues, including anything that could lock a user out, through [GitHub private vulnerability reporting](https://github.com/bhimrazy/vps-ready/security/advisories/new) as described in [SECURITY.md](SECURITY.md), not in public issues.
 
