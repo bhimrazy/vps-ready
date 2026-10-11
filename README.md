@@ -5,49 +5,15 @@
   </picture>
 </p>
 
-<h3 align="center">Make a fresh Linux VPS secure and ready to deploy, without locking yourself out.</h3>
-
 <div align="center">
 
-<table>
-<tr>
-<td valign="top">
+**One static binary to audit a fresh Linux server, and soon to harden it without locking you out.**
 
-**Detect and audit**
-
-✅ OS, init system, VM or container<br>
-✅ Effective SSH config from `sshd -T`<br>
-✅ Open ports and the processes behind them<br>
-✅ Controls with stable IDs and reasons<br>
-✅ Text or JSON, exit codes for CI
-
-</td>
-<td valign="top">
-
-**Harden safely**
-
-⬜ A readable plan before any change<br>
-⬜ Snapshots, journal and rollback<br>
-⬜ Dead-man switch for SSH and firewall<br>
-⬜ A firewall that also covers Docker<br>
-⬜ Export to cloud-init for new servers
-
-</td>
-<td valign="top">
-
-**Built to be trusted**
-
-✅ One static binary, x86_64 and arm64<br>
-✅ Signed releases with build provenance<br>
-✅ No telemetry, no self-update<br>
-✅ MIT or Apache-2.0<br>
-⬜ apt, dnf and apk packages
-
-</td>
-</tr>
-</table>
-
-✅ available now &nbsp;&middot;&nbsp; ⬜ planned
+<pre>
+✅ Detects distro, VM, container     ✅ Audits with stable control IDs    ✅ x86_64 and arm64
+✅ Reads the effective SSH config    ✅ JSON output, CI exit codes        ✅ Signed releases 
+✅ Maps open ports to processes      ✅ Read-only by design               ✅ No telemetry    
+</pre>
 
 <p>
 <a href="https://github.com/bhimrazy/vps-ready/actions/workflows/ci.yml"><img src="https://github.com/bhimrazy/vps-ready/actions/workflows/ci.yml/badge.svg" alt="CI"></a> <a href="https://crates.io/crates/vps-ready"><img src="https://img.shields.io/crates/v/vps-ready.svg" alt="crates.io"></a> <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="License: MIT OR Apache-2.0"></a> <img src="https://img.shields.io/badge/rust-stable%20(MSRV%201.98)-orange.svg" alt="Rust stable, MSRV 1.98">
@@ -59,7 +25,8 @@
 
 </div>
 
-> **Status: alpha.** `detect` and `audit` (five SSH controls so far) work today; hardening arrives milestone by milestone. Expect breaking changes before 1.0.
+> [!NOTE]
+> vps-ready is in **alpha**. `detect` and `audit` (five SSH controls so far) work today; hardening arrives milestone by milestone, and there may be breaking changes before 1.0.
 
 ## Why
 
