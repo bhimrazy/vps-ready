@@ -60,7 +60,7 @@ pub enum Command {
     /// Check this system against the security controls and report what fails.
     ///
     /// Exits 0 when no control fails or is unknown, 1 otherwise, and 2 on
-    /// error. The SSH checks need root.
+    /// error. Some checks need root, so run it with sudo.
     Audit,
 }
 
@@ -138,7 +138,7 @@ pub fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
             }
         }
         Command::Detect { root } => {
-            let facts = collect_facts(root)?;
+            let facts = collect_facts(root, &[])?;
             if cli.json {
                 serde_json::to_writer_pretty(&mut out, &facts)?;
                 writeln!(out)?;
@@ -148,7 +148,8 @@ pub fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
         }
         Command::Audit => {
             let controls = audit::catalog()?;
-            let facts = collect_facts(Path::new("/"))?;
+            // The audit does not use the SSH session, so its notice is noise.
+            let facts = collect_facts(Path::new("/"), &[facts::session::UNSET_NOTICE])?;
             let report = audit::run(controls, &facts);
             if !report.all_passed() {
                 code = ExitCode::from(EXIT_AUDIT_FAILED);
@@ -163,13 +164,8 @@ pub fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
                 } else {
                     &facts.os.pretty_name
                 };
-                print_report(
-                    &mut out,
-                    &report,
-                    host,
-                    running_as_root(),
-                    cli.color_enabled(),
-                )
+                let root_hint = !running_as_root() && root_would_help(&report, &facts);
+                print_report(&mut out, &report, host, root_hint, cli.color_enabled())
             };
             match printed.and_then(|()| out.flush()) {
                 // `audit | head` must still report the result, not success.
@@ -182,14 +178,34 @@ pub fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
     Ok(code)
 }
 
-/// Collects facts, logging each notice as a warning on stderr.
-fn collect_facts(root: &Path) -> anyhow::Result<Facts> {
+/// Collects facts, logging each notice except those in `quiet` as a warning
+/// on stderr. All notices stay in the facts, and so in `--json` output.
+fn collect_facts(root: &Path, quiet: &[&str]) -> anyhow::Result<Facts> {
     let facts = facts::collect(&RealFs::new(root), &RealRunner, &Env::from_process())
         .with_context(|| format!("detecting facts under {}", root.display()))?;
-    for notice in &facts.notices {
+    for notice in facts
+        .notices
+        .iter()
+        .filter(|n| !quiet.contains(&n.as_str()))
+    {
         tracing::warn!("{notice}");
     }
     Ok(facts)
+}
+
+/// Whether running as root would let an unknown control be checked: when
+/// `sshd -T` could not run (it needs root), or a `/proc/sys` file is
+/// root-only on this kernel.
+fn root_would_help(report: &Report, facts: &Facts) -> bool {
+    report.findings.iter().any(|f| {
+        matches!(f.outcome, Outcome::Unknown { .. })
+            && match &f.control.check {
+                Check::SshdEffective { .. } => facts.ssh.effective.is_none(),
+                Check::Sysctl { key, .. } => {
+                    facts.sysctl.as_ref().is_some_and(|s| s.is_unreadable(key))
+                }
+            }
+    })
 }
 
 /// A title, a header row, one block per control, then a summary line:
@@ -212,7 +228,7 @@ fn print_report(
     out: &mut impl Write,
     report: &Report,
     host: &str,
-    root: bool,
+    root_hint: bool,
     color: bool,
 ) -> io::Result<()> {
     const INDENT: &str = "                            ";
@@ -277,13 +293,8 @@ fn print_report(
             out,
             "Unknown controls could not be checked; the warnings on stderr say why."
         )?;
-        // `sshd -T` needs root; kernel settings are readable by anyone.
-        let ssh_unknown = report.findings.iter().any(|f| {
-            matches!(f.outcome, Outcome::Unknown { .. })
-                && matches!(f.control.check, Check::SshdEffective { .. })
-        });
-        if ssh_unknown && !root {
-            write!(out, " SSH checks need root.")?;
+        if root_hint {
+            write!(out, " Run it with sudo: some checks need root.")?;
         }
         writeln!(out)?;
     }
@@ -436,16 +447,40 @@ mod tests {
     fn audit_text_explains_unknown() {
         let facts = host("ubuntu-24.04", &["sshd-T-before-login"]);
         let report = audit::run(audit::catalog().unwrap(), &facts);
-        let mut text = Vec::new();
-        print_report(&mut text, &report, "this host", false, false).unwrap();
-        let text = String::from_utf8(text).unwrap();
-        assert!(text.contains("0 passed, 0 failed, 5 unknown"), "{text}");
-        assert!(text.contains("SSH checks need root"), "{text}");
-
+        assert!(root_would_help(&report, &facts));
         let mut text = Vec::new();
         print_report(&mut text, &report, "this host", true, false).unwrap();
         let text = String::from_utf8(text).unwrap();
-        assert!(!text.contains("need root"), "{text}");
+        assert!(text.contains("0 passed, 0 failed, 5 unknown"), "{text}");
+        assert!(text.contains("Run it with sudo"), "{text}");
+
+        let mut text = Vec::new();
+        print_report(&mut text, &report, "this host", false, false).unwrap();
+        let text = String::from_utf8(text).unwrap();
+        assert!(!text.contains("sudo"), "{text}");
+    }
+
+    /// A kernel setting that only root can read is worth a sudo hint; one
+    /// the kernel does not have is not.
+    #[test]
+    fn root_hint_covers_root_only_kernel_settings() {
+        let mut facts = host("debian-13", &[]);
+        facts.virtualization.container = crate::facts::Virt::None;
+        let mut sysctl = crate::facts::Sysctl::default();
+        for key in crate::facts::sysctl::KEYS {
+            sysctl.values.insert(key.to_owned(), "1".to_owned());
+        }
+        sysctl.values.remove("kernel.yama.ptrace_scope");
+        facts.sysctl = Some(sysctl.clone());
+        let report = audit::run(audit::catalog().unwrap(), &facts);
+        assert!(report.summary.unknown > 0);
+        assert!(!root_would_help(&report, &facts));
+
+        sysctl.values.remove("fs.protected_symlinks");
+        sysctl.unreadable.push("fs.protected_symlinks".to_owned());
+        facts.sysctl = Some(sysctl);
+        let report = audit::run(audit::catalog().unwrap(), &facts);
+        assert!(root_would_help(&report, &facts));
     }
 
     #[test]

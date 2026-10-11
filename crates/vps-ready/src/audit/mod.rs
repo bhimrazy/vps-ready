@@ -152,8 +152,9 @@ pub struct Report {
     pub findings: Vec<Finding>,
     /// Counts of outcomes.
     pub summary: Summary,
-    /// Every notice from fact collection. Those about SSH explain unknown
-    /// outcomes; the rest concern facts no control uses yet.
+    /// Every notice from fact collection. Those about SSH and root-only
+    /// kernel settings explain unknown outcomes; the rest concern facts no
+    /// control uses yet.
     pub notices: Vec<String>,
 }
 
@@ -244,6 +245,11 @@ fn evaluate(check: &Check, facts: &Facts) -> Outcome {
             if facts.virtualization.in_container() {
                 return Outcome::Skip {
                     reason: "kernel settings are not checked inside a container".to_owned(),
+                };
+            }
+            if facts.sysctl.as_ref().is_some_and(|s| s.is_unreadable(key)) {
+                return Outcome::Unknown {
+                    reason: format!("{key} is readable only by root on this kernel"),
                 };
             }
             match facts.sysctl.as_ref().and_then(|s| s.get(key)) {
