@@ -70,7 +70,10 @@ Hardening will be grouped into modules you can toggle: base system, admin user, 
 ## How a run works
 
 <p align="center">
-  <img src="assets/how-it-works.png" alt="Three phases. 1, detect and audit (available now): reads live state, reports controls, read-only. 2, plan and apply (planned, M2): a readable diff, then snapshot, validate, atomic write and reload, rolled back on any failure. 3, confirm or revert (planned, M3): SSH and firewall changes arm a dead-man timer and are reverted unless confirmed from a new SSH login." width="100%">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/how-it-works.png">
+    <img src="assets/how-it-works-light.png" alt="Three phases. 1, detect and audit (available now): reads live state, reports controls, read-only. 2, plan and apply (planned, M2): a readable diff, then snapshot, validate, atomic write and reload, rolled back on any failure. 3, confirm or revert (planned, M3): SSH and firewall changes arm a dead-man timer and are reverted unless confirmed from a new SSH login." width="100%">
+  </picture>
 </p>
 
 If any step inside `apply` fails, the engine restores the snapshots in reverse order before it ever reaches the confirm step. The full design is in [the architecture doc](docs/architecture.md).
