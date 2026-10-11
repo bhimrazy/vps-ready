@@ -14,7 +14,7 @@ use owo_colors::OwoColorize;
 use tracing_subscriber::EnvFilter;
 
 use crate::VERSION_INFO;
-use crate::audit::{self, Outcome, Report};
+use crate::audit::{self, Check, Outcome, Report};
 use crate::facts::{self, Env, Facts, Listener};
 use crate::sys::{RealFs, RealRunner};
 
@@ -59,8 +59,8 @@ pub enum Command {
     },
     /// Check this system against the security controls and report what fails.
     ///
-    /// Exits 0 when every control passes, 1 when any control fails or cannot
-    /// be checked, and 2 on error. Most checks need root.
+    /// Exits 0 when no control fails or is unknown, 1 otherwise, and 2 on
+    /// error. The SSH checks need root.
     Audit,
 }
 
@@ -163,7 +163,13 @@ pub fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
                 } else {
                     &facts.os.pretty_name
                 };
-                print_report(&mut out, &report, host, cli.color_enabled())
+                print_report(
+                    &mut out,
+                    &report,
+                    host,
+                    running_as_root(),
+                    cli.color_enabled(),
+                )
             };
             match printed.and_then(|()| out.flush()) {
                 // `audit | head` must still report the result, not success.
@@ -199,7 +205,16 @@ fn collect_facts(root: &Path) -> anyhow::Result<Facts> {
 ///
 /// 3 passed, 2 failed, 0 unknown
 /// ```
-fn print_report(out: &mut impl Write, report: &Report, host: &str, color: bool) -> io::Result<()> {
+///
+/// Skipped controls get a row without details, and each distinct reason is
+/// printed once after the summary.
+fn print_report(
+    out: &mut impl Write,
+    report: &Report,
+    host: &str,
+    root: bool,
+    color: bool,
+) -> io::Result<()> {
     const INDENT: &str = "                            ";
     const WIDTH: usize = 100;
     let title = format!("Audit of {host}: {} controls", report.findings.len());
@@ -216,12 +231,14 @@ fn print_report(out: &mut impl Write, report: &Report, host: &str, color: bool) 
             Outcome::Pass => "PASS   ",
             Outcome::Fail { .. } => "FAIL   ",
             Outcome::Unknown { .. } => "UNKNOWN",
+            Outcome::Skip { .. } => "SKIP   ",
         };
         let label = match (color, &finding.outcome) {
             (false, _) => label.to_owned(),
             (true, Outcome::Pass) => label.green().to_string(),
             (true, Outcome::Fail { .. }) => label.red().to_string(),
             (true, Outcome::Unknown { .. }) => label.yellow().to_string(),
+            (true, Outcome::Skip { .. }) => label.dimmed().to_string(),
         };
         let severity = control.severity.to_string();
         writeln!(
@@ -229,7 +246,10 @@ fn print_report(out: &mut impl Write, report: &Report, host: &str, color: bool) 
             "{label}  {:<7}  {severity:<8}  {}",
             control.id, control.title
         )?;
-        if let Some(detail) = finding.detail() {
+        // Skip reasons repeat across controls, so they are listed once below.
+        if let Some(detail) = finding.detail()
+            && !matches!(finding.outcome, Outcome::Skip { .. })
+        {
             writeln!(out, "{INDENT}{detail}")?;
         }
         if matches!(finding.outcome, Outcome::Fail { .. }) {
@@ -243,17 +263,40 @@ fn print_report(out: &mut impl Write, report: &Report, host: &str, color: bool) 
         }
     }
     let s = report.summary;
-    writeln!(
+    write!(
         out,
         "\n{} passed, {} failed, {} unknown",
         s.passed, s.failed, s.unknown
     )?;
+    if s.skipped > 0 {
+        write!(out, ", {} skipped", s.skipped)?;
+    }
+    writeln!(out)?;
     if s.unknown > 0 {
-        writeln!(
+        write!(
             out,
-            "Unknown controls could not be checked; the warnings on stderr say why. \
-             Most checks need root."
+            "Unknown controls could not be checked; the warnings on stderr say why."
         )?;
+        // `sshd -T` needs root; kernel settings are readable by anyone.
+        let ssh_unknown = report.findings.iter().any(|f| {
+            matches!(f.outcome, Outcome::Unknown { .. })
+                && matches!(f.control.check, Check::SshdEffective { .. })
+        });
+        if ssh_unknown && !root {
+            write!(out, " SSH checks need root.")?;
+        }
+        writeln!(out)?;
+    }
+    let mut reasons: Vec<&str> = Vec::new();
+    for finding in &report.findings {
+        if let Outcome::Skip { reason } = &finding.outcome
+            && !reasons.contains(&reason.as_str())
+        {
+            reasons.push(reason);
+        }
+    }
+    for reason in reasons {
+        writeln!(out, "Skipped: {reason}.")?;
     }
     Ok(())
 }
@@ -332,6 +375,18 @@ fn ssh_line(ssh: &facts::Ssh) -> String {
     parts.join(", ")
 }
 
+/// Whether this process runs as root: the effective UID, the second field of
+/// the `Uid:` line in `/proc/self/status`. False where there is no `/proc`.
+fn running_as_root() -> bool {
+    std::fs::read_to_string("/proc/self/status").is_ok_and(|status| {
+        status
+            .lines()
+            .find_map(|line| line.strip_prefix("Uid:"))
+            .and_then(|ids| ids.split_whitespace().nth(1))
+            == Some("0")
+    })
+}
+
 /// Splits `text` into lines of at most `width` characters at spaces. A word
 /// longer than `width` gets a line of its own.
 fn wrap(text: &str, width: usize) -> Vec<String> {
@@ -382,10 +437,15 @@ mod tests {
         let facts = host("ubuntu-24.04", &["sshd-T-before-login"]);
         let report = audit::run(audit::catalog().unwrap(), &facts);
         let mut text = Vec::new();
-        print_report(&mut text, &report, "this host", false).unwrap();
+        print_report(&mut text, &report, "this host", false, false).unwrap();
         let text = String::from_utf8(text).unwrap();
         assert!(text.contains("0 passed, 0 failed, 5 unknown"), "{text}");
-        assert!(text.contains("Most checks need root"), "{text}");
+        assert!(text.contains("SSH checks need root"), "{text}");
+
+        let mut text = Vec::new();
+        print_report(&mut text, &report, "this host", true, false).unwrap();
+        let text = String::from_utf8(text).unwrap();
+        assert!(!text.contains("need root"), "{text}");
     }
 
     #[test]
@@ -401,7 +461,14 @@ mod tests {
         for name in HOSTS {
             let report = audit::run(audit::catalog().unwrap(), &host(name, &[]));
             let mut text = Vec::new();
-            print_report(&mut text, &report, &host(name, &[]).os.pretty_name, false).unwrap();
+            print_report(
+                &mut text,
+                &report,
+                &host(name, &[]).os.pretty_name,
+                false,
+                false,
+            )
+            .unwrap();
             insta::assert_snapshot!(format!("audit-{name}"), String::from_utf8(text).unwrap());
         }
     }

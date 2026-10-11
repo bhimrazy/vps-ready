@@ -1,0 +1,74 @@
+# Kernel controls. Checks read /proc/sys, so they see the values the running
+# kernel uses, whichever file set them. Skipped inside a container.
+
+[[control]]
+id = "KRN-001"
+severity = "low"
+title = "Kernel pointers hidden"
+why = "Kernel memory addresses help an attacker aim a kernel exploit; hiding them from normal users makes that harder."
+check = { kind = "sysctl", key = "kernel.kptr_restrict", one_of = ["1", "2"] }
+
+[[control]]
+id = "KRN-002"
+severity = "low"
+title = "Kernel log restricted to root"
+why = "The kernel log can reveal addresses and system details useful to an attacker; only admins need to read it."
+check = { kind = "sysctl", key = "kernel.dmesg_restrict", one_of = ["1"] }
+
+[[control]]
+id = "KRN-003"
+severity = "medium"
+title = "Unprivileged BPF disabled"
+why = "Unprivileged BPF has been the entry point for many kernel privilege escalations, and normal users rarely need it."
+check = { kind = "sysctl", key = "kernel.unprivileged_bpf_disabled", one_of = ["1", "2"] }
+
+[[control]]
+id = "KRN-004"
+severity = "medium"
+title = "ptrace scope restricted"
+why = "Otherwise a compromised process can read the memory of your other processes, including secrets such as keys held by ssh-agent."
+check = { kind = "sysctl", key = "kernel.yama.ptrace_scope", one_of = ["1", "2", "3"] }
+
+[[control]]
+id = "KRN-005"
+severity = "medium"
+title = "Symlink protection enabled"
+why = "A symlink planted in a shared directory such as /tmp can trick a root process into writing to a file the attacker chose."
+check = { kind = "sysctl", key = "fs.protected_symlinks", one_of = ["1"] }
+
+[[control]]
+id = "KRN-006"
+severity = "medium"
+title = "Hardlink protection enabled"
+why = "Hard links to files you do not own let an attacker redirect root's writes or keep a vulnerable setuid program around."
+check = { kind = "sysctl", key = "fs.protected_hardlinks", one_of = ["1"] }
+
+[[control]]
+id = "KRN-007"
+severity = "low"
+title = "FIFO protection enabled"
+why = "A FIFO planted in a shared directory such as /tmp can feed a privileged program data it did not expect."
+check = { kind = "sysctl", key = "fs.protected_fifos", one_of = ["1", "2"] }
+
+[[control]]
+id = "KRN-008"
+severity = "low"
+title = "Regular file protection enabled"
+why = "A file planted in a shared directory such as /tmp lets another user control what a privileged program reads or writes."
+check = { kind = "sysctl", key = "fs.protected_regular", one_of = ["1", "2"] }
+
+# 2 is safe too: the kernel then writes such dumps only through a pipe or to an
+# absolute path, readable by root (Ubuntu's apport and systemd-coredump use it).
+[[control]]
+id = "KRN-009"
+severity = "low"
+title = "Setuid core dumps restricted"
+why = "Crash dumps of setuid programs can hold passwords and keys from memory; they must be off or readable only by root."
+check = { kind = "sysctl", key = "fs.suid_dumpable", one_of = ["0", "2"] }
+
+[[control]]
+id = "KRN-010"
+severity = "medium"
+title = "Address space randomization fully enabled"
+why = "A random memory layout makes memory-corruption bugs much harder to exploit reliably."
+check = { kind = "sysctl", key = "kernel.randomize_va_space", one_of = ["2"] }

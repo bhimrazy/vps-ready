@@ -12,7 +12,11 @@ use serde::{Deserialize, Serialize};
 use crate::facts::Facts;
 
 /// The embedded catalog, as `(file name, contents)`.
-const CATALOG: [(&str, &str); 1] = [("ssh.toml", include_str!("controls/ssh.toml"))];
+const CATALOG: [(&str, &str); 3] = [
+    ("ssh.toml", include_str!("controls/ssh.toml")),
+    ("kernel.toml", include_str!("controls/kernel.toml")),
+    ("network.toml", include_str!("controls/network.toml")),
+];
 
 /// One security control.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -64,6 +68,15 @@ pub enum Check {
         /// Expected value.
         equals: String,
     },
+    /// A kernel setting under `/proc/sys` has one of these values. Skipped
+    /// in a container, where the kernel belongs to the host.
+    Sysctl {
+        /// Setting name as `sysctl` prints it, e.g. `kernel.kptr_restrict`.
+        /// Must be one of [`crate::facts::sysctl::KEYS`].
+        key: String,
+        /// Accepted values.
+        one_of: Vec<String>,
+    },
 }
 
 /// The result of checking one control.
@@ -82,6 +95,12 @@ pub enum Outcome {
         /// Why it could not be checked.
         reason: String,
     },
+    /// The control does not apply to this host, e.g. a kernel setting
+    /// inside a container.
+    Skip {
+        /// Why it does not apply.
+        reason: String,
+    },
 }
 
 /// A control and its outcome.
@@ -96,7 +115,7 @@ pub struct Finding {
 }
 
 impl Finding {
-    /// A one-line explanation of a failed or unknown outcome, e.g.
+    /// A one-line explanation of an outcome other than pass, e.g.
     /// `passwordauthentication is yes, expected no`.
     #[must_use]
     pub fn detail(&self) -> Option<String> {
@@ -105,7 +124,10 @@ impl Finding {
             (Outcome::Fail { found }, Check::SshdEffective { key, equals }) => {
                 Some(format!("{key} is {found}, expected {equals}"))
             }
-            (Outcome::Unknown { reason }, _) => Some(reason.clone()),
+            (Outcome::Fail { found }, Check::Sysctl { key, one_of }) => {
+                Some(format!("{key} is {found}, expected {}", or_list(one_of)))
+            }
+            (Outcome::Unknown { reason } | Outcome::Skip { reason }, _) => Some(reason.clone()),
         }
     }
 }
@@ -119,6 +141,8 @@ pub struct Summary {
     pub failed: usize,
     /// Controls that could not be checked.
     pub unknown: usize,
+    /// Controls that do not apply to this host.
+    pub skipped: usize,
 }
 
 /// The result of an audit.
@@ -134,7 +158,8 @@ pub struct Report {
 }
 
 impl Report {
-    /// Whether every control passed. Unknown outcomes do not count as passed.
+    /// Whether every control passed or was skipped. Unknown outcomes do not
+    /// count as passed.
     #[must_use]
     pub fn all_passed(&self) -> bool {
         self.summary.failed == 0 && self.summary.unknown == 0
@@ -185,6 +210,7 @@ pub fn run(controls: Vec<Control>, facts: &Facts) -> Report {
                 Outcome::Pass => summary.passed += 1,
                 Outcome::Fail { .. } => summary.failed += 1,
                 Outcome::Unknown { .. } => summary.unknown += 1,
+                Outcome::Skip { .. } => summary.skipped += 1,
             }
             Finding { control, outcome }
         })
@@ -214,6 +240,31 @@ fn evaluate(check: &Check, facts: &Facts) -> Outcome {
                 },
             }
         }
+        Check::Sysctl { key, one_of } => {
+            if facts.virtualization.in_container() {
+                return Outcome::Skip {
+                    reason: "kernel settings are not checked inside a container".to_owned(),
+                };
+            }
+            match facts.sysctl.as_ref().and_then(|s| s.get(key)) {
+                Some(found) if one_of.iter().any(|ok| ok == found) => Outcome::Pass,
+                Some(found) => Outcome::Fail {
+                    found: found.to_owned(),
+                },
+                None => Outcome::Unknown {
+                    reason: format!("{key} not found under /proc/sys"),
+                },
+            }
+        }
+    }
+}
+
+/// `["1", "2", "3"]` as `1, 2 or 3`.
+fn or_list(values: &[String]) -> String {
+    match values {
+        [] => String::new(),
+        [only] => only.clone(),
+        [rest @ .., last] => format!("{} or {last}", rest.join(", ")),
     }
 }
 
@@ -222,8 +273,9 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
-    use crate::facts::SshdConfig;
     use crate::facts::fixtures::{HOSTS, host};
+    use crate::facts::{SshdConfig, Virt, sysctl};
+    use crate::sys::fake::{FakeFs, FakeRunner};
 
     #[test]
     fn catalog_parses_with_unique_well_formed_ids() {
@@ -244,15 +296,23 @@ mod tests {
         }
     }
 
-    /// A key that `sshd -T` never prints would make a control permanently
-    /// unknown, so every key must appear in a real capture.
+    /// A key that is never read would make a control permanently unknown:
+    /// sshd keys must appear in a real `sshd -T` capture, and sysctl keys
+    /// must be among the settings facts collection reads.
     #[test]
-    fn sshd_keys_exist_in_real_sshd_output() {
+    fn check_keys_are_collected() {
         let facts = host("ubuntu-24.04", &[]);
         let config = facts.ssh.effective.unwrap();
         for c in catalog().unwrap() {
-            let Check::SshdEffective { key, .. } = &c.check;
-            assert!(config.get(key).is_some(), "{}: {key}", c.id);
+            match &c.check {
+                Check::SshdEffective { key, .. } => {
+                    assert!(config.get(key).is_some(), "{}: {key}", c.id);
+                }
+                Check::Sysctl { key, one_of } => {
+                    assert!(sysctl::KEYS.contains(&key.as_str()), "{}: {key}", c.id);
+                    assert!(!one_of.is_empty(), "{}", c.id);
+                }
+            }
         }
     }
 
@@ -313,7 +373,12 @@ mod tests {
             catalog().unwrap(),
             &host("ubuntu-24.04", &["sshd-T-before-login"]),
         );
-        assert_eq!(report.summary.unknown, report.findings.len());
+        let ssh_controls = report
+            .findings
+            .iter()
+            .filter(|f| matches!(f.control.check, Check::SshdEffective { .. }))
+            .count();
+        assert_eq!(report.summary.unknown, ssh_controls);
         assert!(!report.all_passed());
         assert!(!report.notices.is_empty());
     }
@@ -342,6 +407,81 @@ mod tests {
         ));
     }
 
+    /// Facts of a VM whose `/proc/sys` holds `files`.
+    fn vm(files: &[(&str, &str)]) -> Facts {
+        let fs = files.iter().fold(
+            FakeFs::new().with_file("/proc/sys/kernel/osrelease", "6.8.0\n"),
+            |fs, (path, value)| fs.with_file(*path, *value),
+        );
+        let mut facts =
+            crate::facts::collect(&fs, &FakeRunner::new(), &Default::default()).unwrap();
+        facts.virtualization.container = Virt::None;
+        facts
+    }
+
+    #[test]
+    fn evaluates_sysctl() {
+        let check = |key: &str, one_of: &[&str]| Check::Sysctl {
+            key: key.to_owned(),
+            one_of: one_of.iter().map(|v| (*v).to_owned()).collect(),
+        };
+        let facts = vm(&[("/proc/sys/kernel/kptr_restrict", "1\n")]);
+        let eval = |key, one_of| evaluate(&check(key, one_of), &facts);
+        assert_eq!(eval("kernel.kptr_restrict", &["1", "2"]), Outcome::Pass);
+        assert_eq!(
+            eval("kernel.kptr_restrict", &["2"]),
+            Outcome::Fail {
+                found: "1".to_owned()
+            }
+        );
+        assert!(matches!(
+            eval("kernel.dmesg_restrict", &["1"]),
+            Outcome::Unknown { .. }
+        ));
+
+        let mut container = facts.clone();
+        container.virtualization.container = Virt::Detected("lxc".to_owned());
+        assert!(matches!(
+            evaluate(&check("kernel.kptr_restrict", &["2"]), &container),
+            Outcome::Skip { .. }
+        ));
+    }
+
+    #[test]
+    fn sysctl_detail_names_the_accepted_values() {
+        let facts = vm(&[("/proc/sys/kernel/yama/ptrace_scope", "0\n")]);
+        let report = run(catalog().unwrap(), &facts);
+        let finding = report
+            .findings
+            .iter()
+            .find(|f| f.control.id == "KRN-004")
+            .unwrap();
+        assert_eq!(
+            finding.detail().unwrap(),
+            "kernel.yama.ptrace_scope is 0, expected 1, 2 or 3"
+        );
+    }
+
+    /// Kernel settings belong to the host, so in a container they are
+    /// skipped, and skipping does not fail the audit.
+    #[test]
+    fn container_skips_kernel_controls_without_failing() {
+        let mut facts = host("debian-13", &["sshd-T-dropin-00"]);
+        facts.ssh.effective = Some(SshdConfig::parse(
+            "permitrootlogin no\npasswordauthentication no\nkbdinteractiveauthentication no\n\
+             permitemptypasswords no\nx11forwarding no\n",
+        ));
+        let report = run(catalog().unwrap(), &facts);
+        let sysctl_controls = report
+            .findings
+            .iter()
+            .filter(|f| matches!(f.control.check, Check::Sysctl { .. }))
+            .count();
+        assert!(sysctl_controls > 0);
+        assert_eq!(report.summary.skipped, sysctl_controls);
+        assert!(report.all_passed(), "{:?}", report.summary);
+    }
+
     #[test]
     fn report_json_flattens_control_and_outcome() {
         let report = run(catalog().unwrap(), &host("debian-12", &[]));
@@ -350,5 +490,22 @@ mod tests {
         assert_eq!(json["status"], "fail");
         assert_eq!(json["found"], "yes");
         assert_eq!(json["check"]["kind"], "sshd_effective");
+
+        let skipped = report
+            .findings
+            .iter()
+            .find(|f| f.control.id == "KRN-001")
+            .unwrap();
+        let json = serde_json::to_value(skipped).unwrap();
+        assert_eq!(json["status"], "skip");
+        assert!(json["reason"].is_string());
+        assert!(json.get("found").is_none());
+        let sysctl_controls = report
+            .findings
+            .iter()
+            .filter(|f| matches!(f.control.check, Check::Sysctl { .. }))
+            .count();
+        let summary = serde_json::to_value(report.summary).unwrap();
+        assert_eq!(summary["skipped"], sysctl_controls);
     }
 }

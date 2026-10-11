@@ -26,7 +26,7 @@
 </div>
 
 > [!NOTE]
-> vps-ready is in **alpha**. `detect` and `audit` (five SSH controls so far) work today; hardening arrives milestone by milestone, and there may be breaking changes before 1.0.
+> vps-ready is in **alpha**. `detect` and `audit` (SSH, kernel and network controls so far) work today; hardening arrives milestone by milestone, and there may be breaking changes before 1.0.
 
 ## Why
 
@@ -58,7 +58,7 @@ The command is also installed as `vpsready`, without the hyphen. With Rust insta
 | Command | What happens | Status |
 |---|---|---|
 | `vps-ready detect` | Read-only facts: distro, init system, virtualization, effective SSH config, listening ports, whether Docker is present | available |
-| `vps-ready audit` | Checks the host against controls with stable IDs (for example `SSH-002`), each with the reason it matters. Text or JSON; exits 0 only when every control passes | available |
+| `vps-ready audit` | Checks the host against controls with stable IDs (for example `SSH-002`), each with the reason it matters. Text or JSON; exits 0 only when no control fails or is unknown | available |
 | `vps-ready plan` | A diff of every file and setting that would change, with a one-line reason for each | M2 |
 | `vps-ready apply` | Snapshots originals, validates, writes atomically, reloads services, and arms a dead-man timer for anything that could lock you out | M2, M3 |
 | `vps-ready confirm` | Run from a **new** SSH session to prove the new configuration works. Without it, the change reverts automatically | M3 |
@@ -85,7 +85,7 @@ The engine (M2 and M3) is built around these rules, so they hold for every modul
 - **Never lock the user out.** Passwords and root login are not disabled until a keyed sudo user has logged in from a fresh session. The firewall always allows the SSH port that is actually in use.
 - **Confirm from a new connection.** Your open terminal proves nothing, because sshd reloads and conntrack keep existing sessions alive. The dead-man timer reverts SSH and firewall changes unless you confirm from a new session, even if the tool or the terminal is gone, and even across a reboot.
 - **Show, then do.** Nothing changes without a plan you can read. Every change carries a reversibility label: reversible, partial, or irreversible.
-- **Effective state over file state.** Checks use `sshd -T`, `sysctl -n` and `ss -ltn`, not a guess at what a config file means.
+- **Effective state over file state.** Checks use `sshd -T`, `/proc/sys` and `ss`, not a guess at what a config file means.
 - **Drop-ins, not edits.** The tool owns files like `/etc/ssh/sshd_config.d/00-vps-ready.conf` and never rewrites your `sshd_config` in place. That is also what beats cloud-init re-enabling passwords.
 - **Docker- and cloud-aware.** Container ports bypass ufw and firewalld by default; `ip_forward=0` kills Docker; cloud metadata must stay reachable. These are handled, not just warned about.
 - **No network calls** except package installs. No telemetry, no self-update.

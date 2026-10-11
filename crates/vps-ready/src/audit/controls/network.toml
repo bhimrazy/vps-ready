@@ -1,0 +1,25 @@
+# Network stack controls. Checks read /proc/sys. Skipped inside a container.
+
+[[control]]
+id = "NET-001"
+severity = "low"
+title = "TCP SYN cookies enabled"
+why = "SYN cookies keep the server accepting real connections during a SYN flood."
+# 2 sends cookies even without a flood, which is stricter.
+check = { kind = "sysctl", key = "net.ipv4.tcp_syncookies", one_of = ["1", "2"] }
+
+# The kernel accepts the option only when `all` and the interface both allow
+# it, so `all` alone decides.
+[[control]]
+id = "NET-002"
+severity = "low"
+title = "Source-routed packets rejected"
+why = "Source-routed packets let the sender pick their path, which can get around network filtering."
+check = { kind = "sysctl", key = "net.ipv4.conf.all.accept_source_route", one_of = ["0"] }
+
+[[control]]
+id = "NET-003"
+severity = "low"
+title = "Broadcast pings ignored"
+why = "Answering broadcast pings lets the server be used to amplify attacks on others."
+check = { kind = "sysctl", key = "net.ipv4.icmp_echo_ignore_broadcasts", one_of = ["1"] }

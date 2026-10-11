@@ -117,6 +117,21 @@ jobs:
         run: |
           file "target/$TARGET/release/vps-ready" | tee /dev/stderr \
             | grep -Eq 'statically linked|static-pie linked'
+      # The runner is a VM, not a container, so this exercises the kernel
+      # checks for real. Exit 1 (a control failed or is unknown) is expected; 2 is an
+      # error.
+      - name: Run detect and audit on the runner
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          bin="target/$TARGET/release/vps-ready"
+          "$bin" detect
+          rc=0
+          sudo "$bin" audit || rc=$?
+          [ "$rc" -le 1 ]
+          # Every kernel and network control must have been checked.
+          sudo "$bin" audit --json >audit.json || true
+          jq -e '[.findings[] | select(.id | test("^(KRN|NET)-"))
+                 | select(.status == "skip" or .status == "unknown")] | length == 0' audit.json
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: vps-ready-${{ matrix.target }}
