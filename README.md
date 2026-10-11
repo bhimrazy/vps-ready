@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="assets/banner.svg" alt="vps-ready: make a fresh VPS ready and secure, safely" width="100%">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/banner.svg">
+    <img src="assets/banner-light.svg" alt="vps-ready: make a fresh VPS ready and secure, safely" width="100%">
+  </picture>
 </p>
 
 <p align="center">
@@ -81,7 +84,10 @@ Rust users and CI can also use `cargo install vpsready --locked` (builds from so
 ## How a run works
 
 <p align="center">
-  <img src="assets/how-it-works.svg" alt="Flow: detect, audit, plan, then apply as one transaction (snapshot, validate, write, reload). The change is confirmed from a new SSH session or reverted by the dead-man timer, then verified and reported." width="100%">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/how-it-works.svg">
+    <img src="assets/how-it-works-light.svg" alt="Flow: detect, audit, plan, then apply as one transaction (snapshot, validate, write, reload). The change is confirmed from a new SSH session or reverted by the dead-man timer, then verified and reported." width="100%">
+  </picture>
 </p>
 
 If any step inside `apply` fails, the engine restores the snapshots in reverse order before it ever reaches the confirm step. The full design is in [the architecture doc](docs/architecture.md).

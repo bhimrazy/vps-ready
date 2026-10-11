@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300">
+  <rect width="1200" height="300" rx="12" fill="#ffffff"/>
+  <rect x="0.5" y="0.5" width="1199" height="299" rx="12" fill="none" stroke="#d0d7de"/>
+  <g transform="translate(110 70) scale(1.0)">
+  <rect width="160" height="160" rx="30" fill="#f6f8fa" stroke="#d0d7de"/>
+  <path d="M46 56 L74 80 L46 104" fill="none" stroke="#1a7f37" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="84" y="96" width="34" height="10" rx="2" fill="#1f2328"/></g>
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
+    <text x="320" y="150" font-size="72" font-weight="600" fill="#1f2328" letter-spacing="-1">vps<tspan fill="#1a7f37">-</tspan>ready</text>
+    <text x="322" y="204" font-size="26" fill="#59636e">Make a fresh VPS ready and secure, safely.</text>
+  </g>
+</svg>
