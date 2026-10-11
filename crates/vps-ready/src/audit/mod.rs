@@ -152,8 +152,9 @@ pub struct Report {
     pub findings: Vec<Finding>,
     /// Counts of outcomes.
     pub summary: Summary,
-    /// Every notice from fact collection. Those about SSH explain unknown
-    /// outcomes; the rest concern facts no control uses yet.
+    /// Every notice from fact collection. Those about SSH and root-only
+    /// kernel settings explain unknown outcomes; the rest concern facts no
+    /// control uses yet.
     pub notices: Vec<String>,
 }
 

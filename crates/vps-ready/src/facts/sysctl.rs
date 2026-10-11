@@ -1,8 +1,8 @@
 //! Kernel settings, read from the files under `/proc/sys`.
 //!
 //! Only the settings in [`KEYS`] are read, without running a command. Most
-//! are readable by anyone, but some kernels restrict a few to root, e.g. the
-//! `fs.protected_*` files on Linux 5.15 (Ubuntu 22.04).
+//! are readable by anyone, but older kernels restrict a few to root: the
+//! `fs.protected_*` files before Linux 5.18, e.g. Ubuntu 22.04's 5.15.
 
 use std::collections::BTreeMap;
 use std::path::Path;

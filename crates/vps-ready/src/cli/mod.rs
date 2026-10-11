@@ -193,13 +193,14 @@ fn collect_facts(root: &Path, quiet: &[&str]) -> anyhow::Result<Facts> {
     Ok(facts)
 }
 
-/// Whether running as root would let an unknown control be checked:
-/// `sshd -T` needs root, and some kernels restrict a few `/proc/sys` files.
+/// Whether running as root would let an unknown control be checked: when
+/// `sshd -T` could not run (it needs root), or a `/proc/sys` file is
+/// root-only on this kernel.
 fn root_would_help(report: &Report, facts: &Facts) -> bool {
     report.findings.iter().any(|f| {
         matches!(f.outcome, Outcome::Unknown { .. })
             && match &f.control.check {
-                Check::SshdEffective { .. } => true,
+                Check::SshdEffective { .. } => facts.ssh.effective.is_none(),
                 Check::Sysctl { key, .. } => {
                     facts.sysctl.as_ref().is_some_and(|s| s.is_unreadable(key))
                 }
