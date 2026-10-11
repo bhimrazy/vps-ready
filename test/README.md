@@ -1,11 +1,11 @@
 # Tests
 
-`vpsready` is tested in four layers, from fastest to most realistic:
+`vps-ready` is tested in four layers, from fastest to most realistic:
 
 1. **Unit tests** (`cargo test`): parsers and planners against the fakes in
-   `crates/vpsready/src/sys/fake.rs`, plus `insta` snapshots.
+   `crates/vps-ready/src/sys/fake.rs`, plus `insta` snapshots.
 2. **Fixture tests**: `detect`/`audit` against file trees under
-   `crates/vpsready/testdata/`, read through a rooted `RealFs`.
+   `crates/vps-ready/testdata/`, read through a rooted `RealFs`.
 3. **Container tests**: the static binary inside distro containers, for
    anything that reads or changes the system without touching SSH or the network.
 4. **VM tests**: full VMs for SSH, firewall, the engine and the dead-man switch,
@@ -16,11 +16,11 @@
 `test/images/Containerfile` builds a systemd + OpenSSH image that behaves
 like a fresh VPS, from the base image given as `BASE`. `test/capture-host-fixtures.sh <distro>` boots one
 (512 MB, 1 CPU, removed afterwards), logs in over SSH once, and records the
-exact commands the facts code runs into `crates/vpsready/testdata/hosts/<distro>/`.
+exact commands the facts code runs into `crates/vps-ready/testdata/hosts/<distro>/`.
 Unit tests replay them with `FakeRunner::from_fixture`.
 
 ```sh
-docker build -f test/images/Containerfile --build-arg BASE=debian:13 -t vpsready-test:debian-13 test/images
+docker build -f test/images/Containerfile --build-arg BASE=debian:13 -t vps-ready-test:debian-13 test/images
 test/capture-host-fixtures.sh debian-13
 ```
 

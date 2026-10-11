@@ -423,7 +423,7 @@ mod tests {
     #[test]
     fn missing_program_is_not_found() {
         let err = RealRunner
-            .run(&Cmd::new("definitely-not-a-real-program-vpsready"))
+            .run(&Cmd::new("definitely-not-a-real-program-vps-ready"))
             .unwrap_err();
         assert!(matches!(err, SysError::NotFound(_)), "{err:?}");
     }

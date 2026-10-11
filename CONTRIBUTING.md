@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping. `vpsready` changes SSH and firewall settings on real
+Thanks for helping. `vps-ready` changes SSH and firewall settings on real
 servers, so correctness and reviewability matter more than speed.
 
 ## Development setup
@@ -22,7 +22,7 @@ servers, so correctness and reviewability matter more than speed.
 
 ## Adding a module
 
-A module is one directory under `crates/vpsready/src/modules/<name>/` plus one
+A module is one directory under `crates/vps-ready/src/modules/<name>/` plus one
 registration line. Modules only describe the desired state and how to check
 it; the engine owns planning, applying, snapshots and rollback, so a module
 never writes files or restarts services itself.

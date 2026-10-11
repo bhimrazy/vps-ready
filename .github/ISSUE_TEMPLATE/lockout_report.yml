@@ -1,5 +1,5 @@
 name: Lockout report
-description: vpsready left a server unreachable, or the dead-man switch did not behave as expected.
+description: vps-ready left a server unreachable, or the dead-man switch did not behave as expected.
 labels: [lockout, bug]
 body:
   - type: markdown
@@ -10,8 +10,8 @@ body:
   - type: input
     id: version
     attributes:
-      label: vpsready version
-      description: Output of `vpsready version`.
+      label: vps-ready version
+      description: Output of `vps-ready version`.
     validations:
       required: true
   - type: input
@@ -46,12 +46,12 @@ body:
     id: recovery
     attributes:
       label: How you recovered
-      description: For example provider console, rescue system, or `vpsready rollback`.
+      description: For example provider console, rescue system, or `vps-ready rollback`.
     validations:
       required: true
   - type: textarea
     id: logs
     attributes:
       label: Logs
-      description: Output of `vpsready history` and the journal around the change, if available.
+      description: Output of `vps-ready history` and the journal around the change, if available.
       render: text

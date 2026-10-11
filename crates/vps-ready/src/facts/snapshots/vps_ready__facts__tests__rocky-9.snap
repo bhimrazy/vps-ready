@@ -1,5 +1,5 @@
 ---
-source: crates/vpsready/src/facts/mod.rs
+source: crates/vps-ready/src/facts/mod.rs
 expression: facts.os
 ---
 id: rocky

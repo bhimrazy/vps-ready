@@ -1,26 +1,25 @@
 ---
-source: crates/vpsready/src/facts/mod.rs
+source: crates/vps-ready/src/facts/mod.rs
 expression: "host(name, &[])"
 ---
 os:
-  id: debian
-  id_like: []
-  version_id: "13"
-  pretty_name: Debian GNU/Linux 13 (trixie)
+  id: ubuntu
+  id_like:
+    - debian
+  version_id: "24.04"
+  pretty_name: Ubuntu 24.04.5 LTS
   family: debian
 init: systemd
 virtualization:
   container: docker
   vm: vm-other
 ssh:
-  version: 10.0p2
-  activation: service
+  version: 9.6p1
+  activation: socket
   effective:
     acceptenv:
       - LANG
       - LC_*
-      - COLORTERM
-      - NO_COLOR
     addressfamily:
       - any
     allowagentforwarding:
@@ -52,7 +51,7 @@ ssh:
     chrootdirectory:
       - none
     ciphers:
-      - "chacha20-poly1305@openssh.com,aes128-gcm@openssh.com,aes256-gcm@openssh.com,aes128-ctr,aes192-ctr,aes256-ctr"
+      - "chacha20-poly1305@openssh.com,aes128-ctr,aes192-ctr,aes256-ctr,aes128-gcm@openssh.com,aes256-gcm@openssh.com"
     clientalivecountmax:
       - "3"
     clientaliveinterval:
@@ -102,7 +101,7 @@ ssh:
     ignoreuserknownhosts:
       - "no"
     ipqos:
-      - ef cs1
+      - lowdelay throughput
     kbdinteractiveauthentication:
       - "no"
     kerberosauthentication:
@@ -112,7 +111,7 @@ ssh:
     kerberosticketcleanup:
       - "yes"
     kexalgorithms:
-      - "mlkem768x25519-sha256,sntrup761x25519-sha512,sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521"
+      - "sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group-exchange-sha256,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group14-sha256"
     listenaddress:
       - "[::]:22"
       - "0.0.0.0:22"
@@ -130,8 +129,6 @@ ssh:
       - "10:30:100"
     modulifile:
       - /etc/ssh/moduli
-    pamservicename:
-      - sshd
     passwordauthentication:
       - "yes"
     permitemptypasswords:
@@ -154,10 +151,6 @@ ssh:
       - none
     persourcenetblocksize:
       - "32:128"
-    persourcepenalties:
-      - "crash:90 authfail:5 noauth:1 grace-exceeded:10 refuseconnection:10 max:600 min:15 max-sources4:65536 max-sources6:65536 overflow:permissive overflow6:permissive"
-    persourcepenaltyexemptlist:
-      - none
     pidfile:
       - /run/sshd.pid
     port:
@@ -172,8 +165,6 @@ ssh:
       - "yes"
     pubkeyauthoptions:
       - none
-    refuseconnection:
-      - "no"
     rekeylimit:
       - 0 0
     requiredrsasize:
@@ -182,10 +173,6 @@ ssh:
       - none
     securitykeyprovider:
       - internal
-    sshdauthpath:
-      - /usr/lib/openssh/sshd-auth
-    sshdsessionpath:
-      - /usr/lib/openssh/sshd-session
     streamlocalbindmask:
       - "0177"
     streamlocalbindunlink:
@@ -222,13 +209,15 @@ listeners:
     port: 22
     processes:
       - sshd
+      - systemd
   - proto: tcp
     addr: "::"
     port: 22
     processes:
       - sshd
+      - systemd
 session:
-  client: "127.0.0.1:46120"
+  client: "127.0.0.1:46104"
   server: "127.0.0.1:22"
 docker: false
 notices: []

@@ -62,7 +62,7 @@ impl fmt::Display for OsFamily {
     }
 }
 
-/// The fields of `os-release` that `vpsready` uses.
+/// The fields of `os-release` that `vps-ready` uses.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct OsRelease {
     /// `ID`, e.g. `ubuntu`. Defaults to `linux` per the spec.

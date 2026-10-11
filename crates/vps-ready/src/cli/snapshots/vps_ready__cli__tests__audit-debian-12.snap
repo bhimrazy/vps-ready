@@ -1,8 +1,8 @@
 ---
-source: crates/vpsready/src/cli/mod.rs
+source: crates/vps-ready/src/cli/mod.rs
 expression: "String::from_utf8(text).unwrap()"
 ---
-Audit of Debian GNU/Linux 13 (trixie): 5 controls
+Audit of Debian GNU/Linux 12 (bookworm): 5 controls
 
 STATUS   ID       SEVERITY  CONTROL
 FAIL     SSH-001  medium    Root login disabled

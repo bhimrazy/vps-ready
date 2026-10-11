@@ -10,8 +10,8 @@ body:
   - type: input
     id: version
     attributes:
-      label: vpsready version
-      description: Output of `vpsready version`.
+      label: vps-ready version
+      description: Output of `vps-ready version`.
     validations:
       required: true
   - type: input

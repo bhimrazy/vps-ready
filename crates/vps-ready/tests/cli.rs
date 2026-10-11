@@ -1,29 +1,29 @@
-//! End-to-end tests of the `vpsready` binary.
+//! End-to-end tests of the `vps-ready` binary.
 
 use assert_cmd::Command;
 use predicates::prelude::*;
 
-fn vpsready() -> Command {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_vpsready"));
+fn vps_ready() -> Command {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_vps-ready"));
     cmd.env("NO_COLOR", "1").env_remove("RUST_LOG");
     cmd
 }
 
 #[test]
 fn version_prints_version() {
-    vpsready()
+    vps_ready()
         .arg("version")
         .assert()
         .success()
         .stdout(predicate::str::starts_with(format!(
-            "vpsready {} (",
+            "vps-ready {} (",
             env!("CARGO_PKG_VERSION")
         )));
 }
 
 #[test]
 fn version_json_is_valid() {
-    let out = vpsready()
+    let out = vps_ready()
         .args(["version", "--json"])
         .assert()
         .success()
@@ -40,7 +40,7 @@ fn detect_reads_a_fixture_root() {
         env!("CARGO_MANIFEST_DIR"),
         "/testdata/os-release/ubuntu-24.04"
     );
-    vpsready()
+    vps_ready()
         .args(["detect", "--json", "--root", root])
         .assert()
         .success()
@@ -51,7 +51,7 @@ fn detect_reads_a_fixture_root() {
 /// checked (`sshd -T` needs root), so the exit code is 1, never 0 or 2.
 #[test]
 fn audit_json_reports_every_control() {
-    let out = vpsready()
+    let out = vps_ready()
         .args(["audit", "--json"])
         .assert()
         .code(1)
@@ -70,7 +70,7 @@ fn audit_json_reports_every_control() {
 
 #[test]
 fn unknown_command_is_a_usage_error() {
-    vpsready()
+    vps_ready()
         .arg("frobnicate")
         .assert()
         .code(2)

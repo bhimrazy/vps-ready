@@ -11,6 +11,7 @@ use std::process::ExitCode;
 use anyhow::Context;
 use clap::{ArgAction, Parser, Subcommand};
 use owo_colors::OwoColorize;
+use tracing_subscriber::EnvFilter;
 
 use crate::VERSION_INFO;
 use crate::audit::{self, Outcome, Report};
@@ -25,7 +26,7 @@ pub const EXIT_ERROR: u8 = 2;
 
 /// Detect, audit and safely harden a fresh Linux VPS.
 #[derive(Debug, Parser)]
-#[command(name = "vpsready", version, about, long_about = None)]
+#[command(name = "vps-ready", version, about, long_about = None)]
 pub struct Cli {
     /// Print machine-readable JSON instead of text.
     #[arg(long, global = true)]
@@ -72,6 +73,51 @@ impl Cli {
         let no_color_env = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
         !self.no_color && !no_color_env && io::stdout().is_terminal()
     }
+}
+
+/// Runs the command line of this process: parses arguments, sets up logging
+/// and maps the result to an exit code. Both the `vps-ready` and `vpsready`
+/// binaries are this one call.
+#[must_use]
+pub fn main() -> ExitCode {
+    // Usage errors are reported by clap itself, also with exit code 2.
+    let cli = Cli::parse();
+    init_tracing(cli.verbose, cli.color_enabled());
+
+    match run(&cli) {
+        Ok(code) => code,
+        Err(err) if is_broken_pipe(&err) => ExitCode::SUCCESS,
+        Err(err) => {
+            // `{:#}` prints the context chain on one line, without a backtrace.
+            eprintln!("error: {err:#}");
+            ExitCode::from(EXIT_ERROR)
+        }
+    }
+}
+
+/// Logs go to stderr. `RUST_LOG` wins when set; otherwise `-v` raises the
+/// level from `warn` to `info`, `debug` and `trace`.
+fn init_tracing(verbose: u8, ansi: bool) {
+    let default = match verbose {
+        0 => "warn",
+        1 => "info",
+        2 => "debug",
+        _ => "trace",
+    };
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(io::stderr)
+        .with_ansi(ansi)
+        .with_target(false)
+        .without_time()
+        .init();
+}
+
+/// `vps-ready detect | head -1` should not print an error.
+fn is_broken_pipe(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<io::Error>()
+        .is_some_and(|e| e.kind() == io::ErrorKind::BrokenPipe)
 }
 
 /// Runs the parsed command line and returns the exit code to use on success.

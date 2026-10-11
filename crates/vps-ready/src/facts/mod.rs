@@ -2,7 +2,7 @@
 //!
 //! [`collect`] gathers [`Facts`] through the [`Fs`] and [`Runner`] traits.
 //! Missing sources and failed probes are not errors: the fact becomes unknown
-//! and a notice is recorded, so `vpsready detect` also works on a developer
+//! and a notice is recorded, so `vps-ready detect` also works on a developer
 //! laptop or in a minimal container.
 
 use std::fmt;
@@ -31,7 +31,7 @@ const DOCKER_PATHS: [&str; 3] = [
     "/usr/bin/docker",
 ];
 
-/// Everything `vpsready` knows about the host.
+/// Everything `vps-ready` knows about the host.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Facts {
     /// Operating system identification from `os-release`.
@@ -44,7 +44,7 @@ pub struct Facts {
     pub ssh: Ssh,
     /// Listening TCP and UDP sockets.
     pub listeners: Vec<Listener>,
-    /// The SSH session `vpsready` runs in, if any.
+    /// The SSH session `vps-ready` runs in, if any.
     pub session: Option<SshSession>,
     /// Whether Docker is installed. Docker changes firewall and sysctl rules.
     pub docker: bool,

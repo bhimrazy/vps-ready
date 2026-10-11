@@ -18,7 +18,7 @@ use crate::sys::{Cmd, Runner};
 /// `ssh.*`; Fedora and RHEL call them `sshd.*`.
 const UNITS: [&str; 4] = ["ssh.socket", "sshd.socket", "ssh.service", "sshd.service"];
 
-/// What `vpsready` knows about the SSH server.
+/// What `vps-ready` knows about the SSH server.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Ssh {
     /// OpenSSH version from `ssh -V`, e.g. `9.6p1`.

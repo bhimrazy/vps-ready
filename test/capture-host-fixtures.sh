@@ -3,9 +3,9 @@
 #
 # Usage: test/capture-host-fixtures.sh <distro>      e.g. ubuntu-24.04
 # Needs: docker, and the test image for <distro>:
-#   docker build -f test/images/Containerfile --build-arg BASE=ubuntu:24.04 -t vpsready-test:ubuntu-24.04 test/images
+#   docker build -f test/images/Containerfile --build-arg BASE=ubuntu:24.04 -t vps-ready-test:ubuntu-24.04 test/images
 #
-# Writes crates/vpsready/testdata/hosts/<distro>/:
+# Writes crates/vps-ready/testdata/hosts/<distro>/:
 #   root/...        files the facts code reads (os-release, /proc/1/comm)
 #   commands.tsv    name, exit code, then the exact argv, tab-separated.
 #                   Several entries can share an argv (scenarios); the first wins
@@ -17,9 +17,9 @@ set -eu
 cd "$(dirname "$0")/.."
 
 distro=${1:?usage: $0 <distro>}
-image="vpsready-test:$distro"
-out="crates/vpsready/testdata/hosts/$distro"
-name="vpsready-capture-$distro-$$"
+image="vps-ready-test:$distro"
+out="crates/vps-ready/testdata/hosts/$distro"
+name="vps-ready-capture-$distro-$$"
 tmp=$(mktemp -d)
 
 cleanup() { docker rm -f "$name" >/dev/null 2>&1 || true; rm -rf "$tmp"; }
@@ -89,7 +89,7 @@ docker exec "$name" sh -c '
   echo "PasswordAuthentication yes" >/etc/ssh/sshd_config.d/50-cloud-init.conf
   echo "PasswordAuthentication no"  >/etc/ssh/sshd_config.d/99-late.conf'
 scenario sshd-T-dropin-99 sshd -T
-docker exec "$name" mv /etc/ssh/sshd_config.d/99-late.conf /etc/ssh/sshd_config.d/00-vpsready.conf
+docker exec "$name" mv /etc/ssh/sshd_config.d/99-late.conf /etc/ssh/sshd_config.d/00-vps-ready.conf
 scenario sshd-T-dropin-00 sshd -T
 
 cat "$tmp/plain.tsv" "$tmp/scenarios.tsv" >"$out/commands.tsv"

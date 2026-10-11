@@ -14,7 +14,7 @@
 
 **vps-ready** is a single static binary you run on a fresh Linux server. It detects what the machine is, audits what is insecure, shows you exactly what it will change, applies the changes safely, and cannot lock you out.
 
-> **Status:** early development. The repo is private until the first read-only release (v0.1.0). Today the binary has `vpsready version`, `vpsready detect` and a first `vpsready audit` with five SSH controls; the rest arrives milestone by milestone.
+> **Status:** early development. The repo is private until the first read-only release (v0.1.0). Today the binary has `vps-ready version`, `vps-ready detect` and a first `vps-ready audit` with five SSH controls; the rest arrives milestone by milestone.
 
 ## Table of contents
 
@@ -39,13 +39,13 @@ Auditors like Lynis tell you what is wrong but fix nothing. Ansible roles fix th
 
 | Command | What happens |
 |---|---|
-| `vpsready detect` | Read-only facts: distro, init system, virtualization, cloud provider, effective SSH config, listening ports, whether Docker is present |
-| `vpsready audit` | Checks the host against controls with stable IDs (for example `SSH-002`), each with the reason it matters. Text or JSON; exits 0 only when every control passes |
-| `vpsready plan` | A diff of every file and setting that would change, with a one-line reason for each |
-| `vpsready apply` | Snapshots originals, validates, writes atomically, reloads services, and arms a dead-man timer for anything that could lock you out |
-| `vpsready confirm` | Run from a **new** SSH session to prove the new configuration works. Without it, the change reverts automatically |
-| `vpsready rollback` | Restores the previous state from the transaction journal |
-| `vpsready export cloud-init` | Turns the profile you chose interactively into `user-data` for the next fifty servers |
+| `vps-ready detect` | Read-only facts: distro, init system, virtualization, cloud provider, effective SSH config, listening ports, whether Docker is present |
+| `vps-ready audit` | Checks the host against controls with stable IDs (for example `SSH-002`), each with the reason it matters. Text or JSON; exits 0 only when every control passes |
+| `vps-ready plan` | A diff of every file and setting that would change, with a one-line reason for each |
+| `vps-ready apply` | Snapshots originals, validates, writes atomically, reloads services, and arms a dead-man timer for anything that could lock you out |
+| `vps-ready confirm` | Run from a **new** SSH session to prove the new configuration works. Without it, the change reverts automatically |
+| `vps-ready rollback` | Restores the previous state from the transaction journal |
+| `vps-ready export cloud-init` | Turns the profile you chose interactively into `user-data` for the next fifty servers |
 
 Hardening is grouped into modules you can toggle: base system, admin user, SSH, firewall, brute-force protection, automatic updates, sysctl, logging, and deployment readiness (Docker done right, deploy user, reverse proxy, Tailscale, backups). Three profiles cover most people: **minimal**, **web** and **paranoid**.
 
@@ -59,13 +59,13 @@ $ ssh root@203.0.113.10
 # less install.sh
 # sh install.sh                              # verifies checksum and signature, installs to /usr/local/bin
 
-# vpsready detect
+# vps-ready detect
   OS        Ubuntu 24.04 LTS (debian family), systemd, KVM, Hetzner Cloud
   SSH       OpenSSH 9.6, ssh.socket activation, port 22, passwords ENABLED (via 50-cloud-init.conf)
   Firewall  ufw installed, inactive
   You       connected from 198.51.100.7 as root
 
-# vpsready audit
+# vps-ready audit
   Audit of Ubuntu 24.04.5 LTS: 23 controls
 
   STATUS   ID       SEVERITY  CONTROL
@@ -79,13 +79,13 @@ $ ssh root@203.0.113.10
   ...
   14 passed, 9 failed, 0 unknown
 
-# vpsready plan --profile web               # review the diff
-# vpsready apply
-  Open a NEW terminal and run:  ssh admin@203.0.113.10 sudo vpsready confirm 7F3K
+# vps-ready plan --profile web               # review the diff
+# vps-ready apply
+  Open a NEW terminal and run:  ssh admin@203.0.113.10 sudo vps-ready confirm 7F3K
   Auto-revert in 180s if not confirmed.
 ```
 
-Rust users and CI can also use `cargo install vpsready --locked` (builds from source) or `cargo binstall vpsready` (fetches the release binary). Signed packages for apt, dnf and apk follow at v0.5. Details and the trust model of each channel are in [the release doc](docs/release.md).
+The command is also installed as `vpsready`, without the hyphen. Rust users and CI can also use `cargo install vps-ready --locked` (builds from source) or `cargo binstall vps-ready` (fetches the release binary). Signed packages for apt, dnf and apk follow at v0.5. Details and the trust model of each channel are in [the release doc](docs/release.md).
 
 ## How a run works
 
@@ -106,7 +106,7 @@ These are enforced by the engine, not left to each module.
 - **Confirm from a new connection.** Your open terminal proves nothing, because sshd reloads and conntrack keep existing sessions alive. The dead-man timer reverts SSH and firewall changes unless you confirm from a new session, even if the tool or the terminal is gone, and even across a reboot.
 - **Show, then do.** Nothing changes without a plan you can read. Every change carries a reversibility label: reversible, partial, or irreversible.
 - **Effective state over file state.** Checks use `sshd -T`, `sysctl -n` and `ss -ltn`, not a guess at what a config file means.
-- **Drop-ins, not edits.** The tool owns files like `/etc/ssh/sshd_config.d/00-vpsready.conf` and never rewrites your `sshd_config` in place. That is also what beats cloud-init re-enabling passwords.
+- **Drop-ins, not edits.** The tool owns files like `/etc/ssh/sshd_config.d/00-vps-ready.conf` and never rewrites your `sshd_config` in place. That is also what beats cloud-init re-enabling passwords.
 - **Docker- and cloud-aware.** Container ports bypass ufw and firewalld by default; `ip_forward=0` kills Docker; cloud metadata must stay reachable. These are handled, not just warned about.
 - **No network calls** except package installs. No telemetry, no self-update.
 
@@ -151,7 +151,7 @@ cargo run -- detect
 | `make build-musl` | Static release builds for `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` |
 | `make deny` | Dependency checks: advisories, licenses, banned crates and allowed sources |
 
-The code is a Cargo workspace with one app crate (`crates/vpsready`, library plus thin binary) and, from M3, a standalone `sshd-config` parser crate. All system access goes through two traits, `Runner` and `Fs`, so every module is tested against fakes before it ever touches a real machine. The layout and the reasoning are in [the architecture doc](docs/architecture.md#repo-layout).
+The code is a Cargo workspace with one app crate (`crates/vps-ready`, library plus thin binary) and, from M3, a standalone `sshd-config` parser crate. All system access goes through two traits, `Runner` and `Fs`, so every module is tested against fakes before it ever touches a real machine. The layout and the reasoning are in [the architecture doc](docs/architecture.md#repo-layout).
 
 ## Contributing and security
 

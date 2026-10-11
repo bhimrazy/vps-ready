@@ -115,12 +115,12 @@ jobs:
       - run: cargo build --release --locked --target "$TARGET"
       - name: Check the binary is static
         run: |
-          file "target/$TARGET/release/vpsready" | tee /dev/stderr \
+          file "target/$TARGET/release/vps-ready" | tee /dev/stderr \
             | grep -Eq 'statically linked|static-pie linked'
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: vpsready-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/vpsready
+          name: vps-ready-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/vps-ready
           if-no-files-found: error
           retention-days: 7
 

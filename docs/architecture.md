@@ -193,35 +193,35 @@ stateDiagram-v2
 For modules with `needs_deadman` (ssh, firewall, close-public-ssh):
 
 ```
-arm:     systemd-run --unit=vpsready-revert-<txn> --on-active=180s \
-           /usr/local/bin/vpsready rollback --txn <txn> --reason deadman
-         + write /var/lib/vpsready/pending  (so a reboot during the window also reverts)
+arm:     systemd-run --unit=vps-ready-revert-<txn> --on-active=180s \
+           /usr/local/bin/vps-ready rollback --txn <txn> --reason deadman
+         + write /var/lib/vps-ready/pending  (so a reboot during the window also reverts)
 apply:   reload sshd / enable firewall
-prompt:  "Open a NEW terminal: ssh admin@host sudo vpsready confirm 7F3K"
+prompt:  "Open a NEW terminal: ssh admin@host sudo vps-ready confirm 7F3K"
 confirm: verify SSH_CONNECTION differs from the applying session (and arrived on the new port)
-         → systemctl stop vpsready-revert-<txn>.timer → clear pending → persist
+         → systemctl stop vps-ready-revert-<txn>.timer → clear pending → persist
 timeout: revert runs even if the tool and terminal are gone
 ```
 
 ```mermaid
 sequenceDiagram
   participant Old as User (old session)
-  participant V as vpsready
+  participant V as vps-ready
   participant T as systemd timer
   participant S as sshd / firewall
   participant New as User (new session)
-  Old->>V: vpsready apply
+  Old->>V: vps-ready apply
   V->>T: arm revert timer (180s), write pending marker
   V->>S: write drop-in or ruleset, reload
   V-->>Old: open a NEW terminal and run confirm 7F3K
   alt confirmed before the deadline
     New->>S: ssh admin@host with the new config
-    New->>V: sudo vpsready confirm 7F3K
+    New->>V: sudo vps-ready confirm 7F3K
     V->>V: check SSH_CONNECTION differs from the applying session
     V->>T: disarm, stop the timer
     V->>V: clear pending, state Confirmed
   else no confirm before the deadline
-    T->>V: vpsready rollback --txn ID --reason deadman
+    T->>V: vps-ready rollback --txn ID --reason deadman
     V->>S: restore snapshots, reload
     V->>V: state RolledBack
   end
@@ -234,15 +234,15 @@ sequenceDiagram
 ## State layout
 
 ```
-/etc/vpsready/config.toml            last-applied profile
-/var/lib/vpsready/state.json         applied modules + managed-file hashes (drift detection)
-/var/lib/vpsready/txn/<ULID>/
+/etc/vps-ready/config.toml            last-applied profile
+/var/lib/vps-ready/state.json         applied modules + managed-file hashes (drift detection)
+/var/lib/vps-ready/txn/<ULID>/
     meta.json                        TxnState: planned | applied | pending-confirm | confirmed | rolled-back
     plan.json  diff.patch
     journal.jsonl                    append-only, fsync per step
     backups/<escaped-path>           original bytes + stat
-/run/vpsready/lock
-/var/log/vpsready/<txn>.log          + journald when present
+/run/vps-ready/lock
+/var/log/vps-ready/<txn>.log          + journald when present
 ```
 Commands that read this: `history`, `rollback [--txn|--last]`, `drift`.
 
@@ -251,17 +251,17 @@ Commands that read this: `history`, `rollback [--txn|--last]`, `drift`.
 Commands are `clap` derive structs in `src/cli`. At M0 only `version` and `detect` exist; the rest arrive with their milestones (see the GitHub milestones).
 
 ```
-vpsready                      interactive wizard (default when a TTY)
-vpsready detect               print facts (also --json)
-vpsready audit                run controls → text | json | sarif | junit; non-zero exit on fail
-vpsready plan  [--profile X] [--out plan.json]
-vpsready apply [plan.json | --profile X] [--yes] [--deadman=180s|off|selftest]
-vpsready confirm <code>
-vpsready rollback [--last | --txn ID]
-vpsready history | drift
-vpsready export cloud-init --profile X > user-data.yaml
-vpsready modules [--explain ssh]       learn-mode: what and why for each module
-vpsready version
+vps-ready                      interactive wizard (default when a TTY)
+vps-ready detect               print facts (also --json)
+vps-ready audit                run controls → text | json | sarif | junit; non-zero exit on fail
+vps-ready plan  [--profile X] [--out plan.json]
+vps-ready apply [plan.json | --profile X] [--yes] [--deadman=180s|off|selftest]
+vps-ready confirm <code>
+vps-ready rollback [--last | --txn ID]
+vps-ready history | drift
+vps-ready export cloud-init --profile X > user-data.yaml
+vps-ready modules [--explain ssh]       learn-mode: what and why for each module
+vps-ready version
 ```
 
 ## Profile format: TOML
@@ -296,7 +296,7 @@ enabled          = true
 bind_ports_local = true
 ```
 
-**cloud-init:** `vpsready export cloud-init` emits `#cloud-config` that writes the profile, downloads a **pinned version, verifying its SHA256** (embedded in the user-data), and runs `apply --yes --deadman=off` from `runcmd`.
+**cloud-init:** `vps-ready export cloud-init` emits `#cloud-config` that writes the profile, downloads a **pinned version, verifying its SHA256** (embedded in the user-data), and runs `apply --yes --deadman=off` from `runcmd`.
 
 ## Repo layout
 
@@ -305,7 +305,7 @@ A Cargo workspace. Shared metadata, dependency versions and lints are declared o
 ```
 Cargo.toml                 workspace: [workspace.package], [workspace.dependencies], [workspace.lints]
 crates/
-  vpsready/                the app (lib + thin bin)
+  vps-ready/                the app (lib + thin bin)
     src/main.rs  src/lib.rs
     src/cli/               clap derive commands
     src/sys/               Runner + Fs traits; RealRunner/RealFs; FakeRunner/FakeFs (feature "testing")
