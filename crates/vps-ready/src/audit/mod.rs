@@ -243,7 +243,7 @@ fn evaluate(check: &Check, facts: &Facts) -> Outcome {
         Check::Sysctl { key, one_of } => {
             if facts.virtualization.in_container() {
                 return Outcome::Skip {
-                    reason: "kernel settings belong to the container host".to_owned(),
+                    reason: "kernel settings are not checked inside a container".to_owned(),
                 };
             }
             match facts.sysctl.as_ref().and_then(|s| s.get(key)) {
@@ -500,7 +500,12 @@ mod tests {
         assert_eq!(json["status"], "skip");
         assert!(json["reason"].is_string());
         assert!(json.get("found").is_none());
+        let sysctl_controls = report
+            .findings
+            .iter()
+            .filter(|f| matches!(f.control.check, Check::Sysctl { .. }))
+            .count();
         let summary = serde_json::to_value(report.summary).unwrap();
-        assert_eq!(summary["skipped"], 13);
+        assert_eq!(summary["skipped"], sysctl_controls);
     }
 }

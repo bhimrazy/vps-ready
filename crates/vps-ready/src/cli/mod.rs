@@ -59,8 +59,8 @@ pub enum Command {
     },
     /// Check this system against the security controls and report what fails.
     ///
-    /// Exits 0 when every control passes, 1 when any control fails or cannot
-    /// be checked, and 2 on error. The SSH checks need root.
+    /// Exits 0 when no control fails or is unknown, 1 otherwise, and 2 on
+    /// error. The SSH checks need root.
     Audit,
 }
 
@@ -375,11 +375,16 @@ fn ssh_line(ssh: &facts::Ssh) -> String {
     parts.join(", ")
 }
 
-/// Whether this process runs as root: `/proc/self` belongs to the effective
-/// user. False where there is no `/proc`.
+/// Whether this process runs as root: the effective UID, the second field of
+/// the `Uid:` line in `/proc/self/status`. False where there is no `/proc`.
 fn running_as_root() -> bool {
-    use std::os::unix::fs::MetadataExt;
-    std::fs::metadata("/proc/self").is_ok_and(|m| m.uid() == 0)
+    std::fs::read_to_string("/proc/self/status").is_ok_and(|status| {
+        status
+            .lines()
+            .find_map(|line| line.strip_prefix("Uid:"))
+            .and_then(|ids| ids.split_whitespace().nth(1))
+            == Some("0")
+    })
 }
 
 /// Splits `text` into lines of at most `width` characters at spaces. A word

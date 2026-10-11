@@ -34,4 +34,4 @@ SKIP     NET-002  low       Source-routed packets rejected
 SKIP     NET-003  low       Broadcast pings ignored
 
 2 passed, 3 failed, 0 unknown, 13 skipped
-Skipped: kernel settings belong to the container host.
+Skipped: kernel settings are not checked inside a container.

@@ -74,7 +74,7 @@ Detection runs once, read-only, into a typed `Facts` struct (`serde` `Serialize`
 - virtualization and container (`systemd-detect-virt`, `/.dockerenv`, DMI (planned))
 - cloud provider (`cloud-id`, `/run/cloud-init/instance-data.json`, DMI vendor strings) (planned)
 - effective sshd config (`sshd -T`), listening sockets, admin IP from `SSH_CONNECTION`, Docker present
-- kernel settings from `/proc/sys` (not read inside a container, where they belong to the host)
+- kernel settings from `/proc/sys` (not read inside a detected container, where they mostly belong to the host; a container that `systemd-detect-virt` and the Docker/Podman markers miss is read as if it were the host)
 
 `Facts` is plain data with no methods that touch the system, so a test can build one by hand for any distro.
 
@@ -130,7 +130,7 @@ check    = { kind = "sshd_effective", key = "passwordauthentication", equals = "
 ```
 Check kinds: `sshd_effective` and `sysctl` are implemented; planned are `file_mode`, `file_contains`, `pkg_installed`, `service_state`, `port_listening`, `user_property`, `fw_allows`. Each is added with the first control that needs it. Later fields: `fix` (the module setting that resolves it, M2) and `refs` (CIS and Lynis IDs).
 
-An outcome is `pass`, `fail` (with the value found), `unknown` (the fact could not be read, usually for lack of root) or `skip` (the control does not apply, e.g. kernel settings inside a container, which belong to the host). Unknown never counts as a pass. `audit` exits 0 when no control fails or is unknown, 1 otherwise, and 2 on error.
+An outcome is `pass`, `fail` (with the value found), `unknown` (the fact could not be read, usually for lack of root) or `skip` (the control is not checked here, e.g. kernel settings inside a container). Unknown never counts as a pass. `audit` exits 0 when no control fails or is unknown, 1 otherwise, and 2 on error.
 
 `sysctl` checks read `/proc/sys` directly, with no command, and only outside containers. Settings whose effect depends on several files, such as ICMP redirects (the kernel combines `all`, the interface and its forwarding state), need a check kind of their own and come later.
 
