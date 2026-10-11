@@ -66,11 +66,14 @@ $ ssh root@203.0.113.10
   You       connected from 198.51.100.7 as root
 
 # vpsready audit
-  FAIL     SSH-002  high    Password authentication disabled
-                            passwordauthentication is yes, expected no
-  FAIL     FW-001   high    Host firewall active
-  FAIL     UPD-001  medium  Automatic security updates enabled
-  PASS     MAC-001  medium  AppArmor enforcing
+  Audit of Ubuntu 24.04.5 LTS: 23 controls
+
+  STATUS   ID       SEVERITY  CONTROL
+  FAIL     SSH-002  high      Password authentication disabled
+                              passwordauthentication is yes, expected no
+  FAIL     FW-001   high      Host firewall active
+  FAIL     UPD-001  medium    Automatic security updates enabled
+  PASS     MAC-001  medium    AppArmor enforcing
   ...
   14 passed, 9 failed, 0 unknown
 

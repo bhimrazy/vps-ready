@@ -102,12 +102,18 @@ pub fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
         }
         Command::Audit => {
             let controls = audit::catalog()?;
-            let report = audit::run(controls, &collect_facts(Path::new("/"))?);
+            let facts = collect_facts(Path::new("/"))?;
+            let report = audit::run(controls, &facts);
             if cli.json {
                 serde_json::to_writer_pretty(&mut out, &report)?;
                 writeln!(out)?;
             } else {
-                print_report(&mut out, &report, cli.color_enabled())?;
+                print_report(
+                    &mut out,
+                    &report,
+                    &facts.os.pretty_name,
+                    cli.color_enabled(),
+                )?;
             }
             if !report.all_passed() {
                 code = ExitCode::from(EXIT_AUDIT_FAILED);
@@ -128,19 +134,29 @@ fn collect_facts(root: &Path) -> anyhow::Result<Facts> {
     Ok(facts)
 }
 
-/// One block per control, then a summary line:
+/// A title, a header row, one block per control, then a summary line:
 ///
 /// ```text
-/// FAIL     SSH-002  high    Password authentication disabled
-///                           passwordauthentication is yes, expected no
-///                           Passwords can be guessed or reused from leaks; ...
-/// PASS     SSH-003  high    Keyboard-interactive authentication disabled
+/// Audit of Ubuntu 24.04.5 LTS: 5 controls
+///
+/// STATUS   ID       SEVERITY  CONTROL
+/// FAIL     SSH-002  high      Password authentication disabled
+///                             passwordauthentication is yes, expected no
+///                             Passwords can be guessed or reused from leaks; ...
+/// PASS     SSH-003  high      Keyboard-interactive authentication disabled
 ///
 /// 3 passed, 2 failed, 0 unknown
 /// ```
-fn print_report(out: &mut impl Write, report: &Report, color: bool) -> io::Result<()> {
-    const INDENT: &str = "                          ";
+fn print_report(out: &mut impl Write, report: &Report, host: &str, color: bool) -> io::Result<()> {
+    const INDENT: &str = "                            ";
     const WIDTH: usize = 100;
+    let title = format!("Audit of {host}: {} controls", report.findings.len());
+    let header = format!("{:<7}  {:<7}  {:<8}  CONTROL", "STATUS", "ID", "SEVERITY");
+    if color {
+        writeln!(out, "{}\n\n{}", title.bold(), header.dimmed())?;
+    } else {
+        writeln!(out, "{title}\n\n{header}")?;
+    }
     for finding in &report.findings {
         let control = &finding.control;
         // Pad before coloring: escape codes would count towards the width.
@@ -158,7 +174,7 @@ fn print_report(out: &mut impl Write, report: &Report, color: bool) -> io::Resul
         let severity = control.severity.to_string();
         writeln!(
             out,
-            "{label}  {:<7}  {severity:<6}  {}",
+            "{label}  {:<7}  {severity:<8}  {}",
             control.id, control.title
         )?;
         if let Some(detail) = finding.detail() {
@@ -314,7 +330,7 @@ mod tests {
         for name in HOSTS {
             let report = audit::run(audit::catalog().unwrap(), &host(name, &[]));
             let mut text = Vec::new();
-            print_report(&mut text, &report, false).unwrap();
+            print_report(&mut text, &report, &host(name, &[]).os.pretty_name, false).unwrap();
             insta::assert_snapshot!(format!("audit-{name}"), String::from_utf8(text).unwrap());
         }
     }

@@ -2,19 +2,22 @@
 source: crates/vpsready/src/cli/mod.rs
 expression: "String::from_utf8(text).unwrap()"
 ---
-FAIL     SSH-001  medium  Root login disabled
-                          permitrootlogin is without-password, expected no
-                          Root is the one account name every scanner tries, and its actions are not
-                          tied to a person. Log in as a named user and use sudo.
-FAIL     SSH-002  high    Password authentication disabled
-                          passwordauthentication is yes, expected no
-                          Passwords can be guessed or reused from leaks; SSH keys cannot be
-                          brute-forced.
-PASS     SSH-003  high    Keyboard-interactive authentication disabled
-PASS     SSH-004  high    Empty passwords rejected
-FAIL     SSH-005  low     X11 forwarding disabled
-                          x11forwarding is yes, expected no
-                          A server has no use for graphical apps, and a forwarded display lets the
-                          server reach into your desktop session.
+Audit of Debian GNU/Linux 13 (trixie): 5 controls
+
+STATUS   ID       SEVERITY  CONTROL
+FAIL     SSH-001  medium    Root login disabled
+                            permitrootlogin is without-password, expected no
+                            Root is the one account name every scanner tries, and its actions are
+                            not tied to a person. Log in as a named user and use sudo.
+FAIL     SSH-002  high      Password authentication disabled
+                            passwordauthentication is yes, expected no
+                            Passwords can be guessed or reused from leaks; SSH keys cannot be
+                            brute-forced.
+PASS     SSH-003  high      Keyboard-interactive authentication disabled
+PASS     SSH-004  high      Empty passwords rejected
+FAIL     SSH-005  low       X11 forwarding disabled
+                            x11forwarding is yes, expected no
+                            A server has no use for graphical apps, and a forwarded display lets the
+                            server reach into your desktop session.
 
 2 passed, 3 failed, 0 unknown
