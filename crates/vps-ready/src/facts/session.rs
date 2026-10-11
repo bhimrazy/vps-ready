@@ -54,13 +54,14 @@ impl SshSession {
     }
 }
 
+/// The notice recorded when `SSH_CONNECTION` is not set. Only `detect`
+/// shows the session, so `audit` does not print it.
+pub const UNSET_NOTICE: &str = "SSH_CONNECTION is not set: not an SSH session, or sudo removed it \
+     (use `sudo --preserve-env=SSH_CONNECTION`)";
+
 pub(super) fn detect(env: &Env, notices: &mut Vec<String>) -> Option<SshSession> {
     let Some(value) = env.ssh_connection.as_deref() else {
-        notices.push(
-            "SSH_CONNECTION is not set: not an SSH session, or sudo removed it \
-             (use `sudo --preserve-env=SSH_CONNECTION`)"
-                .to_owned(),
-        );
+        notices.push(UNSET_NOTICE.to_owned());
         return None;
     };
     let session = SshSession::parse(value);

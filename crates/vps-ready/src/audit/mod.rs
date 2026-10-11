@@ -246,6 +246,11 @@ fn evaluate(check: &Check, facts: &Facts) -> Outcome {
                     reason: "kernel settings are not checked inside a container".to_owned(),
                 };
             }
+            if facts.sysctl.as_ref().is_some_and(|s| s.is_unreadable(key)) {
+                return Outcome::Unknown {
+                    reason: format!("{key} is readable only by root on this kernel"),
+                };
+            }
             match facts.sysctl.as_ref().and_then(|s| s.get(key)) {
                 Some(found) if one_of.iter().any(|ok| ok == found) => Outcome::Pass,
                 Some(found) => Outcome::Fail {
