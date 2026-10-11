@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping. `vpsready` changes SSH and firewall settings on real
+Thanks for helping. `vps-ready` changes SSH and firewall settings on real
 servers, so correctness and reviewability matter more than speed.
 
 ## Development setup
@@ -22,18 +22,15 @@ servers, so correctness and reviewability matter more than speed.
 
 ## Adding a module
 
-A module is one directory under `crates/vpsready/src/modules/<name>/` plus one
-registration line. Modules only describe the desired state and how to check
+Modules arrive with the engine in M2. Once they do, a module is one directory under
+`crates/vps-ready/src/modules/<name>/` plus one registration line. Modules only describe the desired state and how to check
 it; the engine owns planning, applying, snapshots and rollback, so a module
 never writes files or restarts services itself.
 
 ## Tests
 
-- Unit tests and an `insta` snapshot for every module.
-- A container test for anything that touches the system.
-- A VM test for anything involving SSH, the firewall or the engine.
-
-See `test/README.md` for the layers.
+- Unit tests and, where output is rendered, an `insta` snapshot.
+- Container and VM tests are planned (see [docs/testing.md](docs/testing.md)); until then, say in the PR how you tried a change that touches the system.
 
 ## Lint policy
 

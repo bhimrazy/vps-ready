@@ -2,8 +2,8 @@
 * @bhimrazy
 
 # Security-relevant paths: changes here need an explicit owner review.
-/crates/vpsready/src/engine/ @bhimrazy
-/crates/vpsready/src/modules/ssh/ @bhimrazy
-/crates/vpsready/src/modules/firewall/ @bhimrazy
+/crates/vps-ready/src/engine/ @bhimrazy
+/crates/vps-ready/src/modules/ssh/ @bhimrazy
+/crates/vps-ready/src/modules/firewall/ @bhimrazy
 /.github/ @bhimrazy
 /scripts/ @bhimrazy

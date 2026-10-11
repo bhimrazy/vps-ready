@@ -53,10 +53,10 @@ Legend: **Risk** = chance of lockout or breakage (L/M/H). **Profile** = M(inimal
 
 ### SSH (highest lockout risk; the dead-man switch is required)
 
-**Mechanism:** write **one** drop-in, `/etc/ssh/sshd_config.d/00-vpsready.conf`.
+**Mechanism:** write **one** drop-in, `/etc/ssh/sshd_config.d/00-vps-ready.conf`.
 - sshd uses the **first value it reads** for each keyword, and the `Include` is at the top of `sshd_config`.
 - So `00-` beats cloud-init's `50-cloud-init.conf` (which sets `PasswordAuthentication yes`).
-- Also write `/etc/cloud/cloud.cfg.d/99-vpsready.cfg` containing `ssh_pwauth: false` so cloud-init doesn't write it back.
+- Also write `/etc/cloud/cloud.cfg.d/99-vps-ready.cfg` containing `ssh_pwauth: false` so cloud-init doesn't write it back.
 - If there's no `Include` line (check Alpine/Arch), add one as the first line.
 
 ```sshconfig
@@ -92,7 +92,7 @@ AllowGroups sshusers        # add admin + deploy to the group FIRST
 
 ### Firewall
 
-**Policy:** deny inbound, allow outbound, allow established/loopback/ICMP. **Never block ICMPv6** (neighbour discovery and path-MTU discovery need it). **Allow SSH before enabling.**
+**Policy:** deny inbound, allow outbound, allow established/loopback/ICMP. **Never block ICMPv6** (neighbor discovery and path-MTU discovery need it). **Allow SSH before enabling.**
 
 | Family | How | Safety net |
 |---|---|---|
@@ -124,14 +124,14 @@ Once SSH is key-only, brute force is mostly noise. Don't oversell this module.
 
 | Family | How |
 |---|---|
-| Debian/Ubuntu | `unattended-upgrades`, `20auto-upgrades`, our `52vpsready` drop-in: `Automatic-Reboot "false"` (or a reboot window), `Remove-Unused-Kernel-Packages "true"`. **Leave Docker's repo out** (an upgrade restarts containers unless `live-restore` is on) |
+| Debian/Ubuntu | `unattended-upgrades`, `20auto-upgrades`, our `52vps-ready` drop-in: `Automatic-Reboot "false"` (or a reboot window), `Remove-Unused-Kernel-Packages "true"`. **Leave Docker's repo out** (an upgrade restarts containers unless `live-restore` is on) |
 | RHEL 9/10 | `dnf-automatic`, `upgrade_type = security`, `apply_updates = yes`, timer |
 | Fedora 41+ | `dnf5-plugin-automatic` |
 | Alpine | `/etc/periodic/daily/apk-upgrade`; warn when the branch nears end of life |
 
 Also make sure **needrestart ≥ 3.8**, because older versions have local-root CVEs (CVE-2024-48990 family).
 
-### Kernel / sysctl (`/etc/sysctl.d/90-vpsready.conf`)
+### Kernel / sysctl (`/etc/sysctl.d/90-vps-ready.conf`)
 
 **Safe set (all profiles):**
 - no ICMP redirects or source routing, `tcp_syncookies=1`;
@@ -176,7 +176,7 @@ Also make sure **needrestart ≥ 3.8**, because older versions have local-root C
 
 0. Preflight + backups + snapshot advice.
 1. Update, time, hostname, swap.
-2. Admin user + key + sudo → **Challenge 1:** the user opens a *new* terminal and runs `ssh admin@host sudo vpsready confirm <code>`. This proves a fresh login with the right user, key and sudo all work. Nothing restrictive runs before it.
+2. Admin user + key + sudo → **Challenge 1:** the user opens a *new* terminal and runs `ssh admin@host sudo vps-ready confirm <code>`. This proves a fresh login with the right user, key and sudo all work. Nothing restrictive runs before it.
 3. SSH drop-in: write → `sshd -t` → `sshd -T` effective check → **arm dead-man** → reload → **Challenge 2** from a new connection → disarm.
 4. Firewall: allow current SSH + admin IP → arm dead-man → enable → confirm from a new connection.
 5. Brute-force protection, updates, sysctl, journald, auditd.

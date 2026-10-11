@@ -1,4 +1,4 @@
-//! The SSH session `vpsready` was started from.
+//! The SSH session `vps-ready` was started from.
 //!
 //! Knowing the admin's address and the port they connected to is what lets
 //! later milestones keep that path open: the firewall must allow it, and a

@@ -1,8 +1,8 @@
 # Test image: a distro with systemd as PID 1 and OpenSSH, close to a fresh
 # cloud VPS. Debian-family bases only for now (apt).
 #
-#   docker build -f test/images/Containerfile --build-arg BASE=debian:13 -t vpsready-test:debian-13 test/images
-#   docker run -d --privileged --cgroupns=private --tmpfs /run --tmpfs /run/lock vpsready-test:debian-13
+#   docker build -f test/images/Containerfile --build-arg BASE=debian:13 -t vps-ready-test:debian-13 test/images
+#   docker run -d --privileged --cgroupns=private --tmpfs /run --tmpfs /run/lock vps-ready-test:debian-13
 ARG BASE=debian:13
 FROM ${BASE}
 

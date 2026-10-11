@@ -4,7 +4,7 @@
 
 | | Rust | Go | Bash | Python |
 |---|---|---|---|---|
-| Static binary incl. Alpine/musl + arm64 | Yes: `x86_64-` / `aarch64-unknown-linux-musl` targets; arm64 needs a cross linker or an arm64 runner | Yes: `CGO_ENABLED=0 GOARCH=arm64` | n/a (but bash is missing on Alpine; busybox vs GNU differences) | No: not present on Alpine/minimal Debian |
+| Static binary incl. Alpine/musl + arm64 | Yes: `x86_64-` / `aarch64-unknown-linux-musl` targets; both targets link with `rust-lld` and the bundled musl CRT; no cross toolchain or arm64 runner needed | Yes: `CGO_ENABLED=0 GOARCH=arm64` | n/a (but bash is missing on Alpine; busybox vs GNU differences) | No: not present on Alpine/minimal Debian |
 | TUI | `inquire` (forms), `ratatui` (plan/diff view) | Charm `huh` (forms), `bubbletea` | whiptail (not everywhere) | textual (needs a runtime) |
 | Who can read and contribute | Smaller among sysadmins, growing (sudo-rs, uutils coreutils) | Large infra crowd (Docker, k8s, Terraform, Tailscale, CrowdSec are Go) | Everyone, but quality varies | Ansible people |
 | Plan/diff/rollback/state machine | Best fit: exhaustive `match` means a new state or label doesn't compile until every use handles it | Comfortable, but a missing `switch` case compiles silently | Collapses at this size | Comfortable |
@@ -24,7 +24,7 @@
 - **Slower compiles** than Go. Mitigation: one app crate, a short dependency list, `cargo check` in the inner loop.
 - **Release tooling is less turnkey** than GoReleaser. We hand-write the release workflow (see [the release doc](release.md) and [D16](decisions.md)).
 
-**Shell is used for exactly one thing:** the ~100-line POSIX `install.sh`.
+**Shell is used only for** the POSIX `install.sh` (about 150 lines) and the fixture-capture script under `test/`.
 
 > Learning note: this project exercises the core of Rust without the hard corners: traits and trait objects (`Box<dyn Resource>`), enums with data plus `match`, error types with `thiserror`, `std::process::Command`, compile-time templates with `askama`, and testing with fakes behind a Cargo feature. No async, no lifetimes beyond the simple ones.
 
@@ -48,6 +48,8 @@ Each layer only calls the one below it. The bottom layer, `sys`, is the only cod
 
 Two traits, and nothing else in the codebase is allowed to run a process or touch a file directly:
 
+Target design. Today `Fs` is read-only (`read`, `exists`, `read_dir`, `metadata`; see `crates/vps-ready/src/sys/mod.rs`); writes arrive with the engine in M2.
+
 ```rust
 pub trait Runner {
     fn run(&self, cmd: &Cmd) -> Result<Output, SysError>;   // Cmd = program, args, env, timeout
@@ -61,16 +63,16 @@ pub trait Fs {                                              // every path is res
     // ... remove, read_dir
 }
 ```
-- `RealRunner` uses `std::process::Command` and kills the child if it exceeds its timeout. `RealFs` is rooted at `/` and uses `rustix` for `fsync` and `flock`.
-- `FakeRunner` (matches argv, returns canned output) and `FakeFs` (rooted at a temp dir) live behind the `testing` Cargo feature, so integration tests can use them but release binaries don't contain them.
+- `RealRunner` uses `std::process::Command` and kills the child if it exceeds its timeout. `RealFs` is rooted at `/`; `rustix` for `fsync` and `flock` is planned with the engine.
+- `FakeRunner` (matches argv, returns canned output) and `FakeFs` (an in-memory map of paths to contents) live behind the `testing` Cargo feature, so integration tests can use them but release binaries don't contain them.
 - `Sys` bundles both, so higher layers take one `&dyn Sys` argument.
 
 ### Facts (`src/facts`)
 Detection runs once, read-only, into a typed `Facts` struct (`serde` `Serialize`, so `detect --json` is free):
 - OS family from `/etc/os-release` (`ID`, `ID_LIKE`, `VERSION_ID`)
 - init from `/proc/1/comm`
-- virtualization and container (`systemd-detect-virt`, `/.dockerenv`, DMI)
-- cloud provider (`cloud-id`, `/run/cloud-init/instance-data.json`, DMI vendor strings)
+- virtualization and container (`systemd-detect-virt`, `/.dockerenv`, DMI (planned))
+- cloud provider (`cloud-id`, `/run/cloud-init/instance-data.json`, DMI vendor strings) (planned)
 - effective sshd config (`sshd -T`), listening sockets, admin IP from `SSH_CONNECTION`, Docker present
 
 `Facts` is plain data with no methods that touch the system, so a test can build one by hand for any distro.
@@ -193,35 +195,35 @@ stateDiagram-v2
 For modules with `needs_deadman` (ssh, firewall, close-public-ssh):
 
 ```
-arm:     systemd-run --unit=vpsready-revert-<txn> --on-active=180s \
-           /usr/local/bin/vpsready rollback --txn <txn> --reason deadman
-         + write /var/lib/vpsready/pending  (so a reboot during the window also reverts)
+arm:     systemd-run --unit=vps-ready-revert-<txn> --on-active=180s \
+           /usr/local/bin/vps-ready rollback --txn <txn> --reason deadman
+         + write /var/lib/vps-ready/pending  (so a reboot during the window also reverts)
 apply:   reload sshd / enable firewall
-prompt:  "Open a NEW terminal: ssh admin@host sudo vpsready confirm 7F3K"
+prompt:  "Open a NEW terminal: ssh admin@host sudo vps-ready confirm 7F3K"
 confirm: verify SSH_CONNECTION differs from the applying session (and arrived on the new port)
-         → systemctl stop vpsready-revert-<txn>.timer → clear pending → persist
+         → systemctl stop vps-ready-revert-<txn>.timer → clear pending → persist
 timeout: revert runs even if the tool and terminal are gone
 ```
 
 ```mermaid
 sequenceDiagram
   participant Old as User (old session)
-  participant V as vpsready
+  participant V as vps-ready
   participant T as systemd timer
   participant S as sshd / firewall
   participant New as User (new session)
-  Old->>V: vpsready apply
+  Old->>V: vps-ready apply
   V->>T: arm revert timer (180s), write pending marker
   V->>S: write drop-in or ruleset, reload
   V-->>Old: open a NEW terminal and run confirm 7F3K
   alt confirmed before the deadline
     New->>S: ssh admin@host with the new config
-    New->>V: sudo vpsready confirm 7F3K
+    New->>V: sudo vps-ready confirm 7F3K
     V->>V: check SSH_CONNECTION differs from the applying session
     V->>T: disarm, stop the timer
     V->>V: clear pending, state Confirmed
   else no confirm before the deadline
-    T->>V: vpsready rollback --txn ID --reason deadman
+    T->>V: vps-ready rollback --txn ID --reason deadman
     V->>S: restore snapshots, reload
     V->>V: state RolledBack
   end
@@ -234,34 +236,34 @@ sequenceDiagram
 ## State layout
 
 ```
-/etc/vpsready/config.toml            last-applied profile
-/var/lib/vpsready/state.json         applied modules + managed-file hashes (drift detection)
-/var/lib/vpsready/txn/<ULID>/
+/etc/vps-ready/config.toml            last-applied profile
+/var/lib/vps-ready/state.json         applied modules + managed-file hashes (drift detection)
+/var/lib/vps-ready/txn/<ULID>/
     meta.json                        TxnState: planned | applied | pending-confirm | confirmed | rolled-back
     plan.json  diff.patch
     journal.jsonl                    append-only, fsync per step
     backups/<escaped-path>           original bytes + stat
-/run/vpsready/lock
-/var/log/vpsready/<txn>.log          + journald when present
+/run/vps-ready/lock
+/var/log/vps-ready/<txn>.log          + journald when present
 ```
 Commands that read this: `history`, `rollback [--txn|--last]`, `drift`.
 
 ## CLI surface (v1)
 
-Commands are `clap` derive structs in `src/cli`. At M0 only `version` and `detect` exist; the rest arrive with their milestones (see the GitHub milestones).
+Commands are `clap` derive structs in `src/cli`. Today `version`, `detect` and `audit` exist; the rest arrive with their milestones (see the GitHub milestones).
 
 ```
-vpsready                      interactive wizard (default when a TTY)
-vpsready detect               print facts (also --json)
-vpsready audit                run controls → text | json | sarif | junit; non-zero exit on fail
-vpsready plan  [--profile X] [--out plan.json]
-vpsready apply [plan.json | --profile X] [--yes] [--deadman=180s|off|selftest]
-vpsready confirm <code>
-vpsready rollback [--last | --txn ID]
-vpsready history | drift
-vpsready export cloud-init --profile X > user-data.yaml
-vpsready modules [--explain ssh]       learn-mode: what and why for each module
-vpsready version
+vps-ready                      interactive wizard (default when a TTY)
+vps-ready detect               print facts (also --json)
+vps-ready audit                run controls → text | json | sarif | junit; non-zero exit on fail
+vps-ready plan  [--profile X] [--out plan.json]
+vps-ready apply [plan.json | --profile X] [--yes] [--deadman=180s|off|selftest]
+vps-ready confirm <code>
+vps-ready rollback [--last | --txn ID]
+vps-ready history | drift
+vps-ready export cloud-init --profile X > user-data.yaml
+vps-ready modules [--explain ssh]       learn-mode: what and why for each module
+vps-ready version
 ```
 
 ## Profile format: TOML
@@ -296,7 +298,7 @@ enabled          = true
 bind_ports_local = true
 ```
 
-**cloud-init:** `vpsready export cloud-init` emits `#cloud-config` that writes the profile, downloads a **pinned version, verifying its SHA256** (embedded in the user-data), and runs `apply --yes --deadman=off` from `runcmd`.
+**cloud-init:** `vps-ready export cloud-init` emits `#cloud-config` that writes the profile, downloads a **pinned version, verifying its SHA256** (embedded in the user-data), and runs `apply --yes --deadman=off` from `runcmd`.
 
 ## Repo layout
 
@@ -305,22 +307,24 @@ A Cargo workspace. Shared metadata, dependency versions and lints are declared o
 ```
 Cargo.toml                 workspace: [workspace.package], [workspace.dependencies], [workspace.lints]
 crates/
-  vpsready/                the app (lib + thin bin)
+  vps-ready/                the app (lib + thin bin)
     src/main.rs  src/lib.rs
     src/cli/               clap derive commands
     src/sys/               Runner + Fs traits; RealRunner/RealFs; FakeRunner/FakeFs (feature "testing")
     src/facts/             read-only detection into a `Facts` struct (serde)
-    src/platform/          PkgManager, ServiceManager, Firewall, Sshd traits + per-family data tables
-    src/resource/          Resource trait (id, current, diff, snapshot, apply, restore, reversibility)
-    src/engine/            plan, diff, txn, journal, deadman, lock
+    src/platform/          PkgManager, ServiceManager, Firewall, Sshd traits + per-family data tables (planned)
+    src/resource/          Resource trait (id, current, diff, snapshot, apply, restore, reversibility) (planned)
+    src/engine/            plan, diff, txn, journal, deadman, lock (planned)
     src/audit/             controls catalog (controls/*.toml), evaluation, report
-    src/modules/<name>/    mod.rs + templates/
-    src/config/            TOML profiles, strict deserialize (deny_unknown_fields), JSON Schema via schemars
-    src/report/            text | json | sarif | junit
-    src/tui/               (M4) inquire forms, ratatui plan/diff view
-  sshd-config/             (added at M3) parser + linter for sshd_config and `sshd -T`; publishable to crates.io
-profiles/                  minimal.toml  web.toml  paranoid.toml
-test/                      images/<distro>/Containerfile  integration/  vm/
+    src/modules/<name>/    mod.rs + templates/ (planned)
+    src/config/            TOML profiles, strict deserialize (deny_unknown_fields), JSON Schema via schemars (planned)
+    src/report/            text | json | sarif | junit (planned)
+    src/tui/               (planned, M4) inquire forms, ratatui plan/diff view
+  vpsready/                alias crate: the same command under the name `vpsready`
+  sshd-config/             (planned, M3) parser + linter for sshd_config and `sshd -T`; publishable to crates.io
+profiles/                  (planned) minimal.toml  web.toml  paranoid.toml
+test/                      images/Containerfile (one file, `BASE` build arg)  capture-host-fixtures.sh
+                           (planned: integration/  vm/)
 scripts/                   install.sh.tmpl
 docs/
 .github/workflows/         ci.yml codeql.yml scorecard.yml release.yml

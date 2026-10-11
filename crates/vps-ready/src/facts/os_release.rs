@@ -2,7 +2,7 @@
 //!
 //! The format is a list of `KEY=VALUE` lines. Values may be unquoted, or
 //! enclosed in single or double quotes; inside double quotes and in unquoted
-//! values the escapes `\"`, `\\`, `\$` and `` \` `` are honoured, following
+//! values the escapes `\"`, `\\`, `\$` and `` \` `` are honored, following
 //! shell rules. Blank lines and lines starting with `#` are ignored, as are
 //! malformed lines (bad key, unterminated quote), so a single odd line never
 //! hides the rest of the file.
@@ -62,7 +62,7 @@ impl fmt::Display for OsFamily {
     }
 }
 
-/// The fields of `os-release` that `vpsready` uses.
+/// The fields of `os-release` that `vps-ready` uses.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct OsRelease {
     /// `ID`, e.g. `ubuntu`. Defaults to `linux` per the spec.

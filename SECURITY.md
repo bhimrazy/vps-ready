@@ -1,6 +1,6 @@
 # Security policy
 
-`vpsready` runs as root and changes SSH and firewall configuration, so we treat
+`vps-ready` runs as root and changes SSH and firewall configuration, so we treat
 its bugs with more care than usual.
 
 ## Reporting a vulnerability
@@ -16,7 +16,7 @@ We will credit you in the advisory unless you prefer otherwise.
 
 In scope:
 
-- **Lockout bugs are security bugs.** Any way `vpsready` can leave a server
+- **Lockout bugs are security bugs.** Any way `vps-ready` can leave a server
   unreachable (SSH or firewall change applied without a working path back,
   dead-man switch failing to revert, `confirm` accepted from the old session)
   should be reported here, not as a normal issue.
@@ -39,7 +39,7 @@ Once released, the latest minor version receives security fixes.
 ## Verifying a release
 
 Every release ships `checksums.txt`, a Sigstore bundle for it, and a GitHub
-build-provenance attestation for each tarball.
+build-provenance attestation for each tarball and for `install.sh`.
 
 ```sh
 # 1. Checksums
@@ -53,13 +53,14 @@ cosign verify-blob \
   checksums.txt
 
 # 3. Build provenance for a tarball
-gh attestation verify vpsready-<version>-<target>.tar.gz --repo bhimrazy/vps-ready
+gh attestation verify vps-ready-<version>-<target>.tar.gz --repo bhimrazy/vps-ready
 ```
 
 ## Official channels
 
 - GitHub Releases: <https://github.com/bhimrazy/vps-ready/releases>
-- crates.io: the `vpsready` crate
+- crates.io: the `vps-ready` crate, and `vpsready`, an alias published from
+  this repository by the same release workflow
 - Later: apt, rpm and apk repositories announced in the README
 
 Anything else (other download sites, container images, packages under other
