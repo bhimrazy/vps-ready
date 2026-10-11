@@ -69,7 +69,7 @@ impl SysError {
 /// A command to run. Build with [`Cmd::new`] and the chained setters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cmd {
-    /// Program name (looked up in `PATH`) or absolute path.
+    /// Program name (looked up in [`SYSTEM_PATH`]) or absolute path.
     pub program: String,
     /// Arguments, not including the program.
     pub args: Vec<String>,
@@ -236,10 +236,16 @@ pub trait Fs {
     fn metadata(&self, path: &Path) -> Result<FileMeta, SysError>;
 }
 
+/// `PATH` for every command, systemd's default. The caller's `PATH` is not
+/// used: a non-root user's often lacks `/usr/sbin` (where `sshd` lives), and
+/// when running as root it must not decide which binaries run.
+pub const SYSTEM_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
 /// [`Runner`] backed by [`std::process::Command`].
 ///
-/// Stdin is closed; stdout and stderr are drained on background threads so a
-/// chatty child cannot block on a full pipe while we wait for it.
+/// Programs are looked up in [`SYSTEM_PATH`]. Stdin is closed; stdout and
+/// stderr are drained on background threads so a chatty child cannot block on
+/// a full pipe while we wait for it.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RealRunner;
 
@@ -252,6 +258,7 @@ impl Runner for RealRunner {
         tracing::debug!(program = %cmd.program, args = ?cmd.args, "run");
         let mut child = Command::new(&cmd.program)
             .args(&cmd.args)
+            .env("PATH", SYSTEM_PATH)
             .envs(cmd.env.iter().map(|(k, v)| (k, v)))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -403,6 +410,14 @@ mod tests {
         assert!(!out.ok());
         assert_eq!(out.stdout_str().unwrap(), "hi\n");
         assert_eq!(out.stderr, b"err\n");
+    }
+
+    #[test]
+    fn uses_the_system_path() {
+        let out = RealRunner
+            .run(&Cmd::new("sh").args(["-c", "echo \"$PATH\""]))
+            .unwrap();
+        assert_eq!(out.stdout_str().unwrap().trim(), SYSTEM_PATH);
     }
 
     #[test]

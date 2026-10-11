@@ -14,7 +14,7 @@
 
 **vps-ready** is a single static binary you run on a fresh Linux server. It detects what the machine is, audits what is insecure, shows you exactly what it will change, applies the changes safely, and cannot lock you out.
 
-> **Status:** early development. The repo is private until the first read-only release (v0.1.0). Today the binary has `vpsready version` and `vpsready detect`; the rest arrives milestone by milestone.
+> **Status:** early development. The repo is private until the first read-only release (v0.1.0). Today the binary has `vpsready version`, `vpsready detect` and a first `vpsready audit` with five SSH controls; the rest arrives milestone by milestone.
 
 ## Table of contents
 
@@ -40,7 +40,7 @@ Auditors like Lynis tell you what is wrong but fix nothing. Ansible roles fix th
 | Command | What happens |
 |---|---|
 | `vpsready detect` | Read-only facts: distro, init system, virtualization, cloud provider, effective SSH config, listening ports, whether Docker is present |
-| `vpsready audit` | Scores the host against controls with stable IDs (for example `SSH-002`), cross-referenced to CIS and Lynis. Text or JSON, non-zero exit on failure |
+| `vpsready audit` | Checks the host against controls with stable IDs (for example `SSH-002`), each with the reason it matters. Text or JSON; exits 0 only when every control passes |
 | `vpsready plan` | A diff of every file and setting that would change, with a one-line reason for each |
 | `vpsready apply` | Snapshots originals, validates, writes atomically, reloads services, and arms a dead-man timer for anything that could lock you out |
 | `vpsready confirm` | Run from a **new** SSH session to prove the new configuration works. Without it, the change reverts automatically |
@@ -66,12 +66,18 @@ $ ssh root@203.0.113.10
   You       connected from 198.51.100.7 as root
 
 # vpsready audit
-  FAIL  SSH-001  high    Root login allowed
-  FAIL  SSH-002  high    Password authentication enabled
-  FAIL  FW-001   high    No host firewall active
-  FAIL  UPD-001  medium  Automatic security updates off
-  PASS  MAC-001          AppArmor enforcing
-  Score 41/100
+  Audit of Ubuntu 24.04.5 LTS: 23 controls
+
+  STATUS   ID       SEVERITY  CONTROL
+  FAIL     SSH-002  high      Password authentication disabled
+                              passwordauthentication is yes, expected no
+                              Passwords can be guessed or reused from leaks; SSH keys cannot be
+                              brute-forced.
+  FAIL     FW-001   high      Host firewall active
+  FAIL     UPD-001  medium    Automatic security updates enabled
+  PASS     MAC-001  medium    AppArmor enforcing
+  ...
+  14 passed, 9 failed, 0 unknown
 
 # vpsready plan --profile web               # review the diff
 # vpsready apply

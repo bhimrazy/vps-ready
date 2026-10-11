@@ -10,17 +10,17 @@ use tracing_subscriber::EnvFilter;
 use vpsready::cli::{self, Cli};
 
 fn main() -> ExitCode {
-    // Usage errors are reported by clap itself with exit code 2.
+    // Usage errors are reported by clap itself, also with exit code 2.
     let cli = Cli::parse();
     init_tracing(cli.verbose, cli.color_enabled());
 
     match cli::run(&cli) {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(code) => code,
         Err(err) if is_broken_pipe(&err) => ExitCode::SUCCESS,
         Err(err) => {
             // `{:#}` prints the context chain on one line, without a backtrace.
             eprintln!("error: {err:#}");
-            ExitCode::FAILURE
+            ExitCode::from(cli::EXIT_ERROR)
         }
     }
 }
