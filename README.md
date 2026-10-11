@@ -47,7 +47,7 @@ On the server, as root. Installation is three steps on purpose: download, read, 
 ```
 
 <p align="center">
-  <img src="assets/demo.png" alt="An SSH session on an Ubuntu 24.04 VPS: vps-ready detect shows the OS, init system, KVM, SSH settings, open ports and the admin's connection; vps-ready audit then checks five SSH controls, 3 passed and 2 failed, each failure showing the value found and why it matters" width="88%">
+  <img src="assets/demo.png" alt="An SSH session on an Ubuntu 24.04 VPS: vps-ready detect shows the OS, init system, KVM, SSH settings, open ports and the admin's connection; vps-ready audit then checks 18 SSH, kernel and network controls, 16 passed and 2 failed, each failure showing the value found and why it matters" width="88%">
   <br><sub>Example session on an Ubuntu 24.04 VPS.</sub>
 </p>
 
