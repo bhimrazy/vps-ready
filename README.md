@@ -7,7 +7,7 @@
 
 <p align="center">
   <a href="https://github.com/bhimrazy/vps-ready/actions/workflows/ci.yml"><img src="https://github.com/bhimrazy/vps-ready/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License: Apache-2.0"></a>
+  <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="License: MIT OR Apache-2.0"></a>
   <img src="https://img.shields.io/badge/rust-stable%20(MSRV%201.98)-orange.svg" alt="Rust stable, MSRV 1.98">
   <img src="https://img.shields.io/badge/status-M0%20skeleton-lightgrey.svg" alt="Status: M0 skeleton">
 </p>
@@ -161,4 +161,6 @@ Please report security issues, including anything that could lock a user out, th
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT) at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this project by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.

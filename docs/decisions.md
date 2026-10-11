@@ -13,7 +13,7 @@
 | D7 | **Dead-man switch + new-session confirm** for ssh/firewall | The one thing nobody does fully | Trust the open session (wrong) |
 | D8 | **Read-only `audit` ships first** (v0.1) | Useful immediately, zero risk, builds trust | Ship apply first |
 | D9 | **Ubuntu/Debian → RHEL → Alpine** | Most VPS images are Ubuntu/Debian | All at once |
-| D10 | **Apache-2.0, DCO, no CLA** | Patent grant, embeddable by providers | MIT, GPL-3.0 |
+| D10 | **MIT OR Apache-2.0, DCO, no CLA** | Rust-standard dual license: Apache patent grant, MIT for GPLv2 compatibility, embeddable by providers | Apache-2.0 only, GPL-3.0 |
 | D11 | **Signed + reproducible releases, SLSA L3, immutable releases, no self-update** | Root tool → trust is the product | Plain GitHub releases |
 | D12 | **Caddy** default reverse proxy | Auto HTTPS, minimal config | Nginx, Traefik |
 | D13 | **Rust main; Go companion optional and unscheduled** | One language done well beats two done halfway; the M3 `sshd-config` crate already gives a standalone library to practise publishing | Build the first slice in both languages, then pick (dropped) |
