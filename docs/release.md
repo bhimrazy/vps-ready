@@ -95,10 +95,10 @@ For the full chain of trust, use the release tarball and verify it with the comm
 ### Publishing to crates.io
 
 - The `crates` job in `release.yml` publishes `vps-ready`, then `vpsready`, with `cargo publish --workspace --locked` in the `crates-io` environment, using crates.io trusted publishing (no stored token).
-- Trusted publishing cannot create a crate, so each crate's first version (`0.1.0-alpha.1`) was published by hand from a clean `main` with a short-lived API token, without pushing a tag. Trusted publishing is configured on crates.io for both crates: owner `bhimrazy`, repo `vps-ready`, workflow `release.yml`, environment `crates-io`.
+- Trusted publishing cannot create a crate, so each crate's first version (`0.1.0-alpha.1`) was published by hand from a clean `main` with a short-lived API token, without pushing a tag. Both crates are configured for trusted publishing (owner `bhimrazy`, repo `vps-ready`, workflow `release.yml`, environment `crates-io`) and have **trusted publishing only** turned on, so an API token can no longer publish them.
 - Pre-releases are tags such as `v0.1.0-alpha.2`: they go through the same workflow, become GitHub pre-releases, and `cargo install` skips them unless asked for with `--version`.
 - The version appears twice in the root `Cargo.toml`: `[workspace.package] version` and the `=` pin of `vps-ready` in `[workspace.dependencies]`. Bump both together.
-- If `vps-ready` uploads but `vpsready` fails, re-running the job fails on the already-published `vps-ready`. Publish the remaining crate by hand with `cargo publish -p vpsready --locked`.
+- If `vps-ready` uploads but `vpsready` fails, re-running the job fails on the already-published `vps-ready`. To recover, turn off trusted publishing only for `vpsready` in its crates.io settings, run `cargo publish -p vpsready --locked` with a short-lived token, then turn the setting back on and revoke the token.
 
 ## No self-update
 
