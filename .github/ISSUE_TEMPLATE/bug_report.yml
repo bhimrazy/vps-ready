@@ -1,0 +1,36 @@
+name: Bug report
+description: Something did not work as expected.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If this bug locked you out of a server, use the **Lockout report** template instead.
+        Security vulnerabilities go to https://github.com/bhimrazy/vps-ready/security/advisories/new.
+  - type: input
+    id: version
+    attributes:
+      label: vpsready version
+      description: Output of `vpsready version`.
+    validations:
+      required: true
+  - type: input
+    id: distro
+    attributes:
+      label: Distribution and version
+      placeholder: Ubuntu 24.04
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The command you ran, what you expected and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: Relevant output, ideally with `-vv`. Remove anything sensitive.
+      render: text

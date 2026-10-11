@@ -1,0 +1,57 @@
+name: Lockout report
+description: vpsready left a server unreachable, or the dead-man switch did not behave as expected.
+labels: [lockout, bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Lockouts are treated as security bugs. If you think the issue is exploitable, report it
+        privately at https://github.com/bhimrazy/vps-ready/security/advisories/new instead.
+  - type: input
+    id: version
+    attributes:
+      label: vpsready version
+      description: Output of `vpsready version`.
+    validations:
+      required: true
+  - type: input
+    id: distro
+    attributes:
+      label: Distribution and version
+      placeholder: Debian 13
+    validations:
+      required: true
+  - type: input
+    id: provider
+    attributes:
+      label: Hosting provider and image
+      placeholder: Hetzner CX22, stock Debian 13 image
+    validations:
+      required: true
+  - type: textarea
+    id: applied
+    attributes:
+      label: What was applied
+      description: The command, profile or plan, and the `--deadman` setting.
+    validations:
+      required: true
+  - type: textarea
+    id: symptoms
+    attributes:
+      label: What you observed
+      description: How access failed and whether the automatic revert ran.
+    validations:
+      required: true
+  - type: textarea
+    id: recovery
+    attributes:
+      label: How you recovered
+      description: For example provider console, rescue system, or `vpsready rollback`.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Output of `vpsready history` and the journal around the change, if available.
+      render: text
