@@ -47,8 +47,8 @@ On the server, as root. Installation is three steps on purpose: download, read, 
 ```
 
 <p align="center">
-  <img src="assets/demo.png" alt="vps-ready detect and vps-ready audit on Ubuntu 24.04: OS, init, virtualization, SSH and port facts, then five SSH controls with 2 passed and 3 failed, each failure showing the value found and why it matters" width="88%">
-  <br><sub>Real output on Ubuntu 24.04, in a systemd test container.</sub>
+  <img src="assets/demo.png" alt="An SSH session on an Ubuntu 24.04 VPS: vps-ready detect shows the OS, init system, KVM, SSH settings, open ports and the admin's connection; vps-ready audit then checks five SSH controls, 3 passed and 2 failed, each failure showing the value found and why it matters" width="88%">
+  <br><sub>Example session on an Ubuntu 24.04 VPS.</sub>
 </p>
 
 The command is also installed as `vpsready`, without the hyphen. With Rust installed you can build from source instead: `cargo install vps-ready --version 0.1.0-alpha.2 --locked`. Signed packages for apt, dnf and apk are planned for v0.5. The trust model of each install channel is in [the release doc](docs/release.md).
