@@ -48,7 +48,9 @@ impl FakeRunner {
     ///
     /// # Errors
     ///
-    /// Any I/O error, or [`io::ErrorKind::InvalidData`] for a malformed line.
+    /// Any I/O error, or [`io::ErrorKind::InvalidData`] for a malformed line
+    /// or a `prefer` name that matches no entry (so a typo cannot silently
+    /// replay the default capture).
     pub fn from_fixture(dir: &Path, prefer: &[&str]) -> io::Result<Self> {
         let invalid = |msg: String| io::Error::new(io::ErrorKind::InvalidData, msg);
         let read_optional = |path: PathBuf| match std::fs::read(path) {
@@ -76,6 +78,15 @@ impl FakeRunner {
             };
             let args = fields.map(str::to_owned).collect();
             entries.push((name, (program.to_owned(), args, output)));
+        }
+        if let Some(missing) = prefer
+            .iter()
+            .find(|p| !entries.iter().any(|(name, _)| name == *p))
+        {
+            return Err(invalid(format!(
+                "no fixture named {missing:?} in {}",
+                dir.display()
+            )));
         }
         // Stable sort: preferred entries first, file order otherwise.
         entries.sort_by_key(|(name, _)| !prefer.contains(name));

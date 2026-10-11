@@ -2,9 +2,8 @@
 # Capture a real host as a unit-test fixture, from a systemd test container.
 #
 # Usage: test/capture-host-fixtures.sh <distro>      e.g. ubuntu-24.04
-# Needs: docker, and test/images/<distro>/Containerfile built as
-#        vpsready-test:<distro>:
-#   docker build -f test/images/<distro>/Containerfile -t vpsready-test:<distro> test/images/<distro>
+# Needs: docker, and the test image for <distro>:
+#   docker build -f test/images/Containerfile --build-arg BASE=ubuntu:24.04 -t vpsready-test:ubuntu-24.04 test/images
 #
 # Writes crates/vpsready/testdata/hosts/<distro>/:
 #   root/...        files the facts code reads (os-release, /proc/1/comm)
@@ -15,6 +14,7 @@
 #   env             SSH_CONNECTION as seen by a real SSH login
 # The container is capped at 512 MB and 1 CPU and is removed afterwards.
 set -eu
+cd "$(dirname "$0")/.."
 
 distro=${1:?usage: $0 <distro>}
 image="vpsready-test:$distro"
@@ -23,7 +23,10 @@ name="vpsready-capture-$distro-$$"
 tmp=$(mktemp -d)
 
 cleanup() { docker rm -f "$name" >/dev/null 2>&1 || true; rm -rf "$tmp"; }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+# POSIX sh keeps running after a trapped signal; exit so a Ctrl-C during boot
+# cannot reach the step that replaces the committed fixtures.
+trap 'exit 130' INT TERM
 
 docker run -d --name "$name" --privileged --cgroupns=private \
   --memory 512m --cpus 1 --tmpfs /run --tmpfs /run/lock "$image" >/dev/null
@@ -53,8 +56,10 @@ record() {
 capture()  { record "$tmp/plain.tsv" "$@"; }
 scenario() { record "$tmp/scenarios.tsv" "$@"; }
 
-# Before anyone has logged in. On Ubuntu with ssh.socket, sshd has not run yet.
-scenario sshd-T-before-login sshd -T
+# Before anyone has logged in. On Ubuntu with ssh.socket, sshd has not run yet
+# and port 22 is held by systemd alone.
+scenario sshd-T-before-login    sshd -T
+scenario listeners-before-login ss -tulnpH
 
 # Log in over SSH once, as on a VPS, and keep the SSH_CONNECTION it sees.
 docker exec "$name" sh -c '

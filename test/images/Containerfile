@@ -1,0 +1,16 @@
+# Test image: a distro with systemd as PID 1 and OpenSSH, close to a fresh
+# cloud VPS. Debian-family bases only for now (apt).
+#
+#   docker build -f test/images/Containerfile --build-arg BASE=debian:13 -t vpsready-test:debian-13 test/images
+#   docker run -d --privileged --cgroupns=private --tmpfs /run --tmpfs /run/lock vpsready-test:debian-13
+ARG BASE=debian:13
+FROM ${BASE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends systemd systemd-sysv dbus openssh-server openssh-client iproute2 sudo ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && rm -f /etc/machine-id && touch /etc/machine-id
+
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]

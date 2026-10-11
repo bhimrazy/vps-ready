@@ -7,7 +7,7 @@ use std::fmt;
 
 use serde::Serialize;
 
-use super::probe;
+use super::{Probe, probe};
 use crate::sys::{Cmd, Runner};
 
 /// Transport protocol of a listening socket.
@@ -39,24 +39,27 @@ pub struct Listener {
     pub addr: String,
     /// Local port.
     pub port: u16,
-    /// Name of the first owning process, when `ss` could see it (needs root).
-    pub process: Option<String>,
+    /// Names of the owning processes, when `ss` can see them (needs root).
+    /// Under socket activation this includes `systemd`, and before the first
+    /// connection it is *only* `systemd`, so do not expect `sshd` on the SSH port.
+    pub processes: Vec<String>,
 }
 
 pub(super) fn detect(runner: &dyn Runner, notices: &mut Vec<String>) -> Vec<Listener> {
     match probe(runner, &Cmd::new("ss").arg("-tulnpH"), notices) {
-        Some(out) if out.ok() => parse(&String::from_utf8_lossy(&out.stdout)),
-        Some(out) => {
+        Probe::Ran(out) if out.ok() => parse(&String::from_utf8_lossy(&out.stdout)),
+        Probe::Ran(out) => {
             notices.push(format!(
                 "`ss -tulnpH` exited with {}; listening sockets are unknown",
                 out.status
             ));
             Vec::new()
         }
-        None => {
+        Probe::Missing => {
             notices.push("ss not found (iproute2); listening sockets are unknown".to_owned());
             Vec::new()
         }
+        Probe::Failed => Vec::new(),
     }
 }
 
@@ -85,28 +88,42 @@ fn parse_line(line: &str) -> Option<Listener> {
         proto,
         addr,
         port: port.parse().ok()?,
-        process: process_name(&process),
+        processes: process_names(&process),
     })
 }
 
-/// `users:(("sshd",pid=131,fd=3),("systemd",pid=1,fd=41))` -> `sshd`.
-fn process_name(column: &str) -> Option<String> {
-    let start = column.find("((\"")? + 3;
-    let rest = column.get(start..)?;
-    let name = rest.get(..rest.find('"')?)?;
-    (!name.is_empty()).then(|| name.to_owned())
+/// `users:(("sshd",pid=131,fd=3),("systemd",pid=1,fd=41))` -> `[sshd, systemd]`,
+/// without duplicates.
+fn process_names(column: &str) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    let mut rest = column;
+    while let Some(start) = rest.find("(\"") {
+        let Some(after) = rest.get(start + 2..) else {
+            break;
+        };
+        let Some(end) = after.find('"') else {
+            break;
+        };
+        if let Some(name) = after.get(..end).filter(|n| !n.is_empty())
+            && !names.iter().any(|n| n == name)
+        {
+            names.push(name.to_owned());
+        }
+        rest = after.get(end + 1..).unwrap_or("");
+    }
+    names
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn listener(proto: Proto, addr: &str, port: u16, process: Option<&str>) -> Listener {
+    fn listener(proto: Proto, addr: &str, port: u16, processes: &[&str]) -> Listener {
         Listener {
             proto,
             addr: addr.to_owned(),
             port,
-            process: process.map(str::to_owned),
+            processes: processes.iter().map(|p| (*p).to_owned()).collect(),
         }
     }
 
@@ -114,9 +131,10 @@ mod tests {
     fn parses_ss_output() {
         let text = "\
 tcp LISTEN 0      4096   0.0.0.0:22 0.0.0.0:* users:((\"sshd\",pid=131,fd=3),(\"systemd\",pid=1,fd=41))
-tcp LISTEN 0      4096      [::]:22    [::]:* users:((\"sshd\",pid=131,fd=4))
+tcp LISTEN 0      4096      [::]:22    [::]:* users:((\"systemd\",pid=1,fd=47))
 udp UNCONN 0      0      127.0.0.53%lo:53 0.0.0.0:* users:((\"systemd-resolve\",pid=300,fd=13))
 udp UNCONN 0      0            *:68       *:*
+udp UNCONN 0      0      [fe80::1%eth0]:546 [::]:* users:((\"dhclient\",pid=9,fd=6),(\"dhclient\",pid=9,fd=7))
 tcp LISTEN 0      511    [::ffff:127.0.0.1]:8080 *:*
 garbage line
 tcp LISTEN 0 1 noport *:*
@@ -124,11 +142,12 @@ tcp LISTEN 0 1 noport *:*
         assert_eq!(
             parse(text),
             vec![
-                listener(Proto::Tcp, "0.0.0.0", 22, Some("sshd")),
-                listener(Proto::Tcp, "::", 22, Some("sshd")),
-                listener(Proto::Udp, "127.0.0.53%lo", 53, Some("systemd-resolve")),
-                listener(Proto::Udp, "*", 68, None),
-                listener(Proto::Tcp, "::ffff:127.0.0.1", 8080, None),
+                listener(Proto::Tcp, "0.0.0.0", 22, &["sshd", "systemd"]),
+                listener(Proto::Tcp, "::", 22, &["systemd"]),
+                listener(Proto::Udp, "127.0.0.53%lo", 53, &["systemd-resolve"]),
+                listener(Proto::Udp, "*", 68, &[]),
+                listener(Proto::Udp, "fe80::1%eth0", 546, &["dhclient"]),
+                listener(Proto::Tcp, "::ffff:127.0.0.1", 8080, &[]),
             ]
         );
     }

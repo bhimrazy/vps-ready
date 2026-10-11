@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 
-use super::probe;
+use super::{Probe, probe};
 use crate::sys::{Cmd, Runner};
 
 /// Units queried to find out how sshd is started. Debian and Ubuntu call them
@@ -102,13 +102,25 @@ pub(super) fn detect(runner: &dyn Runner, notices: &mut Vec<String>) -> Ssh {
 /// stderr. The client and server come from the same package on every
 /// supported distro, so this is also the server version.
 fn version(runner: &dyn Runner, notices: &mut Vec<String>) -> Option<String> {
-    let out = probe(runner, &Cmd::new("ssh").arg("-V"), notices)?;
-    let text = if out.stderr.is_empty() {
-        &out.stdout
-    } else {
-        &out.stderr
-    };
-    parse_version(&String::from_utf8_lossy(text))
+    match probe(runner, &Cmd::new("ssh").arg("-V"), notices) {
+        Probe::Ran(out) => {
+            let text = if out.stderr.is_empty() {
+                &out.stdout
+            } else {
+                &out.stderr
+            };
+            let version = parse_version(&String::from_utf8_lossy(text));
+            if version.is_none() {
+                notices.push("unrecognised `ssh -V` output; OpenSSH version is unknown".to_owned());
+            }
+            version
+        }
+        Probe::Missing => {
+            notices.push("ssh not found; OpenSSH version is unknown".to_owned());
+            None
+        }
+        Probe::Failed => None,
+    }
 }
 
 fn parse_version(text: &str) -> Option<String> {
@@ -120,25 +132,40 @@ fn parse_version(text: &str) -> Option<String> {
 
 fn effective(runner: &dyn Runner, notices: &mut Vec<String>) -> Option<SshdConfig> {
     let cmd = Cmd::new("sshd").arg("-T").timeout(Duration::from_secs(10));
-    let Some(out) = probe(runner, &cmd, notices) else {
-        notices.push("sshd not found; is openssh-server installed?".to_owned());
-        return None;
+    let out = match probe(runner, &cmd, notices) {
+        Probe::Ran(out) => out,
+        Probe::Missing => {
+            notices.push("sshd not found; is openssh-server installed?".to_owned());
+            return None;
+        }
+        Probe::Failed => return None,
     };
     if out.ok() {
         return Some(SshdConfig::parse(&String::from_utf8_lossy(&out.stdout)));
     }
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let reason = stderr.lines().next().unwrap_or("no error output").trim();
+    notices.push(sshd_t_failure(&String::from_utf8_lossy(&out.stderr)));
+    None
+}
+
+/// Explains a failed `sshd -T`. sshd prints a line per unreadable host key
+/// before the fatal one, so the whole of stderr is searched and the last line
+/// is shown.
+fn sshd_t_failure(stderr: &str) -> String {
+    let reason = stderr
+        .lines()
+        .map(str::trim)
+        .rfind(|l| !l.is_empty())
+        .unwrap_or("no error output");
     let mut notice = format!("`sshd -T` failed ({reason}); effective SSH config is unknown");
-    if reason.contains("Missing privilege separation directory") {
+    if stderr.contains("Missing privilege separation directory") {
         notice.push_str(
             ". This is normal on Ubuntu with ssh.socket until the first SSH login has started sshd",
         );
-    } else if reason.contains("no hostkeys available") {
+    } else if stderr.contains("no hostkeys available") || stderr.contains("Could not load host key")
+    {
         notice.push_str(". `sshd -T` needs root");
     }
-    notices.push(notice);
-    None
+    notice
 }
 
 fn activation(runner: &dyn Runner, notices: &mut Vec<String>) -> SshActivation {
@@ -146,10 +173,21 @@ fn activation(runner: &dyn Runner, notices: &mut Vec<String>) -> SshActivation {
         .args(["show", "--property=Id,LoadState,ActiveState,UnitFileState"])
         .args(UNITS);
     match probe(runner, &cmd, notices) {
-        Some(out) if out.ok() => {
-            activation_from_units(&parse_units(&String::from_utf8_lossy(&out.stdout)))
+        Probe::Ran(out) if out.ok() => {
+            activation_from_units(&parse_units(&String::from_utf8_lossy(&out.stdout)), notices)
         }
-        _ => SshActivation::Unknown,
+        Probe::Ran(out) => {
+            notices.push(format!(
+                "`systemctl show` exited with {}; sshd activation is unknown",
+                out.status
+            ));
+            SshActivation::Unknown
+        }
+        Probe::Missing => {
+            notices.push("systemctl not found; sshd activation is unknown".to_owned());
+            SshActivation::Unknown
+        }
+        Probe::Failed => SshActivation::Unknown,
     }
 }
 
@@ -174,28 +212,41 @@ fn prop<'a>(unit: &'a Unit, key: &str) -> &'a str {
     unit.get(key).map_or("", String::as_str)
 }
 
-fn activation_from_units(units: &[Unit]) -> SshActivation {
+/// Unit states in which the unit is (or is becoming) live.
+const RUNNING: [&str; 3] = ["active", "activating", "reloading"];
+
+/// Decides from what is running now, not from what starts at boot: the
+/// running unit is the one that owns the port today.
+fn activation_from_units(units: &[Unit], notices: &mut Vec<String>) -> SshActivation {
     let loaded: Vec<&Unit> = units
         .iter()
         .filter(|u| prop(u, "LoadState") == "loaded")
         .collect();
-    let kind = |u: &Unit, suffix: &str| prop(u, "Id").ends_with(suffix);
+    let is = |u: &Unit, suffix: &str| prop(u, "Id").ends_with(suffix);
+    let running = |u: &Unit| RUNNING.contains(&prop(u, "ActiveState"));
 
-    if loaded.iter().any(|u| {
-        kind(u, ".socket")
-            && (prop(u, "UnitFileState") == "enabled" || prop(u, "ActiveState") == "active")
-    }) {
+    let activation = if loaded.iter().any(|u| is(u, ".socket") && running(u)) {
         SshActivation::Socket
-    } else if loaded
-        .iter()
-        .any(|u| kind(u, ".service") && prop(u, "ActiveState") == "active")
-    {
+    } else if loaded.iter().any(|u| is(u, ".service") && running(u)) {
         SshActivation::Service
     } else if loaded.is_empty() {
         SshActivation::Unknown
     } else {
         SshActivation::Inactive
+    };
+
+    if activation != SshActivation::Socket {
+        for unit in loaded.iter().filter(|u| {
+            is(u, ".socket") && !running(u) && prop(u, "UnitFileState").starts_with("enabled")
+        }) {
+            notices.push(format!(
+                "{} is enabled at boot but not running; after a reboot sshd will start via \
+                 socket activation",
+                prop(unit, "Id")
+            ));
+        }
     }
+    activation
 }
 
 #[cfg(test)]
@@ -235,20 +286,109 @@ mod tests {
         assert!(config.get_all("missing").is_empty());
     }
 
-    #[test]
-    fn rhel_style_service_activation() {
-        let units = parse_units(
-            "Id=sshd.socket\nLoadState=loaded\nActiveState=inactive\nUnitFileState=disabled\n\n\
-             Id=sshd.service\nLoadState=loaded\nActiveState=active\nUnitFileState=enabled\n",
-        );
-        assert_eq!(activation_from_units(&units), SshActivation::Service);
+    /// `(Id, LoadState, ActiveState, UnitFileState)` of one unit.
+    type Row<'a> = (&'a str, &'a str, &'a str, &'a str);
+
+    /// Builds `systemctl show` output from rows.
+    fn units(rows: &[Row<'_>]) -> Vec<Unit> {
+        let text = rows
+            .iter()
+            .map(|(id, load, active, file)| {
+                format!("Id={id}\nLoadState={load}\nActiveState={active}\nUnitFileState={file}\n")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        parse_units(&text)
+    }
+
+    fn decide(rows: &[Row<'_>]) -> (SshActivation, Vec<String>) {
+        let mut notices = Vec::new();
+        (activation_from_units(&units(rows), &mut notices), notices)
     }
 
     #[test]
-    fn nothing_loaded_is_unknown() {
-        let units = parse_units("Id=ssh.socket\nLoadState=not-found\nActiveState=inactive\n");
-        assert_eq!(activation_from_units(&units), SshActivation::Unknown);
-        assert_eq!(activation_from_units(&[]), SshActivation::Unknown);
+    fn activation_follows_running_units() {
+        let cases: [(&[Row<'_>], SshActivation, usize); 7] = [
+            // Ubuntu after a login: socket and the service it started.
+            (
+                &[
+                    ("ssh.socket", "loaded", "active", "enabled"),
+                    ("ssh.service", "loaded", "active", "disabled"),
+                ],
+                SshActivation::Socket,
+                0,
+            ),
+            // RHEL: plain service, socket unit present but unused.
+            (
+                &[
+                    ("sshd.socket", "loaded", "inactive", "disabled"),
+                    ("sshd.service", "loaded", "active", "enabled"),
+                ],
+                SshActivation::Service,
+                0,
+            ),
+            // Socket enabled for boot, but the admin started the service by hand.
+            (
+                &[
+                    ("ssh.socket", "loaded", "inactive", "enabled"),
+                    ("ssh.service", "loaded", "active", "disabled"),
+                ],
+                SshActivation::Service,
+                1,
+            ),
+            // Socket failed to bind; enabled-runtime counts as enabled.
+            (
+                &[
+                    ("ssh.socket", "loaded", "failed", "enabled-runtime"),
+                    ("ssh.service", "loaded", "active", "enabled"),
+                ],
+                SshActivation::Service,
+                1,
+            ),
+            // A masked socket is not loaded and is ignored.
+            (
+                &[
+                    ("ssh.socket", "masked", "inactive", "masked"),
+                    ("ssh.service", "loaded", "reloading", "enabled"),
+                ],
+                SshActivation::Service,
+                0,
+            ),
+            (
+                &[("ssh.service", "loaded", "inactive", "disabled")],
+                SshActivation::Inactive,
+                0,
+            ),
+            (
+                &[("ssh.socket", "not-found", "inactive", "")],
+                SshActivation::Unknown,
+                0,
+            ),
+        ];
+        for (rows, want, notice_count) in cases {
+            let (got, notices) = decide(rows);
+            assert_eq!(got, want, "{rows:?}");
+            assert_eq!(notices.len(), notice_count, "{rows:?}: {notices:?}");
+        }
+        assert_eq!(decide(&[]).0, SshActivation::Unknown);
+    }
+
+    #[test]
+    fn explains_sshd_t_failures() {
+        let not_root = "Could not load host key: /etc/ssh/ssh_host_rsa_key\n\
+                        Could not load host key: /etc/ssh/ssh_host_ed25519_key\n\
+                        sshd: no hostkeys available -- exiting.\n";
+        let notice = sshd_t_failure(not_root);
+        assert!(
+            notice.contains("(sshd: no hostkeys available -- exiting.)"),
+            "{notice}"
+        );
+        assert!(notice.ends_with("needs root"), "{notice}");
+
+        let ubuntu = sshd_t_failure("Missing privilege separation directory: /run/sshd\n");
+        assert!(ubuntu.contains("until the first SSH login"), "{ubuntu}");
+
+        assert!(sshd_t_failure("").contains("(no error output)"));
     }
 
     proptest::proptest! {
@@ -256,7 +396,8 @@ mod tests {
         fn parsers_never_panic(s in "\\PC*") {
             let _ = SshdConfig::parse(&s);
             let _ = parse_version(&s);
-            let _ = activation_from_units(&parse_units(&s));
+            let _ = activation_from_units(&parse_units(&s), &mut Vec::new());
+            let _ = sshd_t_failure(&s);
         }
     }
 }

@@ -118,20 +118,27 @@ pub fn collect(fs: &dyn Fs, runner: &dyn Runner, env: &Env) -> Result<Facts, Fac
     })
 }
 
-/// Runs a probe command. A missing program returns `None` quietly, because
-/// many probes only exist on some distros; the caller decides whether that
-/// deserves a notice. Any other failure to run is recorded as a notice.
-/// A non-zero exit status is returned as output for the caller to judge.
-fn probe(runner: &dyn Runner, cmd: &Cmd, notices: &mut Vec<String>) -> Option<Output> {
+/// The outcome of running a probe command, or of interpreting its output.
+enum Probe<T = Output> {
+    /// The command ran. A non-zero exit status is for the caller to judge.
+    Ran(T),
+    /// The program is not installed. Many probes exist only on some distros,
+    /// so the caller decides whether this deserves a notice.
+    Missing,
+    /// The command could not be run; a notice has already been recorded.
+    Failed,
+}
+
+fn probe(runner: &dyn Runner, cmd: &Cmd, notices: &mut Vec<String>) -> Probe {
     match runner.run(cmd) {
-        Ok(out) => Some(out),
+        Ok(out) => Probe::Ran(out),
         Err(SysError::NotFound(_)) => {
             tracing::debug!(program = %cmd.program, "probe not found");
-            None
+            Probe::Missing
         }
         Err(err) => {
             notices.push(format!("running `{}`: {err}", cmd.program));
-            None
+            Probe::Failed
         }
     }
 }
@@ -271,6 +278,25 @@ mod tests {
         );
     }
 
+    /// Before the first connection only systemd holds port 22 on Ubuntu, so a
+    /// check for "is SSH listening" must not look for an sshd process.
+    #[test]
+    fn ubuntu_port_22_belongs_to_systemd_before_first_login() {
+        let facts = host("ubuntu-24.04", &["listeners-before-login"]);
+        let ssh_port: Vec<_> = facts.listeners.iter().filter(|l| l.port == 22).collect();
+        assert!(!ssh_port.is_empty());
+        assert!(
+            ssh_port.iter().all(|l| l.processes == ["systemd"]),
+            "{ssh_port:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_fixture_scenario_is_an_error() {
+        let dir = testdata("hosts/ubuntu-24.04");
+        assert!(FakeRunner::from_fixture(&dir, &["sshd-T-dropin-9"]).is_err());
+    }
+
     #[test]
     fn ubuntu_sshd_t_fails_before_first_login() {
         let facts = host("ubuntu-24.04", &["sshd-T-before-login"]);
@@ -314,8 +340,9 @@ mod tests {
         assert_eq!(facts.ssh.activation, SshActivation::Unknown);
         assert!(facts.listeners.is_empty());
         assert!(!facts.docker);
-        // os-release, init, virtualization, sshd, ss, SSH_CONNECTION.
-        assert_eq!(facts.notices.len(), 6, "{:?}", facts.notices);
+        // os-release, init, virtualization, ssh version, sshd activation,
+        // sshd config, ss, SSH_CONNECTION.
+        assert_eq!(facts.notices.len(), 8, "{:?}", facts.notices);
     }
 
     #[test]

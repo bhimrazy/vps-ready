@@ -1,0 +1,2 @@
+tcp LISTEN 0      4096   0.0.0.0:22 0.0.0.0:* users:(("systemd",pid=1,fd=41))
+tcp LISTEN 0      4096      [::]:22    [::]:* users:(("systemd",pid=1,fd=48))

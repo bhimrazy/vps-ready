@@ -9,7 +9,7 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use super::probe;
+use super::{Probe, probe};
 use crate::sys::{Cmd, Fs, Runner};
 
 /// One kind of virtualization (container or VM), as reported by
@@ -59,30 +59,40 @@ pub(super) fn detect(
     runner: &dyn Runner,
     notices: &mut Vec<String>,
 ) -> Virtualization {
-    let container = detect_virt(runner, "--container", notices).unwrap_or_else(|| {
-        let marker = [("/.dockerenv", "docker"), ("/run/.containerenv", "podman")]
-            .into_iter()
-            .find(|(path, _)| fs.exists(Path::new(path)));
-        match marker {
-            Some((_, name)) => Virt::Detected(name.to_owned()),
-            None => Virt::Unknown,
+    let container = match detect_virt(runner, "--container", notices) {
+        Probe::Ran(virt) => virt,
+        Probe::Missing | Probe::Failed => {
+            let marker = [("/.dockerenv", "docker"), ("/run/.containerenv", "podman")]
+                .into_iter()
+                .find(|(path, _)| fs.exists(Path::new(path)));
+            match marker {
+                Some((_, name)) => Virt::Detected(name.to_owned()),
+                None => Virt::Unknown,
+            }
         }
-    });
-    let vm = detect_virt(runner, "--vm", notices).unwrap_or(Virt::Unknown);
-    if vm == Virt::Unknown {
-        notices.push("systemd-detect-virt not available; virtualization is unknown".to_owned());
-    }
+    };
+    let vm = match detect_virt(runner, "--vm", notices) {
+        Probe::Ran(virt) => virt,
+        Probe::Missing => {
+            notices.push("systemd-detect-virt not found; virtualization is unknown".to_owned());
+            Virt::Unknown
+        }
+        Probe::Failed => Virt::Unknown,
+    };
     Virtualization { container, vm }
 }
 
 /// Runs `systemd-detect-virt <flag>`. It prints `none` and exits 1 when
-/// nothing is detected, so the exit code is not checked.
-fn detect_virt(runner: &dyn Runner, flag: &str, notices: &mut Vec<String>) -> Option<Virt> {
-    let out = probe(runner, &Cmd::new("systemd-detect-virt").arg(flag), notices)?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    match text.trim() {
-        "" => None,
-        "none" => Some(Virt::None),
-        name => Some(Virt::Detected(name.to_owned())),
+/// nothing is detected, so the exit code is not checked; empty output counts
+/// as unknown.
+fn detect_virt(runner: &dyn Runner, flag: &str, notices: &mut Vec<String>) -> Probe<Virt> {
+    match probe(runner, &Cmd::new("systemd-detect-virt").arg(flag), notices) {
+        Probe::Ran(out) => Probe::Ran(match String::from_utf8_lossy(&out.stdout).trim() {
+            "" => Virt::Unknown,
+            "none" => Virt::None,
+            name => Virt::Detected(name.to_owned()),
+        }),
+        Probe::Missing => Probe::Missing,
+        Probe::Failed => Probe::Failed,
     }
 }

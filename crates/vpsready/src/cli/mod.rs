@@ -170,13 +170,14 @@ fn ssh_line(ssh: &facts::Ssh) -> String {
     parts.join(", ")
 }
 
-/// Unique `proto/port (process)` entries, e.g. `tcp/22 (sshd)`.
+/// Unique `proto/port (processes)` entries, e.g. `tcp/22 (sshd, systemd)`.
 fn ports_line(listeners: &[Listener]) -> String {
     let mut seen: Vec<String> = Vec::new();
     for l in listeners {
-        let entry = match &l.process {
-            Some(p) => format!("{}/{} ({p})", l.proto, l.port),
-            None => format!("{}/{}", l.proto, l.port),
+        let entry = if l.processes.is_empty() {
+            format!("{}/{}", l.proto, l.port)
+        } else {
+            format!("{}/{} ({})", l.proto, l.port, l.processes.join(", "))
         };
         if !seen.contains(&entry) {
             seen.push(entry);

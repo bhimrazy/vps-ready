@@ -207,13 +207,17 @@ listeners:
   - proto: tcp
     addr: 0.0.0.0
     port: 22
-    process: sshd
+    processes:
+      - sshd
+      - systemd
   - proto: tcp
     addr: "::"
     port: 22
-    process: sshd
+    processes:
+      - sshd
+      - systemd
 session:
-  client: "127.0.0.1:58392"
+  client: "127.0.0.1:46104"
   server: "127.0.0.1:22"
 docker: false
 notices: []
