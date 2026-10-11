@@ -5,7 +5,8 @@ id = "NET-001"
 severity = "low"
 title = "TCP SYN cookies enabled"
 why = "SYN cookies keep the server accepting real connections during a SYN flood."
-check = { kind = "sysctl", key = "net.ipv4.tcp_syncookies", one_of = ["1"] }
+# 2 sends cookies even without a flood, which is stricter.
+check = { kind = "sysctl", key = "net.ipv4.tcp_syncookies", one_of = ["1", "2"] }
 
 # The kernel accepts the option only when `all` and the interface both allow
 # it, so `all` alone decides.

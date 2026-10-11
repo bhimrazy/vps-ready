@@ -127,6 +127,10 @@ jobs:
           rc=0
           sudo "$bin" audit || rc=$?
           [ "$rc" -le 1 ]
+          # Every kernel and network control must have been checked.
+          sudo "$bin" audit --json >audit.json || true
+          jq -e '[.findings[] | select(.id | test("^(KRN|NET)-"))
+                 | select(.status == "skip" or .status == "unknown")] | length == 0' audit.json
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: vps-ready-${{ matrix.target }}

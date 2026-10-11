@@ -48,9 +48,11 @@ pub struct Facts {
     pub listeners: Vec<Listener>,
     /// The SSH session `vps-ready` runs in, if any.
     pub session: Option<SshSession>,
-    /// Kernel settings from `/proc/sys`. Not read inside a container, where
-    /// they belong to the host.
-    pub sysctl: Sysctl,
+    /// Kernel settings from `/proc/sys`. `None` inside a container, where
+    /// they belong to the host. A container that cannot be detected (no
+    /// `systemd-detect-virt` and no Docker or Podman marker) is read as if it
+    /// were the host.
+    pub sysctl: Option<Sysctl>,
     /// Whether Docker is installed. Docker changes firewall and sysctl rules.
     pub docker: bool,
     /// Human-readable notes about facts that could not be determined.
@@ -110,11 +112,7 @@ pub fn collect(fs: &dyn Fs, runner: &dyn Runner, env: &Env) -> Result<Facts, Fac
     let ssh = ssh::detect(runner, &mut notices);
     let listeners = listeners::detect(runner, &mut notices);
     let session = session::detect(env, &mut notices);
-    let sysctl = if virtualization.in_container() {
-        Sysctl::default()
-    } else {
-        sysctl::detect(fs, &mut notices)
-    };
+    let sysctl = (!virtualization.in_container()).then(|| sysctl::detect(fs, &mut notices));
     let docker = DOCKER_PATHS.iter().any(|p| fs.exists(Path::new(p)));
     Ok(Facts {
         os,
@@ -422,11 +420,14 @@ mod tests {
             .with_file("/.dockerenv", "")
             .with_file("/proc/sys/kernel/kptr_restrict", "1\n");
         let facts = collect(&fs, &FakeRunner::new(), &Env::default()).unwrap();
-        assert_eq!(facts.sysctl, Sysctl::default());
+        assert_eq!(facts.sysctl, None);
 
+        // Without systemd-detect-virt or a marker, the container status is
+        // unknown and the settings are read.
         let fs = FakeFs::new().with_file("/proc/sys/kernel/kptr_restrict", "1\n");
         let facts = collect(&fs, &FakeRunner::new(), &Env::default()).unwrap();
-        assert_eq!(facts.sysctl.get("kernel.kptr_restrict"), Some("1"));
+        assert_eq!(facts.virtualization.container, Virt::Unknown);
+        assert_eq!(facts.sysctl.unwrap().get("kernel.kptr_restrict"), Some("1"));
     }
 
     #[test]

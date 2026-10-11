@@ -246,7 +246,7 @@ fn evaluate(check: &Check, facts: &Facts) -> Outcome {
                     reason: "kernel settings belong to the container host".to_owned(),
                 };
             }
-            match facts.sysctl.get(key) {
+            match facts.sysctl.as_ref().and_then(|s| s.get(key)) {
                 Some(found) if one_of.iter().any(|ok| ok == found) => Outcome::Pass,
                 Some(found) => Outcome::Fail {
                     found: found.to_owned(),
@@ -490,5 +490,17 @@ mod tests {
         assert_eq!(json["status"], "fail");
         assert_eq!(json["found"], "yes");
         assert_eq!(json["check"]["kind"], "sshd_effective");
+
+        let skipped = report
+            .findings
+            .iter()
+            .find(|f| f.control.id == "KRN-001")
+            .unwrap();
+        let json = serde_json::to_value(skipped).unwrap();
+        assert_eq!(json["status"], "skip");
+        assert!(json["reason"].is_string());
+        assert!(json.get("found").is_none());
+        let summary = serde_json::to_value(report.summary).unwrap();
+        assert_eq!(summary["skipped"], 13);
     }
 }

@@ -74,6 +74,7 @@ Detection runs once, read-only, into a typed `Facts` struct (`serde` `Serialize`
 - virtualization and container (`systemd-detect-virt`, `/.dockerenv`, DMI (planned))
 - cloud provider (`cloud-id`, `/run/cloud-init/instance-data.json`, DMI vendor strings) (planned)
 - effective sshd config (`sshd -T`), listening sockets, admin IP from `SSH_CONNECTION`, Docker present
+- kernel settings from `/proc/sys` (not read inside a container, where they belong to the host)
 
 `Facts` is plain data with no methods that touch the system, so a test can build one by hand for any distro.
 

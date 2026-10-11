@@ -25,7 +25,7 @@ check = { kind = "sysctl", key = "kernel.unprivileged_bpf_disabled", one_of = ["
 [[control]]
 id = "KRN-004"
 severity = "medium"
-title = "ptrace limited to child processes"
+title = "ptrace scope restricted"
 why = "Otherwise a compromised process can read the memory of your other processes, including secrets such as keys held by ssh-agent."
 check = { kind = "sysctl", key = "kernel.yama.ptrace_scope", one_of = ["1", "2", "3"] }
 

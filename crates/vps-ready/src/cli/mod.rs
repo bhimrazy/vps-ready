@@ -14,7 +14,7 @@ use owo_colors::OwoColorize;
 use tracing_subscriber::EnvFilter;
 
 use crate::VERSION_INFO;
-use crate::audit::{self, Outcome, Report};
+use crate::audit::{self, Check, Outcome, Report};
 use crate::facts::{self, Env, Facts, Listener};
 use crate::sys::{RealFs, RealRunner};
 
@@ -261,11 +261,19 @@ fn print_report(out: &mut impl Write, report: &Report, host: &str, color: bool) 
     }
     writeln!(out)?;
     if s.unknown > 0 {
-        writeln!(
+        write!(
             out,
-            "Unknown controls could not be checked; the warnings on stderr say why. \
-             Most checks need root."
+            "Unknown controls could not be checked; the warnings on stderr say why."
         )?;
+        // `sshd -T` needs root; kernel settings are readable by anyone.
+        let ssh_unknown = report.findings.iter().any(|f| {
+            matches!(f.outcome, Outcome::Unknown { .. })
+                && matches!(f.control.check, Check::SshdEffective { .. })
+        });
+        if ssh_unknown {
+            write!(out, " SSH checks need root.")?;
+        }
+        writeln!(out)?;
     }
     let mut reasons: Vec<&str> = Vec::new();
     for finding in &report.findings {
@@ -408,7 +416,7 @@ mod tests {
         print_report(&mut text, &report, "this host", false).unwrap();
         let text = String::from_utf8(text).unwrap();
         assert!(text.contains("0 passed, 0 failed, 5 unknown"), "{text}");
-        assert!(text.contains("Most checks need root"), "{text}");
+        assert!(text.contains("SSH checks need root"), "{text}");
     }
 
     #[test]

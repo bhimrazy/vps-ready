@@ -22,7 +22,7 @@ FAIL     SSH-005  low       X11 forwarding disabled
 SKIP     KRN-001  low       Kernel pointers hidden
 SKIP     KRN-002  low       Kernel log restricted to root
 SKIP     KRN-003  medium    Unprivileged BPF disabled
-SKIP     KRN-004  medium    ptrace limited to child processes
+SKIP     KRN-004  medium    ptrace scope restricted
 SKIP     KRN-005  medium    Symlink protection enabled
 SKIP     KRN-006  medium    Hardlink protection enabled
 SKIP     KRN-007  low       FIFO protection enabled
