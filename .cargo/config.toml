@@ -1,0 +1,12 @@
+# Link the static musl targets with the LLVM linker bundled with rustup
+# (`rust-lld`) and the musl CRT/libc that ship with the Rust target. No system
+# cross toolchain is needed, so the same config works on macOS and on Linux CI
+# runners for both x86_64 and aarch64.
+[target.x86_64-unknown-linux-musl]
+linker = "rust-lld"
+
+[target.aarch64-unknown-linux-musl]
+linker = "rust-lld"
+
+[alias]
+check-all = "clippy --workspace --all-targets --all-features -- -D warnings"

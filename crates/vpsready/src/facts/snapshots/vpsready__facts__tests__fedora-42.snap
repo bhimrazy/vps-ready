@@ -1,0 +1,13 @@
+---
+source: crates/vpsready/src/facts/mod.rs
+expression: facts
+---
+os:
+  id: fedora
+  id_like: []
+  version_id: "42"
+  pretty_name: Fedora Linux 42 (Server Edition)
+  family: rhel
+init: unknown
+notices:
+  - /proc/1/comm not found; init system is unknown

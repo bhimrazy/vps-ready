@@ -1,0 +1,10 @@
+NAME="Fedora Linux"
+VERSION="42 (Server Edition)"
+RELEASE_TYPE=stable
+ID=fedora
+VERSION_ID=42
+PLATFORM_ID="platform:f42"
+PRETTY_NAME="Fedora Linux 42 (Server Edition)"
+# Fedora ships comments and variant fields too.
+VARIANT="Server Edition"
+VARIANT_ID=server

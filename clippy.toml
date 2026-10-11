@@ -1,0 +1,5 @@
+# Production code denies unwrap/expect/panic (see [workspace.lints] in Cargo.toml);
+# tests may use them freely.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true

@@ -1,0 +1,16 @@
+---
+source: crates/vpsready/src/facts/mod.rs
+expression: facts
+---
+os:
+  id: rocky
+  id_like:
+    - rhel
+    - centos
+    - fedora
+  version_id: "9.6"
+  pretty_name: Rocky Linux 9.6 (Blue Onyx)
+  family: rhel
+init: unknown
+notices:
+  - /proc/1/comm not found; init system is unknown

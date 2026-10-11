@@ -1,0 +1,13 @@
+---
+source: crates/vpsready/src/facts/mod.rs
+expression: facts
+---
+os:
+  id: debian
+  id_like: []
+  version_id: "13"
+  pretty_name: Debian GNU/Linux 13 (trixie)
+  family: debian
+init: unknown
+notices:
+  - /proc/1/comm not found; init system is unknown

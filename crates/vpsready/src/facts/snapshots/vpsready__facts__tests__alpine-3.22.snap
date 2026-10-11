@@ -1,0 +1,13 @@
+---
+source: crates/vpsready/src/facts/mod.rs
+expression: facts
+---
+os:
+  id: alpine
+  id_like: []
+  version_id: 3.22.1
+  pretty_name: Alpine Linux v3.22
+  family: alpine
+init: unknown
+notices:
+  - /proc/1/comm not found; init system is unknown

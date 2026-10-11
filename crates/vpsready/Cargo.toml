@@ -1,0 +1,44 @@
+[package]
+name = "vpsready"
+description = "Detect, audit and safely harden a fresh Linux VPS, with snapshots, rollback and an SSH dead-man switch."
+categories = ["command-line-utilities"]
+keywords = ["vps", "hardening", "security", "ssh", "linux"]
+readme = "../../README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "vpsready"
+path = "src/main.rs"
+
+[features]
+default = []
+# Exposes `sys::fake` (FakeRunner, FakeFs) to downstream tests.
+testing = []
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+owo-colors.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+assert_cmd.workspace = true
+insta.workspace = true
+predicates.workspace = true
+proptest.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true
