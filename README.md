@@ -39,7 +39,7 @@ Auditors like Lynis tell you what is wrong but fix nothing. Ansible roles fix th
 On the server, as root. Installation is three steps on purpose: download, read, run.
 
 ```console
-# curl -fsSLO https://github.com/bhimrazy/vps-ready/releases/download/v0.1.0-alpha.2/install.sh
+# curl -fsSLO https://github.com/bhimrazy/vps-ready/releases/download/v0.1.0-alpha.3/install.sh
 # less install.sh
 # sh install.sh        # checks the SHA-256, verifies the signature if gh or cosign is installed
 # vps-ready detect
@@ -51,7 +51,7 @@ On the server, as root. Installation is three steps on purpose: download, read, 
   <br><sub>Example session on an Ubuntu 24.04 VPS.</sub>
 </p>
 
-The command is also installed as `vpsready`, without the hyphen. With Rust installed you can build from source instead: `cargo install vps-ready --version 0.1.0-alpha.2 --locked`. Signed packages for apt, dnf and apk are planned for v0.5. The trust model of each install channel is in [the release doc](docs/release.md).
+The command is also installed as `vpsready`, without the hyphen. With Rust installed you can build from source instead: `cargo install vps-ready --version 0.1.0-alpha.3 --locked`. Signed packages for apt, dnf and apk are planned for v0.5. The trust model of each install channel is in [the release doc](docs/release.md).
 
 ## What it does
 
