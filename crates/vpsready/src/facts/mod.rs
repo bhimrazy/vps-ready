@@ -1,20 +1,35 @@
 //! Read-only discovery of what the host is.
 //!
 //! [`collect`] gathers [`Facts`] through the [`Fs`] and [`Runner`] traits.
-//! Missing sources are not errors: the fact becomes `Unknown` and a notice is
-//! recorded, so `vpsready detect` also works on a developer laptop or in a
-//! minimal container.
+//! Missing sources and failed probes are not errors: the fact becomes unknown
+//! and a notice is recorded, so `vpsready detect` also works on a developer
+//! laptop or in a minimal container.
 
 use std::fmt;
 use std::path::Path;
 
 use serde::Serialize;
 
-use crate::sys::{Fs, Runner, SysError};
+use crate::sys::{Cmd, Fs, Output, Runner, SysError};
 
+pub mod listeners;
 pub mod os_release;
+pub mod session;
+pub mod ssh;
+pub mod virt;
 
+pub use listeners::{Listener, Proto};
 pub use os_release::{OsFamily, OsRelease};
+pub use session::{Env, SshSession};
+pub use ssh::{Ssh, SshActivation, SshdConfig};
+pub use virt::{Virt, Virtualization};
+
+/// Paths whose presence means Docker is installed.
+const DOCKER_PATHS: [&str; 3] = [
+    "/run/docker.sock",
+    "/var/run/docker.sock",
+    "/usr/bin/docker",
+];
 
 /// Everything `vpsready` knows about the host.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -23,6 +38,16 @@ pub struct Facts {
     pub os: OsRelease,
     /// Init system running as PID 1.
     pub init: Init,
+    /// Container and VM detection.
+    pub virtualization: Virtualization,
+    /// The SSH server.
+    pub ssh: Ssh,
+    /// Listening TCP and UDP sockets.
+    pub listeners: Vec<Listener>,
+    /// The SSH session `vpsready` runs in, if any.
+    pub session: Option<SshSession>,
+    /// Whether Docker is installed. Docker changes firewall and sysctl rules.
+    pub docker: bool,
     /// Human-readable notes about facts that could not be determined.
     pub notices: Vec<String>,
 }
@@ -66,18 +91,56 @@ pub enum FactsError {
     },
 }
 
-/// Collects facts about the system behind `fs` and `runner`.
-///
-/// `runner` is unused in M0; from M1 it runs probes such as `sshd -T`.
+/// Collects facts about the system behind `fs` and `runner`, plus the
+/// session described by `env`.
 ///
 /// # Errors
 ///
 /// [`FactsError::Read`] if a source exists but cannot be read.
-pub fn collect(fs: &dyn Fs, _runner: &dyn Runner) -> Result<Facts, FactsError> {
+pub fn collect(fs: &dyn Fs, runner: &dyn Runner, env: &Env) -> Result<Facts, FactsError> {
     let mut notices = Vec::new();
     let os = detect_os(fs, &mut notices)?;
     let init = detect_init(fs, &mut notices)?;
-    Ok(Facts { os, init, notices })
+    let virtualization = virt::detect(fs, runner, &mut notices);
+    let ssh = ssh::detect(runner, &mut notices);
+    let listeners = listeners::detect(runner, &mut notices);
+    let session = session::detect(env, &mut notices);
+    let docker = DOCKER_PATHS.iter().any(|p| fs.exists(Path::new(p)));
+    Ok(Facts {
+        os,
+        init,
+        virtualization,
+        ssh,
+        listeners,
+        session,
+        docker,
+        notices,
+    })
+}
+
+/// The outcome of running a probe command, or of interpreting its output.
+enum Probe<T = Output> {
+    /// The command ran. A non-zero exit status is for the caller to judge.
+    Ran(T),
+    /// The program is not installed. Many probes exist only on some distros,
+    /// so the caller decides whether this deserves a notice.
+    Missing,
+    /// The command could not be run; a notice has already been recorded.
+    Failed,
+}
+
+fn probe(runner: &dyn Runner, cmd: &Cmd, notices: &mut Vec<String>) -> Probe {
+    match runner.run(cmd) {
+        Ok(out) => Probe::Ran(out),
+        Err(SysError::NotFound(_)) => {
+            tracing::debug!(program = %cmd.program, "probe not found");
+            Probe::Missing
+        }
+        Err(err) => {
+            notices.push(format!("running `{}`: {err}", cmd.program));
+            Probe::Failed
+        }
+    }
 }
 
 /// Reads `path`, mapping "not found" to `None`.
@@ -123,11 +186,14 @@ fn detect_init(fs: &dyn Fs, notices: &mut Vec<String>) -> Result<Init, FactsErro
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
     use crate::sys::RealFs;
     use crate::sys::fake::{FakeFs, FakeRunner};
 
-    const FIXTURES: [&str; 5] = [
+    /// Parser fixtures for distros we cannot capture yet.
+    const OS_RELEASE_FIXTURES: [&str; 5] = [
         "ubuntu-24.04",
         "debian-13",
         "rocky-9",
@@ -135,29 +201,174 @@ mod tests {
         "fedora-42",
     ];
 
+    /// Hosts captured by `test/capture-host-fixtures.sh`.
+    const HOSTS: [&str; 3] = ["ubuntu-24.04", "debian-12", "debian-13"];
+
+    fn testdata(path: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("testdata")
+            .join(path)
+    }
+
+    /// Facts for a captured host, answering commands from its fixture.
+    /// `prefer` selects a scenario, e.g. `["sshd-T-before-login"]`.
+    fn host(name: &str, prefer: &[&str]) -> Facts {
+        let dir = testdata(&format!("hosts/{name}"));
+        let runner = FakeRunner::from_fixture(&dir, prefer).unwrap();
+        let env_file = std::fs::read_to_string(dir.join("env")).unwrap();
+        let env = Env {
+            ssh_connection: env_file
+                .trim()
+                .strip_prefix("SSH_CONNECTION=")
+                .map(str::to_owned),
+        };
+        collect(&RealFs::new(dir.join("root")), &runner, &env).unwrap()
+    }
+
     #[test]
-    fn fixtures_snapshot() {
-        for name in FIXTURES {
-            let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("testdata/os-release")
-                .join(name);
-            let facts = collect(&RealFs::new(root), &FakeRunner::new()).unwrap();
-            insta::assert_yaml_snapshot!(name, facts);
+    fn os_release_fixtures_snapshot() {
+        for name in OS_RELEASE_FIXTURES {
+            let root = testdata(&format!("os-release/{name}"));
+            let facts = collect(&RealFs::new(root), &FakeRunner::new(), &Env::default()).unwrap();
+            insta::assert_yaml_snapshot!(name, facts.os);
+        }
+    }
+
+    #[test]
+    fn hosts_snapshot() {
+        for name in HOSTS {
+            insta::assert_yaml_snapshot!(format!("host-{name}"), host(name, &[]));
+        }
+    }
+
+    #[test]
+    fn captured_hosts_are_complete() {
+        for name in HOSTS {
+            let facts = host(name, &[]);
+            assert_eq!(facts.os.family, OsFamily::Debian, "{name}");
+            assert_eq!(facts.init, Init::Systemd, "{name}");
+            assert!(facts.virtualization.in_container(), "{name}");
+            assert!(facts.ssh.version.is_some(), "{name}");
+            assert!(facts.ssh.effective.is_some(), "{name}");
+            assert!(
+                facts
+                    .listeners
+                    .iter()
+                    .any(|l| l.port == 22 && l.proto == Proto::Tcp),
+                "{name}"
+            );
+            assert_eq!(facts.session.map(|s| s.server.port()), Some(22), "{name}");
+            assert!(facts.notices.is_empty(), "{name}: {:?}", facts.notices);
+        }
+    }
+
+    #[test]
+    fn ubuntu_uses_socket_activation_and_debian_does_not() {
+        assert_eq!(
+            host("ubuntu-24.04", &[]).ssh.activation,
+            SshActivation::Socket
+        );
+        assert_eq!(
+            host("debian-12", &[]).ssh.activation,
+            SshActivation::Service
+        );
+        assert_eq!(
+            host("debian-13", &[]).ssh.activation,
+            SshActivation::Service
+        );
+    }
+
+    /// Before the first connection only systemd holds port 22 on Ubuntu, so a
+    /// check for "is SSH listening" must not look for an sshd process.
+    #[test]
+    fn ubuntu_port_22_belongs_to_systemd_before_first_login() {
+        let facts = host("ubuntu-24.04", &["listeners-before-login"]);
+        let ssh_port: Vec<_> = facts.listeners.iter().filter(|l| l.port == 22).collect();
+        assert!(!ssh_port.is_empty());
+        assert!(
+            ssh_port.iter().all(|l| l.processes == ["systemd"]),
+            "{ssh_port:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_fixture_scenario_is_an_error() {
+        let dir = testdata("hosts/ubuntu-24.04");
+        assert!(FakeRunner::from_fixture(&dir, &["sshd-T-dropin-9"]).is_err());
+    }
+
+    #[test]
+    fn ubuntu_sshd_t_fails_before_first_login() {
+        let facts = host("ubuntu-24.04", &["sshd-T-before-login"]);
+        assert_eq!(facts.ssh.effective, None);
+        let notice = facts.notices.join("\n");
+        assert!(notice.contains("until the first SSH login"), "{notice}");
+    }
+
+    /// sshd keeps the first value it reads. A provider's 50-cloud-init.conf
+    /// beats a later 99- drop-in, but loses to an earlier 00- drop-in.
+    #[test]
+    fn first_sshd_dropin_wins() {
+        for name in HOSTS {
+            let password_auth = |scenario| {
+                host(name, &[scenario])
+                    .ssh
+                    .effective
+                    .unwrap()
+                    .get("passwordauthentication")
+                    .map(str::to_owned)
+            };
+            assert_eq!(
+                password_auth("sshd-T-dropin-99").as_deref(),
+                Some("yes"),
+                "{name}"
+            );
+            assert_eq!(
+                password_auth("sshd-T-dropin-00").as_deref(),
+                Some("no"),
+                "{name}"
+            );
         }
     }
 
     #[test]
     fn empty_system_is_unknown_with_notices() {
-        let facts = collect(&FakeFs::new(), &FakeRunner::new()).unwrap();
+        let facts = collect(&FakeFs::new(), &FakeRunner::new(), &Env::default()).unwrap();
         assert_eq!(facts.os.family, OsFamily::Unknown);
         assert_eq!(facts.init, Init::Unknown);
-        assert_eq!(facts.notices.len(), 2);
+        assert_eq!(facts.virtualization.vm, Virt::Unknown);
+        assert_eq!(facts.ssh.activation, SshActivation::Unknown);
+        assert!(facts.listeners.is_empty());
+        assert!(!facts.docker);
+        // os-release, init, virtualization, ssh version, sshd activation,
+        // sshd config, ss, SSH_CONNECTION.
+        assert_eq!(facts.notices.len(), 8, "{:?}", facts.notices);
+    }
+
+    #[test]
+    fn container_marker_without_systemd() {
+        let fs = FakeFs::new().with_file("/.dockerenv", "");
+        let facts = collect(&fs, &FakeRunner::new(), &Env::default()).unwrap();
+        assert_eq!(
+            facts.virtualization.container,
+            Virt::Detected("docker".into())
+        );
+    }
+
+    #[test]
+    fn detects_docker() {
+        let fs = FakeFs::new().with_file("/usr/bin/docker", "");
+        assert!(
+            collect(&fs, &FakeRunner::new(), &Env::default())
+                .unwrap()
+                .docker
+        );
     }
 
     #[test]
     fn falls_back_to_usr_lib() {
         let fs = FakeFs::new().with_file("/usr/lib/os-release", "ID=arch\n");
-        let facts = collect(&fs, &FakeRunner::new()).unwrap();
+        let facts = collect(&fs, &FakeRunner::new(), &Env::default()).unwrap();
         assert_eq!(facts.os.family, OsFamily::Arch);
     }
 
@@ -176,7 +387,7 @@ mod tests {
             let fs = files
                 .iter()
                 .fold(FakeFs::new(), |fs, (p, c)| fs.with_file(*p, *c));
-            let facts = collect(&fs, &FakeRunner::new()).unwrap();
+            let facts = collect(&fs, &FakeRunner::new(), &Env::default()).unwrap();
             assert_eq!(facts.init, want, "{files:?}");
         }
     }

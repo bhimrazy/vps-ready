@@ -3,6 +3,7 @@
 //! Compiled under `cfg(test)` and with the `testing` feature.
 
 use std::collections::BTreeMap;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
@@ -34,6 +35,65 @@ impl FakeRunner {
         let prefix = args_prefix.into_iter().map(Into::into).collect();
         self.rules.push((program.to_owned(), prefix, output));
         self
+    }
+
+    /// Loads a host fixture written by `test/capture-host-fixtures.sh`.
+    ///
+    /// `dir/commands.tsv` lists `name`, exit code and the exact argv, one
+    /// command per line, tab-separated; stdout and stderr live in
+    /// `dir/cmd/<name>.stdout` and `.stderr` (absent means empty). Several
+    /// entries may share an argv: by default the first one answers, and names
+    /// listed in `prefer` move to the front, which is how a test selects a
+    /// scenario such as `sshd-T-before-login`.
+    ///
+    /// # Errors
+    ///
+    /// Any I/O error, or [`io::ErrorKind::InvalidData`] for a malformed line
+    /// or a `prefer` name that matches no entry (so a typo cannot silently
+    /// replay the default capture).
+    pub fn from_fixture(dir: &Path, prefer: &[&str]) -> io::Result<Self> {
+        let invalid = |msg: String| io::Error::new(io::ErrorKind::InvalidData, msg);
+        let read_optional = |path: PathBuf| match std::fs::read(path) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+            other => other,
+        };
+
+        let tsv = std::fs::read_to_string(dir.join("commands.tsv"))?;
+        let mut entries = Vec::new();
+        for line in tsv.lines().filter(|l| !l.is_empty()) {
+            let mut fields = line.split('\t');
+            let (Some(name), Some(status), Some(program)) =
+                (fields.next(), fields.next(), fields.next())
+            else {
+                return Err(invalid(format!("malformed fixture line: {line:?}")));
+            };
+            let status = status
+                .parse()
+                .map_err(|_| invalid(format!("bad exit code in {line:?}")))?;
+            let cmd_dir = dir.join("cmd");
+            let output = Output {
+                status,
+                stdout: read_optional(cmd_dir.join(format!("{name}.stdout")))?,
+                stderr: read_optional(cmd_dir.join(format!("{name}.stderr")))?,
+            };
+            let args = fields.map(str::to_owned).collect();
+            entries.push((name, (program.to_owned(), args, output)));
+        }
+        if let Some(missing) = prefer
+            .iter()
+            .find(|p| !entries.iter().any(|(name, _)| name == *p))
+        {
+            return Err(invalid(format!(
+                "no fixture named {missing:?} in {}",
+                dir.display()
+            )));
+        }
+        // Stable sort: preferred entries first, file order otherwise.
+        entries.sort_by_key(|(name, _)| !prefer.contains(name));
+        Ok(Self {
+            rules: entries.into_iter().map(|(_, rule)| rule).collect(),
+            calls: Mutex::default(),
+        })
     }
 
     /// Commands run so far, in order.
