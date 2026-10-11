@@ -118,7 +118,7 @@ pub trait Module {
 `plan` returns `Vec<Box<dyn Resource>>` because one module mixes kinds (a `DropIn`, a `Service`, a `User`). A trait object is how Rust holds different types behind one interface; it's why `Resource` has no generic methods.
 
 ### Controls catalog (declarative, auditable without reading Rust)
-Controls live in `src/audit/controls/<area>.toml`, one file per area (`ssh.toml`, later `firewall.toml`, ...), using a **closed** check vocabulary. They are separate from modules because some controls have no module that fixes them. The vocabulary must not grow into a DSL:
+Controls live in `src/audit/controls/<area>.toml`, one file per area (`ssh.toml`, `kernel.toml`, `network.toml`, later `firewall.toml`, ...), using a **closed** check vocabulary. They are separate from modules because some controls have no module that fixes them. The vocabulary must not grow into a DSL:
 ```toml
 [[control]]
 id       = "SSH-002"
@@ -127,9 +127,11 @@ title    = "Password authentication disabled"
 why      = "Passwords can be brute-forced; keys cannot."
 check    = { kind = "sshd_effective", key = "passwordauthentication", equals = "no" }
 ```
-Planned check kinds: `sshd_effective` (implemented), `sysctl`, `file_mode`, `file_contains`, `pkg_installed`, `service_state`, `port_listening`, `user_property`, `fw_allows`. Each is added with the first control that needs it. Later fields: `fix` (the module setting that resolves it, M2) and `refs` (CIS and Lynis IDs).
+Check kinds: `sshd_effective` and `sysctl` are implemented; planned are `file_mode`, `file_contains`, `pkg_installed`, `service_state`, `port_listening`, `user_property`, `fw_allows`. Each is added with the first control that needs it. Later fields: `fix` (the module setting that resolves it, M2) and `refs` (CIS and Lynis IDs).
 
-An outcome is `pass`, `fail` (with the value found) or `unknown` (the fact could not be read, usually for lack of root). Unknown never counts as a pass. `audit` exits 0 only when every control passes, 1 otherwise, and 2 on error.
+An outcome is `pass`, `fail` (with the value found), `unknown` (the fact could not be read, usually for lack of root) or `skip` (the control does not apply, e.g. kernel settings inside a container, which belong to the host). Unknown never counts as a pass. `audit` exits 0 when no control fails or is unknown, 1 otherwise, and 2 on error.
+
+`sysctl` checks read `/proc/sys` directly, with no command, and only outside containers. Settings whose effect depends on several files, such as ICMP redirects (the kernel combines `all`, the interface and its forwarding state), need a check kind of their own and come later.
 
 Facts collection runs only read-only commands. A unit test pins the exact list, and every command runs with a fixed system `PATH` and a timeout.
 

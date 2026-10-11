@@ -199,6 +199,9 @@ fn collect_facts(root: &Path) -> anyhow::Result<Facts> {
 ///
 /// 3 passed, 2 failed, 0 unknown
 /// ```
+///
+/// Skipped controls get a row without details, and each distinct reason is
+/// printed once after the summary.
 fn print_report(out: &mut impl Write, report: &Report, host: &str, color: bool) -> io::Result<()> {
     const INDENT: &str = "                            ";
     const WIDTH: usize = 100;
@@ -216,12 +219,14 @@ fn print_report(out: &mut impl Write, report: &Report, host: &str, color: bool) 
             Outcome::Pass => "PASS   ",
             Outcome::Fail { .. } => "FAIL   ",
             Outcome::Unknown { .. } => "UNKNOWN",
+            Outcome::Skip { .. } => "SKIP   ",
         };
         let label = match (color, &finding.outcome) {
             (false, _) => label.to_owned(),
             (true, Outcome::Pass) => label.green().to_string(),
             (true, Outcome::Fail { .. }) => label.red().to_string(),
             (true, Outcome::Unknown { .. }) => label.yellow().to_string(),
+            (true, Outcome::Skip { .. }) => label.dimmed().to_string(),
         };
         let severity = control.severity.to_string();
         writeln!(
@@ -229,7 +234,10 @@ fn print_report(out: &mut impl Write, report: &Report, host: &str, color: bool) 
             "{label}  {:<7}  {severity:<8}  {}",
             control.id, control.title
         )?;
-        if let Some(detail) = finding.detail() {
+        // Skip reasons repeat across controls, so they are listed once below.
+        if let Some(detail) = finding.detail()
+            && !matches!(finding.outcome, Outcome::Skip { .. })
+        {
             writeln!(out, "{INDENT}{detail}")?;
         }
         if matches!(finding.outcome, Outcome::Fail { .. }) {
@@ -243,17 +251,32 @@ fn print_report(out: &mut impl Write, report: &Report, host: &str, color: bool) 
         }
     }
     let s = report.summary;
-    writeln!(
+    write!(
         out,
         "\n{} passed, {} failed, {} unknown",
         s.passed, s.failed, s.unknown
     )?;
+    if s.skipped > 0 {
+        write!(out, ", {} skipped", s.skipped)?;
+    }
+    writeln!(out)?;
     if s.unknown > 0 {
         writeln!(
             out,
             "Unknown controls could not be checked; the warnings on stderr say why. \
              Most checks need root."
         )?;
+    }
+    let mut reasons: Vec<&str> = Vec::new();
+    for finding in &report.findings {
+        if let Outcome::Skip { reason } = &finding.outcome
+            && !reasons.contains(&reason.as_str())
+        {
+            reasons.push(reason);
+        }
+    }
+    for reason in reasons {
+        writeln!(out, "Skipped: {reason}.")?;
     }
     Ok(())
 }

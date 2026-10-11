@@ -16,12 +16,14 @@ pub mod listeners;
 pub mod os_release;
 pub mod session;
 pub mod ssh;
+pub mod sysctl;
 pub mod virt;
 
 pub use listeners::{Listener, Proto};
 pub use os_release::{OsFamily, OsRelease};
 pub use session::{Env, SshSession};
 pub use ssh::{Ssh, SshActivation, SshdConfig};
+pub use sysctl::Sysctl;
 pub use virt::{Virt, Virtualization};
 
 /// Paths whose presence means Docker is installed.
@@ -46,6 +48,9 @@ pub struct Facts {
     pub listeners: Vec<Listener>,
     /// The SSH session `vps-ready` runs in, if any.
     pub session: Option<SshSession>,
+    /// Kernel settings from `/proc/sys`. Not read inside a container, where
+    /// they belong to the host.
+    pub sysctl: Sysctl,
     /// Whether Docker is installed. Docker changes firewall and sysctl rules.
     pub docker: bool,
     /// Human-readable notes about facts that could not be determined.
@@ -105,6 +110,11 @@ pub fn collect(fs: &dyn Fs, runner: &dyn Runner, env: &Env) -> Result<Facts, Fac
     let ssh = ssh::detect(runner, &mut notices);
     let listeners = listeners::detect(runner, &mut notices);
     let session = session::detect(env, &mut notices);
+    let sysctl = if virtualization.in_container() {
+        Sysctl::default()
+    } else {
+        sysctl::detect(fs, &mut notices)
+    };
     let docker = DOCKER_PATHS.iter().any(|p| fs.exists(Path::new(p)));
     Ok(Facts {
         os,
@@ -113,6 +123,7 @@ pub fn collect(fs: &dyn Fs, runner: &dyn Runner, env: &Env) -> Result<Facts, Fac
         ssh,
         listeners,
         session,
+        sysctl,
         docker,
         notices,
     })
@@ -390,8 +401,8 @@ mod tests {
         assert!(facts.listeners.is_empty());
         assert!(!facts.docker);
         // os-release, init, virtualization, ssh version, sshd activation,
-        // sshd config, ss, SSH_CONNECTION.
-        assert_eq!(facts.notices.len(), 8, "{:?}", facts.notices);
+        // sshd config, ss, SSH_CONNECTION, /proc/sys.
+        assert_eq!(facts.notices.len(), 9, "{:?}", facts.notices);
     }
 
     #[test]
@@ -402,6 +413,20 @@ mod tests {
             facts.virtualization.container,
             Virt::Detected("docker".into())
         );
+    }
+
+    /// Kernel settings in a container are the host's, so they are not read.
+    #[test]
+    fn container_does_not_read_kernel_settings() {
+        let fs = FakeFs::new()
+            .with_file("/.dockerenv", "")
+            .with_file("/proc/sys/kernel/kptr_restrict", "1\n");
+        let facts = collect(&fs, &FakeRunner::new(), &Env::default()).unwrap();
+        assert_eq!(facts.sysctl, Sysctl::default());
+
+        let fs = FakeFs::new().with_file("/proc/sys/kernel/kptr_restrict", "1\n");
+        let facts = collect(&fs, &FakeRunner::new(), &Env::default()).unwrap();
+        assert_eq!(facts.sysctl.get("kernel.kptr_restrict"), Some("1"));
     }
 
     #[test]
