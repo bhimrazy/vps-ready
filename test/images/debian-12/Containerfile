@@ -1,0 +1,12 @@
+# Test image: debian-12 with systemd as PID 1 and OpenSSH, close to a fresh cloud VPS.
+# Run with: docker run -d --privileged --cgroupns=private --tmpfs /run --tmpfs /run/lock <image>
+FROM debian:12
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends systemd systemd-sysv dbus openssh-server openssh-client iproute2 sudo ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && rm -f /etc/machine-id && touch /etc/machine-id
+
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]

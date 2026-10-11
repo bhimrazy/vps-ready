@@ -1,0 +1,9 @@
+virt-container	0	systemd-detect-virt	--container
+virt-vm	0	systemd-detect-virt	--vm
+ssh-version	0	ssh	-V
+sshd-T	0	sshd	-T
+ssh-units	0	systemctl	show	--property=Id,LoadState,ActiveState,UnitFileState	ssh.socket	sshd.socket	ssh.service	sshd.service
+listeners	0	ss	-tulnpH
+sshd-T-before-login	0	sshd	-T
+sshd-T-dropin-99	0	sshd	-T
+sshd-T-dropin-00	0	sshd	-T

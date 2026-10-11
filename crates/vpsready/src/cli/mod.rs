@@ -12,7 +12,7 @@ use clap::{ArgAction, Parser, Subcommand};
 use owo_colors::OwoColorize;
 
 use crate::VERSION_INFO;
-use crate::facts::{self, Facts};
+use crate::facts::{self, Env, Facts, Listener};
 use crate::sys::{RealFs, RealRunner};
 
 /// Detect, audit and safely harden a fresh Linux VPS.
@@ -41,9 +41,10 @@ pub struct Cli {
 pub enum Command {
     /// Print version and build information.
     Version,
-    /// Detect facts about this system (OS, init system) and print them.
+    /// Detect facts about this system (OS, virtualization, SSH, open ports) and print them.
     Detect {
-        /// Inspect a filesystem tree mounted at PATH instead of `/`.
+        /// Read files from a tree mounted at PATH instead of `/`. Commands such
+        /// as `sshd -T` still run on this machine.
         #[arg(long, value_name = "PATH", default_value = "/")]
         root: PathBuf,
     },
@@ -78,7 +79,7 @@ pub fn run(cli: &Cli) -> anyhow::Result<()> {
         }
         Command::Detect { root } => {
             let fs = RealFs::new(root);
-            let facts = facts::collect(&fs, &RealRunner)
+            let facts = facts::collect(&fs, &RealRunner, &Env::from_process())
                 .with_context(|| format!("detecting facts under {}", root.display()))?;
             for notice in &facts.notices {
                 tracing::warn!("{notice}");
@@ -97,20 +98,42 @@ pub fn run(cli: &Cli) -> anyhow::Result<()> {
 
 fn print_facts(out: &mut impl Write, facts: &Facts, color: bool) -> io::Result<()> {
     let os = &facts.os;
-    let id = if os.id_like.is_empty() {
-        os.id.clone()
-    } else {
-        format!("{} (like {})", os.id, os.id_like.join(", "))
-    };
+    let mut os_line = os.pretty_name.clone();
+    if os.family != facts::OsFamily::Unknown {
+        os_line.push_str(&format!(" ({} family)", os.family));
+    }
+    let virt = &facts.virtualization;
     let rows = [
-        ("OS", os.pretty_name.clone()),
-        ("ID", id),
-        (
-            "Version",
-            os.version_id.clone().unwrap_or_else(|| "-".into()),
-        ),
-        ("Family", os.family.to_string()),
+        ("OS", os_line),
         ("Init", facts.init.to_string()),
+        (
+            "Virt",
+            format!("container {}, vm {}", virt.container, virt.vm),
+        ),
+        ("SSH", ssh_line(&facts.ssh)),
+        ("Ports", ports_line(&facts.listeners)),
+        (
+            "You",
+            facts.session.map_or_else(
+                || "not connected over SSH".to_owned(),
+                |s| {
+                    format!(
+                        "connected from {} to port {}",
+                        s.client.ip(),
+                        s.server.port()
+                    )
+                },
+            ),
+        ),
+        (
+            "Docker",
+            if facts.docker {
+                "installed"
+            } else {
+                "not installed"
+            }
+            .to_owned(),
+        ),
     ];
     for (key, value) in rows {
         if color {
@@ -120,4 +143,48 @@ fn print_facts(out: &mut impl Write, facts: &Facts, color: bool) -> io::Result<(
         }
     }
     Ok(())
+}
+
+/// e.g. `OpenSSH 9.6p1, socket activation, port 22, passwords yes, root login without-password`.
+fn ssh_line(ssh: &facts::Ssh) -> String {
+    let mut parts = vec![
+        ssh.version.as_ref().map_or_else(
+            || "OpenSSH version unknown".to_owned(),
+            |v| format!("OpenSSH {v}"),
+        ),
+        ssh.activation.to_string(),
+    ];
+    match &ssh.effective {
+        Some(config) => {
+            let ports = config.get_all("port").join(",");
+            parts.push(format!("port {ports}"));
+            for (label, key) in [
+                ("passwords", "passwordauthentication"),
+                ("root login", "permitrootlogin"),
+            ] {
+                parts.push(format!("{label} {}", config.get(key).unwrap_or("?")));
+            }
+        }
+        None => parts.push("effective config unknown".to_owned()),
+    }
+    parts.join(", ")
+}
+
+/// Unique `proto/port (process)` entries, e.g. `tcp/22 (sshd)`.
+fn ports_line(listeners: &[Listener]) -> String {
+    let mut seen: Vec<String> = Vec::new();
+    for l in listeners {
+        let entry = match &l.process {
+            Some(p) => format!("{}/{} ({p})", l.proto, l.port),
+            None => format!("{}/{}", l.proto, l.port),
+        };
+        if !seen.contains(&entry) {
+            seen.push(entry);
+        }
+    }
+    if seen.is_empty() {
+        "none found".to_owned()
+    } else {
+        seen.join(", ")
+    }
 }

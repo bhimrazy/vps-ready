@@ -1,14 +1,10 @@
 ---
 source: crates/vpsready/src/facts/mod.rs
-expression: facts
+expression: facts.os
 ---
-os:
-  id: ubuntu
-  id_like:
-    - debian
-  version_id: "24.04"
-  pretty_name: Ubuntu 24.04.3 LTS
-  family: debian
-init: unknown
-notices:
-  - /proc/1/comm not found; init system is unknown
+id: ubuntu
+id_like:
+  - debian
+version_id: "24.04"
+pretty_name: Ubuntu 24.04.3 LTS
+family: debian

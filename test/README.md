@@ -11,4 +11,18 @@
 4. **VM tests**: full VMs for SSH, firewall, the engine and the dead-man switch,
    where a lockout must be observable and recoverable.
 
-Container images (`test/images/`) arrive in M1; VM tests in M3.
+## Host fixtures
+
+`test/images/<distro>/Containerfile` builds a systemd + OpenSSH image that
+behaves like a fresh VPS. `test/capture-host-fixtures.sh <distro>` boots one
+(512 MB, 1 CPU, removed afterwards), logs in over SSH once, and records the
+exact commands the facts code runs into `crates/vpsready/testdata/hosts/<distro>/`.
+Unit tests replay them with `FakeRunner::from_fixture`.
+
+```sh
+docker build -f test/images/debian-13/Containerfile -t vpsready-test:debian-13 test/images/debian-13
+test/capture-host-fixtures.sh debian-13
+```
+
+Re-capture when a probe's argv changes, then review the snapshot diff with
+`cargo insta review`. Running the container tests in CI comes next; VM tests in M3.

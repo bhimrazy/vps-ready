@@ -1,0 +1,2 @@
+tcp LISTEN 0      128    0.0.0.0:22 0.0.0.0:* users:(("sshd",pid=61,fd=3))
+tcp LISTEN 0      128       [::]:22    [::]:* users:(("sshd",pid=61,fd=4))
