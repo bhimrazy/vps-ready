@@ -84,7 +84,7 @@ AllowGroups sshusers        # add admin + deploy to the group FIRST
 
 **Port change: keep 22 by default.** Changing it only reduces log noise. It touches five places that can each lock you out: the firewall, the provider firewall, the SELinux `semanage port`, `ssh.socket` and fail2ban. A private network (Tailscale) is the real fix.
 
-**Validate before reload:** `sshd -t` → `sshd -T | grep -Ei 'passwordauth|permitroot|kbdinter'` → `sshd -T -C user=admin,host=x,addr=1.2.3.4` (for Match/AllowGroups). Then `reload`; existing sessions survive it.
+**Validate before reload:** `sshd -t` → `sshd -T | grep -Ei 'passwordauth|permitroot|kbdinter'` → `sshd -T -C user=admin,host=x,addr=192.0.2.1` (for Match/AllowGroups). Then `reload`; existing sessions survive it.
 
 **Second factor (opt-in):**
 - **FIDO2 `ed25519-sk` keys with `verify-required`** (recommended; phishing-resistant).
