@@ -71,6 +71,8 @@ $ ssh root@203.0.113.10
   STATUS   ID       SEVERITY  CONTROL
   FAIL     SSH-002  high      Password authentication disabled
                               passwordauthentication is yes, expected no
+                              Passwords can be guessed or reused from leaks; SSH keys cannot be
+                              brute-forced.
   FAIL     FW-001   high      Host firewall active
   FAIL     UPD-001  medium    Automatic security updates enabled
   PASS     MAC-001  medium    AppArmor enforcing

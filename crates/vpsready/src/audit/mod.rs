@@ -31,7 +31,7 @@ pub struct Control {
 }
 
 /// How much a failed control matters.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
     /// Worth fixing; rarely exploitable on its own.
@@ -128,8 +128,8 @@ pub struct Report {
     pub findings: Vec<Finding>,
     /// Counts of outcomes.
     pub summary: Summary,
-    /// Notes about facts that could not be determined; they explain unknown
-    /// outcomes.
+    /// Every notice from fact collection. Those about SSH explain unknown
+    /// outcomes; the rest concern facts no control uses yet.
     pub notices: Vec<String>,
 }
 
@@ -256,16 +256,32 @@ mod tests {
         }
     }
 
+    /// Each rejected input has every required field, so only the unknown
+    /// kind or the extra field can make it fail.
     #[test]
     fn unknown_kind_and_fields_are_rejected() {
-        let parse = |check: &str| {
+        let parse = |extra: &str, check: &str| {
             toml::from_str::<Control>(&format!(
-                "id = \"X-001\"\nseverity = \"low\"\ntitle = \"t\"\nwhy = \"w\"\ncheck = {check}"
+                "id = \"X-001\"\nseverity = \"low\"\ntitle = \"t\"\nwhy = \"w\"\n{extra}\ncheck = {check}"
             ))
         };
-        assert!(parse(r#"{ kind = "sshd_effective", key = "port", equals = "22" }"#).is_ok());
-        assert!(parse(r#"{ kind = "sshd_whatever", key = "port", equals = "22" }"#).is_err());
-        assert!(parse(r#"{ kind = "sshd_effective", key = "port", equal = "22" }"#).is_err());
+        let valid = r#"{ kind = "sshd_effective", key = "port", equals = "22" }"#;
+        assert!(parse("", valid).is_ok());
+        assert!(parse("fix = \"x\"", valid).is_err());
+        assert!(
+            parse(
+                "",
+                r#"{ kind = "sshd_whatever", key = "port", equals = "22" }"#
+            )
+            .is_err()
+        );
+        assert!(
+            parse(
+                "",
+                r#"{ kind = "sshd_effective", key = "port", equals = "22", extra = "x" }"#
+            )
+            .is_err()
+        );
     }
 
     #[test]

@@ -138,7 +138,7 @@ Config files a module writes (sshd drop-ins, jail.local, nftables rulesets) are 
 
 ### Error handling
 - One `thiserror` enum per layer (`SysError`, `FactsError`, `ResourceError`, `EngineError`, `ConfigError`), each wrapping the layer below with context ("reading /etc/ssh/sshd_config: permission denied").
-- `anyhow` only in `main.rs`, to print the chain and pick the exit code.
+- `anyhow` only in the binary's edge (`main.rs` and the CLI layer), to add context, print the chain and pick the exit code. Library layers return their own `thiserror` types.
 - No `unwrap()`, `expect()` or `panic!` outside tests. The clippy lints for them are denied workspace-wide, on top of clippy's defaults. A root tool that panics halfway through an edit is exactly the bug we're preventing; with `panic = "abort"` in release builds there would be no unwinding to clean up.
 
 ## Engine flow
@@ -332,4 +332,4 @@ README.md SECURITY.md CONTRIBUTING.md LICENSE CODE_OF_CONDUCT.md .github/CODEOWN
 - **`sshd-config` as its own crate:** the parser is useful outside this tool and has its own fuzz targets, so it gets its own crate and can be published on its own.
 - Adding a module = adding one directory + registering it in one line.
 
-**Direct dependencies (keep it to roughly these):** `clap` (derive), `serde`, `serde_json`, `toml`, `thiserror` (library errors), `anyhow` (binary only), `similar` (unified diffs), `ulid`, `tracing` + `tracing-subscriber`, `askama` (templates), `schemars`, `rustix` (`flock`, uid checks, `fsync`), `owo-colors`. Dev-only: `insta` (snapshots), `proptest`, `tempfile`, `assert_cmd`, `predicates`. Later: `inquire` and `ratatui` (M4), `cargo-fuzz` targets. **No async runtime:** the tool is sequential (one transaction, a handful of subprocesses), so `std::process::Command` with timeouts is enough ([D18](decisions.md)).
+**Direct dependencies (keep it to roughly these):** `clap` (derive), `serde`, `serde_json`, `toml`, `thiserror` (library errors), `anyhow` (binary and CLI layer only), `similar` (unified diffs), `ulid`, `tracing` + `tracing-subscriber`, `askama` (templates), `schemars`, `rustix` (`flock`, uid checks, `fsync`), `owo-colors`. Dev-only: `insta` (snapshots), `proptest`, `tempfile`, `assert_cmd`, `predicates`. Later: `inquire` and `ratatui` (M4), `cargo-fuzz` targets. **No async runtime:** the tool is sequential (one transaction, a handful of subprocesses), so `std::process::Command` with timeouts is enough ([D18](decisions.md)).

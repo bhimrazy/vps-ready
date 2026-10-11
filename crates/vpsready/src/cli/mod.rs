@@ -104,19 +104,25 @@ pub fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
             let controls = audit::catalog()?;
             let facts = collect_facts(Path::new("/"))?;
             let report = audit::run(controls, &facts);
-            if cli.json {
-                serde_json::to_writer_pretty(&mut out, &report)?;
-                writeln!(out)?;
-            } else {
-                print_report(
-                    &mut out,
-                    &report,
-                    &facts.os.pretty_name,
-                    cli.color_enabled(),
-                )?;
-            }
             if !report.all_passed() {
                 code = ExitCode::from(EXIT_AUDIT_FAILED);
+            }
+            let printed = if cli.json {
+                serde_json::to_writer_pretty(&mut out, &report)
+                    .map_err(io::Error::from)
+                    .and_then(|()| writeln!(out))
+            } else {
+                let host = if facts.os.family == facts::OsFamily::Unknown {
+                    "this host"
+                } else {
+                    &facts.os.pretty_name
+                };
+                print_report(&mut out, &report, host, cli.color_enabled())
+            };
+            match printed.and_then(|()| out.flush()) {
+                // `audit | head` must still report the result, not success.
+                Err(e) if e.kind() == io::ErrorKind::BrokenPipe => return Ok(code),
+                other => other?,
             }
         }
     }
@@ -195,7 +201,15 @@ fn print_report(out: &mut impl Write, report: &Report, host: &str, color: bool) 
         out,
         "\n{} passed, {} failed, {} unknown",
         s.passed, s.failed, s.unknown
-    )
+    )?;
+    if s.unknown > 0 {
+        writeln!(
+            out,
+            "Unknown controls could not be checked; the warnings on stderr say why. \
+             Most checks need root."
+        )?;
+    }
+    Ok(())
 }
 
 fn print_facts(out: &mut impl Write, facts: &Facts, color: bool) -> io::Result<()> {
@@ -316,6 +330,17 @@ fn ports_line(listeners: &[Listener]) -> String {
 mod tests {
     use super::*;
     use crate::facts::fixtures::{HOSTS, host};
+
+    #[test]
+    fn audit_text_explains_unknown() {
+        let facts = host("ubuntu-24.04", &["sshd-T-before-login"]);
+        let report = audit::run(audit::catalog().unwrap(), &facts);
+        let mut text = Vec::new();
+        print_report(&mut text, &report, "this host", false).unwrap();
+        let text = String::from_utf8(text).unwrap();
+        assert!(text.contains("0 passed, 0 failed, 5 unknown"), "{text}");
+        assert!(text.contains("Most checks need root"), "{text}");
+    }
 
     #[test]
     fn wraps_at_spaces() {
