@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="460" viewBox="0 0 1200 460" role="img" aria-label="How a vps-ready run works: detect, audit, plan, then an apply transaction that is confirmed from a new SSH session or reverted by the dead-man timer">
+  <title>How a run works</title>
+  <defs>
+    <marker id="m-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#8b949e"/></marker>
+    <marker id="m-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#3fb950"/></marker>
+    <marker id="m-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#d29922"/></marker>
+    <style>
+      .box { fill: #161b22; stroke: #30363d; stroke-width: 1; }
+      .t { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 15px; font-weight: 600; fill: #e6edf3; }
+      .s { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 12px; fill: #8b949e; }
+      .lbl { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 12px; font-weight: 600; }
+      .l { stroke: #8b949e; stroke-width: 1.5; fill: none; }
+      .g { stroke: #3fb950; stroke-width: 1.5; fill: none; }
+      .a { stroke: #d29922; stroke-width: 1.5; fill: none; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="460" rx="12" fill="#0d1117"/>
+  <rect x="0.5" y="0.5" width="1199" height="459" rx="12" fill="none" stroke="#30363d"/>
+
+  <!-- row 1: read-only steps -->
+  <g>
+    <rect class="box" x="40" y="60" width="150" height="64" rx="8"/>
+    <text class="t" x="115" y="86" text-anchor="middle">detect</text>
+    <text class="s" x="115" y="106" text-anchor="middle">read-only facts</text>
+
+    <rect class="box" x="230" y="60" width="150" height="64" rx="8"/>
+    <text class="t" x="305" y="86" text-anchor="middle">audit</text>
+    <text class="s" x="305" y="106" text-anchor="middle">score the controls</text>
+
+    <rect class="box" x="420" y="60" width="150" height="64" rx="8"/>
+    <text class="t" x="495" y="86" text-anchor="middle">plan</text>
+    <text class="s" x="495" y="106" text-anchor="middle">diff of every change</text>
+
+    <line class="l" x1="190" y1="92" x2="228" y2="92" marker-end="url(#m-gray)"/>
+    <line class="l" x1="380" y1="92" x2="418" y2="92" marker-end="url(#m-gray)"/>
+    <line class="l" x1="570" y1="92" x2="608" y2="92" marker-end="url(#m-gray)"/>
+  </g>
+
+  <!-- apply transaction -->
+  <g>
+    <rect x="610" y="28" width="550" height="128" rx="10" fill="#0f1620" stroke="#30363d" stroke-dasharray="5 4"/>
+    <text class="s" x="626" y="48">apply: one transaction, rolled back in reverse order if any step fails</text>
+
+    <rect class="box" x="626" y="68" width="122" height="60" rx="8"/>
+    <text class="t" x="687" y="93" text-anchor="middle">snapshot</text>
+    <text class="s" x="687" y="112" text-anchor="middle">originals + stat</text>
+
+    <rect class="box" x="762" y="68" width="122" height="60" rx="8"/>
+    <text class="t" x="823" y="93" text-anchor="middle">validate</text>
+    <text class="s" x="823" y="112" text-anchor="middle">sshd -t, nft -c</text>
+
+    <rect class="box" x="898" y="68" width="122" height="60" rx="8"/>
+    <text class="t" x="959" y="93" text-anchor="middle">write</text>
+    <text class="s" x="959" y="112" text-anchor="middle">temp, fsync, rename</text>
+
+    <rect class="box" x="1034" y="68" width="110" height="60" rx="8"/>
+    <text class="t" x="1089" y="93" text-anchor="middle">reload</text>
+    <text class="s" x="1089" y="112" text-anchor="middle">never restart</text>
+
+    <line class="l" x1="748" y1="98" x2="760" y2="98" marker-end="url(#m-gray)"/>
+    <line class="l" x1="884" y1="98" x2="896" y2="98" marker-end="url(#m-gray)"/>
+    <line class="l" x1="1020" y1="98" x2="1032" y2="98" marker-end="url(#m-gray)"/>
+  </g>
+
+  <!-- down to the decision -->
+  <polyline class="l" points="1089,128 1089,196 600,196 600,236" marker-end="url(#m-gray)"/>
+
+  <!-- decision -->
+  <rect class="box" x="430" y="238" width="340" height="64" rx="8"/>
+  <text class="t" x="600" y="264" text-anchor="middle">confirmed from a new SSH session?</text>
+  <text class="s" x="600" y="284" text-anchor="middle">dead-man timer armed, 180 s by default</text>
+
+  <!-- yes branch -->
+  <polyline class="g" points="430,270 240,270 240,336" marker-end="url(#m-green)"/>
+  <text class="lbl" x="330" y="262" text-anchor="middle" fill="#3fb950">yes</text>
+  <rect class="box" x="165" y="338" width="150" height="60" rx="8"/>
+  <text class="t" x="240" y="363" text-anchor="middle">verify</text>
+  <text class="s" x="240" y="382" text-anchor="middle">re-run every control</text>
+
+  <!-- timeout branch -->
+  <polyline class="a" points="770,270 960,270 960,336" marker-end="url(#m-amber)"/>
+  <text class="lbl" x="868" y="262" text-anchor="middle" fill="#d29922">timeout or reboot</text>
+  <rect class="box" x="860" y="338" width="200" height="60" rx="8"/>
+  <text class="t" x="960" y="363" text-anchor="middle">dead-man revert</text>
+  <text class="s" x="960" y="382" text-anchor="middle">restore the snapshots</text>
+
+  <!-- report -->
+  <rect class="box" x="525" y="338" width="150" height="60" rx="8"/>
+  <text class="t" x="600" y="363" text-anchor="middle">report</text>
+  <text class="s" x="600" y="382" text-anchor="middle">what changed, what reverted</text>
+  <line class="g" x1="315" y1="368" x2="523" y2="368" marker-end="url(#m-green)"/>
+  <line class="a" x1="860" y1="368" x2="677" y2="368" marker-end="url(#m-amber)"/>
+
+  <!-- legend -->
+  <g class="s">
+    <line class="g" x1="40" y1="432" x2="70" y2="432"/><text x="78" y="436">happy path</text>
+    <line class="a" x1="170" y1="432" x2="200" y2="432"/><text x="208" y="436">automatic revert</text>
+    <text x="330" y="436">Your existing terminal proves nothing: sshd reloads keep old sessions alive. Only a new login counts.</text>
+  </g>
+</svg>
