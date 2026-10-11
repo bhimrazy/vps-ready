@@ -60,7 +60,7 @@ pub enum Command {
     /// Check this system against the security controls and report what fails.
     ///
     /// Exits 0 when every control passes, 1 when any control fails or cannot
-    /// be checked, and 2 on error. Most checks need root.
+    /// be checked, and 2 on error. The SSH checks need root.
     Audit,
 }
 
