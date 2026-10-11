@@ -18,7 +18,7 @@ A hardening tool that runs as root is a prime supply-chain target. Users who car
   ```
 
   Why `panic = "abort"` is safe here: the engine never relies on `Drop` running during a panic to clean up. A crash mid-transaction is handled the same way as a power cut, by the on-disk journal and the dead-man timer ([the architecture doc](architecture.md)).
-- **Reproducible**, bit for bit. The steps that make it so:
+- **Reproducible builds** (the target, not yet verified bit for bit). The steps:
   1. `--locked` plus the pinned toolchain: same inputs, same compiler.
   2. `SOURCE_DATE_EPOCH` set to the tag's commit timestamp, used for anything that would otherwise embed "now" (tarball mtimes, build metadata).
   3. Planned: `RUSTFLAGS="--remap-path-prefix=$HOME/.cargo=/cargo --remap-path-prefix=$PWD=/build"`, so absolute paths from the build machine don't leak into panic messages and debug info.
@@ -86,11 +86,10 @@ Only the last two steps need `contents: write`, and they run in the protected `r
 ### Rust users / CI
 
 ```sh
-cargo install vps-ready --locked   # compiles from source
+cargo install vps-ready --locked   # compiles from source; add --version 0.1.0-alpha.N for a pre-release
 ```
 
-- **`cargo install --locked`** builds on your machine from the source published to crates.io. `--locked` uses the `Cargo.lock` shipped in the crate; without it, cargo resolves the newest semver-compatible dependencies, which nobody has reviewed. Be honest about the trust model: this path is **only as trustworthy as crates.io and that lockfile**. No cosign signature or SLSA attestation covers it. (Publishing from CI with crates.io trusted publishing, so there is no long-lived token to steal, narrows the gap.)
-For the full chain of trust, use the release tarball and verify it with the commands above.
+- **`cargo install --locked`** builds on your machine from the source published to crates.io. `--locked` uses the `Cargo.lock` shipped in the crate; without it, cargo resolves the newest semver-compatible dependencies, which nobody has reviewed. Be honest about the trust model: this path is **only as trustworthy as crates.io and that lockfile**. No cosign signature or SLSA attestation covers it. (Publishing from CI with crates.io trusted publishing, so there is no long-lived token to steal, narrows the gap.) For the full chain of trust, use the release tarball and verify it with the commands above.
 
 ### Publishing to crates.io
 

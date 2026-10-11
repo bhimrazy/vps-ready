@@ -24,7 +24,7 @@ target/
 *.pending-snap
 *.snap.new
 
-# OS and editor (.idea/ also holds the maintainer's local planning notes)
+# OS and editor
 .DS_Store
 .vscode/
 .idea/
