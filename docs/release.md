@@ -51,7 +51,7 @@ Only the last two steps need `contents: write`, and they run in the protected `r
 
 | Artifact | Purpose |
 |---|---|
-| `vpsready-<ver>-<target>.tar.gz` | the static binary (plus LICENSE and README), one per target |
+| `vpsready-<ver>-<target>.tar.gz` | the static binary (plus LICENSE-APACHE, LICENSE-MIT and README), one per target |
 | `checksums.txt` | SHA256 of everything |
 | `checksums.txt.sigstore.json` | **cosign keyless** signature bundle; signing the checksums covers all files |
 | GitHub artifact attestation | **SLSA Build L3** provenance, built in a *reusable* workflow (the attestation starts at the first tag; moving the build into a reusable workflow for L3 comes later) |
@@ -111,5 +111,5 @@ A root tool that replaces itself is extra attack surface for a program that usua
 - **Why not cargo-dist (for now):** with only two musl targets and one tarball format, a generated workflow of several hundred lines isn't justified.
   For a tool whose pitch is "trust the release", we want every release step short enough to audit by reading it.
   cargo-dist stays a valid option to revisit if installers or targets multiply.
-- **License: Apache-2.0.** It has a patent grant and is friendly to hosting providers and panels that might bundle it. GPL-licensed competitors (hostveil, hardbox) are less embeddable. Use DCO sign-off, no CLA.
+- **License: MIT OR Apache-2.0** (the Rust-standard dual license). Apache-2.0 brings a patent grant, MIT keeps it usable by GPLv2 projects; both are friendly to hosting providers and panels that might bundle it. GPL-licensed competitors (hostveil, hardbox) are less embeddable. Use DCO sign-off, no CLA.
 - **SECURITY.md:** GitHub private vulnerability reporting, supported versions, how to verify releases, and which channels are official (GitHub Releases, crates.io `vpsready` and `sshd-config`, and later the package repos).

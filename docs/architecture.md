@@ -326,7 +326,7 @@ docs/
 .github/workflows/         ci.yml codeql.yml scorecard.yml release.yml
                            (later: integration.yml vm.yml nightly-cloud.yml)
 .cargo/config.toml  rust-toolchain.toml  rustfmt.toml  clippy.toml  deny.toml  Makefile
-README.md SECURITY.md CONTRIBUTING.md LICENSE CODE_OF_CONDUCT.md .github/CODEOWNERS .github/dependabot.yml
+README.md SECURITY.md CONTRIBUTING.md LICENSE-APACHE LICENSE-MIT CODE_OF_CONDUCT.md .github/CODEOWNERS .github/dependabot.yml
 ```
 - **Lib + thin bin:** `main.rs` only parses arguments and maps errors to exit codes; everything else is in the library, so tests call it directly.
 - **`sshd-config` as its own crate:** the parser is useful outside this tool and has its own fuzz targets, so it gets its own crate and can be published on its own.

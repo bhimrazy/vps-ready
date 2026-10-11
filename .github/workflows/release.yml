@@ -66,7 +66,7 @@ jobs:
         run: |
           name="vpsready-$VERSION-$TARGET"
           mkdir -p "dist/$name"
-          cp "target/$TARGET/release/vpsready" LICENSE NOTICE README.md "dist/$name/"
+          cp "target/$TARGET/release/vpsready" LICENSE-APACHE LICENSE-MIT NOTICE README.md "dist/$name/"
           tar --sort=name --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner \
             -C dist -cf - "$name" | gzip -n > "dist/$name.tar.gz"
 
