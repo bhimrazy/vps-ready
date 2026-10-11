@@ -47,10 +47,31 @@ fn detect_reads_a_fixture_root() {
         .stdout(predicate::str::contains(r#""family": "debian""#));
 }
 
+/// Wherever tests run, some control fails (stock sshd config) or cannot be
+/// checked (`sshd -T` needs root), so the exit code is 1, never 0 or 2.
+#[test]
+fn audit_json_reports_every_control() {
+    let out = vpsready()
+        .args(["audit", "--json"])
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let json: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    let findings = json["findings"].as_array().unwrap();
+    assert!(!findings.is_empty());
+    assert!(
+        findings
+            .iter()
+            .all(|f| f["id"].is_string() && f["status"].is_string())
+    );
+}
+
 #[test]
 fn unknown_command_is_a_usage_error() {
     vpsready()
-        .arg("audit")
+        .arg("frobnicate")
         .assert()
         .code(2)
         .stderr(predicate::str::contains("unrecognized subcommand"));

@@ -1,19 +1,27 @@
 //! Command-line interface: argument definitions and command dispatch.
 //!
-//! M0 ships `version` and `detect`. Further commands (`audit`, `plan`,
+//! Today: `version`, `detect` and `audit`. Further commands (`plan`,
 //! `apply`, `confirm`, `rollback`, ...) are added as their milestones land;
 //! see the GitHub milestones.
 
 use std::io::{self, IsTerminal, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 
 use anyhow::Context;
 use clap::{ArgAction, Parser, Subcommand};
 use owo_colors::OwoColorize;
 
 use crate::VERSION_INFO;
+use crate::audit::{self, Outcome, Report};
 use crate::facts::{self, Env, Facts, Listener};
 use crate::sys::{RealFs, RealRunner};
+
+/// Exit code of `audit` when a control failed or could not be checked.
+pub const EXIT_AUDIT_FAILED: u8 = 1;
+
+/// Exit code for errors, the same code clap uses for usage errors.
+pub const EXIT_ERROR: u8 = 2;
 
 /// Detect, audit and safely harden a fresh Linux VPS.
 #[derive(Debug, Parser)]
@@ -48,6 +56,11 @@ pub enum Command {
         #[arg(long, value_name = "PATH", default_value = "/")]
         root: PathBuf,
     },
+    /// Check this system against the security controls and report what fails.
+    ///
+    /// Exits 0 when every control passes, 1 when any control fails or cannot
+    /// be checked, and 2 on error. Most checks need root.
+    Audit,
 }
 
 impl Cli {
@@ -61,13 +74,14 @@ impl Cli {
     }
 }
 
-/// Runs the parsed command line.
+/// Runs the parsed command line and returns the exit code to use on success.
 ///
 /// # Errors
 ///
 /// Returns an error if the command fails or stdout cannot be written.
-pub fn run(cli: &Cli) -> anyhow::Result<()> {
+pub fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
     let mut out = io::stdout().lock();
+    let mut code = ExitCode::SUCCESS;
     match &cli.command {
         Command::Version => {
             if cli.json {
@@ -78,12 +92,7 @@ pub fn run(cli: &Cli) -> anyhow::Result<()> {
             }
         }
         Command::Detect { root } => {
-            let fs = RealFs::new(root);
-            let facts = facts::collect(&fs, &RealRunner, &Env::from_process())
-                .with_context(|| format!("detecting facts under {}", root.display()))?;
-            for notice in &facts.notices {
-                tracing::warn!("{notice}");
-            }
+            let facts = collect_facts(root)?;
             if cli.json {
                 serde_json::to_writer_pretty(&mut out, &facts)?;
                 writeln!(out)?;
@@ -91,9 +100,86 @@ pub fn run(cli: &Cli) -> anyhow::Result<()> {
                 print_facts(&mut out, &facts, cli.color_enabled())?;
             }
         }
+        Command::Audit => {
+            let controls = audit::catalog()?;
+            let report = audit::run(controls, &collect_facts(Path::new("/"))?);
+            if cli.json {
+                serde_json::to_writer_pretty(&mut out, &report)?;
+                writeln!(out)?;
+            } else {
+                print_report(&mut out, &report, cli.color_enabled())?;
+            }
+            if !report.all_passed() {
+                code = ExitCode::from(EXIT_AUDIT_FAILED);
+            }
+        }
     }
     out.flush()?;
-    Ok(())
+    Ok(code)
+}
+
+/// Collects facts, logging each notice as a warning on stderr.
+fn collect_facts(root: &Path) -> anyhow::Result<Facts> {
+    let facts = facts::collect(&RealFs::new(root), &RealRunner, &Env::from_process())
+        .with_context(|| format!("detecting facts under {}", root.display()))?;
+    for notice in &facts.notices {
+        tracing::warn!("{notice}");
+    }
+    Ok(facts)
+}
+
+/// One block per control, then a summary line:
+///
+/// ```text
+/// FAIL     SSH-002  high    Password authentication disabled
+///                           passwordauthentication is yes, expected no
+///                           Passwords can be guessed or reused from leaks; ...
+/// PASS     SSH-003  high    Keyboard-interactive authentication disabled
+///
+/// 3 passed, 2 failed, 0 unknown
+/// ```
+fn print_report(out: &mut impl Write, report: &Report, color: bool) -> io::Result<()> {
+    const INDENT: &str = "                          ";
+    const WIDTH: usize = 100;
+    for finding in &report.findings {
+        let control = &finding.control;
+        // Pad before coloring: escape codes would count towards the width.
+        let label = match finding.outcome {
+            Outcome::Pass => "PASS   ",
+            Outcome::Fail { .. } => "FAIL   ",
+            Outcome::Unknown { .. } => "UNKNOWN",
+        };
+        let label = match (color, &finding.outcome) {
+            (false, _) => label.to_owned(),
+            (true, Outcome::Pass) => label.green().to_string(),
+            (true, Outcome::Fail { .. }) => label.red().to_string(),
+            (true, Outcome::Unknown { .. }) => label.yellow().to_string(),
+        };
+        let severity = control.severity.to_string();
+        writeln!(
+            out,
+            "{label}  {:<7}  {severity:<6}  {}",
+            control.id, control.title
+        )?;
+        if let Some(detail) = finding.detail() {
+            writeln!(out, "{INDENT}{detail}")?;
+        }
+        if matches!(finding.outcome, Outcome::Fail { .. }) {
+            for line in wrap(&control.why, WIDTH - INDENT.len()) {
+                if color {
+                    writeln!(out, "{INDENT}{}", line.dimmed())?;
+                } else {
+                    writeln!(out, "{INDENT}{line}")?;
+                }
+            }
+        }
+    }
+    let s = report.summary;
+    writeln!(
+        out,
+        "\n{} passed, {} failed, {} unknown",
+        s.passed, s.failed, s.unknown
+    )
 }
 
 fn print_facts(out: &mut impl Write, facts: &Facts, color: bool) -> io::Result<()> {
@@ -170,6 +256,26 @@ fn ssh_line(ssh: &facts::Ssh) -> String {
     parts.join(", ")
 }
 
+/// Splits `text` into lines of at most `width` characters at spaces. A word
+/// longer than `width` gets a line of its own.
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        if !line.is_empty() && line.chars().count() + 1 + word.chars().count() > width {
+            lines.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
+
 /// Unique `proto/port (processes)` entries, e.g. `tcp/22 (sshd, systemd)`.
 fn ports_line(listeners: &[Listener]) -> String {
     let mut seen: Vec<String> = Vec::new();
@@ -187,5 +293,29 @@ fn ports_line(listeners: &[Listener]) -> String {
         "none found".to_owned()
     } else {
         seen.join(", ")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::facts::fixtures::{HOSTS, host};
+
+    #[test]
+    fn wraps_at_spaces() {
+        assert_eq!(wrap("aa bb cc", 5), ["aa bb", "cc"]);
+        assert_eq!(wrap("  aa   bb ", 80), ["aa bb"]);
+        assert_eq!(wrap("toolongword x", 4), ["toolongword", "x"]);
+        assert!(wrap("", 10).is_empty());
+    }
+
+    #[test]
+    fn audit_text_snapshot() {
+        for name in HOSTS {
+            let report = audit::run(audit::catalog().unwrap(), &host(name, &[]));
+            let mut text = Vec::new();
+            print_report(&mut text, &report, false).unwrap();
+            insta::assert_snapshot!(format!("audit-{name}"), String::from_utf8(text).unwrap());
+        }
     }
 }

@@ -184,10 +184,43 @@ fn detect_init(fs: &dyn Fs, notices: &mut Vec<String>) -> Result<Init, FactsErro
     })
 }
 
+/// Captured hosts, shared with the tests of the layers built on facts.
+#[cfg(test)]
+pub(crate) mod fixtures {
+    use std::path::{Path, PathBuf};
+
+    use super::{Env, Facts, collect};
+    use crate::sys::RealFs;
+    use crate::sys::fake::FakeRunner;
+
+    /// Hosts captured by `test/capture-host-fixtures.sh`.
+    pub(crate) const HOSTS: [&str; 3] = ["ubuntu-24.04", "debian-12", "debian-13"];
+
+    pub(crate) fn testdata(path: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("testdata")
+            .join(path)
+    }
+
+    /// Facts for a captured host, answering commands from its fixture.
+    /// `prefer` selects a scenario, e.g. `["sshd-T-before-login"]`.
+    pub(crate) fn host(name: &str, prefer: &[&str]) -> Facts {
+        let dir = testdata(&format!("hosts/{name}"));
+        let runner = FakeRunner::from_fixture(&dir, prefer).unwrap();
+        let env_file = std::fs::read_to_string(dir.join("env")).unwrap();
+        let env = Env {
+            ssh_connection: env_file
+                .trim()
+                .strip_prefix("SSH_CONNECTION=")
+                .map(str::to_owned),
+        };
+        collect(&RealFs::new(dir.join("root")), &runner, &env).unwrap()
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
+    use super::fixtures::{HOSTS, host, testdata};
     use super::*;
     use crate::sys::RealFs;
     use crate::sys::fake::{FakeFs, FakeRunner};
@@ -201,28 +234,44 @@ mod tests {
         "fedora-42",
     ];
 
-    /// Hosts captured by `test/capture-host-fixtures.sh`.
-    const HOSTS: [&str; 3] = ["ubuntu-24.04", "debian-12", "debian-13"];
+    /// `detect` and `audit` must never change the host, so collecting facts
+    /// runs exactly these read-only commands. A new probe has to be added
+    /// here, where review sees it.
+    const READ_ONLY_COMMANDS: [&[&str]; 6] = [
+        &["systemd-detect-virt", "--container"],
+        &["systemd-detect-virt", "--vm"],
+        &["ssh", "-V"],
+        &["sshd", "-T"],
+        &[
+            "systemctl",
+            "show",
+            "--property=Id,LoadState,ActiveState,UnitFileState",
+            "ssh.socket",
+            "sshd.socket",
+            "ssh.service",
+            "sshd.service",
+        ],
+        &["ss", "-tulnpH"],
+    ];
 
-    fn testdata(path: &str) -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("testdata")
-            .join(path)
-    }
-
-    /// Facts for a captured host, answering commands from its fixture.
-    /// `prefer` selects a scenario, e.g. `["sshd-T-before-login"]`.
-    fn host(name: &str, prefer: &[&str]) -> Facts {
-        let dir = testdata(&format!("hosts/{name}"));
-        let runner = FakeRunner::from_fixture(&dir, prefer).unwrap();
-        let env_file = std::fs::read_to_string(dir.join("env")).unwrap();
-        let env = Env {
-            ssh_connection: env_file
-                .trim()
-                .strip_prefix("SSH_CONNECTION=")
-                .map(str::to_owned),
-        };
-        collect(&RealFs::new(dir.join("root")), &runner, &env).unwrap()
+    #[test]
+    fn runs_only_read_only_commands() {
+        let dir = testdata("hosts/ubuntu-24.04");
+        let runner = FakeRunner::from_fixture(&dir, &[]).unwrap();
+        collect(&RealFs::new(dir.join("root")), &runner, &Env::default()).unwrap();
+        let mut ran: Vec<Vec<String>> = runner
+            .calls()
+            .into_iter()
+            .inspect(|c| assert!(c.env.is_empty(), "{c:?}"))
+            .map(|c| std::iter::once(c.program).chain(c.args).collect())
+            .collect();
+        let mut allowed: Vec<Vec<String>> = READ_ONLY_COMMANDS
+            .iter()
+            .map(|argv| argv.iter().map(|a| (*a).to_owned()).collect())
+            .collect();
+        ran.sort();
+        allowed.sort();
+        assert_eq!(ran, allowed);
     }
 
     #[test]

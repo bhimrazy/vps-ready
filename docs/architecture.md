@@ -20,7 +20,7 @@
 - And honestly: the author wants to master Rust, and this project is the vehicle.
 
 **Trade-offs we accept, in writing:**
-- **Smaller contributor pool** among sysadmins than Go. Mitigation: keep the code plain (no clever generics, no macros of our own, no async), and keep the security logic in `controls.toml` and templates that don't need Rust to review.
+- **Smaller contributor pool** among sysadmins than Go. Mitigation: keep the code plain (no clever generics, no macros of our own, no async), and keep the security logic in the controls catalog (TOML) and templates that don't need Rust to review.
 - **Slower compiles** than Go. Mitigation: one app crate, a short dependency list, `cargo check` in the inner loop.
 - **Release tooling is less turnkey** than GoReleaser. We hand-write the release workflow (see [the release doc](release.md) and [D16](decisions.md)).
 
@@ -34,7 +34,7 @@
 flowchart TB
   cli["CLI / TUI<br/>src/cli (clap) · src/tui (inquire, ratatui) · src/report"]
   engine["Engine · src/engine<br/>order modules → collect resources → diff →<br/>snapshot → validate → apply → verify<br/>journal · deadman · rollback · lock"]
-  modules["Modules (policy) · src/modules/*<br/>ssh, firewall, user, docker, ...<br/>+ controls.toml + templates/"]
+  modules["Modules (policy) · src/modules/*<br/>ssh, firewall, user, docker, ...<br/>+ templates/"]
   resources["Resources (idempotent primitives) · src/resource<br/>DropIn, File, Package, Service, Sysctl, User, FirewallRuleset"]
   platform["Platform · src/platform<br/>PkgManager · ServiceManager · Firewall · Sshd<br/>apt/dnf/apk, systemd/openrc, ufw/firewalld/nft"]
   facts["Facts (read-only) · src/facts<br/>os-release, init, virt, cloud, sshd -T, ss,<br/>SSH_CONNECTION, docker present"]
@@ -116,7 +116,7 @@ pub trait Module {
 `plan` returns `Vec<Box<dyn Resource>>` because one module mixes kinds (a `DropIn`, a `Service`, a `User`). A trait object is how Rust holds different types behind one interface; it's why `Resource` has no generic methods.
 
 ### Controls catalog (declarative, auditable without reading Rust)
-Each module ships `controls.toml`, using a **closed** check vocabulary. It must not grow into a DSL:
+Controls live in `src/audit/controls/<area>.toml`, one file per area (`ssh.toml`, later `firewall.toml`, ...), using a **closed** check vocabulary. They are separate from modules because some controls have no module that fixes them. The vocabulary must not grow into a DSL:
 ```toml
 [[control]]
 id       = "SSH-002"
@@ -124,10 +124,12 @@ severity = "high"
 title    = "Password authentication disabled"
 why      = "Passwords can be brute-forced; keys cannot."
 check    = { kind = "sshd_effective", key = "passwordauthentication", equals = "no" }
-fix      = "ssh.password_auth=false"
-refs     = ["cce:sshd_disable_password_authentication", "lynis:SSH-7408", "cis-ubuntu2404:5.1.x"]
 ```
-Check kinds: `sshd_effective`, `sysctl`, `file_mode`, `file_contains`, `pkg_installed`, `service_state`, `port_listening`, `user_property`, `fw_allows`.
+Planned check kinds: `sshd_effective` (implemented), `sysctl`, `file_mode`, `file_contains`, `pkg_installed`, `service_state`, `port_listening`, `user_property`, `fw_allows`. Each is added with the first control that needs it. Later fields: `fix` (the module setting that resolves it, M2) and `refs` (CIS and Lynis IDs).
+
+An outcome is `pass`, `fail` (with the value found) or `unknown` (the fact could not be read, usually for lack of root). Unknown never counts as a pass. `audit` exits 0 only when every control passes, 1 otherwise, and 2 on error.
+
+Facts collection runs only read-only commands. A unit test pins the exact list, and every command runs with a fixed system `PATH` and a timeout.
 
 The vocabulary is a Rust enum deserialized with `#[serde(tag = "kind", rename_all = "snake_case")]`, so an unknown `kind` is a parse error. The files are embedded with `include_str!`, and a unit test parses every one, so a typo fails CI instead of a user's audit.
 
@@ -311,7 +313,8 @@ crates/
     src/platform/          PkgManager, ServiceManager, Firewall, Sshd traits + per-family data tables
     src/resource/          Resource trait (id, current, diff, snapshot, apply, restore, reversibility)
     src/engine/            plan, diff, txn, journal, deadman, lock
-    src/modules/<name>/    mod.rs + controls.toml + templates/
+    src/audit/             controls catalog (controls/*.toml), evaluation, report
+    src/modules/<name>/    mod.rs + templates/
     src/config/            TOML profiles, strict deserialize (deny_unknown_fields), JSON Schema via schemars
     src/report/            text | json | sarif | junit
     src/tui/               (M4) inquire forms, ratatui plan/diff view

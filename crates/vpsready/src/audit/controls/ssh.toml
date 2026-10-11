@@ -1,0 +1,37 @@
+# SSH controls. Checks read the effective config from `sshd -T`, so sshd's own
+# rules (drop-ins, first value wins) are already applied.
+
+[[control]]
+id = "SSH-001"
+severity = "medium"
+title = "Root login disabled"
+why = "Root is the one account name every scanner tries, and its actions are not tied to a person. Log in as a named user and use sudo."
+check = { kind = "sshd_effective", key = "permitrootlogin", equals = "no" }
+
+[[control]]
+id = "SSH-002"
+severity = "high"
+title = "Password authentication disabled"
+why = "Passwords can be guessed or reused from leaks; SSH keys cannot be brute-forced."
+check = { kind = "sshd_effective", key = "passwordauthentication", equals = "no" }
+
+[[control]]
+id = "SSH-003"
+severity = "high"
+title = "Keyboard-interactive authentication disabled"
+why = "It is a second way to ask for a password, through PAM, so leaving it on undoes SSH-002."
+check = { kind = "sshd_effective", key = "kbdinteractiveauthentication", equals = "no" }
+
+[[control]]
+id = "SSH-004"
+severity = "high"
+title = "Empty passwords rejected"
+why = "An account with an empty password could be logged into by name alone."
+check = { kind = "sshd_effective", key = "permitemptypasswords", equals = "no" }
+
+[[control]]
+id = "SSH-005"
+severity = "low"
+title = "X11 forwarding disabled"
+why = "A server has no use for graphical apps, and a forwarded display lets the server reach into your desktop session."
+check = { kind = "sshd_effective", key = "x11forwarding", equals = "no" }
