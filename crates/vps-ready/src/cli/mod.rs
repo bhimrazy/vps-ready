@@ -163,7 +163,13 @@ pub fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
                 } else {
                     &facts.os.pretty_name
                 };
-                print_report(&mut out, &report, host, cli.color_enabled())
+                print_report(
+                    &mut out,
+                    &report,
+                    host,
+                    running_as_root(),
+                    cli.color_enabled(),
+                )
             };
             match printed.and_then(|()| out.flush()) {
                 // `audit | head` must still report the result, not success.
@@ -202,7 +208,13 @@ fn collect_facts(root: &Path) -> anyhow::Result<Facts> {
 ///
 /// Skipped controls get a row without details, and each distinct reason is
 /// printed once after the summary.
-fn print_report(out: &mut impl Write, report: &Report, host: &str, color: bool) -> io::Result<()> {
+fn print_report(
+    out: &mut impl Write,
+    report: &Report,
+    host: &str,
+    root: bool,
+    color: bool,
+) -> io::Result<()> {
     const INDENT: &str = "                            ";
     const WIDTH: usize = 100;
     let title = format!("Audit of {host}: {} controls", report.findings.len());
@@ -270,7 +282,7 @@ fn print_report(out: &mut impl Write, report: &Report, host: &str, color: bool) 
             matches!(f.outcome, Outcome::Unknown { .. })
                 && matches!(f.control.check, Check::SshdEffective { .. })
         });
-        if ssh_unknown {
+        if ssh_unknown && !root {
             write!(out, " SSH checks need root.")?;
         }
         writeln!(out)?;
@@ -363,6 +375,13 @@ fn ssh_line(ssh: &facts::Ssh) -> String {
     parts.join(", ")
 }
 
+/// Whether this process runs as root: `/proc/self` belongs to the effective
+/// user. False where there is no `/proc`.
+fn running_as_root() -> bool {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata("/proc/self").is_ok_and(|m| m.uid() == 0)
+}
+
 /// Splits `text` into lines of at most `width` characters at spaces. A word
 /// longer than `width` gets a line of its own.
 fn wrap(text: &str, width: usize) -> Vec<String> {
@@ -413,10 +432,15 @@ mod tests {
         let facts = host("ubuntu-24.04", &["sshd-T-before-login"]);
         let report = audit::run(audit::catalog().unwrap(), &facts);
         let mut text = Vec::new();
-        print_report(&mut text, &report, "this host", false).unwrap();
+        print_report(&mut text, &report, "this host", false, false).unwrap();
         let text = String::from_utf8(text).unwrap();
         assert!(text.contains("0 passed, 0 failed, 5 unknown"), "{text}");
         assert!(text.contains("SSH checks need root"), "{text}");
+
+        let mut text = Vec::new();
+        print_report(&mut text, &report, "this host", true, false).unwrap();
+        let text = String::from_utf8(text).unwrap();
+        assert!(!text.contains("need root"), "{text}");
     }
 
     #[test]
@@ -432,7 +456,14 @@ mod tests {
         for name in HOSTS {
             let report = audit::run(audit::catalog().unwrap(), &host(name, &[]));
             let mut text = Vec::new();
-            print_report(&mut text, &report, &host(name, &[]).os.pretty_name, false).unwrap();
+            print_report(
+                &mut text,
+                &report,
+                &host(name, &[]).os.pretty_name,
+                false,
+                false,
+            )
+            .unwrap();
             insta::assert_snapshot!(format!("audit-{name}"), String::from_utf8(text).unwrap());
         }
     }
