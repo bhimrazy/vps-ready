@@ -1,2 +1,2 @@
-tcp LISTEN 0      4096   0.0.0.0:22 0.0.0.0:* users:(("sshd",pid=138,fd=3),("systemd",pid=1,fd=41))
-tcp LISTEN 0      4096      [::]:22    [::]:* users:(("sshd",pid=138,fd=4),("systemd",pid=1,fd=48))
+tcp LISTEN 0      4096   0.0.0.0:22 0.0.0.0:* users:(("sshd",pid=137,fd=3),("systemd",pid=1,fd=47))
+tcp LISTEN 0      4096      [::]:22    [::]:* users:(("sshd",pid=137,fd=4),("systemd",pid=1,fd=48))

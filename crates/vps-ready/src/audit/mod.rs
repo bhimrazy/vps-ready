@@ -9,14 +9,15 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::facts::{AptUpdates, Facts, OsFamily};
+use crate::facts::{AptUpdates, Facts, Firewall, OsFamily};
 
 /// The embedded catalog, as `(file name, contents)`.
-const CATALOG: [(&str, &str); 4] = [
+const CATALOG: [(&str, &str); 5] = [
     ("ssh.toml", include_str!("controls/ssh.toml")),
     ("kernel.toml", include_str!("controls/kernel.toml")),
     ("network.toml", include_str!("controls/network.toml")),
     ("updates.toml", include_str!("controls/updates.toml")),
+    ("firewall.toml", include_str!("controls/firewall.toml")),
 ];
 
 /// One security control.
@@ -84,6 +85,10 @@ pub enum Check {
     /// masked). Debian and Ubuntu only so far, where it is unknown without
     /// systemd; skipped on other distros.
     AutoUpdates,
+    /// The firewall drops incoming packets that no rule accepted, for IPv4
+    /// and, when the host has a global IPv6 address, for IPv6. Read from
+    /// the nftables ruleset, which needs root.
+    InboundDefaultDeny,
 }
 
 /// The result of checking one control.
@@ -135,7 +140,9 @@ impl Finding {
             (Outcome::Fail { found }, Check::Sysctl { key, one_of }) => {
                 Some(format!("{key} is {found}, expected {}", or_list(one_of)))
             }
-            (Outcome::Fail { found }, Check::AutoUpdates) => Some(found.clone()),
+            (Outcome::Fail { found }, Check::AutoUpdates | Check::InboundDefaultDeny) => {
+                Some(found.clone())
+            }
             (Outcome::Unknown { reason } | Outcome::Skip { reason }, _) => Some(reason.clone()),
         }
     }
@@ -295,6 +302,42 @@ fn evaluate(check: &Check, facts: &Facts) -> Outcome {
                 reason: "automatic updates are checked only on Debian and Ubuntu so far".to_owned(),
             },
         },
+        Check::InboundDefaultDeny => match &facts.firewall {
+            Some(firewall) => inbound_default_deny(firewall, facts.ipv6),
+            None => Outcome::Unknown {
+                reason: "the firewall ruleset could not be read".to_owned(),
+            },
+        },
+    }
+}
+
+/// Which incoming traffic no chain drops by default, e.g. `IPv6`.
+fn inbound_default_deny(firewall: &Firewall, ipv6: bool) -> Outcome {
+    if firewall.input_chains.is_empty() {
+        return Outcome::Fail {
+            found: "no firewall rules filter incoming traffic".to_owned(),
+        };
+    }
+    let drops = |v6: bool| {
+        firewall
+            .input_chains
+            .iter()
+            .any(|c| c.covers(v6) && c.drops_unmatched)
+    };
+    let open: Vec<&str> = [(false, "IPv4"), (true, "IPv6")]
+        .into_iter()
+        .filter(|&(v6, _)| (!v6 || ipv6) && !drops(v6))
+        .map(|(_, name)| name)
+        .collect();
+    if open.is_empty() {
+        Outcome::Pass
+    } else {
+        Outcome::Fail {
+            found: format!(
+                "incoming {} traffic that no rule allows is accepted",
+                open.join(" and ")
+            ),
+        }
     }
 }
 
@@ -380,6 +423,7 @@ mod tests {
                     assert!(!one_of.is_empty(), "{}", c.id);
                 }
                 Check::AutoUpdates => assert!(facts.updates.is_some(), "{}", c.id),
+                Check::InboundDefaultDeny => assert!(facts.firewall.is_some(), "{}", c.id),
             }
         }
     }
@@ -540,6 +584,14 @@ mod tests {
              permitemptypasswords no\nx11forwarding no\n",
         ));
         facts.updates = Some(updating());
+        facts.firewall = Some(Firewall {
+            input_chains: vec![crate::facts::InputChain {
+                family: "inet".to_owned(),
+                table: "filter".to_owned(),
+                name: "input".to_owned(),
+                drops_unmatched: true,
+            }],
+        });
         let report = run(catalog().unwrap(), &facts);
         let sysctl_controls = report
             .findings
@@ -622,6 +674,52 @@ mod tests {
         assert!(
             matches!(eval(&facts), Outcome::Skip { reason } if reason.contains("only on Debian"))
         );
+    }
+
+    #[test]
+    fn evaluates_inbound_default_deny() {
+        let chain = |family: &str, drops_unmatched| crate::facts::InputChain {
+            family: family.to_owned(),
+            table: "t".to_owned(),
+            name: "input".to_owned(),
+            drops_unmatched,
+        };
+        let mut facts = host("debian-13", &[]);
+        let mut eval = |chains: Vec<crate::facts::InputChain>, ipv6| {
+            facts.firewall = Some(Firewall {
+                input_chains: chains,
+            });
+            facts.ipv6 = ipv6;
+            evaluate(&Check::InboundDefaultDeny, &facts)
+        };
+        let fail = |found: &str| Outcome::Fail {
+            found: found.to_owned(),
+        };
+        assert_eq!(
+            eval(vec![], false),
+            fail("no firewall rules filter incoming traffic")
+        );
+        assert_eq!(eval(vec![chain("inet", true)], true), Outcome::Pass);
+        // A chain that accepts does not undo one that drops.
+        assert_eq!(
+            eval(vec![chain("ip", false), chain("ip", true)], false),
+            Outcome::Pass
+        );
+        // IPv6 counts only when the host has a global IPv6 address.
+        assert_eq!(
+            eval(vec![chain("ip", true)], true),
+            fail("incoming IPv6 traffic that no rule allows is accepted")
+        );
+        assert_eq!(
+            eval(vec![chain("inet", false)], true),
+            fail("incoming IPv4 and IPv6 traffic that no rule allows is accepted")
+        );
+
+        facts.firewall = None;
+        assert!(matches!(
+            evaluate(&Check::InboundDefaultDeny, &facts),
+            Outcome::Unknown { .. }
+        ));
     }
 
     #[test]
