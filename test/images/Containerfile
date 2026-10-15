@@ -1,5 +1,6 @@
 # Test image: a distro with systemd as PID 1 and OpenSSH, close to a fresh
-# cloud VPS. Debian-family bases only for now (apt).
+# cloud VPS. Debian-family bases only for now (apt). nftables is installed by
+# default on Debian and on Ubuntu's cloud images.
 #
 #   docker build -f test/images/Containerfile --build-arg BASE=debian:13 -t vps-ready-test:debian-13 test/images
 #   docker run -d --privileged --cgroupns=private --tmpfs /run --tmpfs /run/lock vps-ready-test:debian-13
@@ -8,7 +9,7 @@ FROM ${BASE}
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
- && apt-get install -y --no-install-recommends systemd systemd-sysv dbus openssh-server openssh-client iproute2 sudo ca-certificates \
+ && apt-get install -y --no-install-recommends systemd systemd-sysv dbus openssh-server openssh-client iproute2 nftables sudo ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
  && rm -f /etc/machine-id && touch /etc/machine-id
 

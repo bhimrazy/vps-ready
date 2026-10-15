@@ -194,8 +194,8 @@ fn collect_facts(root: &Path, quiet: &[&str]) -> anyhow::Result<Facts> {
 }
 
 /// Whether running as root would let an unknown control be checked: when
-/// `sshd -T` could not run (it needs root), or a `/proc/sys` file is
-/// root-only on this kernel.
+/// `sshd -T` or `nft list ruleset` could not run (both need root), or a
+/// `/proc/sys` file is root-only on this kernel.
 fn root_would_help(report: &Report, facts: &Facts) -> bool {
     report.findings.iter().any(|f| {
         matches!(f.outcome, Outcome::Unknown { .. })
@@ -206,6 +206,8 @@ fn root_would_help(report: &Report, facts: &Facts) -> bool {
                 }
                 // `apt-config` and `systemctl show` work without root.
                 Check::AutoUpdates => false,
+                // `nft list ruleset` needs root.
+                Check::InboundDefaultDeny => facts.firewall.is_none(),
             }
     })
 }
@@ -455,7 +457,7 @@ mod tests {
         let mut text = Vec::new();
         print_report(&mut text, &report, "this host", true, false).unwrap();
         let text = String::from_utf8(text).unwrap();
-        assert!(text.contains("0 passed, 1 failed, 5 unknown"), "{text}");
+        assert!(text.contains("0 passed, 2 failed, 5 unknown"), "{text}");
         assert!(text.contains("Run it with sudo"), "{text}");
 
         let mut text = Vec::new();

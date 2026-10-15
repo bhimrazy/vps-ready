@@ -6,7 +6,8 @@
 #   docker build -f test/images/Containerfile --build-arg BASE=ubuntu:24.04 -t vps-ready-test:ubuntu-24.04 test/images
 #
 # Writes crates/vps-ready/testdata/hosts/<distro>/:
-#   root/...        files the facts code reads (os-release, /proc/1/comm)
+#   root/...        files the facts code reads (os-release, /proc/1/comm,
+#                   /proc/net/if_inet6)
 #   commands.tsv    name, exit code, then the exact argv, tab-separated.
 #                   Several entries can share an argv (scenarios); the first wins
 #                   by default, so the plain capture comes before the scenarios.
@@ -39,7 +40,7 @@ until state=$(docker exec "$name" systemctl is-system-running 2>/dev/null); \
   sleep 1
 done
 
-rm -rf "$out"; mkdir -p "$out/cmd" "$out/root/etc" "$out/root/proc/1"
+rm -rf "$out"; mkdir -p "$out/cmd" "$out/root/etc" "$out/root/proc/1" "$out/root/proc/net"
 : >"$tmp/plain.tsv"; : >"$tmp/scenarios.tsv"
 
 # record <tsv> <name> <argv...>: run argv in the container exactly, no shell.
@@ -75,6 +76,7 @@ printf 'SSH_CONNECTION=%s\n' "$conn" >"$out/env"
 
 docker exec "$name" cat /etc/os-release >"$out/root/etc/os-release"
 docker exec "$name" cat /proc/1/comm >"$out/root/proc/1/comm"
+docker exec "$name" cat /proc/net/if_inet6 >"$out/root/proc/net/if_inet6"
 
 capture virt-container systemd-detect-virt --container
 capture virt-vm        systemd-detect-virt --vm
@@ -82,6 +84,7 @@ capture ssh-version    ssh -V
 capture sshd-T         sshd -T
 capture ssh-units      systemctl show --property=Id,LoadState,ActiveState,UnitFileState ssh.socket sshd.socket ssh.service sshd.service
 capture listeners      ss -tulnpH
+capture nft            nft -j list ruleset
 capture apt-periodic   apt-config dump APT::Periodic
 capture apt-units      systemctl show --property=Id,LoadState,ActiveState,UnitFileState apt-daily.timer apt-daily-upgrade.timer apt-daily.service apt-daily-upgrade.service
 
