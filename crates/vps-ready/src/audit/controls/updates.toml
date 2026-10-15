@@ -1,5 +1,6 @@
 # Update controls. Checks read apt's effective settings from `apt-config`
-# and the state of its timers from systemd, not the files in apt.conf.d.
+# and the state of its timers and services from systemd, not the files in
+# apt.conf.d.
 
 [[control]]
 id = "UPD-001"

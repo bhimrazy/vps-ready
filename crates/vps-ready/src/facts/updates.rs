@@ -37,7 +37,8 @@ pub struct AptUpdates {
     pub periodic: BTreeMap<String, String>,
     /// State of apt's timers and services: `ok`, or what keeps the job from
     /// running, e.g. `masked`, `disabled` or `inactive`. `None` without
-    /// systemd, where cron may run the jobs instead.
+    /// systemd, where cron may run the jobs instead, or when `systemctl`
+    /// could not answer.
     pub units: Option<BTreeMap<String, String>>,
 }
 
@@ -49,13 +50,12 @@ pub(super) fn detect(
 ) -> Option<AptUpdates> {
     let periodic = periodic(runner, notices)?;
     let units = if *init == Init::Systemd {
-        let units = systemctl_show(runner, &UNITS, "apt's daily jobs are unknown", notices)?;
-        Some(
+        systemctl_show(runner, &UNITS, "apt's daily jobs are unknown", notices).map(|units| {
             units
                 .iter()
                 .map(|unit| (prop(unit, "Id").to_owned(), unit_state(unit).to_owned()))
-                .collect(),
-        )
+                .collect()
+        })
     } else {
         None
     };
@@ -185,6 +185,24 @@ mod tests {
         assert_eq!(apt.units, None);
         assert!(notices.is_empty(), "{notices:?}");
         assert!(runner.calls().iter().all(|c| c.program == "apt-config"));
+    }
+
+    /// The settings can still fail the control when systemd cannot be asked.
+    #[test]
+    fn failed_systemctl_keeps_the_settings() {
+        let runner = FakeRunner::new().on(
+            "apt-config",
+            ["dump"],
+            Output::success("APT::Periodic::Enable \"0\";\n"),
+        );
+        let mut notices = Vec::new();
+        let apt = detect(&FakeFs::new(), &runner, &Init::Systemd, &mut notices).unwrap();
+        assert_eq!(apt.periodic.get("Enable").map(String::as_str), Some("0"));
+        assert_eq!(apt.units, None);
+        assert_eq!(
+            notices,
+            ["systemctl not found; apt's daily jobs are unknown"]
+        );
     }
 
     #[test]

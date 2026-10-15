@@ -280,7 +280,9 @@ fn evaluate(check: &Check, facts: &Facts) -> Outcome {
                     }
                 } else if apt.units.is_none() {
                     Outcome::Unknown {
-                        reason: "apt's daily jobs are checked only under systemd so far".to_owned(),
+                        reason: "could not confirm that apt's daily jobs run; they are checked \
+                                 only under systemd so far"
+                            .to_owned(),
                     }
                 } else {
                     Outcome::Pass
