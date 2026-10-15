@@ -139,10 +139,42 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # Layer 2: the real static binary inside systemd containers (see docs/testing.md).
+  containers:
+    needs: build-musl
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { distro: ubuntu-22.04, base: "ubuntu:22.04" }
+          - { distro: ubuntu-24.04, base: "ubuntu:24.04" }
+          - { distro: debian-12, base: "debian:12" }
+          - { distro: debian-13, base: "debian:13" }
+    env:
+      DISTRO: ${{ matrix.distro }}
+      BASE: ${{ matrix.base }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: vps-ready-x86_64-unknown-linux-musl
+          path: bin
+      - run: chmod +x bin/vps-ready
+      - name: Build the test image
+        run: |
+          docker build -f test/images/Containerfile --build-arg BASE="$BASE" \
+            -t "vps-ready-test:$DISTRO" test/images
+      - name: Run detect and audit in the container
+        run: test/container-audit.sh "$DISTRO" bin/vps-ready
+
   # Single required check for branch protection.
   ci-ok:
     if: always()
-    needs: [fmt, clippy, test, doc, deny, msrv, build-musl]
+    needs: [fmt, clippy, test, doc, deny, msrv, build-musl, containers]
     runs-on: ubuntu-latest
     steps:
       - name: All jobs passed
