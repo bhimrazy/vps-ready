@@ -1,0 +1,9 @@
+Id=apt-daily.timer
+LoadState=loaded
+ActiveState=active
+UnitFileState=enabled
+
+Id=apt-daily-upgrade.timer
+LoadState=loaded
+ActiveState=active
+UnitFileState=enabled

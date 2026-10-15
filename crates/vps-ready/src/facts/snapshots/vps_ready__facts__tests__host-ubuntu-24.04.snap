@@ -220,5 +220,12 @@ session:
   client: "127.0.0.1:46104"
   server: "127.0.0.1:22"
 sysctl: ~
+updates:
+  unattended_upgrades: false
+  periodic:
+    Enable: "0"
+  timers:
+    apt-daily-upgrade.timer: active
+    apt-daily.timer: active
 docker: false
 notices: []

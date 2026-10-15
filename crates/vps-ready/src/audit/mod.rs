@@ -9,13 +9,14 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::facts::Facts;
+use crate::facts::{AptUpdates, Facts, OsFamily};
 
 /// The embedded catalog, as `(file name, contents)`.
-const CATALOG: [(&str, &str); 3] = [
+const CATALOG: [(&str, &str); 4] = [
     ("ssh.toml", include_str!("controls/ssh.toml")),
     ("kernel.toml", include_str!("controls/kernel.toml")),
     ("network.toml", include_str!("controls/network.toml")),
+    ("updates.toml", include_str!("controls/updates.toml")),
 ];
 
 /// One security control.
@@ -77,6 +78,11 @@ pub enum Check {
         /// Accepted values.
         one_of: Vec<String>,
     },
+    /// Security updates are installed automatically: `unattended-upgrades`
+    /// is installed, apt's `APT::Periodic` settings run it, and under
+    /// systemd apt's timers are active and enabled. Debian and Ubuntu only
+    /// so far; elsewhere the outcome is unknown.
+    AutoUpdates,
 }
 
 /// The result of checking one control.
@@ -87,7 +93,8 @@ pub enum Outcome {
     Pass,
     /// The host does not meet the control.
     Fail {
-        /// The value found on the host.
+        /// The value found on the host, or what is wrong when the check
+        /// has no single value, e.g. `unattended-upgrades is not installed`.
         found: String,
     },
     /// The control could not be checked, e.g. because `sshd -T` needs root.
@@ -127,6 +134,7 @@ impl Finding {
             (Outcome::Fail { found }, Check::Sysctl { key, one_of }) => {
                 Some(format!("{key} is {found}, expected {}", or_list(one_of)))
             }
+            (Outcome::Fail { found }, Check::AutoUpdates) => Some(found.clone()),
             (Outcome::Unknown { reason } | Outcome::Skip { reason }, _) => Some(reason.clone()),
         }
     }
@@ -262,7 +270,52 @@ fn evaluate(check: &Check, facts: &Facts) -> Outcome {
                 },
             }
         }
+        Check::AutoUpdates => match &facts.updates {
+            Some(apt) => {
+                let problems = apt_update_problems(apt);
+                if problems.is_empty() {
+                    Outcome::Pass
+                } else {
+                    Outcome::Fail {
+                        found: problems.join("; "),
+                    }
+                }
+            }
+            None if facts.os.family == OsFamily::Debian => Outcome::Unknown {
+                reason: "apt's update settings could not be read".to_owned(),
+            },
+            None => Outcome::Unknown {
+                reason: "automatic updates are checked only on Debian and Ubuntu so far".to_owned(),
+            },
+        },
     }
+}
+
+/// What keeps apt from installing updates on its own, e.g.
+/// `unattended-upgrades is not installed`. Empty when nothing does.
+fn apt_update_problems(apt: &AptUpdates) -> Vec<String> {
+    let mut problems = Vec::new();
+    if !apt.unattended_upgrades {
+        problems.push("unattended-upgrades is not installed".to_owned());
+    }
+    // `Enable` defaults to on and turns every periodic job off when `0`.
+    if apt.periodic.get("Enable").is_some_and(|v| v == "0") {
+        problems.push("APT::Periodic::Enable is 0".to_owned());
+    }
+    // Without fresh package lists, unattended-upgrade sees no new updates.
+    for key in ["Update-Package-Lists", "Unattended-Upgrade"] {
+        match apt.periodic.get(key).map(String::as_str) {
+            None | Some("") => problems.push(format!("APT::Periodic::{key} is not set")),
+            Some("0") => problems.push(format!("APT::Periodic::{key} is 0")),
+            Some(_) => {}
+        }
+    }
+    for (timer, state) in &apt.timers {
+        if state != "active" {
+            problems.push(format!("{timer} is {state}"));
+        }
+    }
+    problems
 }
 
 /// `["1", "2", "3"]` as `1, 2 or 3`.
@@ -308,7 +361,7 @@ mod tests {
     #[test]
     fn check_keys_are_collected() {
         let facts = host("ubuntu-24.04", &[]);
-        let config = facts.ssh.effective.unwrap();
+        let config = facts.ssh.effective.as_ref().unwrap();
         for c in catalog().unwrap() {
             match &c.check {
                 Check::SshdEffective { key, .. } => {
@@ -318,6 +371,7 @@ mod tests {
                     assert!(sysctl::KEYS.contains(&key.as_str()), "{}: {key}", c.id);
                     assert!(!one_of.is_empty(), "{}", c.id);
                 }
+                Check::AutoUpdates => assert!(facts.updates.is_some(), "{}", c.id),
             }
         }
     }
@@ -477,6 +531,7 @@ mod tests {
             "permitrootlogin no\npasswordauthentication no\nkbdinteractiveauthentication no\n\
              permitemptypasswords no\nx11forwarding no\n",
         ));
+        facts.updates = Some(updating());
         let report = run(catalog().unwrap(), &facts);
         let sysctl_controls = report
             .findings
@@ -486,6 +541,69 @@ mod tests {
         assert!(sysctl_controls > 0);
         assert_eq!(report.summary.skipped, sysctl_controls);
         assert!(report.all_passed(), "{:?}", report.summary);
+    }
+
+    /// apt settings of a host that installs updates on its own.
+    fn updating() -> AptUpdates {
+        AptUpdates {
+            unattended_upgrades: true,
+            periodic: [("Update-Package-Lists", "1"), ("Unattended-Upgrade", "1")]
+                .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                .into(),
+            timers: [
+                ("apt-daily.timer", "active"),
+                ("apt-daily-upgrade.timer", "active"),
+            ]
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .into(),
+        }
+    }
+
+    #[test]
+    fn evaluates_auto_updates() {
+        let mut facts = host("debian-13", &[]);
+        let eval = |facts: &Facts| evaluate(&Check::AutoUpdates, facts);
+        facts.updates = Some(updating());
+        assert_eq!(eval(&facts), Outcome::Pass);
+
+        // A masked timer, or `Enable "0"` as Docker's Ubuntu image sets it,
+        // stops updates however the rest is set.
+        let mut apt = updating();
+        apt.timers
+            .insert("apt-daily-upgrade.timer".to_owned(), "masked".to_owned());
+        apt.periodic.insert("Enable".to_owned(), "0".to_owned());
+        facts.updates = Some(apt);
+        assert_eq!(
+            eval(&facts),
+            Outcome::Fail {
+                found: "APT::Periodic::Enable is 0; apt-daily-upgrade.timer is masked".to_owned()
+            }
+        );
+
+        let mut apt = updating();
+        apt.unattended_upgrades = false;
+        apt.periodic
+            .insert("Unattended-Upgrade".to_owned(), "0".to_owned());
+        apt.periodic.remove("Update-Package-Lists");
+        facts.updates = Some(apt);
+        assert_eq!(
+            eval(&facts),
+            Outcome::Fail {
+                found: "unattended-upgrades is not installed; \
+                        APT::Periodic::Update-Package-Lists is not set; \
+                        APT::Periodic::Unattended-Upgrade is 0"
+                    .to_owned()
+            }
+        );
+
+        facts.updates = None;
+        assert!(
+            matches!(eval(&facts), Outcome::Unknown { reason } if reason.contains("could not be read"))
+        );
+        facts.os.family = OsFamily::Rhel;
+        assert!(
+            matches!(eval(&facts), Outcome::Unknown { reason } if reason.contains("only on Debian"))
+        );
     }
 
     #[test]

@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 
-use super::{Probe, probe};
+use super::{Probe, Unit, parse_units, probe, prop};
 use crate::sys::{Cmd, Runner};
 
 /// Units queried to find out how sshd is started. Debian and Ubuntu call them
@@ -189,27 +189,6 @@ fn activation(runner: &dyn Runner, notices: &mut Vec<String>) -> SshActivation {
         }
         Probe::Failed => SshActivation::Unknown,
     }
-}
-
-/// One unit from `systemctl show`: `Property=value` lines, units separated by
-/// a blank line.
-type Unit = BTreeMap<String, String>;
-
-fn parse_units(text: &str) -> Vec<Unit> {
-    text.split("\n\n")
-        .map(|block| {
-            block
-                .lines()
-                .filter_map(|line| line.split_once('='))
-                .map(|(k, v)| (k.to_owned(), v.to_owned()))
-                .collect::<Unit>()
-        })
-        .filter(|unit| !unit.is_empty())
-        .collect()
-}
-
-fn prop<'a>(unit: &'a Unit, key: &str) -> &'a str {
-    unit.get(key).map_or("", String::as_str)
 }
 
 /// Unit states in which the unit is (or is becoming) live.
