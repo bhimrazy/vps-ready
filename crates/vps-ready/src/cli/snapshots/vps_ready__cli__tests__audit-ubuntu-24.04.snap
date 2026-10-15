@@ -2,7 +2,7 @@
 source: crates/vps-ready/src/cli/mod.rs
 expression: "String::from_utf8(text).unwrap()"
 ---
-Audit of Ubuntu 24.04.5 LTS: 18 controls
+Audit of Ubuntu 24.04.5 LTS: 19 controls
 
 STATUS   ID       SEVERITY  CONTROL
 FAIL     SSH-001  medium    Root login disabled
@@ -32,6 +32,13 @@ SKIP     KRN-010  medium    Address space randomization fully enabled
 SKIP     NET-001  low       TCP SYN cookies enabled
 SKIP     NET-002  low       Source-routed packets rejected
 SKIP     NET-003  low       Broadcast pings ignored
+FAIL     UPD-001  medium    Security updates installed automatically
+                            unattended-upgrades is not installed; APT::Periodic::Enable is 0;
+                            APT::Periodic::Update-Package-Lists is not set;
+                            APT::Periodic::Unattended-Upgrade is not set
+                            Attackers scan for a flaw soon after its fix is published. Unattended
+                            upgrades install security fixes on their own, so a server nobody logs
+                            into still gets them.
 
-2 passed, 3 failed, 0 unknown, 13 skipped
+2 passed, 4 failed, 0 unknown, 13 skipped
 Skipped: kernel settings are not checked inside a container.

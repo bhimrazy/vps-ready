@@ -5,6 +5,7 @@
 //! and a notice is recorded, so `vps-ready detect` also works on a developer
 //! laptop or in a minimal container.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::path::Path;
 
@@ -17,6 +18,7 @@ pub mod os_release;
 pub mod session;
 pub mod ssh;
 pub mod sysctl;
+pub mod updates;
 pub mod virt;
 
 pub use listeners::{Listener, Proto};
@@ -24,6 +26,7 @@ pub use os_release::{OsFamily, OsRelease};
 pub use session::{Env, SshSession};
 pub use ssh::{Ssh, SshActivation, SshdConfig};
 pub use sysctl::Sysctl;
+pub use updates::AptUpdates;
 pub use virt::{Virt, Virtualization};
 
 /// Paths whose presence means Docker is installed.
@@ -53,6 +56,9 @@ pub struct Facts {
     /// `systemd-detect-virt` and no Docker or Podman marker) is read as if it
     /// were the host.
     pub sysctl: Option<Sysctl>,
+    /// Automatic updates through apt. `None` outside the Debian family, or
+    /// when apt's settings could not be read.
+    pub updates: Option<AptUpdates>,
     /// Whether Docker is installed. Docker changes firewall and sysctl rules.
     pub docker: bool,
     /// Human-readable notes about facts that could not be determined.
@@ -113,6 +119,11 @@ pub fn collect(fs: &dyn Fs, runner: &dyn Runner, env: &Env) -> Result<Facts, Fac
     let listeners = listeners::detect(runner, &mut notices);
     let session = session::detect(env, &mut notices);
     let sysctl = (!virtualization.in_container()).then(|| sysctl::detect(fs, &mut notices));
+    let updates = if os.family == OsFamily::Debian {
+        updates::detect(fs, runner, &init, &mut notices)
+    } else {
+        None
+    };
     let docker = DOCKER_PATHS.iter().any(|p| fs.exists(Path::new(p)));
     Ok(Facts {
         os,
@@ -122,6 +133,7 @@ pub fn collect(fs: &dyn Fs, runner: &dyn Runner, env: &Env) -> Result<Facts, Fac
         listeners,
         session,
         sysctl,
+        updates,
         docker,
         notices,
     })
@@ -149,6 +161,55 @@ fn probe(runner: &dyn Runner, cmd: &Cmd, notices: &mut Vec<String>) -> Probe {
             notices.push(format!("running `{}`: {err}", cmd.program));
             Probe::Failed
         }
+    }
+}
+
+/// One unit from `systemctl show`: `Property=value` lines, units separated by
+/// a blank line.
+type Unit = BTreeMap<String, String>;
+
+fn parse_units(text: &str) -> Vec<Unit> {
+    text.split("\n\n")
+        .map(|block| {
+            block
+                .lines()
+                .filter_map(|line| line.split_once('='))
+                .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                .collect::<Unit>()
+        })
+        .filter(|unit| !unit.is_empty())
+        .collect()
+}
+
+fn prop<'a>(unit: &'a Unit, key: &str) -> &'a str {
+    unit.get(key).map_or("", String::as_str)
+}
+
+/// The state of `units` from `systemctl show`. On failure a notice ends
+/// with `unknown`, e.g. "systemctl not found; sshd activation is unknown".
+fn systemctl_show(
+    runner: &dyn Runner,
+    units: &[&str],
+    unknown: &str,
+    notices: &mut Vec<String>,
+) -> Option<Vec<Unit>> {
+    let cmd = Cmd::new("systemctl")
+        .args(["show", "--property=Id,LoadState,ActiveState,UnitFileState"])
+        .args(units.iter().copied());
+    match probe(runner, &cmd, notices) {
+        Probe::Ran(out) if out.ok() => Some(parse_units(&String::from_utf8_lossy(&out.stdout))),
+        Probe::Ran(out) => {
+            notices.push(format!(
+                "`systemctl show` exited with {}; {unknown}",
+                out.status
+            ));
+            None
+        }
+        Probe::Missing => {
+            notices.push(format!("systemctl not found; {unknown}"));
+            None
+        }
+        Probe::Failed => None,
     }
 }
 
@@ -246,7 +307,7 @@ mod tests {
     /// `detect` and `audit` must never change the host, so collecting facts
     /// runs exactly these read-only commands. A new probe has to be added
     /// here, where review sees it.
-    const READ_ONLY_COMMANDS: [&[&str]; 6] = [
+    const READ_ONLY_COMMANDS: [&[&str]; 8] = [
         &["systemd-detect-virt", "--container"],
         &["systemd-detect-virt", "--vm"],
         &["ssh", "-V"],
@@ -261,6 +322,16 @@ mod tests {
             "sshd.service",
         ],
         &["ss", "-tulnpH"],
+        &["apt-config", "dump", "APT::Periodic"],
+        &[
+            "systemctl",
+            "show",
+            "--property=Id,LoadState,ActiveState,UnitFileState",
+            "apt-daily.timer",
+            "apt-daily-upgrade.timer",
+            "apt-daily.service",
+            "apt-daily-upgrade.service",
+        ],
     ];
 
     #[test]

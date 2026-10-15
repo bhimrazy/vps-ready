@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 
-use super::{Probe, probe};
+use super::{Probe, Unit, probe, prop, systemctl_show};
 use crate::sys::{Cmd, Runner};
 
 /// Units queried to find out how sshd is started. Debian and Ubuntu call them
@@ -169,47 +169,10 @@ fn sshd_t_failure(stderr: &str) -> String {
 }
 
 fn activation(runner: &dyn Runner, notices: &mut Vec<String>) -> SshActivation {
-    let cmd = Cmd::new("systemctl")
-        .args(["show", "--property=Id,LoadState,ActiveState,UnitFileState"])
-        .args(UNITS);
-    match probe(runner, &cmd, notices) {
-        Probe::Ran(out) if out.ok() => {
-            activation_from_units(&parse_units(&String::from_utf8_lossy(&out.stdout)), notices)
-        }
-        Probe::Ran(out) => {
-            notices.push(format!(
-                "`systemctl show` exited with {}; sshd activation is unknown",
-                out.status
-            ));
-            SshActivation::Unknown
-        }
-        Probe::Missing => {
-            notices.push("systemctl not found; sshd activation is unknown".to_owned());
-            SshActivation::Unknown
-        }
-        Probe::Failed => SshActivation::Unknown,
+    match systemctl_show(runner, &UNITS, "sshd activation is unknown", notices) {
+        Some(units) => activation_from_units(&units, notices),
+        None => SshActivation::Unknown,
     }
-}
-
-/// One unit from `systemctl show`: `Property=value` lines, units separated by
-/// a blank line.
-type Unit = BTreeMap<String, String>;
-
-fn parse_units(text: &str) -> Vec<Unit> {
-    text.split("\n\n")
-        .map(|block| {
-            block
-                .lines()
-                .filter_map(|line| line.split_once('='))
-                .map(|(k, v)| (k.to_owned(), v.to_owned()))
-                .collect::<Unit>()
-        })
-        .filter(|unit| !unit.is_empty())
-        .collect()
-}
-
-fn prop<'a>(unit: &'a Unit, key: &str) -> &'a str {
-    unit.get(key).map_or("", String::as_str)
 }
 
 /// Unit states in which the unit is (or is becoming) live.
@@ -252,6 +215,7 @@ fn activation_from_units(units: &[Unit], notices: &mut Vec<String>) -> SshActiva
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::facts::parse_units;
 
     #[test]
     fn parses_versions() {

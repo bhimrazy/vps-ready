@@ -63,7 +63,7 @@ Someone buys a $5 VPS, gets `root@ip` access with a password or one key, and wan
 2. **Show, then do.** Nothing changes without a visible plan (except with `--yes`).
 3. **Explain why.** Every check has a one-line rationale and a "learn more" link.
 4. **Prefer drop-ins over edits.** We own `00-vps-ready.conf` files and never rewrite `sshd_config` in place.
-5. **Effective state over file state.** Check with `sshd -T`, `/proc/sys` and `ss`.
+5. **Effective state over file state.** Check with `sshd -T`, `/proc/sys`, `apt-config` and `ss`.
 6. **Small and boring beats broad.** A perfect core of 10 modules beats 21 untested ones.
 7. **No network calls except package installs.** No telemetry and no phoning home.
 

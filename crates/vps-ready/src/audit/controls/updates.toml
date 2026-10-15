@@ -1,0 +1,10 @@
+# Update controls. Checks read apt's effective settings from `apt-config`
+# and the state of its timers and services from systemd, not the files in
+# apt.conf.d.
+
+[[control]]
+id = "UPD-001"
+severity = "medium"
+title = "Security updates installed automatically"
+why = "Attackers scan for a flaw soon after its fix is published. Unattended upgrades install security fixes on their own, so a server nobody logs into still gets them."
+check = { kind = "auto_updates" }

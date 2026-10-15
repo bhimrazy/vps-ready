@@ -204,6 +204,8 @@ fn root_would_help(report: &Report, facts: &Facts) -> bool {
                 Check::Sysctl { key, .. } => {
                     facts.sysctl.as_ref().is_some_and(|s| s.is_unreadable(key))
                 }
+                // `apt-config` and `systemctl show` work without root.
+                Check::AutoUpdates => false,
             }
     })
 }
@@ -266,7 +268,9 @@ fn print_report(
         if let Some(detail) = finding.detail()
             && !matches!(finding.outcome, Outcome::Skip { .. })
         {
-            writeln!(out, "{INDENT}{detail}")?;
+            for line in wrap(&detail, WIDTH - INDENT.len()) {
+                writeln!(out, "{INDENT}{line}")?;
+            }
         }
         if matches!(finding.outcome, Outcome::Fail { .. }) {
             for line in wrap(&control.why, WIDTH - INDENT.len()) {
@@ -451,7 +455,7 @@ mod tests {
         let mut text = Vec::new();
         print_report(&mut text, &report, "this host", true, false).unwrap();
         let text = String::from_utf8(text).unwrap();
-        assert!(text.contains("0 passed, 0 failed, 5 unknown"), "{text}");
+        assert!(text.contains("0 passed, 1 failed, 5 unknown"), "{text}");
         assert!(text.contains("Run it with sudo"), "{text}");
 
         let mut text = Vec::new();
