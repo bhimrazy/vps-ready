@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 
-use super::{Probe, Unit, parse_units, probe, prop};
+use super::{Probe, Unit, probe, prop, systemctl_show};
 use crate::sys::{Cmd, Runner};
 
 /// Units queried to find out how sshd is started. Debian and Ubuntu call them
@@ -169,25 +169,9 @@ fn sshd_t_failure(stderr: &str) -> String {
 }
 
 fn activation(runner: &dyn Runner, notices: &mut Vec<String>) -> SshActivation {
-    let cmd = Cmd::new("systemctl")
-        .args(["show", "--property=Id,LoadState,ActiveState,UnitFileState"])
-        .args(UNITS);
-    match probe(runner, &cmd, notices) {
-        Probe::Ran(out) if out.ok() => {
-            activation_from_units(&parse_units(&String::from_utf8_lossy(&out.stdout)), notices)
-        }
-        Probe::Ran(out) => {
-            notices.push(format!(
-                "`systemctl show` exited with {}; sshd activation is unknown",
-                out.status
-            ));
-            SshActivation::Unknown
-        }
-        Probe::Missing => {
-            notices.push("systemctl not found; sshd activation is unknown".to_owned());
-            SshActivation::Unknown
-        }
-        Probe::Failed => SshActivation::Unknown,
+    match systemctl_show(runner, &UNITS, "sshd activation is unknown", notices) {
+        Some(units) => activation_from_units(&units, notices),
+        None => SshActivation::Unknown,
     }
 }
 
@@ -231,6 +215,7 @@ fn activation_from_units(units: &[Unit], notices: &mut Vec<String>) -> SshActiva
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::facts::parse_units;
 
     #[test]
     fn parses_versions() {

@@ -224,8 +224,10 @@ updates:
   unattended_upgrades: false
   periodic:
     Enable: "0"
-  timers:
-    apt-daily-upgrade.timer: active
-    apt-daily.timer: active
+  units:
+    apt-daily-upgrade.service: ok
+    apt-daily-upgrade.timer: ok
+    apt-daily.service: ok
+    apt-daily.timer: ok
 docker: false
 notices: []

@@ -10,12 +10,18 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use super::{Init, Probe, Unit, parse_units, probe, prop};
+use super::{Init, Probe, Unit, probe, prop, systemctl_show};
 use crate::sys::{Cmd, Fs, Runner};
 
-/// apt's systemd timers: the first refreshes the package lists, the second
-/// installs the updates.
-const TIMERS: [&str; 2] = ["apt-daily.timer", "apt-daily-upgrade.timer"];
+/// apt's daily jobs under systemd: `apt-daily` refreshes the package lists
+/// and `apt-daily-upgrade` installs the updates. Each timer starts the
+/// service of the same name.
+const UNITS: [&str; 4] = [
+    "apt-daily.timer",
+    "apt-daily-upgrade.timer",
+    "apt-daily.service",
+    "apt-daily-upgrade.service",
+];
 
 /// The program the `unattended-upgrades` package installs.
 const UNATTENDED_UPGRADE: &str = "/usr/bin/unattended-upgrade";
@@ -26,13 +32,13 @@ pub struct AptUpdates {
     /// Whether the `unattended-upgrades` package is installed.
     pub unattended_upgrades: bool,
     /// Effective `APT::Periodic` settings, without the prefix, e.g.
-    /// `Unattended-Upgrade` = `1`. A value is an interval in days; `0` or
-    /// unset turns the job off.
+    /// `Unattended-Upgrade` = `1`. A value is an interval: days by default,
+    /// or e.g. `12h` or `always`. `0` or unset turns the job off.
     pub periodic: BTreeMap<String, String>,
-    /// State of each of apt's timers: `active` when it is loaded, running and
-    /// enabled at boot, otherwise what is wrong, e.g. `masked`, `disabled` or
-    /// `inactive`. Empty without systemd, where cron runs the jobs.
-    pub timers: BTreeMap<String, String>,
+    /// State of apt's timers and services: `ok`, or what keeps the job from
+    /// running, e.g. `masked`, `disabled` or `inactive`. `None` without
+    /// systemd, where cron may run the jobs instead.
+    pub units: Option<BTreeMap<String, String>>,
 }
 
 pub(super) fn detect(
@@ -42,15 +48,21 @@ pub(super) fn detect(
     notices: &mut Vec<String>,
 ) -> Option<AptUpdates> {
     let periodic = periodic(runner, notices)?;
-    let timers = if *init == Init::Systemd {
-        timers(runner, notices)?
+    let units = if *init == Init::Systemd {
+        let units = systemctl_show(runner, &UNITS, "apt's daily jobs are unknown", notices)?;
+        Some(
+            units
+                .iter()
+                .map(|unit| (prop(unit, "Id").to_owned(), unit_state(unit).to_owned()))
+                .collect(),
+        )
     } else {
-        BTreeMap::new()
+        None
     };
     Some(AptUpdates {
         unattended_upgrades: fs.exists(Path::new(UNATTENDED_UPGRADE)),
         periodic,
-        timers,
+        units,
     })
 }
 
@@ -85,45 +97,24 @@ fn parse_periodic(text: &str) -> BTreeMap<String, String> {
         .collect()
 }
 
-fn timers(runner: &dyn Runner, notices: &mut Vec<String>) -> Option<BTreeMap<String, String>> {
-    let cmd = Cmd::new("systemctl")
-        .args(["show", "--property=Id,LoadState,ActiveState,UnitFileState"])
-        .args(TIMERS);
-    match probe(runner, &cmd, notices) {
-        Probe::Ran(out) if out.ok() => Some(
-            parse_units(&String::from_utf8_lossy(&out.stdout))
-                .iter()
-                .map(|unit| (prop(unit, "Id").to_owned(), timer_state(unit).to_owned()))
-                .collect(),
-        ),
-        Probe::Ran(out) => {
-            notices.push(format!(
-                "`systemctl show` exited with {}; apt's timers are unknown",
-                out.status
-            ));
-            None
-        }
-        Probe::Missing => {
-            notices.push("systemctl not found; apt's timers are unknown".to_owned());
-            None
-        }
-        Probe::Failed => None,
+/// `ok`, or the first thing that keeps the job from running. Masking the
+/// services is a common way to silence apt lock errors, and it leaves the
+/// timers active. A service only runs when its timer starts it, so only a
+/// timer has to be active, and enabled so that it comes back after a
+/// reboot (`enabled-runtime` does not).
+fn unit_state(unit: &Unit) -> &str {
+    let load = prop(unit, "LoadState");
+    if load != "loaded" {
+        return load;
     }
-}
-
-/// `active`, or the first thing that keeps the timer from firing: a masked
-/// timer is `masked`, a stopped one e.g. `inactive`, and one that runs now
-/// but will not start after a reboot `disabled`.
-fn timer_state(unit: &Unit) -> &str {
-    match (
-        prop(unit, "LoadState"),
-        prop(unit, "ActiveState"),
-        prop(unit, "UnitFileState"),
-    ) {
-        (load, _, _) if load != "loaded" => load,
-        (_, active, _) if active != "active" => active,
-        (_, _, file) if !file.starts_with("enabled") => file,
-        _ => "active",
+    if !prop(unit, "Id").ends_with(".timer") {
+        return "ok";
+    }
+    match (prop(unit, "ActiveState"), prop(unit, "UnitFileState")) {
+        (active, _) if active != "active" => active,
+        (_, "") => "not enabled",
+        (_, file) if file != "enabled" => file,
+        _ => "ok",
     }
 }
 
@@ -150,29 +141,38 @@ mod tests {
     }
 
     #[test]
-    fn timer_states() {
-        let unit = |load: &str, active: &str, file: &str| {
+    fn unit_states() {
+        let unit = |id: &str, load: &str, active: &str, file: &str| {
             Unit::from([
+                ("Id".to_owned(), id.to_owned()),
                 ("LoadState".to_owned(), load.to_owned()),
                 ("ActiveState".to_owned(), active.to_owned()),
                 ("UnitFileState".to_owned(), file.to_owned()),
             ])
         };
-        // Real `systemctl show` output: masking a running timer fails it.
+        let timer = |load, active, file| unit("apt-daily.timer", load, active, file);
+        let service = |load, active, file| unit("apt-daily.service", load, active, file);
+        // States as `systemctl show` prints them on Debian 13.
         let cases = [
-            (unit("loaded", "active", "enabled"), "active"),
-            (unit("masked", "failed", "masked"), "masked"),
-            (unit("not-found", "inactive", ""), "not-found"),
-            (unit("loaded", "inactive", "enabled"), "inactive"),
-            (unit("loaded", "active", "disabled"), "disabled"),
+            (timer("loaded", "active", "enabled"), "ok"),
+            (timer("masked", "failed", "masked"), "masked"),
+            (timer("not-found", "inactive", ""), "not-found"),
+            (timer("loaded", "inactive", "enabled"), "inactive"),
+            (timer("loaded", "active", "disabled"), "disabled"),
+            (
+                timer("loaded", "active", "enabled-runtime"),
+                "enabled-runtime",
+            ),
+            (service("loaded", "inactive", "static"), "ok"),
+            (service("masked", "inactive", "masked"), "masked"),
         ];
         for (unit, want) in cases {
-            assert_eq!(timer_state(&unit), want, "{unit:?}");
+            assert_eq!(unit_state(&unit), want, "{unit:?}");
         }
     }
 
     #[test]
-    fn timers_are_read_only_under_systemd() {
+    fn units_are_queried_only_under_systemd() {
         let runner = FakeRunner::new().on(
             "apt-config",
             ["dump"],
@@ -182,21 +182,25 @@ mod tests {
         let mut notices = Vec::new();
         let apt = detect(&fs, &runner, &Init::OpenRc, &mut notices).unwrap();
         assert!(apt.unattended_upgrades);
-        assert!(apt.timers.is_empty());
+        assert_eq!(apt.units, None);
         assert!(notices.is_empty(), "{notices:?}");
         assert!(runner.calls().iter().all(|c| c.program == "apt-config"));
     }
 
     #[test]
-    fn missing_apt_config_is_a_notice() {
-        let mut notices = Vec::new();
-        let apt = detect(
-            &FakeFs::new(),
-            &FakeRunner::new(),
-            &Init::Systemd,
-            &mut notices,
-        );
-        assert_eq!(apt, None);
-        assert_eq!(notices.len(), 1, "{notices:?}");
+    fn failed_apt_config_is_a_notice() {
+        let failing = Output {
+            status: 100,
+            ..Output::success("")
+        };
+        for runner in [
+            FakeRunner::new(),
+            FakeRunner::new().on("apt-config", ["dump"], failing),
+        ] {
+            let mut notices = Vec::new();
+            let apt = detect(&FakeFs::new(), &runner, &Init::Systemd, &mut notices);
+            assert_eq!(apt, None);
+            assert_eq!(notices.len(), 1, "{notices:?}");
+        }
     }
 }

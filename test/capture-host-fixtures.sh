@@ -83,7 +83,7 @@ capture sshd-T         sshd -T
 capture ssh-units      systemctl show --property=Id,LoadState,ActiveState,UnitFileState ssh.socket sshd.socket ssh.service sshd.service
 capture listeners      ss -tulnpH
 capture apt-periodic   apt-config dump APT::Periodic
-capture apt-timers     systemctl show --property=Id,LoadState,ActiveState,UnitFileState apt-daily.timer apt-daily-upgrade.timer
+capture apt-units      systemctl show --property=Id,LoadState,ActiveState,UnitFileState apt-daily.timer apt-daily-upgrade.timer apt-daily.service apt-daily-upgrade.service
 
 # First match wins. A cloud provider's 50-cloud-init.conf turns passwords on;
 # a later 99- drop-in cannot turn them off, an earlier 00- drop-in can.

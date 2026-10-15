@@ -79,9 +79,10 @@ pub enum Check {
         one_of: Vec<String>,
     },
     /// Security updates are installed automatically: `unattended-upgrades`
-    /// is installed, apt's `APT::Periodic` settings run it, and under
-    /// systemd apt's timers are active and enabled. Debian and Ubuntu only
-    /// so far; elsewhere the outcome is unknown.
+    /// is installed, apt's `APT::Periodic` settings run it, and systemd
+    /// starts apt's daily jobs (timers active and enabled, services not
+    /// masked). Debian and Ubuntu only so far, where it is unknown without
+    /// systemd; skipped on other distros.
     AutoUpdates,
 }
 
@@ -273,18 +274,22 @@ fn evaluate(check: &Check, facts: &Facts) -> Outcome {
         Check::AutoUpdates => match &facts.updates {
             Some(apt) => {
                 let problems = apt_update_problems(apt);
-                if problems.is_empty() {
-                    Outcome::Pass
-                } else {
+                if !problems.is_empty() {
                     Outcome::Fail {
                         found: problems.join("; "),
                     }
+                } else if apt.units.is_none() {
+                    Outcome::Unknown {
+                        reason: "apt's daily jobs are checked only under systemd so far".to_owned(),
+                    }
+                } else {
+                    Outcome::Pass
                 }
             }
             None if facts.os.family == OsFamily::Debian => Outcome::Unknown {
-                reason: "apt's update settings could not be read".to_owned(),
+                reason: "automatic updates could not be checked".to_owned(),
             },
-            None => Outcome::Unknown {
+            None => Outcome::Skip {
                 reason: "automatic updates are checked only on Debian and Ubuntu so far".to_owned(),
             },
         },
@@ -303,16 +308,17 @@ fn apt_update_problems(apt: &AptUpdates) -> Vec<String> {
         problems.push("APT::Periodic::Enable is 0".to_owned());
     }
     // Without fresh package lists, unattended-upgrade sees no new updates.
+    // apt treats any value but `0`, even an empty one, as an interval.
     for key in ["Update-Package-Lists", "Unattended-Upgrade"] {
         match apt.periodic.get(key).map(String::as_str) {
-            None | Some("") => problems.push(format!("APT::Periodic::{key} is not set")),
+            None => problems.push(format!("APT::Periodic::{key} is not set")),
             Some("0") => problems.push(format!("APT::Periodic::{key} is 0")),
             Some(_) => {}
         }
     }
-    for (timer, state) in &apt.timers {
-        if state != "active" {
-            problems.push(format!("{timer} is {state}"));
+    for (unit, state) in apt.units.iter().flatten() {
+        if state != "ok" {
+            problems.push(format!("{unit} is {state}"));
         }
     }
     problems
@@ -545,17 +551,18 @@ mod tests {
 
     /// apt settings of a host that installs updates on its own.
     fn updating() -> AptUpdates {
+        let units = [
+            "apt-daily.timer",
+            "apt-daily-upgrade.timer",
+            "apt-daily.service",
+            "apt-daily-upgrade.service",
+        ];
         AptUpdates {
             unattended_upgrades: true,
             periodic: [("Update-Package-Lists", "1"), ("Unattended-Upgrade", "1")]
                 .map(|(k, v)| (k.to_owned(), v.to_owned()))
                 .into(),
-            timers: [
-                ("apt-daily.timer", "active"),
-                ("apt-daily-upgrade.timer", "active"),
-            ]
-            .map(|(k, v)| (k.to_owned(), v.to_owned()))
-            .into(),
+            units: Some(units.map(|u| (u.to_owned(), "ok".to_owned())).into()),
         }
     }
 
@@ -566,17 +573,18 @@ mod tests {
         facts.updates = Some(updating());
         assert_eq!(eval(&facts), Outcome::Pass);
 
-        // A masked timer, or `Enable "0"` as Docker's Ubuntu image sets it,
-        // stops updates however the rest is set.
+        // A masked service, or `Enable "0"` as Docker's Ubuntu image sets
+        // it, stops updates however the rest is set.
         let mut apt = updating();
-        apt.timers
-            .insert("apt-daily-upgrade.timer".to_owned(), "masked".to_owned());
+        if let Some(units) = &mut apt.units {
+            units.insert("apt-daily-upgrade.service".to_owned(), "masked".to_owned());
+        }
         apt.periodic.insert("Enable".to_owned(), "0".to_owned());
         facts.updates = Some(apt);
         assert_eq!(
             eval(&facts),
             Outcome::Fail {
-                found: "APT::Periodic::Enable is 0; apt-daily-upgrade.timer is masked".to_owned()
+                found: "APT::Periodic::Enable is 0; apt-daily-upgrade.service is masked".to_owned()
             }
         );
 
@@ -596,13 +604,21 @@ mod tests {
             }
         );
 
+        // Without systemd nothing proves the jobs run, but a setting that
+        // turns them off still fails.
+        let mut apt = updating();
+        apt.units = None;
+        facts.updates = Some(apt.clone());
+        assert!(matches!(eval(&facts), Outcome::Unknown { reason } if reason.contains("systemd")));
+        apt.unattended_upgrades = false;
+        facts.updates = Some(apt);
+        assert!(matches!(eval(&facts), Outcome::Fail { .. }));
+
         facts.updates = None;
-        assert!(
-            matches!(eval(&facts), Outcome::Unknown { reason } if reason.contains("could not be read"))
-        );
+        assert!(matches!(eval(&facts), Outcome::Unknown { .. }));
         facts.os.family = OsFamily::Rhel;
         assert!(
-            matches!(eval(&facts), Outcome::Unknown { reason } if reason.contains("only on Debian"))
+            matches!(eval(&facts), Outcome::Skip { reason } if reason.contains("only on Debian"))
         );
     }
 

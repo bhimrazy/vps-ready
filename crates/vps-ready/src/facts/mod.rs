@@ -185,6 +185,34 @@ fn prop<'a>(unit: &'a Unit, key: &str) -> &'a str {
     unit.get(key).map_or("", String::as_str)
 }
 
+/// The state of `units` from `systemctl show`. On failure a notice ends
+/// with `unknown`, e.g. "systemctl not found; sshd activation is unknown".
+fn systemctl_show(
+    runner: &dyn Runner,
+    units: &[&str],
+    unknown: &str,
+    notices: &mut Vec<String>,
+) -> Option<Vec<Unit>> {
+    let cmd = Cmd::new("systemctl")
+        .args(["show", "--property=Id,LoadState,ActiveState,UnitFileState"])
+        .args(units.iter().copied());
+    match probe(runner, &cmd, notices) {
+        Probe::Ran(out) if out.ok() => Some(parse_units(&String::from_utf8_lossy(&out.stdout))),
+        Probe::Ran(out) => {
+            notices.push(format!(
+                "`systemctl show` exited with {}; {unknown}",
+                out.status
+            ));
+            None
+        }
+        Probe::Missing => {
+            notices.push(format!("systemctl not found; {unknown}"));
+            None
+        }
+        Probe::Failed => None,
+    }
+}
+
 /// Reads `path`, mapping "not found" to `None`.
 fn read_optional(fs: &dyn Fs, path: &str) -> Result<Option<Vec<u8>>, FactsError> {
     match fs.read(Path::new(path)) {
@@ -301,6 +329,8 @@ mod tests {
             "--property=Id,LoadState,ActiveState,UnitFileState",
             "apt-daily.timer",
             "apt-daily-upgrade.timer",
+            "apt-daily.service",
+            "apt-daily-upgrade.service",
         ],
     ];
 
