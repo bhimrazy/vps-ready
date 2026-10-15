@@ -54,7 +54,8 @@ pub struct Facts {
     /// The packet filter, from the live nftables ruleset. `None` when it
     /// could not be read, usually for lack of root.
     pub firewall: Option<Firewall>,
-    /// Whether the host has an IPv6 address other than loopback.
+    /// Whether the host has a global IPv6 address (not loopback or
+    /// link-local).
     pub ipv6: bool,
     /// The SSH session `vps-ready` runs in, if any.
     pub session: Option<SshSession>,

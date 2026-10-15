@@ -85,10 +85,9 @@ pub enum Check {
     /// masked). Debian and Ubuntu only so far, where it is unknown without
     /// systemd; skipped on other distros.
     AutoUpdates,
-    /// The firewall drops incoming packets that no rule accepted: an input
-    /// chain with a `drop` policy or a final drop-everything rule, for IPv4
-    /// and, when the host has an IPv6 address, for IPv6. Read from the
-    /// nftables ruleset, which needs root.
+    /// The firewall drops incoming packets that no rule accepted, for IPv4
+    /// and, when the host has a global IPv6 address, for IPv6. Read from
+    /// the nftables ruleset, which needs root.
     InboundDefaultDeny,
 }
 
@@ -706,7 +705,7 @@ mod tests {
             eval(vec![chain("ip", false), chain("ip", true)], false),
             Outcome::Pass
         );
-        // IPv6 counts only when the host has an IPv6 address.
+        // IPv6 counts only when the host has a global IPv6 address.
         assert_eq!(
             eval(vec![chain("ip", true)], true),
             fail("incoming IPv6 traffic that no rule allows is accepted")

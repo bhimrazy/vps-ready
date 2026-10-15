@@ -74,7 +74,7 @@ Detection runs once, read-only, into a typed `Facts` struct (`serde` `Serialize`
 - virtualization and container (`systemd-detect-virt`, `/.dockerenv`, DMI (planned))
 - cloud provider (`cloud-id`, `/run/cloud-init/instance-data.json`, DMI vendor strings) (planned)
 - effective sshd config (`sshd -T`), listening sockets, admin IP from `SSH_CONNECTION`, Docker present
-- the firewall: input chains of the live nftables ruleset (`nft -j list ruleset`, root only), which also holds ufw, firewalld and iptables-nft rules; whether the host has a non-loopback IPv6 address (`/proc/net/if_inet6`)
+- the firewall: input chains of the live nftables ruleset (`nft -j list ruleset`, root only), which also holds ufw, firewalld and iptables-nft rules; whether the host has a global IPv6 address (`/proc/net/if_inet6`)
 - automatic updates on Debian and Ubuntu: `unattended-upgrades` installed, the effective `APT::Periodic` settings (`apt-config dump`) and whether systemd starts apt's daily jobs (timers and services)
 - kernel settings from `/proc/sys` (not read inside a detected container, where they mostly belong to the host; a container that `systemd-detect-virt` and the Docker/Podman markers miss is read as if it were the host)
 
