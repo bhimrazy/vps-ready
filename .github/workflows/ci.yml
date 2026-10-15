@@ -143,6 +143,7 @@ jobs:
   containers:
     needs: build-musl
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -151,6 +152,9 @@ jobs:
           - { distro: ubuntu-24.04, base: "ubuntu:24.04" }
           - { distro: debian-12, base: "debian:12" }
           - { distro: debian-13, base: "debian:13" }
+    env:
+      DISTRO: ${{ matrix.distro }}
+      BASE: ${{ matrix.base }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -162,10 +166,10 @@ jobs:
       - run: chmod +x bin/vps-ready
       - name: Build the test image
         run: |
-          docker build -f test/images/Containerfile --build-arg BASE="${{ matrix.base }}" \
-            -t "vps-ready-test:${{ matrix.distro }}" test/images
+          docker build -f test/images/Containerfile --build-arg BASE="$BASE" \
+            -t "vps-ready-test:$DISTRO" test/images
       - name: Run detect and audit in the container
-        run: test/container-audit.sh "${{ matrix.distro }}" bin/vps-ready
+        run: test/container-audit.sh "$DISTRO" bin/vps-ready
 
   # Single required check for branch protection.
   ci-ok:

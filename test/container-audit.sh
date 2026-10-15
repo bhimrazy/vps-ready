@@ -2,7 +2,8 @@
 # Run the real binary inside a systemd test container and assert on its output.
 #
 # Usage: test/container-audit.sh <distro> [binary]      e.g. ubuntu-24.04
-#   The binary defaults to $VPS_READY_BIN, then target/release/vps-ready. It must
+#   The binary defaults to $VPS_READY_BIN, then target/release/vps-ready. A
+#   relative path is relative to the repo root. It must
 #   be a Linux binary that matches the container's CPU (the static musl build
 #   runs on every distro).
 # Needs: docker, jq, and the test image for <distro>:
@@ -45,8 +46,8 @@ done
 docker cp "$bin" "$name:/usr/local/bin/vps-ready"
 docker exec "$name" chmod 755 /usr/local/bin/vps-ready
 
-# Log in over SSH once, as on a VPS. On Ubuntu this is what starts sshd
-# (socket activation); before that, `sshd -T` and the listener checks see a
+# Log in over SSH once, as on a VPS. On Ubuntu 24.04 this is what starts sshd
+# (ssh.socket); before that, `sshd -T` and the listener checks see a
 # host that no real user would audit.
 docker exec "$name" sh -c '
   useradd -m -s /bin/bash -G sudo admin
@@ -82,8 +83,12 @@ check() { echo "FAIL [$distro]: $*" >&2; fail=1; }
 [ "$audit_rc" -le 1 ] || check "audit exited $audit_rc, expected 0 or 1"
 [ "$audit_json_rc" -le 1 ] || check "audit --json exited $audit_json_rc, expected 0 or 1"
 
-jq -e . "$tmp/audit-json.out" >/dev/null 2>&1 || { check "audit --json is not valid JSON"; exit 1; }
-jq -e . "$tmp/detect-json.out" >/dev/null 2>&1 || { check "detect --json is not valid JSON"; exit 1; }
+for out in audit-json detect-json; do
+  jq -e . "$tmp/$out.out" >/dev/null 2>&1 || {
+    check "$out is not valid JSON:"; head -c 500 "$tmp/$out.out" >&2; exit 1; }
+done
+jq -e '.findings | type == "array"' "$tmp/audit-json.out" >/dev/null ||
+  { check "audit --json has no findings array"; exit 1; }
 
 # Offenders are listed as "id status", one per line.
 bad=$(jq -r '.findings[] | select(.id | startswith("SSH-"))
