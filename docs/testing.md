@@ -1,6 +1,6 @@
 # Testing strategy
 
-Today only layer 1 (unit tests with fakes and captured host fixtures) exists; container tests are next, VMs come with M3 and cloud tests later.
+Today layers 1 (unit tests with fakes and captured host fixtures) and 2 (a smoke test of the real binary in systemd containers) exist; VMs come with M3 and cloud tests later.
 
 The tool's whole promise is "safe on real servers", so testing is the product. There are four layers, each catching what the previous one can't.
 
@@ -35,9 +35,16 @@ The cheap layers run on every change; the slow, expensive ones run only where th
 
 ## Layer 2: containers (every PR, minutes)
 
-- A Rust test harness starts containers either with `testcontainers-rs` or by calling the plain `docker`/`podman` CLI, driven by a GitHub Actions matrix: Ubuntu 22/24/26, Debian 12/13, Rocky 9/10, Fedora, Alpine. Use `ubuntu-24.04-arm` runners for arm64.
-- Images run **systemd as PID 1** (`--privileged --cgroupns=private`, or Podman `--systemd=always`); Alpine boots OpenRC.
-- **Covers:** packages, services, users, fail2ban/CrowdSec, Docker install, unattended-upgrades, templates, audit exit codes.
+**Today:** the `containers` CI job runs `test/container-audit.sh` on Ubuntu 22.04, Ubuntu 24.04, Debian 12 and Debian 13 (x86_64).
+
+- The script boots the systemd test image (`--privileged --cgroupns=private`, 512 MB, 1 CPU), copies in the static musl binary built by `build-musl`, logs in over SSH once (which starts sshd on Ubuntu), and runs `detect` and `audit` as root, in human and `--json` form.
+- It asserts that `detect` exits 0 and `audit` exits 0 or 1, never 2; that every `SSH-*` finding is pass or fail (so `sshd -T` worked); that every `KRN-*` and `NET-*` finding is skipped, since kernel settings belong to the host; and that a container is detected. It does not assert a total control count, so adding controls does not break it.
+- The audit is read-only, so there is no apply or rollback to test yet.
+
+**Planned:**
+
+- A Rust test harness starting containers with `testcontainers-rs` or the plain `docker`/`podman` CLI, with a wider matrix: Ubuntu 26, Rocky 9/10, Fedora, Alpine (OpenRC instead of systemd), and `ubuntu-24.04-arm` runners for arm64.
+- **Covers:** packages, services, users, fail2ban/CrowdSec, Docker install, unattended-upgrades, templates.
 - **The full cycle:** apply → re-apply (no-op) → rollback → `diff -r /etc` against the snapshot.
 - nftables works inside the container's own network namespace, which is good enough to check rule syntax and that apply/restore work.
 

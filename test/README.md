@@ -18,3 +18,18 @@ test/capture-host-fixtures.sh debian-13
 
 Re-capture when a probe's argv changes, then review the snapshot diff with
 `cargo insta review`.
+
+## Container tests
+
+`test/container-audit.sh <distro> [binary]` boots the same image, copies in a
+Linux binary, logs in over SSH once, and runs `detect` and `audit` as root,
+asserting on the `--json` output with `jq`. The binary comes from the second
+argument, then `$VPS_READY_BIN`, then `target/release/vps-ready`. It must match the
+container's CPU architecture; the static musl build runs on every distro. CI runs
+it for four distros against the x86_64 musl artifact.
+
+```sh
+cargo build --release --target aarch64-unknown-linux-musl   # x86_64-... on Intel
+docker build -f test/images/Containerfile --build-arg BASE=ubuntu:24.04 -t vps-ready-test:ubuntu-24.04 test/images
+test/container-audit.sh ubuntu-24.04 target/aarch64-unknown-linux-musl/release/vps-ready
+```
