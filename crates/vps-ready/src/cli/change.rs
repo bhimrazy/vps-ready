@@ -160,6 +160,16 @@ pub(super) fn rollback(
         done.restored,
         plural(done.restored, "change")
     )?;
+    let n = done.at_next_boot.len();
+    if n > 0 {
+        writeln!(
+            out,
+            "{n} kernel {} {} running value until the next boot: {}",
+            plural(n, "setting"),
+            if n == 1 { "keeps its" } else { "keep their" },
+            done.at_next_boot.join(", ")
+        )?;
+    }
     Ok(0)
 }
 
@@ -365,6 +375,11 @@ fn print_progress(err: &mut dyn Write, progress: &Progress) {
                 format!("leave {name} as it is (rollback does not remove packages)")
             }
         },
+        Progress::Leave(Backup::Sysctl { key, .. }) => {
+            format!("leave {key} as it is (the host rebooted since apply; the next boot sets it)")
+        }
+        // The engine leaves only sysctls.
+        Progress::Leave(_) => return,
     };
     let _ = writeln!(err, "{line}");
 }

@@ -24,7 +24,7 @@ They can follow in a v0.2.x once the engine is proven.
   - `fs.protected_{symlinks,hardlinks,fifos,regular}=1`, `fs.suid_dumpable=0`;
   - `tcp_syncookies=1`, `conf.all.accept_source_route=0`, `icmp_echo_ignore_broadcasts=1`.
 - `kptr_restrict=1`, not the baseline's `2`: `2` hides `/proc/kallsyms` from root too and breaks `perf` and `bpftrace`. Ubuntu ships `1`.
-- A key goes into the drop-in only if its running value fails the control or the existing drop-in already lists it. Without this, a distro's stricter value (Ubuntu's `perf_event_paranoid=4`) would be lowered at the next boot. Keeping keys the drop-in already lists keeps a second run a no-op.
+- A key goes into the drop-in only if its running value fails the control or the existing drop-in already lists it. Without this, a distro's stricter running value (Ubuntu's `perf_event_paranoid=4`) would be lowered at the next boot. Keeping keys the drop-in already lists keeps a second run a no-op.
 - Skipped keys:
   - a key the kernel does not have (e.g. no Yama) is skipped, and dropped from the drop-in if it is listed there;
   - a key that could not be read (non-root `plan`) is skipped with a note in the plan. It is never added to the drop-in, but stays there if it is already listed, so a non-root `plan` does not show a removal.
@@ -34,7 +34,8 @@ They can follow in a v0.2.x once the engine is proven.
 - Known limits:
   - A file that sorts after `90-` in `sysctl.d` (or Debian 12's `/etc/sysctl.conf` via `99-sysctl.conf`) can override the drop-in at boot. M2 checks the running values only, so such a key shows up again in the next plan.
   - A runtime value written for a key that is not in the drop-in reverts at reboot and shows up again in the next plan.
-  - Another tool can change a key after apply (apport sets `fs.suid_dumpable=2` at boot). `rollback` then refuses that key (see [Rollback](#rollback)).
+  - A key lowered at runtime below the kernel's compiled-in default (Ubuntu's `perf_event_paranoid=4`) is persisted at the module's value, which passes its control; rollback removes the line and the next boot returns to the default. The compiled-in default cannot be read.
+  - Another tool can change a key after apply in the same boot. `rollback` then refuses that key (see [Rollback](#rollback)). A key set at a later boot (apport sets `fs.suid_dumpable=2`) is left as the boot set it.
 
 **`updates.auto` details:**
 - The drop-in sets `APT::Periodic::Enable "1"`, `APT::Periodic::Update-Package-Lists "1"` and `APT::Periodic::Unattended-Upgrade "1"`.
@@ -65,7 +66,7 @@ impl Resource {
 
 pub enum Backup {                       // serde: written to the journal
     File { path: PathBuf, n: u32, original: Option<FileCopy> },  // bytes in files/<n>.before|after; None = did not exist
-    Sysctl { key: String, value: String, applied: String },
+    Sysctl { key: String, value: String, applied: String, boot_id: Option<String> },  // boot_id: /proc/sys/kernel/random/boot_id at snapshot
     Package { name: String, was_installed: bool },
 }
 pub struct FileCopy { mode: u32, uid: u32, gid: u32 }
@@ -205,7 +206,7 @@ Transaction states:
 - A plan that changes the same resource twice is refused before the transaction starts, since `restored` lines name resources by ID.
 - **Safety check first**, on every backup not yet restored:
   - **File:** the current content must equal `.after` or `.before`. If the file did not exist before, it must be absent or equal `.after`. Mode and owner are not compared; restore sets them back from the journal.
-  - **Sysctl:** the current value must equal the applied value or the original.
+  - **Sysctl:** within the boot the backup was taken in, the current value must equal the applied or the original value. In a later boot the runtime value is neither checked nor restored (it already comes from the boot configuration); the key is reported and the next boot settles it after the drop-in is removed.
   - Both values are allowed because a crash may have happened just before or after `apply()`.
 - **If the check fails:** nothing is restored. The command lists each resource that changed, the transaction's `files/` paths, and the by-hand step for each, e.g. "copy `files/1.before` to `/etc/...`" or "`sysctl -w fs.suid_dumpable=0`". There is no `--force` in M2. This also stops an older transaction from undoing a newer one on the same file.
 - `Package` restore is a no-op; the plan already labeled it `partial`.
