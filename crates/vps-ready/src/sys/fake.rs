@@ -5,9 +5,9 @@
 use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use super::{Cmd, FileKind, FileMeta, Fs, Output, Runner, SysError};
+use super::{Cmd, FileKind, FileMeta, FileOwner, Fs, Output, Runner, SysError};
 
 /// A scripted [`Runner`]. Each rule matches a program plus a prefix of its
 /// arguments; the first matching rule wins. Unmatched commands fail with
@@ -119,11 +119,126 @@ impl Runner for FakeRunner {
     }
 }
 
-/// An in-memory [`Fs`]: a map from absolute path to file contents.
-/// Directories exist implicitly as ancestors of files.
-#[derive(Debug, Clone, Default)]
+/// A [`FakeFs`] operation that a test can make fail, see [`FakeFs::fail`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Op {
+    /// Writing file content: [`Fs::write`] and the temp file of [`Fs::write_atomic`].
+    Write,
+    /// The rename of [`Fs::write_atomic`].
+    Rename,
+    /// [`Fs::remove`].
+    Remove,
+    /// [`Fs::append_sync`].
+    Append,
+}
+
+#[derive(Debug, Clone)]
+enum Node {
+    File(Vec<u8>),
+    Dir,
+    Symlink(PathBuf),
+}
+
+#[derive(Debug, Clone)]
+struct Entry {
+    node: Node,
+    mode: u32,
+    uid: u32,
+    gid: u32,
+}
+
+impl Entry {
+    fn new(node: Node, mode: u32) -> Self {
+        Self {
+            node,
+            mode,
+            uid: 0,
+            gid: 0,
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct State {
+    entries: BTreeMap<PathBuf, Entry>,
+    /// Calls of each operation so far.
+    counts: BTreeMap<Op, usize>,
+    /// The call of each operation that fails.
+    fail_at: BTreeMap<Op, usize>,
+}
+
+impl State {
+    /// Directories exist explicitly or implicitly as ancestors of an entry.
+    fn is_dir(&self, path: &Path) -> bool {
+        path == Path::new("/")
+            || self.entries.iter().any(|(p, e)| {
+                (p == path && matches!(e.node, Node::Dir)) || (p != path && p.starts_with(path))
+            })
+    }
+
+    /// Follows symlinks (absolute targets, at most 8 hops) to the final path.
+    fn resolve(&self, path: &Path) -> PathBuf {
+        let mut path = path.to_path_buf();
+        for _ in 0..8 {
+            match self.entries.get(&path).map(|e| &e.node) {
+                Some(Node::Symlink(target)) => path.clone_from(target),
+                _ => break,
+            }
+        }
+        path
+    }
+
+    fn file(&self, path: &Path) -> Option<&Vec<u8>> {
+        match self.entries.get(path).map(|e| &e.node) {
+            Some(Node::File(contents)) => Some(contents),
+            _ => None,
+        }
+    }
+
+    /// Counts a call of `op`, and fails it if it is the one set by [`FakeFs::fail`].
+    fn tick(&mut self, op: Op, path: &Path) -> Result<(), SysError> {
+        let n = self.counts.entry(op).or_default();
+        *n += 1;
+        if self.fail_at.get(&op) == Some(n) {
+            return Err(SysError::Io {
+                context: path.display().to_string(),
+                source: io::Error::other(format!("injected failure of {op:?} call {n}")),
+            });
+        }
+        Ok(())
+    }
+
+    fn require_parent(&self, path: &Path) -> Result<(), SysError> {
+        match path.parent() {
+            Some(parent) if self.is_dir(parent) => Ok(()),
+            _ => Err(not_found(path)),
+        }
+    }
+}
+
+fn not_found(path: &Path) -> SysError {
+    SysError::NotFound(path.display().to_string())
+}
+
+fn io_error(path: &Path, kind: io::ErrorKind) -> SysError {
+    SysError::Io {
+        context: path.display().to_string(),
+        source: io::Error::from(kind),
+    }
+}
+
+/// An in-memory [`Fs`]: a map from absolute path to a file, directory or
+/// symlink, each with a mode and owner. Directories also exist implicitly as
+/// ancestors of other entries, as `0755 root:root`. Files added with
+/// [`FakeFs::with_file`] are `0644 root:root`.
+///
+/// [`FakeFs::fail`] makes one call of a write operation fail, to test what
+/// the caller does after a failure. A failed call changes no entry: the fake
+/// models only that case, not a real `append_sync` whose bytes landed before
+/// its `sync_all` failed.
+#[derive(Debug, Default)]
 pub struct FakeFs {
-    files: BTreeMap<PathBuf, Vec<u8>>,
+    state: Mutex<State>,
 }
 
 impl FakeFs {
@@ -135,34 +250,57 @@ impl FakeFs {
 
     /// Adds (or replaces) a file.
     #[must_use]
-    pub fn with_file(mut self, path: impl Into<PathBuf>, contents: impl Into<Vec<u8>>) -> Self {
-        self.files.insert(path.into(), contents.into());
+    pub fn with_file(self, path: impl Into<PathBuf>, contents: impl Into<Vec<u8>>) -> Self {
+        let entry = Entry::new(Node::File(contents.into()), 0o644);
+        self.lock().entries.insert(path.into(), entry);
         self
     }
 
-    fn is_dir(&self, path: &Path) -> bool {
-        self.files.keys().any(|f| f != path && f.starts_with(path))
+    /// Adds (or replaces) a symlink to the absolute path `target`.
+    #[must_use]
+    pub fn with_symlink(self, path: impl Into<PathBuf>, target: impl Into<PathBuf>) -> Self {
+        let entry = Entry::new(Node::Symlink(target.into()), 0o777);
+        self.lock().entries.insert(path.into(), entry);
+        self
+    }
+
+    /// Makes the `n`-th call of `op` that reaches the write (counting from 1)
+    /// fail with [`SysError::Io`]. Calls rejected before that, e.g. with
+    /// [`SysError::NotFound`] or [`SysError::Symlink`], are not counted.
+    /// Only that call fails.
+    #[must_use]
+    pub fn fail(self, op: Op, n: usize) -> Self {
+        self.lock().fail_at.insert(op, n);
+        self
+    }
+
+    fn lock(&self) -> MutexGuard<'_, State> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
 impl Fs for FakeFs {
     fn read(&self, path: &Path) -> Result<Vec<u8>, SysError> {
-        self.files
-            .get(path)
+        let state = self.lock();
+        state
+            .file(&state.resolve(path))
             .cloned()
-            .ok_or_else(|| SysError::NotFound(path.display().to_string()))
+            .ok_or_else(|| not_found(path))
     }
 
     fn exists(&self, path: &Path) -> bool {
-        self.files.contains_key(path) || self.is_dir(path)
+        let state = self.lock();
+        let target = state.resolve(path);
+        state.file(&target).is_some() || state.is_dir(&target)
     }
 
     fn read_dir(&self, path: &Path) -> Result<Vec<PathBuf>, SysError> {
-        if !self.is_dir(path) {
-            return Err(SysError::NotFound(path.display().to_string()));
+        let state = self.lock();
+        if !state.is_dir(path) {
+            return Err(not_found(path));
         }
-        let mut entries: Vec<PathBuf> = self
-            .files
+        let mut entries: Vec<PathBuf> = state
+            .entries
             .keys()
             .filter_map(|f| f.strip_prefix(path).ok()?.components().next())
             .map(|first| path.join(first))
@@ -173,18 +311,128 @@ impl Fs for FakeFs {
     }
 
     fn metadata(&self, path: &Path) -> Result<FileMeta, SysError> {
-        let (kind, len, mode) = match self.files.get(path) {
-            Some(contents) => (FileKind::File, contents.len() as u64, 0o644),
-            None if self.is_dir(path) => (FileKind::Dir, 0, 0o755),
-            None => return Err(SysError::NotFound(path.display().to_string())),
+        let state = self.lock();
+        let Some(entry) = state.entries.get(path) else {
+            if state.is_dir(path) {
+                return Ok(FileMeta {
+                    kind: FileKind::Dir,
+                    len: 0,
+                    mode: 0o755,
+                    uid: 0,
+                    gid: 0,
+                });
+            }
+            return Err(not_found(path));
+        };
+        let (kind, len) = match &entry.node {
+            Node::File(contents) => (FileKind::File, contents.len() as u64),
+            Node::Dir => (FileKind::Dir, 0),
+            Node::Symlink(target) => (FileKind::Symlink, target.as_os_str().len() as u64),
         };
         Ok(FileMeta {
             kind,
             len,
-            mode,
-            uid: 0,
-            gid: 0,
+            mode: entry.mode,
+            uid: entry.uid,
+            gid: entry.gid,
         })
+    }
+
+    fn write_atomic(&self, path: &Path, bytes: &[u8], owner: FileOwner) -> Result<(), SysError> {
+        let mut state = self.lock();
+        match state.entries.get(path).map(|e| &e.node) {
+            Some(Node::Symlink(_)) => return Err(SysError::Symlink(path.display().to_string())),
+            Some(Node::Dir) => return Err(io_error(path, io::ErrorKind::IsADirectory)),
+            Some(Node::File(_)) | None => {}
+        }
+        state.require_parent(path)?;
+        state.tick(Op::Write, path)?;
+        state.tick(Op::Rename, path)?;
+        let entry = Entry {
+            node: Node::File(bytes.to_vec()),
+            mode: owner.mode,
+            uid: owner.uid,
+            gid: owner.gid,
+        };
+        state.entries.insert(path.to_path_buf(), entry);
+        Ok(())
+    }
+
+    fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), SysError> {
+        let mut state = self.lock();
+        let target = state.resolve(path);
+        if state.file(&target).is_none() {
+            return Err(not_found(path));
+        }
+        state.tick(Op::Write, path)?;
+        if let Some(entry) = state.entries.get_mut(&target) {
+            entry.node = Node::File(bytes.to_vec());
+        }
+        Ok(())
+    }
+
+    fn append_sync(&self, path: &Path, bytes: &[u8]) -> Result<(), SysError> {
+        let mut state = self.lock();
+        let target = state.resolve(path);
+        if state.entries.contains_key(&target) && state.file(&target).is_none() {
+            return Err(io_error(path, io::ErrorKind::IsADirectory));
+        }
+        state.require_parent(&target)?;
+        state.tick(Op::Append, path)?;
+        let entry = state
+            .entries
+            .entry(target)
+            .or_insert_with(|| Entry::new(Node::File(Vec::new()), 0o600));
+        if let Node::File(contents) = &mut entry.node {
+            contents.extend_from_slice(bytes);
+        }
+        Ok(())
+    }
+
+    fn remove(&self, path: &Path) -> Result<(), SysError> {
+        let mut state = self.lock();
+        match state.entries.get(path).map(|e| &e.node) {
+            Some(Node::File(_) | Node::Symlink(_)) => {}
+            Some(Node::Dir) => return Err(io_error(path, io::ErrorKind::IsADirectory)),
+            None => return Err(not_found(path)),
+        }
+        state.tick(Op::Remove, path)?;
+        state.entries.remove(path);
+        // Keep a parent that existed only implicitly through this entry, as a
+        // real directory outlives its last entry.
+        if let Some(parent) = path.parent().filter(|p| !state.is_dir(p)) {
+            let entry = Entry::new(Node::Dir, 0o755);
+            state.entries.insert(parent.to_path_buf(), entry);
+        }
+        Ok(())
+    }
+
+    fn create_dir_all(&self, path: &Path, mode: u32) -> Result<(), SysError> {
+        let mut state = self.lock();
+        // Outermost first, so each created parent gets `mode` too.
+        let dirs: Vec<&Path> = path.ancestors().collect();
+        for dir in dirs.into_iter().rev() {
+            match state.entries.get(dir).map(|e| &e.node) {
+                Some(Node::File(_) | Node::Symlink(_)) => {
+                    return Err(io_error(path, io::ErrorKind::NotADirectory));
+                }
+                Some(Node::Dir) => {}
+                None if state.is_dir(dir) => {}
+                None => {
+                    let entry = Entry::new(Node::Dir, mode);
+                    state.entries.insert(dir.to_path_buf(), entry);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn sync_dir(&self, path: &Path) -> Result<(), SysError> {
+        if self.lock().is_dir(path) {
+            Ok(())
+        } else {
+            Err(not_found(path))
+        }
     }
 }
 
@@ -215,5 +463,55 @@ mod tests {
         );
         assert_eq!(fs.metadata(Path::new("/etc")).unwrap().kind, FileKind::Dir);
         assert!(fs.read(Path::new("/etc/shadow")).is_err());
+    }
+
+    #[test]
+    fn fake_fs_sets_the_owner() {
+        let fs = FakeFs::new().with_file("/etc/a", "old\n");
+        let owner = FileOwner {
+            mode: 0o640,
+            uid: 1000,
+            gid: 1001,
+        };
+        fs.write_atomic(Path::new("/etc/a"), b"new\n", owner)
+            .unwrap();
+        let meta = fs.metadata(Path::new("/etc/a")).unwrap();
+        assert_eq!((meta.mode, meta.uid, meta.gid), (0o640, 1000, 1001));
+    }
+
+    #[test]
+    fn fake_fs_fails_only_the_nth_call() {
+        let path = Path::new("/etc/a");
+        let owner = FileOwner {
+            mode: 0o600,
+            uid: 0,
+            gid: 0,
+        };
+        let fs = FakeFs::new()
+            .with_file(path, "old\n")
+            .fail(Op::Rename, 2)
+            .fail(Op::Write, 4)
+            .fail(Op::Append, 1)
+            .fail(Op::Remove, 1);
+
+        fs.write_atomic(path, b"one\n", owner).unwrap();
+        assert!(fs.write_atomic(path, b"two\n", owner).is_err());
+        assert_eq!(fs.read(path).unwrap(), b"one\n");
+        assert_eq!(fs.metadata(path).unwrap().mode, 0o600);
+        fs.write_atomic(path, b"three\n", owner).unwrap();
+
+        assert!(fs.write(path, b"four\n").is_err());
+        assert_eq!(fs.read(path).unwrap(), b"three\n");
+        fs.write(path, b"five\n").unwrap();
+
+        let journal = Path::new("/etc/journal");
+        assert!(fs.append_sync(journal, b"1\n").is_err());
+        assert!(!fs.exists(journal));
+        fs.append_sync(journal, b"1\n").unwrap();
+
+        assert!(fs.remove(path).is_err());
+        assert_eq!(fs.read(path).unwrap(), b"five\n");
+        fs.remove(path).unwrap();
+        assert!(!fs.exists(path));
     }
 }
