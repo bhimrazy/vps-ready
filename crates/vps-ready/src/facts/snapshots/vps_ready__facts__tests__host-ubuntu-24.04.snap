@@ -219,7 +219,8 @@ listeners:
 firewall:
   input_chains: []
   published: []
-  legacy_filter: false
+  legacy_filter_v4: false
+  legacy_filter_v6: false
 ipv6: false
 session:
   client: "127.0.0.1:41320"

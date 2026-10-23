@@ -7,7 +7,7 @@
 //!
 //! The legacy `iptables` backend (`iptables-legacy`) does not use nftables.
 //! Its rules are not read; only whether its `filter` table is loaded is
-//! (see [`Firewall::legacy_filter`]).
+//! (see [`Firewall::legacy_filter_v4`]).
 //!
 //! A chain is judged by what it does to a packet that matches no rule with
 //! a condition. Rules that accept only some traffic (`iifname lo`, a port,
@@ -42,11 +42,13 @@ pub struct Firewall {
     /// addresses. Their traffic is forwarded to the container, so input
     /// chains do not see it.
     pub published: Vec<PublishedPort>,
-    /// Whether the kernel has the `filter` table of iptables-legacy loaded,
-    /// as `/proc/net/ip_tables_names` or `ip6_tables_names` lists it. Those
-    /// rules are not in nftables and are not read. The table stays loaded
-    /// after its rules are flushed, so it may hold none.
-    pub legacy_filter: bool,
+    /// Whether the kernel has the IPv4 `filter` table of iptables-legacy
+    /// loaded, as `/proc/net/ip_tables_names` lists it. Those rules are not
+    /// in nftables and are not read. The table stays loaded after its rules
+    /// are flushed, so it may hold none.
+    pub legacy_filter_v4: bool,
+    /// The same for IPv6, from `/proc/net/ip6_tables_names`.
+    pub legacy_filter_v6: bool,
 }
 
 /// A port Docker forwards to a container, from a DNAT rule in its `nat`
@@ -143,16 +145,14 @@ impl InputChain {
 /// one failure that running as root fixes.
 pub const NEEDS_ROOT: &str = ". Reading the ruleset needs root (CAP_NET_ADMIN)";
 
-/// The tables iptables-legacy has loaded, per address family.
+/// The tables iptables-legacy has loaded, for IPv4 and for IPv6.
 const LEGACY_TABLES: [&str; 2] = ["/proc/net/ip_tables_names", "/proc/net/ip6_tables_names"];
 
-fn has_legacy_filter(fs: &dyn Fs) -> bool {
-    LEGACY_TABLES.iter().any(|path| {
-        fs.read(Path::new(path)).is_ok_and(|bytes| {
-            String::from_utf8_lossy(&bytes)
-                .lines()
-                .any(|line| line.trim() == "filter")
-        })
+fn has_legacy_filter(fs: &dyn Fs, path: &str) -> bool {
+    fs.read(Path::new(path)).is_ok_and(|bytes| {
+        String::from_utf8_lossy(&bytes)
+            .lines()
+            .any(|line| line.trim() == "filter")
     })
 }
 
@@ -220,7 +220,8 @@ pub(super) fn detect(
     if !multiport.ports.is_empty() {
         firewall = parse(&out.stdout, &multiport)?;
     }
-    firewall.legacy_filter = has_legacy_filter(fs);
+    firewall.legacy_filter_v4 = has_legacy_filter(fs, LEGACY_TABLES[0]);
+    firewall.legacy_filter_v6 = has_legacy_filter(fs, LEGACY_TABLES[1]);
     Some(firewall)
 }
 
@@ -364,7 +365,8 @@ fn parse(json: &[u8], multiport: &Multiport) -> Option<Firewall> {
     Some(Firewall {
         input_chains,
         published,
-        legacy_filter: false,
+        legacy_filter_v4: false,
+        legacy_filter_v6: false,
     })
 }
 
@@ -1380,16 +1382,25 @@ mod tests {
             let runner = FakeRunner::new().on("nft", ["-j"], Output::success(nft.clone()));
             detect(&fs, &runner, &mut Vec::new()).unwrap()
         };
-        assert!(!detect_with(FakeFs::new()).legacy_filter);
+        let flags = |fw: Firewall| (fw.legacy_filter_v4, fw.legacy_filter_v6);
+        assert_eq!(flags(detect_with(FakeFs::new())), (false, false));
         let names = |path: &str, text: &str| FakeFs::new().with_file(path, text.to_owned());
-        for path in LEGACY_TABLES {
-            let fw = detect_with(names(path, "filter\n"));
-            assert!(fw.legacy_filter, "{path}");
-            assert_eq!(fw.input_chains, []);
-        }
+        let v4 = detect_with(names(LEGACY_TABLES[0], "filter\n"));
+        assert_eq!(v4.input_chains, []);
+        assert_eq!(flags(v4), (true, false));
+        assert_eq!(
+            flags(detect_with(names(LEGACY_TABLES[1], "filter\n"))),
+            (false, true)
+        );
         // Other legacy tables alone say nothing about incoming traffic.
-        assert!(!detect_with(names(LEGACY_TABLES[0], "nat\nmangle\n")).legacy_filter);
-        assert!(!detect_with(names(LEGACY_TABLES[0], "")).legacy_filter);
+        assert_eq!(
+            flags(detect_with(names(LEGACY_TABLES[0], "nat\nmangle\n"))),
+            (false, false)
+        );
+        assert_eq!(
+            flags(detect_with(names(LEGACY_TABLES[0], ""))),
+            (false, false)
+        );
     }
 
     #[test]

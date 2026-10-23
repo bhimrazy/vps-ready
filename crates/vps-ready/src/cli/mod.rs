@@ -206,7 +206,7 @@ fn root_would_help(report: &Report, facts: &Facts) -> bool {
                 }
                 // `apt-config` and `systemctl show` work without root.
                 Check::AutoUpdates => false,
-                // `nft list ruleset` needs root, but not when it is missing.
+                // Sudo helps only when nft was refused for lack of privileges.
                 Check::InboundDefaultDeny | Check::PublishedPorts => {
                     facts.firewall.is_none()
                         && facts
