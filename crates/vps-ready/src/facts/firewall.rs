@@ -5,6 +5,10 @@
 //! the one source that shows what is in effect, whichever tool wrote it.
 //! Reading it needs root.
 //!
+//! The legacy `iptables` backend (`iptables-legacy`) does not use nftables.
+//! Its rules are not read; only whether its `filter` table is loaded is
+//! (see [`Firewall::legacy_filter_v4`]).
+//!
 //! A chain is judged by what it does to a packet that matches no rule with
 //! a condition. Rules that accept only some traffic (`iifname lo`, a port,
 //! `meta nfproto ipv4` in an `inet` chain) are assumed to be narrow. Rules
@@ -38,6 +42,13 @@ pub struct Firewall {
     /// addresses. Their traffic is forwarded to the container, so input
     /// chains do not see it.
     pub published: Vec<PublishedPort>,
+    /// Whether the kernel has the IPv4 `filter` table of iptables-legacy
+    /// loaded, as `/proc/net/ip_tables_names` lists it. Those rules are not
+    /// in nftables and are not read. The table stays loaded after its rules
+    /// are flushed, so it may hold none.
+    pub legacy_filter_v4: bool,
+    /// The same for IPv6, from `/proc/net/ip6_tables_names`.
+    pub legacy_filter_v6: bool,
 }
 
 /// A port Docker forwards to a container, from a DNAT rule in its `nat`
@@ -130,7 +141,26 @@ impl InputChain {
     }
 }
 
-pub(super) fn detect(runner: &dyn Runner, notices: &mut Vec<String>) -> Option<Firewall> {
+/// Ends the notice for an `nft` that was refused for lack of privileges, the
+/// one failure that running as root fixes.
+pub const NEEDS_ROOT: &str = ". Reading the ruleset needs root (CAP_NET_ADMIN)";
+
+/// The tables iptables-legacy has loaded, for IPv4 and for IPv6.
+const LEGACY_TABLES: [&str; 2] = ["/proc/net/ip_tables_names", "/proc/net/ip6_tables_names"];
+
+fn has_legacy_filter(fs: &dyn Fs, path: &str) -> bool {
+    fs.read(Path::new(path)).is_ok_and(|bytes| {
+        String::from_utf8_lossy(&bytes)
+            .lines()
+            .any(|line| line.trim() == "filter")
+    })
+}
+
+pub(super) fn detect(
+    fs: &dyn Fs,
+    runner: &dyn Runner,
+    notices: &mut Vec<String>,
+) -> Option<Firewall> {
     let cmd = Cmd::new("nft")
         .args(["-j", "list", "ruleset"])
         .timeout(Duration::from_secs(10));
@@ -153,7 +183,7 @@ pub(super) fn detect(runner: &dyn Runner, notices: &mut Vec<String>) -> Option<F
             .unwrap_or("no error output");
         let mut notice = format!("`nft list ruleset` failed ({reason}); the firewall is unknown");
         if stderr.contains("Operation not permitted") {
-            notice.push_str(". Reading the ruleset needs root (CAP_NET_ADMIN)");
+            notice.push_str(NEEDS_ROOT);
         }
         notices.push(notice);
         return None;
@@ -190,6 +220,8 @@ pub(super) fn detect(runner: &dyn Runner, notices: &mut Vec<String>) -> Option<F
     if !multiport.ports.is_empty() {
         firewall = parse(&out.stdout, &multiport)?;
     }
+    firewall.legacy_filter_v4 = has_legacy_filter(fs, LEGACY_TABLES[0]);
+    firewall.legacy_filter_v6 = has_legacy_filter(fs, LEGACY_TABLES[1]);
     Some(firewall)
 }
 
@@ -333,6 +365,8 @@ fn parse(json: &[u8], multiport: &Multiport) -> Option<Firewall> {
     Some(Firewall {
         input_chains,
         published,
+        legacy_filter_v4: false,
+        legacy_filter_v6: false,
     })
 }
 
@@ -1031,7 +1065,7 @@ mod tests {
                 Output::success(file("ufw-multiport.ip6tables")),
             );
         let mut notices = Vec::new();
-        let fw = detect(&runner, &mut notices).unwrap();
+        let fw = detect(&FakeFs::new(), &runner, &mut notices).unwrap();
         assert_eq!(fw.input_chains.len(), 2);
         for c in &fw.input_chains {
             assert!(c.unread_ports.is_empty(), "{}", c.family);
@@ -1075,7 +1109,12 @@ mod tests {
         assert!(notices.is_empty(), "{notices:?}");
 
         // Without iptables-save the ports stay unknown.
-        let fw = detect(&FakeRunner::new().on("nft", ["-j"], nft), &mut notices).unwrap();
+        let fw = detect(
+            &FakeFs::new(),
+            &FakeRunner::new().on("nft", ["-j"], nft),
+            &mut notices,
+        )
+        .unwrap();
         assert_eq!(fw.input_chains[0].blocks("tcp", 443), None);
     }
 
@@ -1113,7 +1152,7 @@ mod tests {
             let runner = FakeRunner::new()
                 .on("nft", ["-j"], Output::success(file("ufw-multiport.json")))
                 .on("iptables-save", ["-t", "filter"], Output::success(iptables));
-            let fw = detect(&runner, &mut Vec::new()).unwrap();
+            let fw = detect(&FakeFs::new(), &runner, &mut Vec::new()).unwrap();
             let ip = fw.input_chains.iter().find(|c| c.family == "ip").unwrap();
             (ip.blocks("tcp", 8080), ip.blocks("tcp", 443))
         };
@@ -1326,10 +1365,41 @@ mod tests {
             },
         );
         let mut notices = Vec::new();
-        assert_eq!(detect(&runner, &mut notices), None);
+        assert_eq!(detect(&FakeFs::new(), &runner, &mut notices), None);
         assert!(
             notices[0].ends_with("needs root (CAP_NET_ADMIN)"),
             "{notices:?}"
+        );
+    }
+
+    /// With iptables-legacy rules loaded (Ubuntu 24.04, `iptables -P INPUT
+    /// DROP`), nft prints the same empty ruleset as ufw-disabled and
+    /// `/proc/net/ip_tables_names` and `ip6_tables_names` list `filter`.
+    #[test]
+    fn detects_iptables_legacy_filter_table() {
+        let nft = std::fs::read(testdata("nft/ufw-disabled.json")).unwrap();
+        let detect_with = |fs: FakeFs| {
+            let runner = FakeRunner::new().on("nft", ["-j"], Output::success(nft.clone()));
+            detect(&fs, &runner, &mut Vec::new()).unwrap()
+        };
+        let flags = |fw: Firewall| (fw.legacy_filter_v4, fw.legacy_filter_v6);
+        assert_eq!(flags(detect_with(FakeFs::new())), (false, false));
+        let names = |path: &str, text: &str| FakeFs::new().with_file(path, text.to_owned());
+        let v4 = detect_with(names(LEGACY_TABLES[0], "filter\n"));
+        assert_eq!(v4.input_chains, []);
+        assert_eq!(flags(v4), (true, false));
+        assert_eq!(
+            flags(detect_with(names(LEGACY_TABLES[1], "filter\n"))),
+            (false, true)
+        );
+        // Other legacy tables alone say nothing about incoming traffic.
+        assert_eq!(
+            flags(detect_with(names(LEGACY_TABLES[0], "nat\nmangle\n"))),
+            (false, false)
+        );
+        assert_eq!(
+            flags(detect_with(names(LEGACY_TABLES[0], ""))),
+            (false, false)
         );
     }
 
