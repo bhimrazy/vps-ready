@@ -45,7 +45,7 @@ flowchart LR
     draft --> publish["publish<br/>(immutable)"]
 ```
 
-Only the last two steps need `contents: write`, and they run in the protected `release` environment, so a human approves before anything becomes public.
+Only the last two steps need `contents: write`, and they run in the `release` environment, which only `v*` tags can use. Only a repository admin can create a `v*` tag, so pushing the tag is the human approval: the release runs without a further click.
 
 ## What each release ships
 
@@ -63,7 +63,7 @@ Only the last two steps need `contents: write`, and they run in the protected `r
 - Turn on GitHub **Immutable Releases** (assets and tags can't change after publishing). The workflow creates a draft, uploads everything, then publishes.
 - Pin all actions by SHA.
 - Default to `permissions: {}`, granting `id-token`/`attestations`/`contents: write` only to the jobs that need them.
-- Use a protected `release` environment with a required reviewer, plus tag protection.
+- Use `release` and `crates-io` environments limited to `v*` tags, plus tag rulesets: `v*` tags cannot be updated or deleted, and only repository admins can create them.
 
 ## Install paths (most → least trusted)
 
