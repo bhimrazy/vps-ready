@@ -1,0 +1,1115 @@
+{
+ "nftables": [
+  {
+   "metainfo": {
+    "version": "1.0.9",
+    "release_name": "Old Doc Yak #3",
+    "json_schema_version": 1
+   }
+  },
+  {
+   "table": {
+    "family": "ip",
+    "name": "docker-bridges",
+    "handle": 6
+   }
+  },
+  {
+   "map": {
+    "family": "ip",
+    "name": "filter-forward-in-jumps",
+    "table": "docker-bridges",
+    "type": "ifname",
+    "handle": 7,
+    "map": "verdict",
+    "elem": [
+     [
+      "docker0",
+      {
+       "jump": {
+        "target": "filter-forward-in__docker0"
+       }
+      }
+     ]
+    ]
+   }
+  },
+  {
+   "map": {
+    "family": "ip",
+    "name": "filter-forward-out-jumps",
+    "table": "docker-bridges",
+    "type": "ifname",
+    "handle": 8,
+    "map": "verdict",
+    "elem": [
+     [
+      "docker0",
+      {
+       "jump": {
+        "target": "filter-forward-out__docker0"
+       }
+      }
+     ]
+    ]
+   }
+  },
+  {
+   "map": {
+    "family": "ip",
+    "name": "nat-postrouting-in-jumps",
+    "table": "docker-bridges",
+    "type": "ifname",
+    "handle": 9,
+    "map": "verdict",
+    "elem": [
+     [
+      "docker0",
+      {
+       "jump": {
+        "target": "nat-postrouting-in__docker0"
+       }
+      }
+     ]
+    ]
+   }
+  },
+  {
+   "map": {
+    "family": "ip",
+    "name": "nat-postrouting-out-jumps",
+    "table": "docker-bridges",
+    "type": "ifname",
+    "handle": 10,
+    "map": "verdict",
+    "elem": [
+     [
+      "docker0",
+      {
+       "jump": {
+        "target": "nat-postrouting-out__docker0"
+       }
+      }
+     ]
+    ]
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "docker-bridges",
+    "name": "filter-FORWARD",
+    "handle": 1,
+    "type": "filter",
+    "hook": "forward",
+    "prio": 0,
+    "policy": "accept"
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "docker-bridges",
+    "name": "nat-OUTPUT",
+    "handle": 2,
+    "type": "nat",
+    "hook": "output",
+    "prio": -100,
+    "policy": "accept"
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "docker-bridges",
+    "name": "nat-POSTROUTING",
+    "handle": 3,
+    "type": "nat",
+    "hook": "postrouting",
+    "prio": 100,
+    "policy": "accept"
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "docker-bridges",
+    "name": "nat-PREROUTING",
+    "handle": 4,
+    "type": "nat",
+    "hook": "prerouting",
+    "prio": -100,
+    "policy": "accept"
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "docker-bridges",
+    "name": "nat-prerouting-and-output",
+    "handle": 5
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "docker-bridges",
+    "name": "raw-PREROUTING",
+    "handle": 6,
+    "type": "filter",
+    "hook": "prerouting",
+    "prio": -300,
+    "policy": "accept"
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "docker-bridges",
+    "name": "filter-forward-in__docker0",
+    "handle": 27
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "docker-bridges",
+    "name": "filter-forward-out__docker0",
+    "handle": 28
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "docker-bridges",
+    "name": "nat-postrouting-in__docker0",
+    "handle": 29
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "docker-bridges",
+    "name": "nat-postrouting-out__docker0",
+    "handle": 30
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "docker-bridges",
+    "chain": "filter-FORWARD",
+    "handle": 11,
+    "expr": [
+     {
+      "vmap": {
+       "key": {
+        "meta": {
+         "key": "oifname"
+        }
+       },
+       "data": "@filter-forward-in-jumps"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "docker-bridges",
+    "chain": "filter-FORWARD",
+    "handle": 12,
+    "expr": [
+     {
+      "vmap": {
+       "key": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "data": "@filter-forward-out-jumps"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "docker-bridges",
+    "chain": "nat-OUTPUT",
+    "handle": 13,
+    "expr": [
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "daddr"
+        }
+       },
+       "right": {
+        "prefix": {
+         "addr": "127.0.0.0",
+         "len": 8
+        }
+       }
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "fib": {
+         "result": "type",
+         "flags": [
+          "daddr"
+         ]
+        }
+       },
+       "right": "local"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "nat-prerouting-and-output"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "docker-bridges",
+    "chain": "nat-POSTROUTING",
+    "handle": 14,
+    "expr": [
+     {
+      "vmap": {
+       "key": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "data": "@nat-postrouting-out-jumps"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "docker-bridges",
+    "chain": "nat-POSTROUTING",
+    "handle": 15,
+    "expr": [
+     {
+      "vmap": {
+       "key": {
+        "meta": {
+         "key": "oifname"
+        }
+       },
+       "data": "@nat-postrouting-in-jumps"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "docker-bridges",
+    "chain": "nat-PREROUTING",
+    "handle": 16,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "fib": {
+         "result": "type",
+         "flags": [
+          "daddr"
+         ]
+        }
+       },
+       "right": "local"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "nat-prerouting-and-output"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "docker-bridges",
+    "chain": "nat-prerouting-and-output",
+    "handle": 48,
+    "comment": "DNAT",
+    "expr": [
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 8080
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "dnat": {
+       "addr": "172.18.0.2",
+       "port": 80
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "docker-bridges",
+    "chain": "nat-prerouting-and-output",
+    "handle": 49,
+    "comment": "DNAT",
+    "expr": [
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "daddr"
+        }
+       },
+       "right": "127.0.0.1"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 5432
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "dnat": {
+       "addr": "172.18.0.2",
+       "port": 81
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "docker-bridges",
+    "chain": "raw-PREROUTING",
+    "handle": 50,
+    "comment": "DROP DIRECT ACCESS",
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "daddr"
+        }
+       },
+       "right": "172.18.0.2"
+      }
+     },
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "drop": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "docker-bridges",
+    "chain": "raw-PREROUTING",
+    "handle": 51,
+    "comment": "DROP REMOTE LOOPBACK",
+    "expr": [
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "lo"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "daddr"
+        }
+       },
+       "right": "127.0.0.1"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 5432
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "drop": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "docker-bridges",
+    "chain": "filter-forward-in__docker0",
+    "handle": 43,
+    "expr": [
+     {
+      "match": {
+       "op": "in",
+       "left": {
+        "ct": {
+         "key": "state"
+        }
+       },
+       "right": [
+        "established",
+        "related"
+       ]
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "docker-bridges",
+    "chain": "filter-forward-in__docker0",
+    "handle": 44,
+    "comment": "ICC",
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "docker-bridges",
+    "chain": "filter-forward-in__docker0",
+    "handle": 45,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "daddr"
+        }
+       },
+       "right": "172.18.0.2"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 80
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "docker-bridges",
+    "chain": "filter-forward-in__docker0",
+    "handle": 46,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "daddr"
+        }
+       },
+       "right": "172.18.0.2"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 81
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "docker-bridges",
+    "chain": "filter-forward-in__docker0",
+    "handle": 47,
+    "comment": "UNPUBLISHED PORT DROP",
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "drop": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "docker-bridges",
+    "chain": "filter-forward-out__docker0",
+    "handle": 34,
+    "expr": [
+     {
+      "match": {
+       "op": "in",
+       "left": {
+        "ct": {
+         "key": "state"
+        }
+       },
+       "right": [
+        "established",
+        "related"
+       ]
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "docker-bridges",
+    "chain": "filter-forward-out__docker0",
+    "handle": 35,
+    "comment": "OUTGOING",
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "docker-bridges",
+    "chain": "nat-postrouting-out__docker0",
+    "handle": 36,
+    "comment": "MASQUERADE",
+    "expr": [
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "oifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "saddr"
+        }
+       },
+       "right": {
+        "prefix": {
+         "addr": "172.18.0.0",
+         "len": 16
+        }
+       }
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "masquerade": null
+     }
+    ]
+   }
+  },
+  {
+   "table": {
+    "family": "ip6",
+    "name": "docker-bridges",
+    "handle": 7
+   }
+  },
+  {
+   "map": {
+    "family": "ip6",
+    "name": "filter-forward-in-jumps",
+    "table": "docker-bridges",
+    "type": "ifname",
+    "handle": 7,
+    "map": "verdict"
+   }
+  },
+  {
+   "map": {
+    "family": "ip6",
+    "name": "filter-forward-out-jumps",
+    "table": "docker-bridges",
+    "type": "ifname",
+    "handle": 8,
+    "map": "verdict"
+   }
+  },
+  {
+   "map": {
+    "family": "ip6",
+    "name": "nat-postrouting-in-jumps",
+    "table": "docker-bridges",
+    "type": "ifname",
+    "handle": 9,
+    "map": "verdict"
+   }
+  },
+  {
+   "map": {
+    "family": "ip6",
+    "name": "nat-postrouting-out-jumps",
+    "table": "docker-bridges",
+    "type": "ifname",
+    "handle": 10,
+    "map": "verdict"
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "docker-bridges",
+    "name": "filter-FORWARD",
+    "handle": 1,
+    "type": "filter",
+    "hook": "forward",
+    "prio": 0,
+    "policy": "accept"
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "docker-bridges",
+    "name": "nat-OUTPUT",
+    "handle": 2,
+    "type": "nat",
+    "hook": "output",
+    "prio": -100,
+    "policy": "accept"
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "docker-bridges",
+    "name": "nat-POSTROUTING",
+    "handle": 3,
+    "type": "nat",
+    "hook": "postrouting",
+    "prio": 100,
+    "policy": "accept"
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "docker-bridges",
+    "name": "nat-PREROUTING",
+    "handle": 4,
+    "type": "nat",
+    "hook": "prerouting",
+    "prio": -100,
+    "policy": "accept"
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "docker-bridges",
+    "name": "nat-prerouting-and-output",
+    "handle": 5
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "docker-bridges",
+    "name": "raw-PREROUTING",
+    "handle": 6,
+    "type": "filter",
+    "hook": "prerouting",
+    "prio": -300,
+    "policy": "accept"
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "docker-bridges",
+    "chain": "filter-FORWARD",
+    "handle": 11,
+    "expr": [
+     {
+      "vmap": {
+       "key": {
+        "meta": {
+         "key": "oifname"
+        }
+       },
+       "data": "@filter-forward-in-jumps"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "docker-bridges",
+    "chain": "filter-FORWARD",
+    "handle": 12,
+    "expr": [
+     {
+      "vmap": {
+       "key": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "data": "@filter-forward-out-jumps"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "docker-bridges",
+    "chain": "nat-OUTPUT",
+    "handle": 13,
+    "expr": [
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "payload": {
+         "protocol": "ip6",
+         "field": "daddr"
+        }
+       },
+       "right": "::1"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "fib": {
+         "result": "type",
+         "flags": [
+          "daddr"
+         ]
+        }
+       },
+       "right": "local"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "nat-prerouting-and-output"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "docker-bridges",
+    "chain": "nat-POSTROUTING",
+    "handle": 14,
+    "expr": [
+     {
+      "vmap": {
+       "key": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "data": "@nat-postrouting-out-jumps"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "docker-bridges",
+    "chain": "nat-POSTROUTING",
+    "handle": 15,
+    "expr": [
+     {
+      "vmap": {
+       "key": {
+        "meta": {
+         "key": "oifname"
+        }
+       },
+       "data": "@nat-postrouting-in-jumps"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "docker-bridges",
+    "chain": "nat-PREROUTING",
+    "handle": 16,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "fib": {
+         "result": "type",
+         "flags": [
+          "daddr"
+         ]
+        }
+       },
+       "right": "local"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "nat-prerouting-and-output"
+      }
+     }
+    ]
+   }
+  }
+ ]
+}

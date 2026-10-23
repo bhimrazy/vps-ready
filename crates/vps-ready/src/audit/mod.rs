@@ -9,7 +9,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::facts::{AptUpdates, Facts, Firewall, OsFamily};
+use crate::facts::{AptUpdates, Facts, Firewall, OsFamily, PublishedPort};
 
 /// The embedded catalog, as `(file name, contents)`.
 const CATALOG: [(&str, &str); 5] = [
@@ -89,6 +89,11 @@ pub enum Check {
     /// and, when the host has a global IPv6 address, for IPv6. Read from
     /// the nftables ruleset, which needs root.
     InboundDefaultDeny,
+    /// Docker publishes no port on all addresses that the input firewall
+    /// would block: its DNAT sends that traffic down the forward path, past
+    /// ufw and firewalld. Unknown when the user's own forward rules
+    /// (`DOCKER-USER`) may filter it; skipped without Docker.
+    PublishedPorts,
 }
 
 /// The result of checking one control.
@@ -140,9 +145,10 @@ impl Finding {
             (Outcome::Fail { found }, Check::Sysctl { key, one_of }) => {
                 Some(format!("{key} is {found}, expected {}", or_list(one_of)))
             }
-            (Outcome::Fail { found }, Check::AutoUpdates | Check::InboundDefaultDeny) => {
-                Some(found.clone())
-            }
+            (
+                Outcome::Fail { found },
+                Check::AutoUpdates | Check::InboundDefaultDeny | Check::PublishedPorts,
+            ) => Some(found.clone()),
             (Outcome::Unknown { reason } | Outcome::Skip { reason }, _) => Some(reason.clone()),
         }
     }
@@ -308,6 +314,60 @@ fn evaluate(check: &Check, facts: &Facts) -> Outcome {
                 reason: "the firewall ruleset could not be read".to_owned(),
             },
         },
+        Check::PublishedPorts => match &facts.firewall {
+            Some(firewall) => published_ports(firewall, facts.ipv6, facts.docker),
+            None if facts.docker => Outcome::Unknown {
+                reason: "the firewall ruleset could not be read".to_owned(),
+            },
+            None => docker_absent(),
+        },
+    }
+}
+
+fn docker_absent() -> Outcome {
+    Outcome::Skip {
+        reason: "Docker is not installed".to_owned(),
+    }
+}
+
+/// Fails on ports Docker publishes that an input chain would otherwise block.
+fn published_ports(firewall: &Firewall, ipv6: bool, docker: bool) -> Outcome {
+    if firewall.published.is_empty() && !docker {
+        return docker_absent();
+    }
+    let bypassing: Vec<&PublishedPort> = firewall
+        .published
+        .iter()
+        .filter(|p| p.family == "ip" || ipv6)
+        .filter(|p| {
+            firewall
+                .input_chains
+                .iter()
+                .any(|c| c.covers(p.family == "ip6") && c.blocks(&p.proto, p.port))
+        })
+        .collect();
+    let mut unfiltered: Vec<String> = Vec::new();
+    for p in bypassing.iter().filter(|p| !p.filtered) {
+        let name = format!("{}/{}", p.proto, p.port);
+        if !unfiltered.contains(&name) {
+            unfiltered.push(name);
+        }
+    }
+    if !unfiltered.is_empty() {
+        Outcome::Fail {
+            found: format!(
+                "Docker publishes {} on all addresses, which the firewall would otherwise block",
+                unfiltered.join(", ")
+            ),
+        }
+    } else if bypassing.is_empty() {
+        Outcome::Pass
+    } else {
+        Outcome::Unknown {
+            reason: "Docker publishes ports the firewall would block; your DOCKER-USER or \
+                     forward rules may filter them, which vps-ready cannot judge"
+                .to_owned(),
+        }
     }
 }
 
@@ -423,7 +483,9 @@ mod tests {
                     assert!(!one_of.is_empty(), "{}", c.id);
                 }
                 Check::AutoUpdates => assert!(facts.updates.is_some(), "{}", c.id),
-                Check::InboundDefaultDeny => assert!(facts.firewall.is_some(), "{}", c.id),
+                Check::InboundDefaultDeny | Check::PublishedPorts => {
+                    assert!(facts.firewall.is_some(), "{}", c.id);
+                }
             }
         }
     }
@@ -590,7 +652,9 @@ mod tests {
                 table: "filter".to_owned(),
                 name: "input".to_owned(),
                 drops_unmatched: true,
+                open_ports: Vec::new(),
             }],
+            ..Firewall::default()
         });
         let report = run(catalog().unwrap(), &facts);
         let sysctl_controls = report
@@ -599,7 +663,8 @@ mod tests {
             .filter(|f| matches!(f.control.check, Check::Sysctl { .. }))
             .count();
         assert!(sysctl_controls > 0);
-        assert_eq!(report.summary.skipped, sysctl_controls);
+        // And FW-002: the fixture has no Docker.
+        assert_eq!(report.summary.skipped, sysctl_controls + 1);
         assert!(report.all_passed(), "{:?}", report.summary);
     }
 
@@ -683,11 +748,13 @@ mod tests {
             table: "t".to_owned(),
             name: "input".to_owned(),
             drops_unmatched,
+            open_ports: Vec::new(),
         };
         let mut facts = host("debian-13", &[]);
         let mut eval = |chains: Vec<crate::facts::InputChain>, ipv6| {
             facts.firewall = Some(Firewall {
                 input_chains: chains,
+                ..Firewall::default()
             });
             facts.ipv6 = ipv6;
             evaluate(&Check::InboundDefaultDeny, &facts)
@@ -723,6 +790,76 @@ mod tests {
     }
 
     #[test]
+    fn evaluates_published_ports() {
+        // An input chain that drops all but tcp/22, as `ufw allow 22/tcp`.
+        let ufw = crate::facts::InputChain {
+            family: "inet".to_owned(),
+            table: "t".to_owned(),
+            name: "input".to_owned(),
+            drops_unmatched: true,
+            open_ports: vec![crate::facts::Ports {
+                proto: "tcp".to_owned(),
+                first: 22,
+                last: 22,
+            }],
+        };
+        let port = |family: &str, port, filtered| PublishedPort {
+            family: family.to_owned(),
+            proto: "tcp".to_owned(),
+            port,
+            filtered,
+        };
+        let mut facts = host("debian-13", &[]);
+        facts.docker = true;
+        let mut eval = |published: Vec<PublishedPort>, ipv6| {
+            facts.firewall = Some(Firewall {
+                input_chains: vec![ufw.clone()],
+                published,
+            });
+            facts.ipv6 = ipv6;
+            evaluate(&Check::PublishedPorts, &facts)
+        };
+        assert_eq!(eval(vec![], false), Outcome::Pass);
+        // A port the firewall allows anyway is not a bypass.
+        assert_eq!(eval(vec![port("ip", 22, false)], false), Outcome::Pass);
+        assert_eq!(
+            eval(
+                vec![port("ip", 5432, false), port("ip6", 5432, false)],
+                true
+            ),
+            Outcome::Fail {
+                found: "Docker publishes tcp/5432 on all addresses, which the firewall \
+                        would otherwise block"
+                    .to_owned()
+            }
+        );
+        // IPv6 counts only when the host has a global IPv6 address.
+        assert_eq!(eval(vec![port("ip6", 5432, false)], false), Outcome::Pass);
+        assert!(matches!(
+            eval(vec![port("ip", 5432, true)], false),
+            Outcome::Unknown { .. }
+        ));
+
+        // No input chain drops by default: FW-001 reports it, not FW-002.
+        facts.firewall = Some(Firewall {
+            input_chains: vec![],
+            published: vec![port("ip", 5432, false)],
+        });
+        assert_eq!(evaluate(&Check::PublishedPorts, &facts), Outcome::Pass);
+
+        facts.firewall = None;
+        assert!(matches!(
+            evaluate(&Check::PublishedPorts, &facts),
+            Outcome::Unknown { .. }
+        ));
+        facts.docker = false;
+        assert!(matches!(
+            evaluate(&Check::PublishedPorts, &facts),
+            Outcome::Skip { .. }
+        ));
+    }
+
+    #[test]
     fn report_json_flattens_control_and_outcome() {
         let report = run(catalog().unwrap(), &host("debian-12", &[]));
         let json = serde_json::to_value(&report.findings[1]).unwrap();
@@ -746,6 +883,6 @@ mod tests {
             .filter(|f| matches!(f.control.check, Check::Sysctl { .. }))
             .count();
         let summary = serde_json::to_value(report.summary).unwrap();
-        assert_eq!(summary["skipped"], sysctl_controls);
+        assert_eq!(summary["skipped"], sysctl_controls + 1);
     }
 }
