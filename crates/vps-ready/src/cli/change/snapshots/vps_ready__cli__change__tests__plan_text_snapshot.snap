@@ -3,7 +3,7 @@ source: crates/vps-ready/src/cli/change/tests.rs
 expression: out
 ---
 kernel.sysctl: Harden kernel settings (fixes KRN-001, KRN-002, KRN-003, KRN-007, KRN-008, NET-002)
-  + /etc/sysctl.d/90-vps-ready.conf (0644 0:0)                            reversible
+  + /etc/sysctl.d/90-vps-ready.conf (mode 0644, root:root)                reversible
       @@ -0,0 +1,8 @@
       +# Written by vps-ready (kernel.sysctl). `vps-ready rollback --last`
       +# restores the previous state; edits here are replaced by the next apply.
@@ -20,11 +20,11 @@ kernel.sysctl: Harden kernel settings (fixes KRN-001, KRN-002, KRN-003, KRN-007,
   ~ fs.protected_regular 0 -> 1                                           reversible
   ~ net.ipv4.conf.all.accept_source_route 1 -> 0                          reversible
 updates.auto: Install security updates automatically (fixes UPD-001)
-  + /etc/apt/apt.conf.d/52vps-ready (0644 0:0)                            reversible
+  + /etc/apt/apt.conf.d/52vps-ready (mode 0644, root:root)                reversible
       @@ -0,0 +1,3 @@
       +APT::Periodic::Enable "1";
       +APT::Periodic::Update-Package-Lists "1";
       +APT::Periodic::Unattended-Upgrade "1";
 
-8 changes in 2 modules.
+8 changes in 2 modules: 2 files, 6 kernel settings.
 Run `sudo vps-ready apply` to make them.

@@ -141,3 +141,61 @@ fn unknown_module_is_a_usage_error() {
         .code(2)
         .stderr(predicate::str::contains("invalid value 'nope'"));
 }
+
+#[test]
+fn bare_command_prints_help_with_the_first_run() {
+    vps_ready()
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("Usage: vps-ready"))
+        .stderr(predicate::str::ends_with(
+            "Typical first run, as root:\n\
+             \x20 vps-ready detect          what this server is\n\
+             \x20 vps-ready audit           what fails and why\n\
+             \x20 vps-ready plan            what apply would change (read-only)\n\
+             \x20 vps-ready apply           make the changes; undo with `rollback --last`\n",
+        ));
+}
+
+/// Notices are plain lines by default and log lines with `-v`.
+#[test]
+fn notices_have_no_log_labels_by_default() {
+    let root = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/testdata/os-release/ubuntu-24.04"
+    );
+    vps_ready()
+        .args(["detect", "--root", root])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("vps-ready: nft not found"))
+        .stderr(predicate::str::contains("WARN").not());
+    vps_ready()
+        .args(["detect", "-v", "--root", root])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("WARN nft not found"))
+        .stderr(predicate::str::contains("vps-ready: ").not());
+}
+
+/// `apply --dry-run` is `plan`: same output, same exit code, no root needed.
+#[test]
+fn apply_dry_run_is_plan() {
+    for args in [&[][..], &["--module", "kernel.sysctl"][..]] {
+        let plan = vps_ready().arg("plan").args(args).output().unwrap();
+        for flag in ["--dry-run", "-n"] {
+            let dry = vps_ready()
+                .args(["apply", flag])
+                .args(args)
+                .output()
+                .unwrap();
+            assert_eq!(dry.status.code(), plan.status.code());
+            assert_eq!(dry.stdout, plan.stdout);
+        }
+    }
+    vps_ready()
+        .args(["apply", "--dry-run", "--yes"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("cannot be used with"));
+}

@@ -63,7 +63,8 @@ pub(super) fn plan(
     let n = plan.steps().count();
     if n > 0 {
         let args: String = ids.iter().map(|id| format!(" --module {id}")).collect();
-        writeln!(out, "Run `sudo vps-ready apply{args}` to make them.")?;
+        let them = if n == 1 { "it" } else { "them" };
+        writeln!(out, "Run `sudo vps-ready apply{args}` to make {them}.")?;
     }
     Ok(0)
 }
@@ -120,13 +121,16 @@ pub(super) fn apply(
     match engine.apply(&plan, &mut |p| print_progress(err, &p))? {
         ApplyOutcome::NothingToDo => writeln!(out, "Nothing to do.")?,
         ApplyOutcome::Applied { txn } => {
+            let journal = host.state_dir.join("txn").join(&txn);
             writeln!(
                 out,
-                "Applied {n} {} (transaction {txn}). Undo with `sudo vps-ready rollback --last`.",
-                plural(n, "change")
+                "Applied {n} {} (transaction {txn}, journal {}). \
+                 Undo with `sudo vps-ready rollback --last`.",
+                plural(n, "change"),
+                journal.display()
             )?;
             if let Err(e) = audit_fixed(host, &plan, out) {
-                tracing::warn!("could not audit after apply: {e:#}");
+                writeln!(err, "vps-ready: could not audit after apply: {e:#}")?;
             }
         }
         ApplyOutcome::RolledBack { txn, reason, cause } => {
@@ -243,13 +247,15 @@ fn audit_fixed(host: &Host, plan: &Plan, out: &mut dyn Write) -> anyhow::Result<
 ///
 /// ```text
 /// kernel.sysctl: Harden kernel settings (fixes KRN-001, NET-002)
-///   + /etc/sysctl.d/90-vps-ready.conf (0644 0:0)                          reversible
+///   + /etc/sysctl.d/90-vps-ready.conf (mode 0644, root:root)              reversible
 ///       @@ -0,0 +1,3 @@
 ///       +kernel.kptr_restrict = 1
 ///   ~ kernel.kptr_restrict 0 -> 1                                         reversible
 ///
-/// 2 changes in 1 module.
+/// 2 changes in 1 module: 1 file, 1 kernel setting.
 /// ```
+///
+/// A `partial` step adds a footnote line before the final one.
 fn print_plan(
     out: &mut dyn Write,
     plan: &Plan,
@@ -289,11 +295,14 @@ fn print_plan(
             let summary = step.change.summary.as_str();
             let (sign, text) = match &step.resource {
                 Resource::File(_) => match summary.strip_prefix("create ") {
-                    Some(rest) => ('+', rest),
-                    None => ('~', summary.strip_prefix("update ").unwrap_or(summary)),
+                    Some(rest) => ('+', show_owner(rest)),
+                    None => (
+                        '~',
+                        show_owner(summary.strip_prefix("update ").unwrap_or(summary)),
+                    ),
                 },
-                Resource::Sysctl(_) => ('~', summary),
-                Resource::Package(_) => ('+', summary),
+                Resource::Sysctl(_) => ('~', summary.to_owned()),
+                Resource::Package(_) => ('+', summary.to_owned()),
             };
             let rev = match step.change.reversibility {
                 Reversibility::Reversible => "reversible",
@@ -329,11 +338,60 @@ fn print_plan(
         let modules = plan.changed_modules().len();
         writeln!(
             out,
-            "\n{n} {} in {modules} {}.",
+            "\n{n} {} in {modules} {}: {}.",
             plural(n, "change"),
-            plural(modules, "module")
-        )
+            plural(modules, "module"),
+            kinds(plan)
+        )?;
+        if plan
+            .steps()
+            .any(|s| s.change.reversibility == Reversibility::Partial)
+        {
+            writeln!(
+                out,
+                "partial: rollback restores the files but leaves installed packages in place."
+            )?;
+        }
+        Ok(())
     }
+}
+
+/// The steps by kind, e.g. `2 files, 6 kernel settings, 1 package`.
+fn kinds(plan: &Plan) -> String {
+    let count = |f: fn(&Resource) -> bool| plan.steps().filter(|s| f(&s.resource)).count();
+    [
+        (count(|r| matches!(r, Resource::File(_))), "file"),
+        (
+            count(|r| matches!(r, Resource::Sysctl(_))),
+            "kernel setting",
+        ),
+        (count(|r| matches!(r, Resource::Package(_))), "package"),
+    ]
+    .into_iter()
+    .filter(|(n, _)| *n > 0)
+    .map(|(n, word)| format!("{n} {}", plural(n, word)))
+    .collect::<Vec<_>>()
+    .join(", ")
+}
+
+/// Spells out the owner of a file summary: `(0644 0:0)` becomes
+/// `(mode 0644, root:root)`; other owners keep their numbers.
+fn show_owner(summary: &str) -> String {
+    let Some((head, tail)) = summary.split_once(" (") else {
+        return summary.to_owned();
+    };
+    let Some(owners) = tail.strip_suffix(')') else {
+        return summary.to_owned();
+    };
+    let spelled: Vec<String> = owners
+        .split(" -> ")
+        .map(|o| match o.split_once(' ') {
+            Some((mode, "0:0")) => format!("mode {mode}, root:root"),
+            Some((mode, owner)) => format!("mode {mode}, {owner}"),
+            None => o.to_owned(),
+        })
+        .collect();
+    format!("{head} ({})", spelled.join(" -> "))
 }
 
 /// One line of progress, e.g. `[2/8] set kernel.kptr_restrict 0 -> 1`.
