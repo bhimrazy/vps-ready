@@ -91,10 +91,26 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
           ls -l /dev/kvm
+      # The Azure apt mirror is sometimes slow (8 minutes for QEMU), so the
+      # .deb files are cached per runner image version.
+      - id: runner
+        run: echo "image=$ImageOS-$ImageVersion" >>"$GITHUB_OUTPUT"
+      - id: debs
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: debs
+          key: vm-debs-${{ steps.runner.outputs.image }}
       - name: Install QEMU
         run: |
+          mkdir -p debs/partial
           sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends qemu-system-x86 qemu-utils cloud-image-utils
+          sudo apt-get install -y -q --no-install-recommends -o Dir::Cache::Archives="$PWD/debs" \
+            qemu-system-x86 qemu-utils cloud-image-utils
+      - if: steps.debs.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: debs
+          key: vm-debs-${{ steps.runner.outputs.image }}
       # Restore and save are separate so that a failing test still caches the image.
       - id: image
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

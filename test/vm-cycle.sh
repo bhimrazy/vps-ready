@@ -96,7 +96,11 @@ Host vm
 EOF
 fi
 
-vm() { ssh -F "$sshcfg" -o BatchMode=yes -o ConnectTimeout=5 vm "$@"; }
+# The keepalive ends a session the guest dropped without closing it.
+vm() {
+  ssh -F "$sshcfg" -o BatchMode=yes -o ConnectTimeout=5 \
+    -o ServerAliveInterval=5 -o ServerAliveCountMax=3 vm "$@"
+}
 vr() { vm sudo vps-ready "$@"; }
 
 # wait_ssh <seconds>: wait until a login works.
@@ -113,12 +117,14 @@ boot_id() { vm cat /proc/sys/kernel/random/boot_id; }
 # Reboot and wait until the VM is back with a new boot ID.
 reboot_vm() {
   old=$(boot_id)
-  vm sudo systemctl reboot || true
+  # Reboot a second later so that this SSH session ends first.
+  vm sudo systemd-run -q --on-active=1 systemctl reboot
   i=0
   until new=$(boot_id 2>/dev/null) && [ "$new" != "$old" ]; do
     i=$((i + 5)); [ "$i" -lt 300 ] || die "VM did not come back after reboot"
     sleep 5
   done
+  echo "back after about $i s"
 }
 
 # Weak values for keys that cloud images already harden, so the module has
