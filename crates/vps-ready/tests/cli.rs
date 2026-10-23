@@ -168,13 +168,13 @@ fn notices_have_no_log_labels_by_default() {
         .args(["detect", "--root", root])
         .assert()
         .success()
-        .stderr(predicate::str::contains("vps-ready: nft not found"))
+        .stderr(predicate::str::contains("vps-ready: /proc/sys not found"))
         .stderr(predicate::str::contains("WARN").not());
     vps_ready()
         .args(["detect", "-v", "--root", root])
         .assert()
         .success()
-        .stderr(predicate::str::contains("WARN nft not found"))
+        .stderr(predicate::str::contains("WARN /proc/sys not found"))
         .stderr(predicate::str::contains("vps-ready: ").not());
 }
 
