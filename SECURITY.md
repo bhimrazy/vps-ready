@@ -32,10 +32,11 @@ require an attacker who is already root.
 
 | Version | Supported |
 | ------- | --------- |
-| `0.1.x` | best effort: fixes ship in the next 0.1.x release |
-| `0.1.0-alpha.x` (pre-release) | no: upgrade to 0.1.x |
+| `0.2.x` | best effort: fixes ship in the next 0.2.x release |
+| `0.1.x` | no: upgrade to 0.2.x |
+| `0.1.0-alpha.x` (pre-release) | no: upgrade to 0.2.x |
 
-Once v0.1.0 is released, the latest minor version receives security fixes.
+The latest minor version receives security fixes.
 
 ## Verifying a release
 

@@ -99,9 +99,14 @@ pub(crate) fn detect(fs: &dyn Fs, notices: &mut Vec<String>) -> Sysctl {
     sysctl.ipv4_conf = ipv4_conf(fs, notices);
     // One notice, not one per file: on such kernels it is always a group.
     if !sysctl.unreadable.is_empty() {
+        let (noun, verb, them) = if sysctl.unreadable.len() == 1 {
+            ("setting", "is", "it")
+        } else {
+            ("settings", "are", "them")
+        };
         notices.push(format!(
-            "{} kernel settings are readable only by root on this kernel ({}); \
-             run with sudo to check them",
+            "{} kernel {noun} {verb} readable only by root on this kernel ({}); \
+             run with sudo to check {them}",
             sysctl.unreadable.len(),
             sysctl.unreadable.join(", ")
         ));
@@ -267,6 +272,20 @@ mod tests {
         assert!(!sysctl.is_unreadable("kernel.dmesg_restrict"));
         assert_eq!(notices.len(), 1, "{notices:?}");
         assert!(notices[0].starts_with("2 kernel settings are readable only by root"));
+    }
+
+    #[test]
+    fn one_unreadable_setting_is_singular() {
+        let fs = DenyFs {
+            inner: FakeFs::new()
+                .with_file("/proc/sys/kernel/kptr_restrict", "1\n")
+                .with_file("/proc/sys/fs/protected_symlinks", "1\n"),
+            denied: &["/proc/sys/fs/protected_symlinks"],
+        };
+        let mut notices = Vec::new();
+        detect(&fs, &mut notices);
+        assert!(notices[0].starts_with("1 kernel setting is readable only by root"));
+        assert!(notices[0].ends_with("run with sudo to check it"));
     }
 
     #[test]

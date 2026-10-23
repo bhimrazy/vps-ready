@@ -7,12 +7,12 @@
 
 <div align="center">
 
-**One static binary to audit a fresh Linux server, and soon to harden it without locking you out.**
+**One static binary to audit a fresh Linux server and harden it, with rollback, and soon without locking you out.**
 
 <pre>
 ✅ Detects distro, VM, container     ✅ Audits with stable control IDs    ✅ x86_64 and arm64
 ✅ Reads the effective SSH config    ✅ JSON output, CI exit codes        ✅ Signed releases 
-✅ Maps open ports to processes      ✅ Read-only by design               ✅ No telemetry    
+✅ Maps open ports to processes      ✅ Plan, apply and rollback          ✅ No telemetry    
 </pre>
 
 <p>
@@ -26,7 +26,7 @@
 </div>
 
 > [!NOTE]
-> vps-ready is at **v0.1**. `detect` and `audit` (SSH, kernel, network, automatic update and firewall controls so far) work today; hardening arrives milestone by milestone, and there may be breaking changes before 1.0.
+> vps-ready is at **v0.2**. `detect` and `audit` (28 controls so far), and `plan`, `apply` and `rollback` for two modules (`kernel.sysctl` and `updates.auto`) work today. SSH and firewall hardening, with the dead-man switch, arrives in M3, and there may be breaking changes before 1.0.
 
 ## Why
 
@@ -39,11 +39,14 @@ Auditors like Lynis tell you what is wrong but fix nothing. Ansible roles fix th
 On the server, as root. Installation is three steps on purpose: download, read, run.
 
 ```console
-# curl -fsSLO https://github.com/bhimrazy/vps-ready/releases/download/v0.1.0/install.sh
+# curl -fsSLO https://github.com/bhimrazy/vps-ready/releases/download/v0.2.0/install.sh
 # less install.sh
 # sh install.sh        # checks the SHA-256, verifies the signature if gh or cosign is installed
 # vps-ready detect
 # vps-ready audit
+# vps-ready plan                  # what would change, and why; nothing is written
+# vps-ready apply                 # shows the plan, asks, then applies
+# vps-ready rollback --last       # restores the previous state
 ```
 
 <p align="center">
@@ -59,10 +62,10 @@ The command is also installed as `vpsready`, without the hyphen. With Rust insta
 |---|---|---|
 | `vps-ready detect` | Read-only facts: distro, init system, virtualization, effective SSH config, listening ports, whether Docker is present | available |
 | `vps-ready audit` | Checks the host against controls with stable IDs (for example `SSH-002`), each with the reason it matters. Text or JSON; exits 0 only when no control fails or is unknown | available |
-| `vps-ready plan` | A diff of every file and setting that would change, with a one-line reason for each | M2 |
-| `vps-ready apply` | Snapshots originals, validates, writes atomically, reloads services, and arms a dead-man timer for anything that could lock you out | M2, M3 |
+| `vps-ready plan` | A diff of every file and setting that would change, with a one-line reason for each | available |
+| `vps-ready apply` | Snapshots originals, validates, writes atomically and rolls back if anything fails. Available for `kernel.sysctl` and `updates.auto`; the dead-man timer for anything that could lock you out is M3 | available, M3 |
 | `vps-ready confirm` | Run from a **new** SSH session to prove the new configuration works. Without it, the change reverts automatically | M3 |
-| `vps-ready rollback` | Restores the previous state from the transaction journal | M2 |
+| `vps-ready rollback` | Restores the previous state from the transaction journal (`--last` or `--txn ID`); `vps-ready history` lists transactions | available |
 | `vps-ready export cloud-init` | Turns the profile you chose into `user-data` for your next servers | M5 |
 
 Hardening will be grouped into modules you can toggle: base system, admin user, SSH, firewall, brute-force protection, automatic updates, sysctl, logging, and deployment readiness (Docker done right, deploy user, reverse proxy, Tailscale, backups). Three profiles cover most people: **minimal**, **web** and **paranoid**.
@@ -80,7 +83,7 @@ If any step inside `apply` fails, the engine restores the snapshots in reverse o
 
 ## Safety guarantees
 
-The engine (M2 and M3) is built around these rules, so they hold for every module rather than being left to each one. Today the tool is read-only.
+The engine (M2 and M3) is built around these rules, so they hold for every module rather than being left to each one. Today `apply` changes only kernel settings and automatic updates, and none of that can lock you out; the SSH and firewall rules below are enforced from M3.
 
 - **Never lock the user out.** Passwords and root login are not disabled until a keyed sudo user has logged in from a fresh session. The firewall always allows the SSH port that is actually in use.
 - **Confirm from a new connection.** Your open terminal proves nothing, because sshd reloads and conntrack keep existing sessions alive. The dead-man timer reverts SSH and firewall changes unless you confirm from a new session, even if the tool or the terminal is gone, and even across a reboot.
@@ -94,7 +97,7 @@ The engine (M2 and M3) is built around these rules, so they hold for every modul
 
 | Family | Distros | Firewall | Init | Status |
 |---|---|---|---|---|
-| Debian | Ubuntu 22.04, 24.04, 26.04; Debian 12, 13 | ufw or nftables | systemd | first (v0.1) |
+| Debian | Ubuntu 22.04, 24.04, 26.04; Debian 12, 13 | ufw or nftables | systemd | first (v0.2) |
 | RHEL | Rocky and Alma 9, 10; Fedora | firewalld | systemd | v0.6 |
 | Alpine | 3.2x | nftables | OpenRC | v0.6 |
 
@@ -111,7 +114,7 @@ Architectures: x86_64 and aarch64, as static musl binaries. Windows, BSD, Kubern
 | [Testing strategy](docs/testing.md) | Unit tests with fakes, systemd containers, real VMs, nightly cloud runs |
 | [Decisions](docs/decisions.md) | What is decided and why, and what is still open |
 
-The roadmap lives in the [GitHub milestones](https://github.com/bhimrazy/vps-ready/milestones): M0 skeleton, M1 read-only `detect` and `audit` (v0.1.0), M2 engine and safe modules, M3 SSH, firewall and dead-man switch, M4 interactive wizard, M5 deployment readiness, M6 more distros.
+The roadmap lives in the [GitHub milestones](https://github.com/bhimrazy/vps-ready/milestones): M0 skeleton, M1 read-only `detect` and `audit` (v0.1.0), M2 engine and safe modules (v0.2.0), M3 SSH, firewall and dead-man switch, M4 interactive wizard, M5 deployment readiness, M6 more distros.
 
 ## Development
 
