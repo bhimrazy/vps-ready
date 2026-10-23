@@ -39,3 +39,26 @@ docker build -f test/images/Containerfile --build-arg BASE=ubuntu:24.04 -t vps-r
 test/container-audit.sh ubuntu-24.04 target/aarch64-unknown-linux-musl/release/vps-ready
 test/container-apply.sh ubuntu-24.04 target/aarch64-unknown-linux-musl/release/vps-ready
 ```
+
+## VM tests
+
+`test/vm-cycle.sh <distro> <binary> <image>` boots a cloud image with QEMU and
+KVM (2 vCPUs, 2 GiB, a copy-on-write overlay over the image), seeds a user
+and a throwaway SSH key with cloud-init, and drives the VM over SSH. It runs
+`kernel.sysctl` apply and rollback in the same boot and across a reboot, then
+the `updates.auto` cycle. It needs `/dev/kvm`, `qemu-system-x86_64`,
+`qemu-img`, `cloud-localds` (cloud-image-utils), `ssh` and `jq`. The `vm`
+workflow pins the images and runs it on four distros.
+
+Without KVM, for example on a Mac, pass `-` as the image and point
+`VM_SSH_CONFIG` at an ssh config whose `Host vm` reaches a user with
+passwordless sudo, such as a Lima VM's. The cycle changes that VM's kernel
+settings and apt configuration, so use a throwaway one.
+
+```sh
+limactl create --name=vpsr-dev --cpus=1 --memory=1 --disk=10 --mount-none template:ubuntu-24.04
+limactl start vpsr-dev
+sed -e 's/^Host .*/Host vm/' -e '/Control/d' ~/.lima/vpsr-dev/ssh.config >/tmp/vm.ssh_config
+VM_SSH_CONFIG=/tmp/vm.ssh_config test/vm-cycle.sh ubuntu-24.04 target/aarch64-unknown-linux-musl/release/vps-ready -
+limactl delete --force vpsr-dev
+```

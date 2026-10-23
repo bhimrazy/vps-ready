@@ -51,6 +51,7 @@ jobs:
           retention-days: 7
 
   vm:
+    name: vm (${{ matrix.distro }})
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 20
