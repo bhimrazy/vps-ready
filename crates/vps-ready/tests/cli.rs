@@ -76,3 +76,68 @@ fn unknown_command_is_a_usage_error() {
         .code(2)
         .stderr(predicate::str::contains("unrecognized subcommand"));
 }
+
+/// Whether these tests run as root, read as `vps-ready` reads it.
+fn is_root() -> bool {
+    std::fs::read_to_string("/proc/self/status").is_ok_and(|s| {
+        s.lines()
+            .find_map(|l| l.strip_prefix("Uid:"))
+            .and_then(|ids| ids.split_whitespace().nth(1))
+            == Some("0")
+    })
+}
+
+#[test]
+fn apply_without_root_exits_2_and_changes_nothing() {
+    if is_root() {
+        return;
+    }
+    let state = std::path::Path::new("/var/lib/vps-ready");
+    let existed = state.exists();
+    vps_ready()
+        .args(["apply", "--yes"])
+        .assert()
+        .code(2)
+        .stdout("")
+        .stderr("error: apply needs root; run it with sudo\n");
+    assert_eq!(state.exists(), existed);
+}
+
+#[test]
+fn plan_json_parses() {
+    let out = vps_ready()
+        .args(["plan", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    let modules = json["modules"].as_array().unwrap();
+    assert!(modules.iter().any(|m| m["id"] == "kernel.sysctl"));
+}
+
+#[test]
+fn rollback_needs_last_or_txn() {
+    vps_ready()
+        .arg("rollback")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "required arguments were not provided",
+        ));
+    vps_ready()
+        .args(["rollback", "--last", "--txn", "20261023T114246Z"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("cannot be used with"));
+}
+
+#[test]
+fn unknown_module_is_a_usage_error() {
+    vps_ready()
+        .args(["plan", "--module", "nope"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("invalid value 'nope'"));
+}

@@ -1,0 +1,46 @@
+---
+source: crates/vps-ready/src/cli/change/tests.rs
+expression: applied
+---
+kernel.sysctl: Harden kernel settings (fixes KRN-001, KRN-002, KRN-003, KRN-007, KRN-008, NET-002)
+  + /etc/sysctl.d/90-vps-ready.conf (0644 0:0)                            reversible
+      @@ -0,0 +1,8 @@
+      +# Written by vps-ready (kernel.sysctl). `vps-ready rollback` restores the
+      +# previous state; edits here are replaced by the next apply.
+      +kernel.kptr_restrict = 1
+      +kernel.dmesg_restrict = 1
+      +kernel.unprivileged_bpf_disabled = 2
+      +fs.protected_fifos = 1
+      +fs.protected_regular = 1
+      +net.ipv4.conf.all.accept_source_route = 0
+  ~ kernel.kptr_restrict 0 -> 1                                           reversible
+  ~ kernel.dmesg_restrict 0 -> 1                                          reversible
+  ~ kernel.unprivileged_bpf_disabled 0 -> 2                               reversible
+  ~ fs.protected_fifos 0 -> 1                                             reversible
+  ~ fs.protected_regular 0 -> 1                                           reversible
+  ~ net.ipv4.conf.all.accept_source_route 1 -> 0                          reversible
+
+7 changes in 1 module.
+Applied 7 changes (transaction <txn-1>). Undo with `sudo vps-ready rollback --last`.
+
+Audit of this host after apply: 14 controls
+
+STATUS   ID       SEVERITY  CONTROL
+PASS     KRN-001  low       Kernel pointers hidden
+PASS     KRN-002  low       Kernel log restricted to root
+PASS     KRN-003  medium    Unprivileged BPF disabled
+UNKNOWN  KRN-004  medium    ptrace scope restricted
+                            kernel.yama.ptrace_scope not found under /proc/sys
+PASS     KRN-005  medium    Symlink protection enabled
+PASS     KRN-006  medium    Hardlink protection enabled
+PASS     KRN-007  low       FIFO protection enabled
+PASS     KRN-008  low       Regular file protection enabled
+PASS     KRN-009  low       Setuid core dumps restricted
+PASS     KRN-010  medium    Address space randomization fully enabled
+PASS     KRN-011  low       Kernel profiling restricted
+PASS     NET-001  low       TCP SYN cookies enabled
+PASS     NET-002  low       Source-routed packets rejected
+PASS     NET-003  low       Broadcast pings ignored
+
+13 passed, 0 failed, 1 unknown
+Unknown controls could not be checked; the warnings on stderr say why.
