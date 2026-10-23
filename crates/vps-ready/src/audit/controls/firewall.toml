@@ -7,3 +7,10 @@ severity = "medium"
 title = "Incoming traffic denied by default"
 why = "Without it, any service listening on all addresses, such as a database left at its defaults, is reachable from the internet. A firewall at your provider also protects the server, but this check cannot see it."
 check = { kind = "inbound_default_deny" }
+
+[[control]]
+id = "FW-002"
+severity = "medium"
+title = "Container ports do not bypass the firewall"
+why = "Traffic to a port Docker publishes is forwarded to the container and skips the input rules of ufw and firewalld: `-p 5432:5432` makes a database reachable from anywhere even when the firewall blocks port 5432. Publish on 127.0.0.1 (`-p 127.0.0.1:5432:5432`) or filter forwarded traffic yourself, e.g. in the DOCKER-USER chain."
+check = { kind = "published_ports" }

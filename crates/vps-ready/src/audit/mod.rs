@@ -89,6 +89,13 @@ pub enum Check {
     /// and, when the host has a global IPv6 address, for IPv6. Read from
     /// the nftables ruleset, which needs root.
     InboundDefaultDeny,
+    /// Docker publishes no port that the input firewall would block: its
+    /// DNAT sends that traffic down the forward path, past the input rules
+    /// of ufw and firewalld. Unknown when the user's own forward rules
+    /// (`DOCKER-USER`) may filter it, or a rule for one input interface or
+    /// one whose ports nft does not show may allow it; skipped without
+    /// Docker.
+    PublishedPorts,
 }
 
 /// The result of checking one control.
@@ -140,9 +147,10 @@ impl Finding {
             (Outcome::Fail { found }, Check::Sysctl { key, one_of }) => {
                 Some(format!("{key} is {found}, expected {}", or_list(one_of)))
             }
-            (Outcome::Fail { found }, Check::AutoUpdates | Check::InboundDefaultDeny) => {
-                Some(found.clone())
-            }
+            (
+                Outcome::Fail { found },
+                Check::AutoUpdates | Check::InboundDefaultDeny | Check::PublishedPorts,
+            ) => Some(found.clone()),
             (Outcome::Unknown { reason } | Outcome::Skip { reason }, _) => Some(reason.clone()),
         }
     }
@@ -308,7 +316,109 @@ fn evaluate(check: &Check, facts: &Facts) -> Outcome {
                 reason: "the firewall ruleset could not be read".to_owned(),
             },
         },
+        Check::PublishedPorts => match &facts.firewall {
+            Some(firewall) => published_ports(firewall, facts.ipv6, facts.docker),
+            None if facts.docker => Outcome::Unknown {
+                reason: "the firewall ruleset could not be read".to_owned(),
+            },
+            None => docker_absent(),
+        },
     }
+}
+
+fn docker_absent() -> Outcome {
+    Outcome::Skip {
+        reason: "Docker is not installed".to_owned(),
+    }
+}
+
+/// Fails on ports Docker publishes that an input chain would otherwise block.
+fn published_ports(firewall: &Firewall, ipv6: bool, docker: bool) -> Outcome {
+    if firewall.published.is_empty() && !docker {
+        return docker_absent();
+    }
+    let (mut bypassing, mut maybe, mut user_filtered) = (Vec::new(), Vec::new(), Vec::new());
+    for p in firewall
+        .published
+        .iter()
+        .filter(|p| p.family == "ip" || ipv6)
+    {
+        let verdicts: Vec<Option<bool>> = firewall
+            .input_chains
+            .iter()
+            .filter(|c| c.covers(p.family == "ip6"))
+            .map(|c| c.blocks(&p.proto, p.port))
+            .collect();
+        let port = (p.proto.as_str(), p.port, p.address.as_deref());
+        if verdicts.contains(&Some(true)) {
+            if p.filtered {
+                user_filtered.push(port);
+            } else {
+                bypassing.push(port);
+            }
+        } else if verdicts.contains(&None) {
+            maybe.push(port);
+        }
+    }
+    if !bypassing.is_empty() {
+        Outcome::Fail {
+            found: format!(
+                "Docker publishes ports the firewall would otherwise block: {}",
+                port_list(&bypassing)
+            ),
+        }
+    } else if !maybe.is_empty() {
+        Outcome::Unknown {
+            reason: format!(
+                "a firewall rule for one input interface, or one whose ports nft does not \
+                 show (iptables multiport), may allow ports Docker publishes: {}",
+                port_list(&maybe)
+            ),
+        }
+    } else if !user_filtered.is_empty() {
+        Outcome::Unknown {
+            reason: format!(
+                "your DOCKER-USER or forward rules, which vps-ready cannot judge, may filter \
+                 ports Docker publishes past the firewall: {}",
+                port_list(&user_filtered)
+            ),
+        }
+    } else {
+        Outcome::Pass
+    }
+}
+
+/// `tcp/80, udp/60000-60005, tcp/5432 on 10.8.0.1`: sorted, deduplicated,
+/// consecutive ports on the same address joined.
+fn port_list(ports: &[(&str, u16, Option<&str>)]) -> String {
+    let mut ports = ports.to_vec();
+    ports.sort_unstable_by_key(|&(proto, port, address)| (address, proto, port));
+    ports.dedup();
+    let mut ranges: Vec<(&str, u16, u16, Option<&str>)> = Vec::new();
+    for (proto, port, address) in ports {
+        match ranges.last_mut() {
+            Some((p, _, last, a))
+                if *p == proto && *a == address && u32::from(*last) + 1 == u32::from(port) =>
+            {
+                *last = port;
+            }
+            _ => ranges.push((proto, port, port, address)),
+        }
+    }
+    ranges
+        .iter()
+        .map(|&(proto, first, last, address)| {
+            let mut s = format!("{proto}/{first}");
+            if last != first {
+                s.push_str(&format!("-{last}"));
+            }
+            if let Some(a) = address {
+                s.push_str(&format!(" on {a}"));
+            }
+            s
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Which incoming traffic no chain drops by default, e.g. `IPv6`.
@@ -384,7 +494,7 @@ mod tests {
 
     use super::*;
     use crate::facts::fixtures::{HOSTS, host};
-    use crate::facts::{SshdConfig, Virt, sysctl};
+    use crate::facts::{PublishedPort, SshdConfig, Virt, sysctl};
     use crate::sys::fake::{FakeFs, FakeRunner};
 
     #[test]
@@ -423,7 +533,9 @@ mod tests {
                     assert!(!one_of.is_empty(), "{}", c.id);
                 }
                 Check::AutoUpdates => assert!(facts.updates.is_some(), "{}", c.id),
-                Check::InboundDefaultDeny => assert!(facts.firewall.is_some(), "{}", c.id),
+                Check::InboundDefaultDeny | Check::PublishedPorts => {
+                    assert!(facts.firewall.is_some(), "{}", c.id);
+                }
             }
         }
     }
@@ -590,7 +702,11 @@ mod tests {
                 table: "filter".to_owned(),
                 name: "input".to_owned(),
                 drops_unmatched: true,
+                open_ports: Vec::new(),
+                interface_ports: Vec::new(),
+                unread_ports: Vec::new(),
             }],
+            ..Firewall::default()
         });
         let report = run(catalog().unwrap(), &facts);
         let sysctl_controls = report
@@ -599,7 +715,8 @@ mod tests {
             .filter(|f| matches!(f.control.check, Check::Sysctl { .. }))
             .count();
         assert!(sysctl_controls > 0);
-        assert_eq!(report.summary.skipped, sysctl_controls);
+        // And FW-002: the fixture has no Docker.
+        assert_eq!(report.summary.skipped, sysctl_controls + 1);
         assert!(report.all_passed(), "{:?}", report.summary);
     }
 
@@ -683,11 +800,15 @@ mod tests {
             table: "t".to_owned(),
             name: "input".to_owned(),
             drops_unmatched,
+            open_ports: Vec::new(),
+            interface_ports: Vec::new(),
+            unread_ports: Vec::new(),
         };
         let mut facts = host("debian-13", &[]);
         let mut eval = |chains: Vec<crate::facts::InputChain>, ipv6| {
             facts.firewall = Some(Firewall {
                 input_chains: chains,
+                ..Firewall::default()
             });
             facts.ipv6 = ipv6;
             evaluate(&Check::InboundDefaultDeny, &facts)
@@ -723,6 +844,107 @@ mod tests {
     }
 
     #[test]
+    fn evaluates_published_ports() {
+        // An input chain that drops all but tcp/22, as `ufw allow 22/tcp`.
+        let ufw = crate::facts::InputChain {
+            family: "inet".to_owned(),
+            table: "t".to_owned(),
+            name: "input".to_owned(),
+            drops_unmatched: true,
+            open_ports: vec![crate::facts::Ports {
+                proto: "tcp".to_owned(),
+                first: 22,
+                last: 22,
+            }],
+            interface_ports: Vec::new(),
+            unread_ports: Vec::new(),
+        };
+        let port = |family: &str, port, filtered| PublishedPort {
+            family: family.to_owned(),
+            proto: "tcp".to_owned(),
+            port,
+            address: None,
+            filtered,
+        };
+        let mut facts = host("debian-13", &[]);
+        facts.docker = true;
+        let mut eval = |published: Vec<PublishedPort>, ipv6| {
+            facts.firewall = Some(Firewall {
+                input_chains: vec![ufw.clone()],
+                published,
+            });
+            facts.ipv6 = ipv6;
+            evaluate(&Check::PublishedPorts, &facts)
+        };
+        assert_eq!(eval(vec![], false), Outcome::Pass);
+        // A port the firewall allows anyway is not a bypass.
+        assert_eq!(eval(vec![port("ip", 22, false)], false), Outcome::Pass);
+        assert_eq!(
+            eval(
+                vec![
+                    port("ip", 5432, false),
+                    port("ip6", 5432, false),
+                    port("ip", 9000, false),
+                    port("ip", 9001, false),
+                ],
+                true
+            ),
+            Outcome::Fail {
+                found: "Docker publishes ports the firewall would otherwise block: \
+                        tcp/5432, tcp/9000-9001"
+                    .to_owned()
+            }
+        );
+        // A private address may be a cloud server's primary one, so it counts.
+        let mut bound = port("ip", 5432, false);
+        bound.address = Some("10.8.0.1".to_owned());
+        assert_eq!(
+            eval(vec![bound], false),
+            Outcome::Fail {
+                found: "Docker publishes ports the firewall would otherwise block: \
+                        tcp/5432 on 10.8.0.1"
+                    .to_owned()
+            }
+        );
+        // IPv6 counts only when the host has a global IPv6 address.
+        assert_eq!(eval(vec![port("ip6", 5432, false)], false), Outcome::Pass);
+        assert!(matches!(
+            eval(vec![port("ip", 5432, true)], false),
+            Outcome::Unknown { .. }
+        ));
+
+        // A multiport rule (`ufw allow 80,443/tcp`) may allow any TCP port.
+        let mut multiport = ufw.clone();
+        multiport.unread_ports = vec!["tcp".to_owned()];
+        facts.firewall = Some(Firewall {
+            input_chains: vec![multiport],
+            published: vec![port("ip", 443, false)],
+        });
+        assert!(matches!(
+            evaluate(&Check::PublishedPorts, &facts),
+            Outcome::Unknown { .. }
+        ));
+
+        // No input chain drops by default: FW-001 reports it, not FW-002.
+        facts.firewall = Some(Firewall {
+            input_chains: vec![],
+            published: vec![port("ip", 5432, false)],
+        });
+        assert_eq!(evaluate(&Check::PublishedPorts, &facts), Outcome::Pass);
+
+        facts.firewall = None;
+        assert!(matches!(
+            evaluate(&Check::PublishedPorts, &facts),
+            Outcome::Unknown { .. }
+        ));
+        facts.docker = false;
+        assert!(matches!(
+            evaluate(&Check::PublishedPorts, &facts),
+            Outcome::Skip { .. }
+        ));
+    }
+
+    #[test]
     fn report_json_flattens_control_and_outcome() {
         let report = run(catalog().unwrap(), &host("debian-12", &[]));
         let json = serde_json::to_value(&report.findings[1]).unwrap();
@@ -746,6 +968,6 @@ mod tests {
             .filter(|f| matches!(f.control.check, Check::Sysctl { .. }))
             .count();
         let summary = serde_json::to_value(report.summary).unwrap();
-        assert_eq!(summary["skipped"], sysctl_controls);
+        assert_eq!(summary["skipped"], sysctl_controls + 1);
     }
 }

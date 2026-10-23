@@ -22,7 +22,7 @@ pub mod sysctl;
 pub mod updates;
 pub mod virt;
 
-pub use firewall::{Firewall, InputChain};
+pub use firewall::{Firewall, InputChain, Ports, PublishedPort};
 pub use listeners::{Listener, Proto};
 pub use os_release::{OsFamily, OsRelease};
 pub use session::{Env, SshSession};

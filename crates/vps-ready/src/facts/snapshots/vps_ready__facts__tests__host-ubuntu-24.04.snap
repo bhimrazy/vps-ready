@@ -218,6 +218,7 @@ listeners:
       - systemd
 firewall:
   input_chains: []
+  published: []
 ipv6: false
 session:
   client: "127.0.0.1:41320"
