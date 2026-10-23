@@ -16,6 +16,8 @@
 //!   testable with fakes.
 //! - [`facts`]: read-only discovery of what the host is (OS, init system, ...).
 //! - [`audit`]: checks the facts against the embedded controls catalog.
+//! - [`resource`]: the things a fix changes (files, sysctl values), with
+//!   diff, snapshot, apply and restore.
 //!
 //! The library exists so that integration tests and future tooling can drive
 //! the same code as the binary; it has no stability guarantees before 1.0.
@@ -27,6 +29,7 @@ use serde::Serialize;
 pub mod audit;
 pub mod cli;
 pub mod facts;
+pub mod resource;
 pub mod sys;
 
 /// Build metadata reported by `vps-ready version`.

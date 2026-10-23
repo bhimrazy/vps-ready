@@ -18,6 +18,7 @@ clap = { version = "4.6.7", features = ["derive", "env", "wrap_help"] }
 owo-colors = "4.4.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.152"
+similar = "3.2.0"
 thiserror = "2.0.21"
 toml = { version = "1.1.8", default-features = false, features = ["std", "parse", "serde"] }
 tracing = "0.1.44"
