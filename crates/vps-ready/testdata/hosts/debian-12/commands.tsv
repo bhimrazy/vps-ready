@@ -4,6 +4,7 @@ ssh-version	0	ssh	-V
 sshd-T	0	sshd	-T
 ssh-units	0	systemctl	show	--property=Id,LoadState,ActiveState,UnitFileState	ssh.socket	sshd.socket	ssh.service	sshd.service
 listeners	0	ss	-tulnpH
+nft	0	nft	-j	list	ruleset
 apt-periodic	0	apt-config	dump	APT::Periodic
 apt-units	0	systemctl	show	--property=Id,LoadState,ActiveState,UnitFileState	apt-daily.timer	apt-daily-upgrade.timer	apt-daily.service	apt-daily-upgrade.service
 sshd-T-before-login	0	sshd	-T

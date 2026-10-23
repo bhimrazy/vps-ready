@@ -209,8 +209,11 @@ listeners:
     port: 22
     processes:
       - sshd
+firewall:
+  input_chains: []
+ipv6: false
 session:
-  client: "127.0.0.1:46116"
+  client: "127.0.0.1:47438"
   server: "127.0.0.1:22"
 sysctl: ~
 updates:

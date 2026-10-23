@@ -1,0 +1,2500 @@
+{
+ "nftables": [
+  {
+   "metainfo": {
+    "version": "1.1.3",
+    "release_name": "Commodore Bullmoose #4",
+    "json_schema_version": 1
+   }
+  },
+  {
+   "table": {
+    "family": "inet",
+    "name": "firewalld",
+    "handle": 4,
+    "flags": "persist"
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "mangle_PREROUTING",
+    "handle": 1,
+    "type": "filter",
+    "hook": "prerouting",
+    "prio": -140,
+    "policy": "accept"
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "mangle_PREROUTING_POLICIES",
+    "handle": 2
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "nat_PREROUTING",
+    "handle": 4,
+    "type": "nat",
+    "hook": "prerouting",
+    "prio": -90,
+    "policy": "accept"
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "nat_PREROUTING_POLICIES",
+    "handle": 5
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "nat_POSTROUTING",
+    "handle": 7,
+    "type": "nat",
+    "hook": "postrouting",
+    "prio": 110,
+    "policy": "accept"
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "nat_POSTROUTING_POLICIES",
+    "handle": 8
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "nat_OUTPUT",
+    "handle": 10,
+    "type": "nat",
+    "hook": "output",
+    "prio": -90,
+    "policy": "accept"
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "nat_OUTPUT_POLICIES",
+    "handle": 11
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "filter_PREROUTING",
+    "handle": 13,
+    "type": "filter",
+    "hook": "prerouting",
+    "prio": 10,
+    "policy": "accept"
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "filter_INPUT",
+    "handle": 14,
+    "type": "filter",
+    "hook": "input",
+    "prio": 10,
+    "policy": "accept"
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "filter_FORWARD",
+    "handle": 15,
+    "type": "filter",
+    "hook": "forward",
+    "prio": 10,
+    "policy": "accept"
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "filter_OUTPUT",
+    "handle": 16,
+    "type": "filter",
+    "hook": "output",
+    "prio": 10,
+    "policy": "accept"
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "filter_INPUT_POLICIES",
+    "handle": 22
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "filter_FORWARD_POLICIES",
+    "handle": 30
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "filter_OUTPUT_POLICIES",
+    "handle": 37
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "filter_IN_public",
+    "handle": 46
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "filter_IN_public_pre",
+    "handle": 47
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "filter_IN_public_log",
+    "handle": 49
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "filter_IN_public_deny",
+    "handle": 51
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "filter_IN_public_allow",
+    "handle": 53
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "filter_IN_public_post",
+    "handle": 55
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "filter_OUT_public",
+    "handle": 59
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "filter_OUT_public_pre",
+    "handle": 60
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "filter_OUT_public_log",
+    "handle": 62
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "filter_OUT_public_deny",
+    "handle": 64
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "filter_OUT_public_allow",
+    "handle": 66
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "filter_OUT_public_post",
+    "handle": 68
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "nat_OUT_public",
+    "handle": 70
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "nat_OUT_public_pre",
+    "handle": 71
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "nat_OUT_public_log",
+    "handle": 73
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "nat_OUT_public_deny",
+    "handle": 75
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "nat_OUT_public_allow",
+    "handle": 77
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "nat_OUT_public_post",
+    "handle": 79
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "nat_POST_public",
+    "handle": 81
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "nat_POST_public_pre",
+    "handle": 82
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "nat_POST_public_log",
+    "handle": 84
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "nat_POST_public_deny",
+    "handle": 86
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "nat_POST_public_allow",
+    "handle": 88
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "nat_POST_public_post",
+    "handle": 90
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "filter_FWD_public",
+    "handle": 92
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "filter_FWD_public_pre",
+    "handle": 93
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "filter_FWD_public_log",
+    "handle": 95
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "filter_FWD_public_deny",
+    "handle": 97
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "filter_FWD_public_allow",
+    "handle": 99
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "filter_FWD_public_post",
+    "handle": 101
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "nat_PRE_public",
+    "handle": 103
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "nat_PRE_public_pre",
+    "handle": 104
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "nat_PRE_public_log",
+    "handle": 106
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "nat_PRE_public_deny",
+    "handle": 108
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "nat_PRE_public_allow",
+    "handle": 110
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "nat_PRE_public_post",
+    "handle": 112
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "mangle_PRE_public",
+    "handle": 114
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "mangle_PRE_public_pre",
+    "handle": 115
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "mangle_PRE_public_log",
+    "handle": 117
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "mangle_PRE_public_deny",
+    "handle": 119
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "mangle_PRE_public_allow",
+    "handle": 121
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "mangle_PRE_public_post",
+    "handle": 123
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "filter_IN_policy_allow-host-ipv6",
+    "handle": 141
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "filter_IN_policy_allow-host-ipv6_pre",
+    "handle": 142
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "filter_IN_policy_allow-host-ipv6_log",
+    "handle": 144
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "filter_IN_policy_allow-host-ipv6_deny",
+    "handle": 146
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "filter_IN_policy_allow-host-ipv6_allow",
+    "handle": 148
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "filter_IN_policy_allow-host-ipv6_post",
+    "handle": 150
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "nat_PRE_policy_allow-host-ipv6",
+    "handle": 152
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "nat_PRE_policy_allow-host-ipv6_pre",
+    "handle": 153
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "nat_PRE_policy_allow-host-ipv6_log",
+    "handle": 155
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "nat_PRE_policy_allow-host-ipv6_deny",
+    "handle": 157
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "nat_PRE_policy_allow-host-ipv6_allow",
+    "handle": 159
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "nat_PRE_policy_allow-host-ipv6_post",
+    "handle": 161
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "mangle_PRE_policy_allow-host-ipv6",
+    "handle": 163
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "mangle_PRE_policy_allow-host-ipv6_pre",
+    "handle": 164
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "mangle_PRE_policy_allow-host-ipv6_log",
+    "handle": 166
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "mangle_PRE_policy_allow-host-ipv6_deny",
+    "handle": 168
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "mangle_PRE_policy_allow-host-ipv6_allow",
+    "handle": 170
+   }
+  },
+  {
+   "chain": {
+    "family": "inet",
+    "table": "firewalld",
+    "name": "mangle_PRE_policy_allow-host-ipv6_post",
+    "handle": 172
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "mangle_PREROUTING",
+    "handle": 3,
+    "expr": [
+     {
+      "jump": {
+       "target": "mangle_PREROUTING_POLICIES"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "mangle_PREROUTING_POLICIES",
+    "handle": 180,
+    "expr": [
+     {
+      "jump": {
+       "target": "mangle_PRE_policy_allow-host-ipv6"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "mangle_PREROUTING_POLICIES",
+    "handle": 139,
+    "expr": [
+     {
+      "jump": {
+       "target": "mangle_PRE_public"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "mangle_PREROUTING_POLICIES",
+    "handle": 132,
+    "expr": [
+     {
+      "return": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "nat_PREROUTING",
+    "handle": 6,
+    "expr": [
+     {
+      "jump": {
+       "target": "nat_PREROUTING_POLICIES"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "nat_PREROUTING_POLICIES",
+    "handle": 179,
+    "expr": [
+     {
+      "jump": {
+       "target": "nat_PRE_policy_allow-host-ipv6"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "nat_PREROUTING_POLICIES",
+    "handle": 138,
+    "expr": [
+     {
+      "jump": {
+       "target": "nat_PRE_public"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "nat_PREROUTING_POLICIES",
+    "handle": 131,
+    "expr": [
+     {
+      "return": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "nat_POSTROUTING",
+    "handle": 9,
+    "expr": [
+     {
+      "jump": {
+       "target": "nat_POSTROUTING_POLICIES"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "nat_POSTROUTING_POLICIES",
+    "handle": 140,
+    "expr": [
+     {
+      "jump": {
+       "target": "nat_POST_public"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "nat_POSTROUTING_POLICIES",
+    "handle": 133,
+    "expr": [
+     {
+      "return": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "nat_OUTPUT",
+    "handle": 12,
+    "expr": [
+     {
+      "jump": {
+       "target": "nat_OUTPUT_POLICIES"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "nat_OUTPUT_POLICIES",
+    "handle": 136,
+    "expr": [
+     {
+      "jump": {
+       "target": "nat_OUT_public"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "nat_OUTPUT_POLICIES",
+    "handle": 129,
+    "expr": [
+     {
+      "return": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_PREROUTING",
+    "handle": 41,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "icmpv6",
+         "field": "type"
+        }
+       },
+       "right": {
+        "set": [
+         "nd-router-advert",
+         "nd-neighbor-solicit"
+        ]
+       }
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_PREROUTING",
+    "handle": 39,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "nfproto"
+        }
+       },
+       "right": "ipv6"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "fib": {
+         "result": "oif",
+         "flags": [
+          "saddr",
+          "mark",
+          "iif"
+         ]
+        }
+       },
+       "right": false
+      }
+     },
+     {
+      "drop": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_INPUT",
+    "handle": 18,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "ct": {
+         "key": "state"
+        }
+       },
+       "right": {
+        "set": [
+         "established",
+         "related"
+        ]
+       }
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_INPUT",
+    "handle": 19,
+    "expr": [
+     {
+      "match": {
+       "op": "in",
+       "left": {
+        "ct": {
+         "key": "status"
+        }
+       },
+       "right": "dnat"
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_INPUT",
+    "handle": 20,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "lo"
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_INPUT",
+    "handle": 21,
+    "expr": [
+     {
+      "match": {
+       "op": "in",
+       "left": {
+        "ct": {
+         "key": "state"
+        }
+       },
+       "right": "invalid"
+      }
+     },
+     {
+      "drop": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_INPUT",
+    "handle": 23,
+    "expr": [
+     {
+      "jump": {
+       "target": "filter_INPUT_POLICIES"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_INPUT",
+    "handle": 24,
+    "expr": [
+     {
+      "reject": {
+       "type": "icmpx",
+       "expr": "admin-prohibited"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_FORWARD",
+    "handle": 26,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "ct": {
+         "key": "state"
+        }
+       },
+       "right": {
+        "set": [
+         "established",
+         "related"
+        ]
+       }
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_FORWARD",
+    "handle": 27,
+    "expr": [
+     {
+      "match": {
+       "op": "in",
+       "left": {
+        "ct": {
+         "key": "status"
+        }
+       },
+       "right": "dnat"
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_FORWARD",
+    "handle": 28,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "lo"
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_FORWARD",
+    "handle": 29,
+    "expr": [
+     {
+      "match": {
+       "op": "in",
+       "left": {
+        "ct": {
+         "key": "state"
+        }
+       },
+       "right": "invalid"
+      }
+     },
+     {
+      "drop": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_FORWARD",
+    "handle": 45,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip6",
+         "field": "daddr"
+        }
+       },
+       "right": {
+        "set": [
+         {
+          "prefix": {
+           "addr": "::",
+           "len": 96
+          }
+         },
+         {
+          "prefix": {
+           "addr": "::ffff:0.0.0.0",
+           "len": 96
+          }
+         },
+         {
+          "prefix": {
+           "addr": "2002::",
+           "len": 24
+          }
+         },
+         {
+          "prefix": {
+           "addr": "2002:a00::",
+           "len": 24
+          }
+         },
+         {
+          "prefix": {
+           "addr": "2002:7f00::",
+           "len": 24
+          }
+         },
+         {
+          "prefix": {
+           "addr": "2002:a9fe::",
+           "len": 32
+          }
+         },
+         {
+          "prefix": {
+           "addr": "2002:ac10::",
+           "len": 28
+          }
+         },
+         {
+          "prefix": {
+           "addr": "2002:c0a8::",
+           "len": 32
+          }
+         },
+         {
+          "prefix": {
+           "addr": "2002:e000::",
+           "len": 19
+          }
+         }
+        ]
+       }
+      }
+     },
+     {
+      "reject": {
+       "type": "icmpv6",
+       "expr": "addr-unreachable"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_FORWARD",
+    "handle": 31,
+    "expr": [
+     {
+      "jump": {
+       "target": "filter_FORWARD_POLICIES"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_FORWARD",
+    "handle": 32,
+    "expr": [
+     {
+      "reject": {
+       "type": "icmpx",
+       "expr": "admin-prohibited"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_OUTPUT",
+    "handle": 34,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "ct": {
+         "key": "state"
+        }
+       },
+       "right": {
+        "set": [
+         "established",
+         "related"
+        ]
+       }
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_OUTPUT",
+    "handle": 35,
+    "expr": [
+     {
+      "match": {
+       "op": "in",
+       "left": {
+        "ct": {
+         "key": "status"
+        }
+       },
+       "right": "dnat"
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_OUTPUT",
+    "handle": 36,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "oifname"
+        }
+       },
+       "right": "lo"
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_OUTPUT",
+    "handle": 43,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip6",
+         "field": "daddr"
+        }
+       },
+       "right": {
+        "set": [
+         {
+          "prefix": {
+           "addr": "::",
+           "len": 96
+          }
+         },
+         {
+          "prefix": {
+           "addr": "::ffff:0.0.0.0",
+           "len": 96
+          }
+         },
+         {
+          "prefix": {
+           "addr": "2002::",
+           "len": 24
+          }
+         },
+         {
+          "prefix": {
+           "addr": "2002:a00::",
+           "len": 24
+          }
+         },
+         {
+          "prefix": {
+           "addr": "2002:7f00::",
+           "len": 24
+          }
+         },
+         {
+          "prefix": {
+           "addr": "2002:a9fe::",
+           "len": 32
+          }
+         },
+         {
+          "prefix": {
+           "addr": "2002:ac10::",
+           "len": 28
+          }
+         },
+         {
+          "prefix": {
+           "addr": "2002:c0a8::",
+           "len": 32
+          }
+         },
+         {
+          "prefix": {
+           "addr": "2002:e000::",
+           "len": 19
+          }
+         }
+        ]
+       }
+      }
+     },
+     {
+      "reject": {
+       "type": "icmpv6",
+       "expr": "addr-unreachable"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_OUTPUT",
+    "handle": 38,
+    "expr": [
+     {
+      "jump": {
+       "target": "filter_OUTPUT_POLICIES"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_INPUT_POLICIES",
+    "handle": 178,
+    "expr": [
+     {
+      "jump": {
+       "target": "filter_IN_policy_allow-host-ipv6"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_INPUT_POLICIES",
+    "handle": 134,
+    "expr": [
+     {
+      "jump": {
+       "target": "filter_IN_public"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_INPUT_POLICIES",
+    "handle": 127,
+    "expr": [
+     {
+      "reject": {
+       "type": "icmpx",
+       "expr": "admin-prohibited"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_FORWARD_POLICIES",
+    "handle": 137,
+    "expr": [
+     {
+      "jump": {
+       "target": "filter_FWD_public"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_FORWARD_POLICIES",
+    "handle": 130,
+    "expr": [
+     {
+      "reject": {
+       "type": "icmpx",
+       "expr": "admin-prohibited"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_OUTPUT_POLICIES",
+    "handle": 135,
+    "expr": [
+     {
+      "jump": {
+       "target": "filter_OUT_public"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_OUTPUT_POLICIES",
+    "handle": 128,
+    "expr": [
+     {
+      "return": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_IN_public",
+    "handle": 48,
+    "expr": [
+     {
+      "jump": {
+       "target": "filter_IN_public_pre"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_IN_public",
+    "handle": 50,
+    "expr": [
+     {
+      "jump": {
+       "target": "filter_IN_public_log"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_IN_public",
+    "handle": 52,
+    "expr": [
+     {
+      "jump": {
+       "target": "filter_IN_public_deny"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_IN_public",
+    "handle": 54,
+    "expr": [
+     {
+      "jump": {
+       "target": "filter_IN_public_allow"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_IN_public",
+    "handle": 56,
+    "expr": [
+     {
+      "jump": {
+       "target": "filter_IN_public_post"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_IN_public",
+    "handle": 126,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": {
+        "set": [
+         "icmp",
+         "ipv6-icmp"
+        ]
+       }
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_IN_public_allow",
+    "handle": 57,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 22
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_IN_public_allow",
+    "handle": 58,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip6",
+         "field": "daddr"
+        }
+       },
+       "right": {
+        "prefix": {
+         "addr": "fe80::",
+         "len": 64
+        }
+       }
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "udp",
+         "field": "dport"
+        }
+       },
+       "right": 546
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_OUT_public",
+    "handle": 61,
+    "expr": [
+     {
+      "jump": {
+       "target": "filter_OUT_public_pre"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_OUT_public",
+    "handle": 63,
+    "expr": [
+     {
+      "jump": {
+       "target": "filter_OUT_public_log"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_OUT_public",
+    "handle": 65,
+    "expr": [
+     {
+      "jump": {
+       "target": "filter_OUT_public_deny"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_OUT_public",
+    "handle": 67,
+    "expr": [
+     {
+      "jump": {
+       "target": "filter_OUT_public_allow"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_OUT_public",
+    "handle": 69,
+    "expr": [
+     {
+      "jump": {
+       "target": "filter_OUT_public_post"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "nat_OUT_public",
+    "handle": 72,
+    "expr": [
+     {
+      "jump": {
+       "target": "nat_OUT_public_pre"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "nat_OUT_public",
+    "handle": 74,
+    "expr": [
+     {
+      "jump": {
+       "target": "nat_OUT_public_log"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "nat_OUT_public",
+    "handle": 76,
+    "expr": [
+     {
+      "jump": {
+       "target": "nat_OUT_public_deny"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "nat_OUT_public",
+    "handle": 78,
+    "expr": [
+     {
+      "jump": {
+       "target": "nat_OUT_public_allow"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "nat_OUT_public",
+    "handle": 80,
+    "expr": [
+     {
+      "jump": {
+       "target": "nat_OUT_public_post"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "nat_POST_public",
+    "handle": 83,
+    "expr": [
+     {
+      "jump": {
+       "target": "nat_POST_public_pre"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "nat_POST_public",
+    "handle": 85,
+    "expr": [
+     {
+      "jump": {
+       "target": "nat_POST_public_log"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "nat_POST_public",
+    "handle": 87,
+    "expr": [
+     {
+      "jump": {
+       "target": "nat_POST_public_deny"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "nat_POST_public",
+    "handle": 89,
+    "expr": [
+     {
+      "jump": {
+       "target": "nat_POST_public_allow"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "nat_POST_public",
+    "handle": 91,
+    "expr": [
+     {
+      "jump": {
+       "target": "nat_POST_public_post"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_FWD_public",
+    "handle": 94,
+    "expr": [
+     {
+      "jump": {
+       "target": "filter_FWD_public_pre"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_FWD_public",
+    "handle": 96,
+    "expr": [
+     {
+      "jump": {
+       "target": "filter_FWD_public_log"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_FWD_public",
+    "handle": 98,
+    "expr": [
+     {
+      "jump": {
+       "target": "filter_FWD_public_deny"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_FWD_public",
+    "handle": 100,
+    "expr": [
+     {
+      "jump": {
+       "target": "filter_FWD_public_allow"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_FWD_public",
+    "handle": 102,
+    "expr": [
+     {
+      "jump": {
+       "target": "filter_FWD_public_post"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "nat_PRE_public",
+    "handle": 105,
+    "expr": [
+     {
+      "jump": {
+       "target": "nat_PRE_public_pre"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "nat_PRE_public",
+    "handle": 107,
+    "expr": [
+     {
+      "jump": {
+       "target": "nat_PRE_public_log"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "nat_PRE_public",
+    "handle": 109,
+    "expr": [
+     {
+      "jump": {
+       "target": "nat_PRE_public_deny"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "nat_PRE_public",
+    "handle": 111,
+    "expr": [
+     {
+      "jump": {
+       "target": "nat_PRE_public_allow"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "nat_PRE_public",
+    "handle": 113,
+    "expr": [
+     {
+      "jump": {
+       "target": "nat_PRE_public_post"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "mangle_PRE_public",
+    "handle": 116,
+    "expr": [
+     {
+      "jump": {
+       "target": "mangle_PRE_public_pre"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "mangle_PRE_public",
+    "handle": 118,
+    "expr": [
+     {
+      "jump": {
+       "target": "mangle_PRE_public_log"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "mangle_PRE_public",
+    "handle": 120,
+    "expr": [
+     {
+      "jump": {
+       "target": "mangle_PRE_public_deny"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "mangle_PRE_public",
+    "handle": 122,
+    "expr": [
+     {
+      "jump": {
+       "target": "mangle_PRE_public_allow"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "mangle_PRE_public",
+    "handle": 124,
+    "expr": [
+     {
+      "jump": {
+       "target": "mangle_PRE_public_post"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_IN_policy_allow-host-ipv6",
+    "handle": 143,
+    "expr": [
+     {
+      "jump": {
+       "target": "filter_IN_policy_allow-host-ipv6_pre"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_IN_policy_allow-host-ipv6",
+    "handle": 145,
+    "expr": [
+     {
+      "jump": {
+       "target": "filter_IN_policy_allow-host-ipv6_log"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_IN_policy_allow-host-ipv6",
+    "handle": 147,
+    "expr": [
+     {
+      "jump": {
+       "target": "filter_IN_policy_allow-host-ipv6_deny"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_IN_policy_allow-host-ipv6",
+    "handle": 149,
+    "expr": [
+     {
+      "jump": {
+       "target": "filter_IN_policy_allow-host-ipv6_allow"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_IN_policy_allow-host-ipv6",
+    "handle": 151,
+    "expr": [
+     {
+      "jump": {
+       "target": "filter_IN_policy_allow-host-ipv6_post"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_IN_policy_allow-host-ipv6_allow",
+    "handle": 174,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "icmpv6",
+         "field": "type"
+        }
+       },
+       "right": "nd-neighbor-advert"
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_IN_policy_allow-host-ipv6_allow",
+    "handle": 175,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "icmpv6",
+         "field": "type"
+        }
+       },
+       "right": "nd-neighbor-solicit"
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_IN_policy_allow-host-ipv6_allow",
+    "handle": 176,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "icmpv6",
+         "field": "type"
+        }
+       },
+       "right": "nd-redirect"
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "filter_IN_policy_allow-host-ipv6_allow",
+    "handle": 177,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "icmpv6",
+         "field": "type"
+        }
+       },
+       "right": "nd-router-advert"
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "nat_PRE_policy_allow-host-ipv6",
+    "handle": 154,
+    "expr": [
+     {
+      "jump": {
+       "target": "nat_PRE_policy_allow-host-ipv6_pre"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "nat_PRE_policy_allow-host-ipv6",
+    "handle": 156,
+    "expr": [
+     {
+      "jump": {
+       "target": "nat_PRE_policy_allow-host-ipv6_log"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "nat_PRE_policy_allow-host-ipv6",
+    "handle": 158,
+    "expr": [
+     {
+      "jump": {
+       "target": "nat_PRE_policy_allow-host-ipv6_deny"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "nat_PRE_policy_allow-host-ipv6",
+    "handle": 160,
+    "expr": [
+     {
+      "jump": {
+       "target": "nat_PRE_policy_allow-host-ipv6_allow"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "nat_PRE_policy_allow-host-ipv6",
+    "handle": 162,
+    "expr": [
+     {
+      "jump": {
+       "target": "nat_PRE_policy_allow-host-ipv6_post"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "mangle_PRE_policy_allow-host-ipv6",
+    "handle": 165,
+    "expr": [
+     {
+      "jump": {
+       "target": "mangle_PRE_policy_allow-host-ipv6_pre"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "mangle_PRE_policy_allow-host-ipv6",
+    "handle": 167,
+    "expr": [
+     {
+      "jump": {
+       "target": "mangle_PRE_policy_allow-host-ipv6_log"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "mangle_PRE_policy_allow-host-ipv6",
+    "handle": 169,
+    "expr": [
+     {
+      "jump": {
+       "target": "mangle_PRE_policy_allow-host-ipv6_deny"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "mangle_PRE_policy_allow-host-ipv6",
+    "handle": 171,
+    "expr": [
+     {
+      "jump": {
+       "target": "mangle_PRE_policy_allow-host-ipv6_allow"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "inet",
+    "table": "firewalld",
+    "chain": "mangle_PRE_policy_allow-host-ipv6",
+    "handle": 173,
+    "expr": [
+     {
+      "jump": {
+       "target": "mangle_PRE_policy_allow-host-ipv6_post"
+      }
+     }
+    ]
+   }
+  }
+ ]
+}

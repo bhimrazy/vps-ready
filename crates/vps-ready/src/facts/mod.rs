@@ -13,6 +13,7 @@ use serde::Serialize;
 
 use crate::sys::{Cmd, Fs, Output, Runner, SysError};
 
+pub mod firewall;
 pub mod listeners;
 pub mod os_release;
 pub mod session;
@@ -21,6 +22,7 @@ pub mod sysctl;
 pub mod updates;
 pub mod virt;
 
+pub use firewall::{Firewall, InputChain};
 pub use listeners::{Listener, Proto};
 pub use os_release::{OsFamily, OsRelease};
 pub use session::{Env, SshSession};
@@ -49,6 +51,12 @@ pub struct Facts {
     pub ssh: Ssh,
     /// Listening TCP and UDP sockets.
     pub listeners: Vec<Listener>,
+    /// The packet filter, from the live nftables ruleset. `None` when it
+    /// could not be read, usually for lack of root.
+    pub firewall: Option<Firewall>,
+    /// Whether the host has a global IPv6 address (not loopback or
+    /// link-local).
+    pub ipv6: bool,
     /// The SSH session `vps-ready` runs in, if any.
     pub session: Option<SshSession>,
     /// Kernel settings from `/proc/sys`. `None` inside a container, where
@@ -117,6 +125,8 @@ pub fn collect(fs: &dyn Fs, runner: &dyn Runner, env: &Env) -> Result<Facts, Fac
     let virtualization = virt::detect(fs, runner, &mut notices);
     let ssh = ssh::detect(runner, &mut notices);
     let listeners = listeners::detect(runner, &mut notices);
+    let firewall = firewall::detect(runner, &mut notices);
+    let ipv6 = firewall::has_ipv6(fs);
     let session = session::detect(env, &mut notices);
     let sysctl = (!virtualization.in_container()).then(|| sysctl::detect(fs, &mut notices));
     let updates = if os.family == OsFamily::Debian {
@@ -131,6 +141,8 @@ pub fn collect(fs: &dyn Fs, runner: &dyn Runner, env: &Env) -> Result<Facts, Fac
         virtualization,
         ssh,
         listeners,
+        firewall,
+        ipv6,
         session,
         sysctl,
         updates,
@@ -307,7 +319,7 @@ mod tests {
     /// `detect` and `audit` must never change the host, so collecting facts
     /// runs exactly these read-only commands. A new probe has to be added
     /// here, where review sees it.
-    const READ_ONLY_COMMANDS: [&[&str]; 8] = [
+    const READ_ONLY_COMMANDS: [&[&str]; 9] = [
         &["systemd-detect-virt", "--container"],
         &["systemd-detect-virt", "--vm"],
         &["ssh", "-V"],
@@ -322,6 +334,7 @@ mod tests {
             "sshd.service",
         ],
         &["ss", "-tulnpH"],
+        &["nft", "-j", "list", "ruleset"],
         &["apt-config", "dump", "APT::Periodic"],
         &[
             "systemctl",
@@ -470,8 +483,8 @@ mod tests {
         assert!(facts.listeners.is_empty());
         assert!(!facts.docker);
         // os-release, init, virtualization, ssh version, sshd activation,
-        // sshd config, ss, SSH_CONNECTION, /proc/sys.
-        assert_eq!(facts.notices.len(), 9, "{:?}", facts.notices);
+        // sshd config, ss, nft, SSH_CONNECTION, /proc/sys.
+        assert_eq!(facts.notices.len(), 10, "{:?}", facts.notices);
     }
 
     #[test]
