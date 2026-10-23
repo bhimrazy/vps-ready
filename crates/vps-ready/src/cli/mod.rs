@@ -114,6 +114,9 @@ pub enum Command {
     },
     /// Undo the changes of a transaction. Needs root.
     ///
+    /// If the host rebooted since apply, kernel settings keep their running
+    /// values until the next boot, which reads the restored configuration.
+    ///
     /// Exits 0 when rolled back, 2 on error (including a refusal because
     /// something changed since apply), and 3 when it did not complete.
     #[command(group(ArgGroup::new("target").required(true)))]

@@ -472,9 +472,40 @@ fn apply_errors_exit_2() {
     assert!(!fs.exists(Path::new(DROP_IN)));
 }
 
+/// After a reboot, rollback leaves the kernel settings as the boot set them
+/// and names them.
+#[test]
+fn rollback_after_a_reboot() {
+    let boot_id = Path::new(crate::resource::sysctl::BOOT_ID);
+    let fs = fixture().with_file(boot_id, "boot-1\n");
+    let host = host(&fs);
+    assert_eq!(apply_yes(&host).0, 0);
+    fs.write(boot_id, b"boot-2\n").unwrap();
+    // As on Ubuntu, a later sysctl.d file set `fs.protected_regular` after the drop-in.
+    fs.write(Path::new("/proc/sys/fs/protected_regular"), b"2")
+        .unwrap();
+
+    let (code, out, err) = rollback_last(&host);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        redact(&fs, &out, false),
+        "Rolled back transaction <txn-1>: restored 2 changes.\n\
+         6 kernel settings keep their running value until the next boot: \
+         net.ipv4.conf.all.accept_source_route, fs.protected_regular, fs.protected_fifos, \
+         kernel.unprivileged_bpf_disabled, kernel.dmesg_restrict, kernel.kptr_restrict\n"
+    );
+    insta::assert_snapshot!("rollback-after-reboot-progress", err);
+    assert!(!fs.exists(Path::new(DROP_IN)));
+    assert_eq!(
+        fs.read(Path::new("/proc/sys/fs/protected_regular"))
+            .unwrap(),
+        b"2"
+    );
+}
+
 #[test]
 fn rollback_refused_by_the_safety_check_exits_2() {
-    let fs = fixture();
+    let fs = fixture().with_file(crate::resource::sysctl::BOOT_ID, "boot-1\n");
     let host = host(&fs);
     assert_eq!(apply_yes(&host).0, 0);
     fs.write(Path::new("/proc/sys/kernel/kptr_restrict"), b"2")

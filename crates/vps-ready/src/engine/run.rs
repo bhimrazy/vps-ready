@@ -9,6 +9,7 @@ use serde::Serialize;
 use super::journal::{self, Event, Record, RollbackReason, TxnState};
 use super::plan::{Plan, Step};
 use super::{EngineError, StateDir, Txn, id};
+use crate::resource::sysctl::boot_id;
 use crate::resource::{Backup, Resource, Sysctl, after_path, before_path, restore};
 use crate::sys::{FileKind, Fs, FsLock, Sys, SysError};
 
@@ -68,6 +69,8 @@ pub enum Progress<'a> {
     Verified,
     /// A backup is about to be restored.
     Restore(&'a Backup),
+    /// A sysctl backed up in an earlier boot is left as it is.
+    Leave(&'a Backup),
 }
 
 /// A finished [`Engine::rollback`].
@@ -77,6 +80,9 @@ pub struct Rollback {
     pub txn: String,
     /// How many changes this run restored; earlier runs may have restored others.
     pub restored: usize,
+    /// Keys of the sysctls this run left as they are, because they were
+    /// backed up in an earlier boot.
+    pub at_next_boot: Vec<String>,
 }
 
 /// A resource to put back by hand, and how.
@@ -272,7 +278,9 @@ impl<'a> Engine<'a> {
 
     /// Rolls back `target`, resuming it if it is unfinished. First checks
     /// that no backed-up resource changed since apply; if one did, nothing is
-    /// restored. Each restore is reported to `progress` before it runs.
+    /// restored. A sysctl backed up in an earlier boot is neither checked nor
+    /// restored: the boot configuration set its running value. Each restore
+    /// is reported to `progress` before it runs.
     ///
     /// # Errors
     ///
@@ -312,8 +320,13 @@ impl<'a> Engine<'a> {
         }
         let id = txn.id().to_owned();
         let mut open = Open::new(fs, txn, records)?;
-        let restored = self.roll_back(&mut open, RollbackReason::Manual, true, progress)?;
-        Ok(Rollback { txn: id, restored })
+        let (restored, at_next_boot) =
+            self.roll_back(&mut open, RollbackReason::Manual, true, progress)?;
+        Ok(Rollback {
+            txn: id,
+            restored,
+            at_next_boot,
+        })
     }
 
     fn newest_applied(&self) -> Result<Option<Txn>, EngineError> {
@@ -327,15 +340,18 @@ impl<'a> Engine<'a> {
 
     /// Restores every backup without a `restored` line, newest first, then
     /// writes the final state. A `rollback` record goes first, unless an
-    /// earlier run wrote one; its reason then wins over `reason`. Returns how
-    /// many it restored.
+    /// earlier run wrote one; its reason then wins over `reason`. A sysctl
+    /// backed up in an earlier boot gets a `restored` line without a restore.
+    /// Returns how many it restored and the keys of those sysctls.
     fn roll_back(
         &self,
         open: &mut Open,
         reason: RollbackReason,
         check: bool,
         progress: &mut dyn FnMut(Progress),
-    ) -> Result<usize, EngineError> {
+    ) -> Result<(usize, Vec<String>), EngineError> {
+        let boot = boot_id(self.sys.fs);
+        let boot = boot.as_deref();
         let (id, dir) = (open.txn.id().to_owned(), open.txn.dir().to_path_buf());
         let records = open.records().map_err(|e| incomplete(&id, &dir, None, e))?;
         let started = records.iter().rev().find_map(|r| match r.event {
@@ -362,6 +378,7 @@ impl<'a> Engine<'a> {
             Some(
                 pending[..upto]
                     .iter()
+                    .filter(|(_, b)| !earlier_boot(b, boot))
                     .filter_map(|(r, b)| by_hand(&dir, r, b))
                     .collect(),
             )
@@ -370,7 +387,7 @@ impl<'a> Engine<'a> {
         if check {
             let mut changed = Vec::new();
             for (resource, backup) in &pending {
-                if unchanged(self.sys, &dir, backup)? {
+                if earlier_boot(backup, boot) || unchanged(self.sys, &dir, backup)? {
                     continue;
                 }
                 changed.extend(by_hand(&dir, resource, backup).map(|mut step| {
@@ -404,18 +421,27 @@ impl<'a> Engine<'a> {
                 reason
             }
         };
+        let mut at_next_boot = Vec::new();
         for (i, (resource, backup)) in pending.iter().enumerate().rev() {
-            progress(Progress::Restore(backup));
-            let result = restore(self.sys, &dir, backup)
-                .map_err(|source| EngineError::Resource {
-                    id: resource.clone(),
-                    source,
-                })
-                .and_then(|()| {
-                    open.append(Event::Restored {
-                        resource: resource.clone(),
+            let result = match backup {
+                Backup::Sysctl { key, .. } if earlier_boot(backup, boot) => {
+                    progress(Progress::Leave(backup));
+                    at_next_boot.push(key.clone());
+                    Ok(())
+                }
+                _ => {
+                    progress(Progress::Restore(backup));
+                    restore(self.sys, &dir, backup).map_err(|source| EngineError::Resource {
+                        id: resource.clone(),
+                        source,
                     })
-                });
+                }
+            };
+            let result = result.and_then(|()| {
+                open.append(Event::Restored {
+                    resource: resource.clone(),
+                })
+            });
             if let Err(e) = result {
                 return Err(incomplete(&id, &dir, left(i + 1), e));
             }
@@ -424,7 +450,7 @@ impl<'a> Engine<'a> {
             state: TxnState::RolledBack { reason },
         })
         .map_err(|e| incomplete(&id, &dir, left(0), e))?;
-        Ok(pending.len())
+        Ok((pending.len() - at_next_boot.len(), at_next_boot))
     }
 }
 
@@ -477,6 +503,15 @@ fn incomplete(id: &str, dir: &Path, left: Option<Vec<ByHand>>, source: EngineErr
     }
 }
 
+/// Whether `backup` is a sysctl read in a boot other than `boot`; false
+/// when either boot ID is unknown.
+fn earlier_boot(backup: &Backup, boot: Option<&str>) -> bool {
+    matches!(
+        (backup, boot),
+        (Backup::Sysctl { boot_id: Some(then), .. }, Some(now)) if then != now
+    )
+}
+
 /// The safety check: whether the resource is as apply left it or as it was
 /// before. Both are allowed because a crash may have come just before or
 /// after apply. Mode and owner are not compared; restore sets them.
@@ -501,6 +536,7 @@ fn unchanged(sys: Sys, dir: &Path, backup: &Backup) -> Result<bool, EngineError>
             key,
             value,
             applied,
+            ..
         } => {
             // `diff` is `None` when the running value matches.
             for candidate in [applied, value] {

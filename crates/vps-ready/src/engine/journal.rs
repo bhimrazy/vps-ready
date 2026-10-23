@@ -264,6 +264,7 @@ mod tests {
                     key: "kernel.kptr_restrict".into(),
                     value: "0".into(),
                     applied: "1".into(),
+                    boot_id: None,
                 },
             }),
             r#"{"at":7,"event":"backup","resource":"sysctl:kernel.kptr_restrict","backup":{"kind":"sysctl","key":"kernel.kptr_restrict","value":"0","applied":"1"}}"#

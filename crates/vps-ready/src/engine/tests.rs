@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use super::*;
 use crate::facts::Facts;
 use crate::modules::{Applicability, Module, ModuleError};
-use crate::resource::{File, Resource, Sysctl};
+use crate::resource::sysctl::BOOT_ID;
+use crate::resource::{Backup, File, Resource, Sysctl};
 use crate::sys::fake::{FakeFs, FakeRunner, Op};
 use crate::sys::{FileKind, FileOwner, Fs, Sys};
 
@@ -232,7 +233,8 @@ fn applies_then_rolls_back_to_the_original_tree() {
         done,
         Rollback {
             txn: txn.clone(),
-            restored: 3
+            restored: 3,
+            at_next_boot: Vec::new(),
         }
     );
     assert_eq!(host(&fs), before);
@@ -645,6 +647,57 @@ fn rollback_refuses_a_changed_sysctl() {
         }]
     );
     assert_eq!(host(&fs), edited);
+    // Without a boot ID, as in a journal from before 0.2.1, the check applies.
+    let id = &state(&fs).txns(&fs).unwrap()[0].id().to_owned();
+    assert!(events(&fs, id).iter().any(|e| matches!(
+        e,
+        Event::Backup {
+            backup: Backup::Sysctl { boot_id: None, .. },
+            ..
+        }
+    )));
+}
+
+#[test]
+fn rollback_after_a_reboot_leaves_sysctls_to_the_boot_config() {
+    let fs = fixture().with_file(BOOT_ID, "a\n");
+    let facts = facts();
+    let ApplyOutcome::Applied { txn } = apply(&fs, &plan_of(&fs, &facts, &[&demo()])).unwrap()
+    else {
+        panic!("not applied");
+    };
+    // After a reboot, a later sysctl.d file set the key.
+    fs.write(Path::new(BOOT_ID), b"b\n").unwrap();
+    fs.write(Path::new(KPTR), b"2").unwrap();
+
+    let done = rollback(&fs, Target::Last).unwrap();
+    assert_eq!(
+        done,
+        Rollback {
+            txn: txn.clone(),
+            restored: 2,
+            at_next_boot: vec!["kernel.kptr_restrict".into()],
+        }
+    );
+    assert_eq!(fs.read(Path::new(CONF)).unwrap(), b"old\n");
+    assert!(!fs.exists(Path::new(NEW)));
+    assert_eq!(fs.read(Path::new(KPTR)).unwrap(), b"2");
+    let events = events(&fs, &txn);
+    let restored: Vec<&str> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Restored { resource } => Some(resource.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        restored,
+        [
+            "sysctl:kernel.kptr_restrict",
+            "file:/etc/demo.d/new.conf",
+            "file:/etc/demo.conf"
+        ]
+    );
 }
 
 #[test]

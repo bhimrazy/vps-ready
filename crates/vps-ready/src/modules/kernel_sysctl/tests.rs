@@ -11,6 +11,7 @@ use super::*;
 use crate::audit::Outcome;
 use crate::engine::{self, ApplyOutcome, Engine, Plan, StateDir, Target};
 use crate::facts::{Virt, sysctl};
+use crate::resource::sysctl::BOOT_ID;
 use crate::sys::fake::FakeRunner;
 use crate::sys::{Fs, RealFs};
 
@@ -25,8 +26,8 @@ const STICKY: [(&str, &str); 2] = [
 /// Keys from the baseline's "Never set" list, and `rp_filter`.
 const NEVER: [&str; 3] = ["ip_forward", "accept_ra", "rp_filter"];
 
-/// A host tree in a tempdir: `/etc/sysctl.d` and the given `/proc/sys`
-/// values, plus an optional drop-in.
+/// A host tree in a tempdir: `/etc/sysctl.d`, a boot ID and the given
+/// `/proc/sys` values, plus an optional drop-in.
 struct Host {
     dir: tempfile::TempDir,
     fs: RealFs,
@@ -37,8 +38,10 @@ impl Host {
     fn new(values: &[(&str, &str)], drop_in: Option<&str>) -> Self {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("etc/sysctl.d")).unwrap();
-        // So that facts collection finds `/proc/sys` even with no values.
-        std::fs::create_dir_all(dir.path().join("proc/sys/kernel")).unwrap();
+        // Also lets facts collection find `/proc/sys` with no values.
+        let boot_id = dir.path().join(BOOT_ID.trim_start_matches('/'));
+        std::fs::create_dir_all(boot_id.parent().unwrap()).unwrap();
+        std::fs::write(boot_id, "boot-1\n").unwrap();
         for (key, value) in values {
             let path = dir.path().join("proc/sys").join(key.replace('.', "/"));
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -274,6 +277,68 @@ fn apply_then_rollback_restores_the_tree() {
     assert_ne!(host.tree(), before);
     host.rollback();
     assert_eq!(host.tree(), before);
+}
+
+fn proc_path(key: &str) -> PathBuf {
+    PathBuf::from(format!("/proc/sys/{}", key.replace('.', "/")))
+}
+
+/// After a reboot, rollback removes the drop-in and leaves each running
+/// value as the boot set it, even one that is neither the original nor the
+/// applied value.
+#[test]
+fn rollback_after_a_reboot_does_not_lower_any_key() {
+    let weak = [
+        ("kernel.kptr_restrict", "0"),
+        ("kernel.dmesg_restrict", "0"),
+        ("fs.protected_fifos", "0"),
+        ("fs.protected_regular", "0"),
+        ("net.ipv4.conf.all.accept_source_route", "1"),
+        ("kernel.perf_event_paranoid", "1"),
+    ];
+    let host = Host::new(&weak, None);
+    host.apply(&host.plan(&host.facts()));
+
+    // As Ubuntu boots: the drop-in, then `99-protect-links.conf`.
+    host.fs.write(Path::new(BOOT_ID), b"boot-2\n").unwrap();
+    let booted: Vec<(&str, &str)> = weak
+        .iter()
+        .map(|(key, _)| match *key {
+            "fs.protected_regular" => (*key, "2"),
+            _ => *VALUES.iter().find(|(k, _)| k == key).unwrap(),
+        })
+        .collect();
+    for (key, value) in &booted {
+        host.fs.write(&proc_path(key), value.as_bytes()).unwrap();
+    }
+
+    host.rollback();
+    assert_eq!(host.drop_in(), None);
+    for (key, value) in booted {
+        assert_eq!(
+            host.fs.read(&proc_path(key)).unwrap(),
+            value.as_bytes(),
+            "{key}"
+        );
+    }
+}
+
+/// A key lowered at runtime below the kernel's compiled-in default passes
+/// at the module's value, so the drop-in persists that value.
+#[test]
+fn a_key_lowered_at_runtime_is_persisted_at_the_module_value() {
+    let host = Host::new(&[("kernel.perf_event_paranoid", "1")], None);
+    host.apply(&host.plan(&host.facts()));
+    assert!(
+        host.drop_in()
+            .unwrap()
+            .contains("\nkernel.perf_event_paranoid = 2\n")
+    );
+    host.rollback();
+    assert!(
+        host.drop_in()
+            .is_none_or(|text| !text.contains("perf_event_paranoid"))
+    );
 }
 
 /// After apply, the facts collected again pass every control the module
