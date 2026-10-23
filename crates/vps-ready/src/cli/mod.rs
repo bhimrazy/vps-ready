@@ -399,8 +399,8 @@ fn root_would_help(report: &Report, facts: &Facts) -> bool {
 ///
 /// A failed control ends with the command to fix it, e.g. `fix: sudo
 /// vps-ready apply --module kernel.sysctl`, or `fix: not automated yet`. When
-/// any failed control has a fix, the last line lists the failed IDs and
-/// points to `vps-ready plan`.
+/// any failed control has a fix, the last line counts them and points to
+/// `vps-ready plan`.
 ///
 /// Skipped controls get a row without details, and each distinct reason is
 /// printed once after the summary.
@@ -497,21 +497,21 @@ fn print_report(
     for reason in reasons {
         writeln!(out, "Skipped: {reason}.")?;
     }
-    let failed: Vec<&str> = report
+    let fixable = report
         .findings
         .iter()
-        .filter(|f| matches!(f.outcome, Outcome::Fail { .. }))
-        .map(|f| f.control.id.as_str())
-        .collect();
-    if report
-        .findings
-        .iter()
-        .any(|f| matches!(f.outcome, Outcome::Fail { .. }) && f.control.fix.is_some())
-    {
+        .filter(|f| matches!(f.outcome, Outcome::Fail { .. }) && f.control.fix.is_some())
+        .count();
+    if fixable > 0 {
+        let (noun, verb) = if fixable == 1 {
+            ("control", "has")
+        } else {
+            ("controls", "have")
+        };
         writeln!(
             out,
-            "Failed: {}. Run `vps-ready plan` to see what the automatic fixes would change.",
-            failed.join(", ")
+            "{fixable} failed {noun} {verb} an automatic fix. \
+             Run `vps-ready plan` to see what it would change."
         )?;
     }
     Ok(())
@@ -678,6 +678,10 @@ mod tests {
         sysctl
             .values
             .insert("kernel.kptr_restrict".to_owned(), "0".to_owned());
+        sysctl.values.insert(
+            "kernel.unprivileged_bpf_disabled".to_owned(),
+            "0".to_owned(),
+        );
         facts.sysctl = Some(sysctl);
         let controls = |ids: &[&str]| -> Vec<_> {
             audit::catalog()
@@ -697,16 +701,22 @@ mod tests {
         assert!(both.contains("fix: not automated yet"), "{both}");
         assert!(
             both.ends_with(
-                "Failed: KRN-001, MAC-001. \
-                 Run `vps-ready plan` to see what the automatic fixes would change.\n"
+                "1 failed control has an automatic fix. \
+                 Run `vps-ready plan` to see what it would change.\n"
             ),
             "{both}"
         );
 
+        let two = text(&["KRN-001", "KRN-003", "MAC-001"]);
+        assert!(
+            two.contains("\n2 failed controls have an automatic fix. "),
+            "{two}"
+        );
+
         let unfixable = text(&["MAC-001"]);
         assert!(unfixable.contains("fix: not automated yet"), "{unfixable}");
-        assert!(!unfixable.contains("Failed:"), "{unfixable}");
-        assert!(!text(&["KRN-002"]).contains("Failed:"));
+        assert!(!unfixable.contains("automatic fix"), "{unfixable}");
+        assert!(!text(&["KRN-002"]).contains("automatic fix"));
     }
 
     /// A kernel setting that only root can read is worth a sudo hint; one

@@ -61,4 +61,4 @@ SKIP     MAC-001  medium    AppArmor enabled
 4 passed, 5 failed, 0 unknown, 19 skipped
 Skipped: kernel settings are not checked inside a container.
 Skipped: Docker is not installed.
-Failed: SSH-001, SSH-002, SSH-005, UPD-001, FW-001. Run `vps-ready plan` to see what the automatic fixes would change.
+1 failed control has an automatic fix. Run `vps-ready plan` to see what it would change.

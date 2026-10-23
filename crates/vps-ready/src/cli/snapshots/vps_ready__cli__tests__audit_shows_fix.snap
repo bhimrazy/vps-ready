@@ -42,4 +42,4 @@ FAIL     NET-005  medium    IPv4 ICMP redirects not accepted
 PASS     NET-006  low       IPv4 ICMP redirects not sent
 
 13 passed, 4 failed, 0 unknown
-Failed: KRN-001, KRN-004, NET-004, NET-005. Run `vps-ready plan` to see what the automatic fixes would change.
+2 failed controls have an automatic fix. Run `vps-ready plan` to see what it would change.
