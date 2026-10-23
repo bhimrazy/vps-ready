@@ -197,7 +197,8 @@ pub enum Backup {
         value: String,
         /// Value that apply writes.
         applied: String,
-        /// Boot in which `value` was read; `None` in journals from before 0.2.1.
+        /// Boot in which `value` was read; `None` if it could not be read, or in
+        /// journals from before 0.2.1.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         boot_id: Option<String>,
     },

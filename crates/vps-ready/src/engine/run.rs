@@ -351,6 +351,7 @@ impl<'a> Engine<'a> {
         progress: &mut dyn FnMut(Progress),
     ) -> Result<(usize, Vec<String>), EngineError> {
         let boot = boot_id(self.sys.fs);
+        let boot = boot.as_deref();
         let (id, dir) = (open.txn.id().to_owned(), open.txn.dir().to_path_buf());
         let records = open.records().map_err(|e| incomplete(&id, &dir, None, e))?;
         let started = records.iter().rev().find_map(|r| match r.event {
@@ -377,7 +378,7 @@ impl<'a> Engine<'a> {
             Some(
                 pending[..upto]
                     .iter()
-                    .filter(|(_, b)| !earlier_boot(b, boot.as_deref()))
+                    .filter(|(_, b)| !earlier_boot(b, boot))
                     .filter_map(|(r, b)| by_hand(&dir, r, b))
                     .collect(),
             )
@@ -386,7 +387,7 @@ impl<'a> Engine<'a> {
         if check {
             let mut changed = Vec::new();
             for (resource, backup) in &pending {
-                if earlier_boot(backup, boot.as_deref()) || unchanged(self.sys, &dir, backup)? {
+                if earlier_boot(backup, boot) || unchanged(self.sys, &dir, backup)? {
                     continue;
                 }
                 changed.extend(by_hand(&dir, resource, backup).map(|mut step| {
@@ -423,7 +424,7 @@ impl<'a> Engine<'a> {
         let mut at_next_boot = Vec::new();
         for (i, (resource, backup)) in pending.iter().enumerate().rev() {
             let result = match backup {
-                Backup::Sysctl { key, .. } if earlier_boot(backup, boot.as_deref()) => {
+                Backup::Sysctl { key, .. } if earlier_boot(backup, boot) => {
                     progress(Progress::Leave(backup));
                     at_next_boot.push(key.clone());
                     Ok(())

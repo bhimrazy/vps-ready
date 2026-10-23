@@ -414,7 +414,7 @@ fn rollback_after_a_reboot() {
     let host = host(&fs);
     assert_eq!(apply_yes(&host).0, 0);
     fs.write(boot_id, b"boot-2\n").unwrap();
-    // Ubuntu's `99-protect-links.conf` sets `fs.protected_regular` after the drop-in.
+    // As on Ubuntu, a later sysctl.d file set `fs.protected_regular` after the drop-in.
     fs.write(Path::new("/proc/sys/fs/protected_regular"), b"2")
         .unwrap();
 
@@ -438,7 +438,7 @@ fn rollback_after_a_reboot() {
 
 #[test]
 fn rollback_refused_by_the_safety_check_exits_2() {
-    let fs = fixture();
+    let fs = fixture().with_file(crate::resource::sysctl::BOOT_ID, "boot-1\n");
     let host = host(&fs);
     assert_eq!(apply_yes(&host).0, 0);
     fs.write(Path::new("/proc/sys/kernel/kptr_restrict"), b"2")
