@@ -242,6 +242,9 @@ mod tests {
         fn sync_dir(&self, path: &Path) -> Result<(), SysError> {
             self.inner.sync_dir(path)
         }
+        fn try_lock(&self, path: &Path) -> Result<crate::sys::FsLock, SysError> {
+            self.inner.try_lock(path)
+        }
     }
 
     #[test]

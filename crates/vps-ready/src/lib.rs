@@ -16,6 +16,7 @@
 //!   testable with fakes.
 //! - [`facts`]: read-only discovery of what the host is (OS, init system, ...).
 //! - [`audit`]: checks the facts against the embedded controls catalog.
+//! - [`engine`]: the state directory, its lock and the transaction journal.
 //!
 //! The library exists so that integration tests and future tooling can drive
 //! the same code as the binary; it has no stability guarantees before 1.0.
@@ -26,6 +27,7 @@ use serde::Serialize;
 
 pub mod audit;
 pub mod cli;
+pub mod engine;
 pub mod facts;
 pub mod sys;
 
