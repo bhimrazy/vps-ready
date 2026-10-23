@@ -237,6 +237,9 @@ fn root_would_help(report: &Report, facts: &Facts) -> bool {
 /// 3 passed, 2 failed, 0 unknown
 /// ```
 ///
+/// A failed control that a module fixes ends with the command to apply it,
+/// e.g. `fix: sudo vps-ready apply --module kernel.sysctl`.
+///
 /// Skipped controls get a row without details, and each distinct reason is
 /// printed once after the summary.
 fn print_report(
@@ -292,6 +295,9 @@ fn print_report(
                 } else {
                     writeln!(out, "{INDENT}{line}")?;
                 }
+            }
+            if let Some(module) = &control.fix {
+                writeln!(out, "{INDENT}fix: sudo vps-ready apply --module {module}")?;
             }
         }
     }
@@ -553,5 +559,71 @@ mod tests {
             .unwrap();
             insta::assert_snapshot!(format!("audit-{name}"), String::from_utf8(text).unwrap());
         }
+    }
+
+    /// The kernel and network controls of a Debian 13 VM with the kernel's
+    /// defaults: a failed control that a module fixes names the command, in
+    /// text and in JSON.
+    #[test]
+    fn audit_shows_fix() {
+        let mut facts = host("debian-13", &[]);
+        facts.virtualization.container = crate::facts::Virt::None;
+        let mut sysctl = crate::facts::Sysctl::default();
+        for (key, value) in [
+            ("fs.protected_fifos", "1"),
+            ("fs.protected_hardlinks", "1"),
+            ("fs.protected_regular", "2"),
+            ("fs.protected_symlinks", "1"),
+            ("fs.suid_dumpable", "0"),
+            ("kernel.dmesg_restrict", "1"),
+            ("kernel.kptr_restrict", "0"),
+            ("kernel.perf_event_paranoid", "3"),
+            ("kernel.randomize_va_space", "2"),
+            ("kernel.unprivileged_bpf_disabled", "2"),
+            ("kernel.yama.ptrace_scope", "0"),
+            ("net.ipv4.conf.all.accept_source_route", "0"),
+            ("net.ipv4.icmp_echo_ignore_broadcasts", "1"),
+            ("net.ipv4.tcp_syncookies", "1"),
+        ] {
+            sysctl.values.insert(key.to_owned(), value.to_owned());
+        }
+        for dir in ["all", "default", "eth0"] {
+            let conf = [
+                ("accept_redirects", "1"),
+                ("forwarding", "0"),
+                ("rp_filter", "0"),
+                ("send_redirects", "1"),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .collect();
+            sysctl.ipv4_conf.insert(dir.to_owned(), conf);
+        }
+        facts.sysctl = Some(sysctl);
+        let controls = audit::catalog()
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.id.starts_with("KRN-") || c.id.starts_with("NET-"))
+            .collect();
+        let report = audit::run(controls, &facts);
+
+        let mut text = Vec::new();
+        print_report(&mut text, &report, "a Debian 13 VM", false, false).unwrap();
+        insta::assert_snapshot!(String::from_utf8(text).unwrap());
+
+        let json = serde_json::to_value(&report).unwrap();
+        let fix = |id: &str| {
+            json["findings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|f| f["id"] == id)
+                .unwrap()
+                .get("fix")
+                .cloned()
+        };
+        assert_eq!(fix("KRN-001"), Some("kernel.sysctl".into()));
+        assert_eq!(fix("KRN-002"), Some("kernel.sysctl".into()));
+        assert_eq!(fix("NET-004"), None);
     }
 }
