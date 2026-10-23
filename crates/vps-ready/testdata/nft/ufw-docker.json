@@ -1,0 +1,9412 @@
+{
+ "nftables": [
+  {
+   "metainfo": {
+    "version": "1.0.9",
+    "release_name": "Old Doc Yak #3",
+    "json_schema_version": 1
+   }
+  },
+  {
+   "table": {
+    "family": "ip",
+    "name": "nat",
+    "handle": 1
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "nat",
+    "name": "PREROUTING",
+    "handle": 2,
+    "type": "nat",
+    "hook": "prerouting",
+    "prio": -100,
+    "policy": "accept"
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "nat",
+    "name": "OUTPUT",
+    "handle": 4,
+    "type": "nat",
+    "hook": "output",
+    "prio": -100,
+    "policy": "accept"
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "nat",
+    "name": "POSTROUTING",
+    "handle": 6,
+    "type": "nat",
+    "hook": "postrouting",
+    "prio": 100,
+    "policy": "accept"
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "nat",
+    "name": "DOCKER",
+    "handle": 13
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "nat",
+    "chain": "PREROUTING",
+    "handle": 14,
+    "expr": [
+     {
+      "xt": {
+       "type": "match",
+       "name": "addrtype"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "DOCKER"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "nat",
+    "chain": "OUTPUT",
+    "handle": 15,
+    "expr": [
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "daddr"
+        }
+       },
+       "right": {
+        "prefix": {
+         "addr": "127.0.0.0",
+         "len": 8
+        }
+       }
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "addrtype"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "DOCKER"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "nat",
+    "chain": "POSTROUTING",
+    "handle": 17,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "saddr"
+        }
+       },
+       "right": {
+        "prefix": {
+         "addr": "172.18.0.0",
+         "len": 16
+        }
+       }
+      }
+     },
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "oifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "xt": {
+       "type": "target",
+       "name": "MASQUERADE"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "nat",
+    "chain": "DOCKER",
+    "handle": 18,
+    "expr": [
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 2222
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "xt": {
+       "type": "target",
+       "name": "DNAT"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "nat",
+    "chain": "DOCKER",
+    "handle": 19,
+    "expr": [
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "udp",
+         "field": "dport"
+        }
+       },
+       "right": 53
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "xt": {
+       "type": "target",
+       "name": "DNAT"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "nat",
+    "chain": "DOCKER",
+    "handle": 20,
+    "expr": [
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 80
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "xt": {
+       "type": "target",
+       "name": "DNAT"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "nat",
+    "chain": "DOCKER",
+    "handle": 21,
+    "expr": [
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 8080
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "xt": {
+       "type": "target",
+       "name": "DNAT"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "nat",
+    "chain": "DOCKER",
+    "handle": 22,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "daddr"
+        }
+       },
+       "right": "127.0.0.1"
+      }
+     },
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 5432
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "xt": {
+       "type": "target",
+       "name": "DNAT"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "nat",
+    "chain": "DOCKER",
+    "handle": 23,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "daddr"
+        }
+       },
+       "right": "172.18.0.1"
+      }
+     },
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 8081
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "xt": {
+       "type": "target",
+       "name": "DNAT"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "nat",
+    "chain": "DOCKER",
+    "handle": 24,
+    "expr": [
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 443
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "xt": {
+       "type": "target",
+       "name": "DNAT"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "nat",
+    "chain": "DOCKER",
+    "handle": 25,
+    "expr": [
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 3000
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "xt": {
+       "type": "target",
+       "name": "DNAT"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "nat",
+    "chain": "DOCKER",
+    "handle": 26,
+    "expr": [
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 5555
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "xt": {
+       "type": "target",
+       "name": "DNAT"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "nat",
+    "chain": "DOCKER",
+    "handle": 27,
+    "expr": [
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 8443
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "xt": {
+       "type": "target",
+       "name": "DNAT"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "nat",
+    "chain": "DOCKER",
+    "handle": 28,
+    "expr": [
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "udp",
+         "field": "dport"
+        }
+       },
+       "right": 60000
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "xt": {
+       "type": "target",
+       "name": "DNAT"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "nat",
+    "chain": "DOCKER",
+    "handle": 29,
+    "expr": [
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "udp",
+         "field": "dport"
+        }
+       },
+       "right": 60001
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "xt": {
+       "type": "target",
+       "name": "DNAT"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "nat",
+    "chain": "DOCKER",
+    "handle": 30,
+    "expr": [
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "udp",
+         "field": "dport"
+        }
+       },
+       "right": 60002
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "xt": {
+       "type": "target",
+       "name": "DNAT"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "nat",
+    "chain": "DOCKER",
+    "handle": 31,
+    "expr": [
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "udp",
+         "field": "dport"
+        }
+       },
+       "right": 60003
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "xt": {
+       "type": "target",
+       "name": "DNAT"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "nat",
+    "chain": "DOCKER",
+    "handle": 32,
+    "expr": [
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "udp",
+         "field": "dport"
+        }
+       },
+       "right": 60004
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "xt": {
+       "type": "target",
+       "name": "DNAT"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "nat",
+    "chain": "DOCKER",
+    "handle": 33,
+    "expr": [
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "udp",
+         "field": "dport"
+        }
+       },
+       "right": 60005
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "xt": {
+       "type": "target",
+       "name": "DNAT"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "table": {
+    "family": "ip",
+    "name": "filter",
+    "handle": 2
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "FORWARD",
+    "handle": 6,
+    "type": "filter",
+    "hook": "forward",
+    "prio": 0,
+    "policy": "drop"
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "DOCKER-USER",
+    "handle": 11
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "ufw-before-logging-input",
+    "handle": 42
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "ufw-before-logging-output",
+    "handle": 43
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "ufw-before-logging-forward",
+    "handle": 44
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "ufw-before-input",
+    "handle": 45
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "ufw-before-output",
+    "handle": 46
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "ufw-before-forward",
+    "handle": 47
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "ufw-after-input",
+    "handle": 48
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "ufw-after-output",
+    "handle": 49
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "ufw-after-forward",
+    "handle": 50
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "ufw-after-logging-input",
+    "handle": 51
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "ufw-after-logging-output",
+    "handle": 52
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "ufw-after-logging-forward",
+    "handle": 53
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "ufw-reject-input",
+    "handle": 54
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "ufw-reject-output",
+    "handle": 55
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "ufw-reject-forward",
+    "handle": 56
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "ufw-track-input",
+    "handle": 57
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "ufw-track-output",
+    "handle": 58
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "ufw-track-forward",
+    "handle": 59
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "INPUT",
+    "handle": 60,
+    "type": "filter",
+    "hook": "input",
+    "prio": 0,
+    "policy": "drop"
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "OUTPUT",
+    "handle": 67,
+    "type": "filter",
+    "hook": "output",
+    "prio": 0,
+    "policy": "accept"
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "ufw-logging-deny",
+    "handle": 82
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "ufw-logging-allow",
+    "handle": 83
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "ufw-skip-to-policy-input",
+    "handle": 84
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "ufw-skip-to-policy-output",
+    "handle": 85
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "ufw-skip-to-policy-forward",
+    "handle": 86
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "ufw-not-local",
+    "handle": 90
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "ufw-user-input",
+    "handle": 122
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "ufw-user-output",
+    "handle": 123
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "ufw-user-forward",
+    "handle": 124
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "ufw-user-logging-input",
+    "handle": 125
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "ufw-user-logging-output",
+    "handle": 126
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "ufw-user-logging-forward",
+    "handle": 127
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "ufw-user-limit",
+    "handle": 128
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "ufw-user-limit-accept",
+    "handle": 129
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "DOCKER",
+    "handle": 162
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "DOCKER-FORWARD",
+    "handle": 163
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "DOCKER-BRIDGE",
+    "handle": 164
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "DOCKER-CT",
+    "handle": 165
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "filter",
+    "name": "DOCKER-INTERNAL",
+    "handle": 166
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "FORWARD",
+    "handle": 175,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "DOCKER-USER"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "FORWARD",
+    "handle": 167,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "DOCKER-FORWARD"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "FORWARD",
+    "handle": 74,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw-before-logging-forward"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "FORWARD",
+    "handle": 75,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw-before-forward"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "FORWARD",
+    "handle": 76,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw-after-forward"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "FORWARD",
+    "handle": 77,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw-after-logging-forward"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "FORWARD",
+    "handle": 78,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw-reject-forward"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "FORWARD",
+    "handle": 79,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw-track-forward"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-before-input",
+    "handle": 91,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "lo"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-before-input",
+    "handle": 93,
+    "expr": [
+     {
+      "xt": {
+       "type": "match",
+       "name": "conntrack"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-before-input",
+    "handle": 96,
+    "expr": [
+     {
+      "xt": {
+       "type": "match",
+       "name": "conntrack"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw-logging-deny"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-before-input",
+    "handle": 97,
+    "expr": [
+     {
+      "xt": {
+       "type": "match",
+       "name": "conntrack"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "drop": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-before-input",
+    "handle": 98,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "protocol"
+        }
+       },
+       "right": "icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-before-input",
+    "handle": 99,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "protocol"
+        }
+       },
+       "right": "icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-before-input",
+    "handle": 100,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "protocol"
+        }
+       },
+       "right": "icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-before-input",
+    "handle": 101,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "protocol"
+        }
+       },
+       "right": "icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-before-input",
+    "handle": 106,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "udp",
+         "field": "sport"
+        }
+       },
+       "right": 67
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "udp",
+         "field": "dport"
+        }
+       },
+       "right": 68
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-before-input",
+    "handle": 107,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw-not-local"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-before-input",
+    "handle": 113,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "daddr"
+        }
+       },
+       "right": "224.0.0.251"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "udp",
+         "field": "dport"
+        }
+       },
+       "right": 5353
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-before-input",
+    "handle": 114,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "daddr"
+        }
+       },
+       "right": "239.255.255.250"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "udp",
+         "field": "dport"
+        }
+       },
+       "right": 1900
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-before-input",
+    "handle": 150,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw-user-input"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-before-output",
+    "handle": 92,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "oifname"
+        }
+       },
+       "right": "lo"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-before-output",
+    "handle": 94,
+    "expr": [
+     {
+      "xt": {
+       "type": "match",
+       "name": "conntrack"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-before-output",
+    "handle": 151,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw-user-output"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-before-forward",
+    "handle": 95,
+    "expr": [
+     {
+      "xt": {
+       "type": "match",
+       "name": "conntrack"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-before-forward",
+    "handle": 102,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "protocol"
+        }
+       },
+       "right": "icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-before-forward",
+    "handle": 103,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "protocol"
+        }
+       },
+       "right": "icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-before-forward",
+    "handle": 104,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "protocol"
+        }
+       },
+       "right": "icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-before-forward",
+    "handle": 105,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "protocol"
+        }
+       },
+       "right": "icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-before-forward",
+    "handle": 152,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw-user-forward"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-after-input",
+    "handle": 115,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "udp",
+         "field": "dport"
+        }
+       },
+       "right": 137
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw-skip-to-policy-input"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-after-input",
+    "handle": 116,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "udp",
+         "field": "dport"
+        }
+       },
+       "right": 138
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw-skip-to-policy-input"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-after-input",
+    "handle": 117,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 139
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw-skip-to-policy-input"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-after-input",
+    "handle": 118,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 445
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw-skip-to-policy-input"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-after-input",
+    "handle": 119,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "udp",
+         "field": "dport"
+        }
+       },
+       "right": 67
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw-skip-to-policy-input"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-after-input",
+    "handle": 120,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "udp",
+         "field": "dport"
+        }
+       },
+       "right": 68
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw-skip-to-policy-input"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-after-input",
+    "handle": 121,
+    "expr": [
+     {
+      "xt": {
+       "type": "match",
+       "name": "addrtype"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw-skip-to-policy-input"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-after-logging-input",
+    "handle": 156,
+    "expr": [
+     {
+      "limit": {
+       "rate": 3,
+       "burst": 10,
+       "per": "minute"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "xt": {
+       "type": "target",
+       "name": "LOG"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-after-logging-forward",
+    "handle": 157,
+    "expr": [
+     {
+      "limit": {
+       "rate": 3,
+       "burst": 10,
+       "per": "minute"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "xt": {
+       "type": "target",
+       "name": "LOG"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-track-output",
+    "handle": 80,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "protocol"
+        }
+       },
+       "right": "tcp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "conntrack"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-track-output",
+    "handle": 81,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "protocol"
+        }
+       },
+       "right": "udp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "conntrack"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "INPUT",
+    "handle": 61,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw-before-logging-input"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "INPUT",
+    "handle": 62,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw-before-input"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "INPUT",
+    "handle": 63,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw-after-input"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "INPUT",
+    "handle": 64,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw-after-logging-input"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "INPUT",
+    "handle": 65,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw-reject-input"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "INPUT",
+    "handle": 66,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw-track-input"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "OUTPUT",
+    "handle": 68,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw-before-logging-output"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "OUTPUT",
+    "handle": 69,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw-before-output"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "OUTPUT",
+    "handle": 70,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw-after-output"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "OUTPUT",
+    "handle": 71,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw-after-logging-output"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "OUTPUT",
+    "handle": 72,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw-reject-output"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "OUTPUT",
+    "handle": 73,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw-track-output"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-logging-deny",
+    "handle": 158,
+    "expr": [
+     {
+      "xt": {
+       "type": "match",
+       "name": "conntrack"
+      }
+     },
+     {
+      "limit": {
+       "rate": 3,
+       "burst": 10,
+       "per": "minute"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "return": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-logging-deny",
+    "handle": 159,
+    "expr": [
+     {
+      "limit": {
+       "rate": 3,
+       "burst": 10,
+       "per": "minute"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "xt": {
+       "type": "target",
+       "name": "LOG"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-logging-allow",
+    "handle": 160,
+    "expr": [
+     {
+      "limit": {
+       "rate": 3,
+       "burst": 10,
+       "per": "minute"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "xt": {
+       "type": "target",
+       "name": "LOG"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-skip-to-policy-input",
+    "handle": 87,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "drop": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-skip-to-policy-output",
+    "handle": 88,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-skip-to-policy-forward",
+    "handle": 89,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "drop": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-not-local",
+    "handle": 108,
+    "expr": [
+     {
+      "xt": {
+       "type": "match",
+       "name": "addrtype"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "return": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-not-local",
+    "handle": 109,
+    "expr": [
+     {
+      "xt": {
+       "type": "match",
+       "name": "addrtype"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "return": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-not-local",
+    "handle": 110,
+    "expr": [
+     {
+      "xt": {
+       "type": "match",
+       "name": "addrtype"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "return": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-not-local",
+    "handle": 111,
+    "expr": [
+     {
+      "limit": {
+       "rate": 3,
+       "burst": 10,
+       "per": "minute"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw-logging-deny"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-not-local",
+    "handle": 112,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "drop": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-user-input",
+    "handle": 130,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 22
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-user-input",
+    "handle": 131,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "protocol"
+        }
+       },
+       "right": "tcp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "multiport"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-user-input",
+    "handle": 132,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 2222
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "conntrack"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "recent"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-user-input",
+    "handle": 133,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 2222
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "conntrack"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "recent"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw-user-limit"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-user-input",
+    "handle": 134,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 2222
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw-user-limit-accept"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-user-input",
+    "handle": 135,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "saddr"
+        }
+       },
+       "right": {
+        "prefix": {
+         "addr": "203.0.113.0",
+         "len": 24
+        }
+       }
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 5555
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-user-input",
+    "handle": 136,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "saddr"
+        }
+       },
+       "right": {
+        "prefix": {
+         "addr": "203.0.113.0",
+         "len": 24
+        }
+       }
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "udp",
+         "field": "dport"
+        }
+       },
+       "right": 5555
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-user-input",
+    "handle": 137,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "eth0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 3000
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-user-input",
+    "handle": 138,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "eth0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "udp",
+         "field": "dport"
+        }
+       },
+       "right": 3000
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-user-input",
+    "handle": 139,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 53
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-user-input",
+    "handle": 140,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "udp",
+         "field": "dport"
+        }
+       },
+       "right": 53
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-user-input",
+    "handle": 141,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "protocol"
+        }
+       },
+       "right": "udp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "multiport"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-user-limit",
+    "handle": 161,
+    "expr": [
+     {
+      "limit": {
+       "rate": 3,
+       "burst": 5,
+       "per": "minute"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "xt": {
+       "type": "target",
+       "name": "LOG"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-user-limit",
+    "handle": 148,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "xt": {
+       "type": "target",
+       "name": "REJECT"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "ufw-user-limit-accept",
+    "handle": 149,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "DOCKER",
+    "handle": 194,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "daddr"
+        }
+       },
+       "right": "172.18.0.2"
+      }
+     },
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "oifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "udp",
+         "field": "dport"
+        }
+       },
+       "right": 60005
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "DOCKER",
+    "handle": 193,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "daddr"
+        }
+       },
+       "right": "172.18.0.2"
+      }
+     },
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "oifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "udp",
+         "field": "dport"
+        }
+       },
+       "right": 60004
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "DOCKER",
+    "handle": 192,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "daddr"
+        }
+       },
+       "right": "172.18.0.2"
+      }
+     },
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "oifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "udp",
+         "field": "dport"
+        }
+       },
+       "right": 60003
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "DOCKER",
+    "handle": 191,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "daddr"
+        }
+       },
+       "right": "172.18.0.2"
+      }
+     },
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "oifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "udp",
+         "field": "dport"
+        }
+       },
+       "right": 60002
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "DOCKER",
+    "handle": 190,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "daddr"
+        }
+       },
+       "right": "172.18.0.2"
+      }
+     },
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "oifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "udp",
+         "field": "dport"
+        }
+       },
+       "right": 60001
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "DOCKER",
+    "handle": 189,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "daddr"
+        }
+       },
+       "right": "172.18.0.2"
+      }
+     },
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "oifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "udp",
+         "field": "dport"
+        }
+       },
+       "right": 60000
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "DOCKER",
+    "handle": 188,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "daddr"
+        }
+       },
+       "right": "172.18.0.2"
+      }
+     },
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "oifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 8443
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "DOCKER",
+    "handle": 187,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "daddr"
+        }
+       },
+       "right": "172.18.0.2"
+      }
+     },
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "oifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 5555
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "DOCKER",
+    "handle": 186,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "daddr"
+        }
+       },
+       "right": "172.18.0.2"
+      }
+     },
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "oifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 3000
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "DOCKER",
+    "handle": 185,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "daddr"
+        }
+       },
+       "right": "172.18.0.2"
+      }
+     },
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "oifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 443
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "DOCKER",
+    "handle": 184,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "daddr"
+        }
+       },
+       "right": "172.18.0.2"
+      }
+     },
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "oifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 82
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "DOCKER",
+    "handle": 183,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "daddr"
+        }
+       },
+       "right": "172.18.0.2"
+      }
+     },
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "oifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 81
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "DOCKER",
+    "handle": 182,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "daddr"
+        }
+       },
+       "right": "172.18.0.2"
+      }
+     },
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "oifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 80
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "DOCKER",
+    "handle": 181,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "daddr"
+        }
+       },
+       "right": "172.18.0.2"
+      }
+     },
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "oifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "udp",
+         "field": "dport"
+        }
+       },
+       "right": 53
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "DOCKER",
+    "handle": 180,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "daddr"
+        }
+       },
+       "right": "172.18.0.2"
+      }
+     },
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "oifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 22
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "DOCKER",
+    "handle": 177,
+    "expr": [
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "oifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "drop": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "DOCKER-FORWARD",
+    "handle": 170,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "DOCKER-CT"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "DOCKER-FORWARD",
+    "handle": 169,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "DOCKER-INTERNAL"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "DOCKER-FORWARD",
+    "handle": 168,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "DOCKER-BRIDGE"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "DOCKER-FORWARD",
+    "handle": 176,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "DOCKER-BRIDGE",
+    "handle": 179,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "oifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "DOCKER"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "filter",
+    "chain": "DOCKER-CT",
+    "handle": 178,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "oifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "conntrack"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "table": {
+    "family": "ip6",
+    "name": "nat",
+    "handle": 3
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "nat",
+    "name": "PREROUTING",
+    "handle": 2,
+    "type": "nat",
+    "hook": "prerouting",
+    "prio": -100,
+    "policy": "accept"
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "nat",
+    "name": "OUTPUT",
+    "handle": 4,
+    "type": "nat",
+    "hook": "output",
+    "prio": -100,
+    "policy": "accept"
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "nat",
+    "name": "DOCKER",
+    "handle": 6
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "nat",
+    "chain": "PREROUTING",
+    "handle": 7,
+    "expr": [
+     {
+      "xt": {
+       "type": "match",
+       "name": "addrtype"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "DOCKER"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "nat",
+    "chain": "OUTPUT",
+    "handle": 8,
+    "expr": [
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "payload": {
+         "protocol": "ip6",
+         "field": "daddr"
+        }
+       },
+       "right": "::1"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "addrtype"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "DOCKER"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "table": {
+    "family": "ip6",
+    "name": "filter",
+    "handle": 4
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "FORWARD",
+    "handle": 6,
+    "type": "filter",
+    "hook": "forward",
+    "prio": 0,
+    "policy": "drop"
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "DOCKER-USER",
+    "handle": 11
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "ufw6-before-logging-input",
+    "handle": 34
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "ufw6-before-logging-output",
+    "handle": 35
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "ufw6-before-logging-forward",
+    "handle": 36
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "ufw6-before-input",
+    "handle": 37
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "ufw6-before-output",
+    "handle": 38
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "ufw6-before-forward",
+    "handle": 39
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "ufw6-after-input",
+    "handle": 40
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "ufw6-after-output",
+    "handle": 41
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "ufw6-after-forward",
+    "handle": 42
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "ufw6-after-logging-input",
+    "handle": 43
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "ufw6-after-logging-output",
+    "handle": 44
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "ufw6-after-logging-forward",
+    "handle": 45
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "ufw6-reject-input",
+    "handle": 46
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "ufw6-reject-output",
+    "handle": 47
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "ufw6-reject-forward",
+    "handle": 48
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "ufw6-track-input",
+    "handle": 49
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "ufw6-track-output",
+    "handle": 50
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "ufw6-track-forward",
+    "handle": 51
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "INPUT",
+    "handle": 52,
+    "type": "filter",
+    "hook": "input",
+    "prio": 0,
+    "policy": "drop"
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "OUTPUT",
+    "handle": 59,
+    "type": "filter",
+    "hook": "output",
+    "prio": 0,
+    "policy": "accept"
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "ufw6-logging-deny",
+    "handle": 74
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "ufw6-logging-allow",
+    "handle": 75
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "ufw6-skip-to-policy-input",
+    "handle": 76
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "ufw6-skip-to-policy-output",
+    "handle": 77
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "ufw6-skip-to-policy-forward",
+    "handle": 78
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "ufw6-user-input",
+    "handle": 153
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "ufw6-user-output",
+    "handle": 154
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "ufw6-user-forward",
+    "handle": 155
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "ufw6-user-logging-input",
+    "handle": 156
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "ufw6-user-logging-output",
+    "handle": 157
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "ufw6-user-logging-forward",
+    "handle": 158
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "ufw6-user-limit",
+    "handle": 159
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "ufw6-user-limit-accept",
+    "handle": 160
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "DOCKER",
+    "handle": 191
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "DOCKER-FORWARD",
+    "handle": 192
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "DOCKER-BRIDGE",
+    "handle": 193
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "DOCKER-CT",
+    "handle": 194
+   }
+  },
+  {
+   "chain": {
+    "family": "ip6",
+    "table": "filter",
+    "name": "DOCKER-INTERNAL",
+    "handle": 195
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "FORWARD",
+    "handle": 200,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "DOCKER-USER"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "FORWARD",
+    "handle": 196,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "DOCKER-FORWARD"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "FORWARD",
+    "handle": 66,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw6-before-logging-forward"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "FORWARD",
+    "handle": 67,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw6-before-forward"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "FORWARD",
+    "handle": 68,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw6-after-forward"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "FORWARD",
+    "handle": 69,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw6-after-logging-forward"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "FORWARD",
+    "handle": 70,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw6-reject-forward"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "FORWARD",
+    "handle": 71,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw6-track-forward"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-input",
+    "handle": 82,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "lo"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-input",
+    "handle": 84,
+    "expr": [
+     {
+      "xt": {
+       "type": "match",
+       "name": "rt"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "drop": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-input",
+    "handle": 87,
+    "expr": [
+     {
+      "xt": {
+       "type": "match",
+       "name": "conntrack"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-input",
+    "handle": 90,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-input",
+    "handle": 91,
+    "expr": [
+     {
+      "xt": {
+       "type": "match",
+       "name": "conntrack"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw6-logging-deny"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-input",
+    "handle": 92,
+    "expr": [
+     {
+      "xt": {
+       "type": "match",
+       "name": "conntrack"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "drop": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-input",
+    "handle": 93,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-input",
+    "handle": 94,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-input",
+    "handle": 95,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-input",
+    "handle": 96,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-input",
+    "handle": 97,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-input",
+    "handle": 98,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "hl"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-input",
+    "handle": 99,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "hl"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-input",
+    "handle": 100,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "hl"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-input",
+    "handle": 101,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "hl"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-input",
+    "handle": 102,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "hl"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-input",
+    "handle": 103,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "hl"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-input",
+    "handle": 104,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip6",
+         "field": "saddr"
+        }
+       },
+       "right": {
+        "prefix": {
+         "addr": "fe80::",
+         "len": 10
+        }
+       }
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-input",
+    "handle": 105,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip6",
+         "field": "saddr"
+        }
+       },
+       "right": {
+        "prefix": {
+         "addr": "fe80::",
+         "len": 10
+        }
+       }
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-input",
+    "handle": 106,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip6",
+         "field": "saddr"
+        }
+       },
+       "right": {
+        "prefix": {
+         "addr": "fe80::",
+         "len": 10
+        }
+       }
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-input",
+    "handle": 107,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip6",
+         "field": "saddr"
+        }
+       },
+       "right": {
+        "prefix": {
+         "addr": "fe80::",
+         "len": 10
+        }
+       }
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-input",
+    "handle": 108,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "hl"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-input",
+    "handle": 109,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "hl"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-input",
+    "handle": 110,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip6",
+         "field": "saddr"
+        }
+       },
+       "right": {
+        "prefix": {
+         "addr": "fe80::",
+         "len": 10
+        }
+       }
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "hl"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-input",
+    "handle": 111,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip6",
+         "field": "saddr"
+        }
+       },
+       "right": {
+        "prefix": {
+         "addr": "fe80::",
+         "len": 10
+        }
+       }
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "hl"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-input",
+    "handle": 112,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip6",
+         "field": "saddr"
+        }
+       },
+       "right": {
+        "prefix": {
+         "addr": "fe80::",
+         "len": 10
+        }
+       }
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "hl"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-input",
+    "handle": 140,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-input",
+    "handle": 141,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-input",
+    "handle": 142,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-input",
+    "handle": 143,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-input",
+    "handle": 144,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip6",
+         "field": "saddr"
+        }
+       },
+       "right": {
+        "prefix": {
+         "addr": "fe80::",
+         "len": 10
+        }
+       }
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip6",
+         "field": "daddr"
+        }
+       },
+       "right": {
+        "prefix": {
+         "addr": "fe80::",
+         "len": 10
+        }
+       }
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "udp",
+         "field": "sport"
+        }
+       },
+       "right": 547
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "udp",
+         "field": "dport"
+        }
+       },
+       "right": 546
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-input",
+    "handle": 145,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip6",
+         "field": "daddr"
+        }
+       },
+       "right": "ff02::fb"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "udp",
+         "field": "dport"
+        }
+       },
+       "right": 5353
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-input",
+    "handle": 146,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip6",
+         "field": "daddr"
+        }
+       },
+       "right": "ff02::f"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "udp",
+         "field": "dport"
+        }
+       },
+       "right": 1900
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-input",
+    "handle": 179,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw6-user-input"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-output",
+    "handle": 83,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "oifname"
+        }
+       },
+       "right": "lo"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-output",
+    "handle": 86,
+    "expr": [
+     {
+      "xt": {
+       "type": "match",
+       "name": "rt"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "drop": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-output",
+    "handle": 88,
+    "expr": [
+     {
+      "xt": {
+       "type": "match",
+       "name": "conntrack"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-output",
+    "handle": 113,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-output",
+    "handle": 114,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-output",
+    "handle": 115,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-output",
+    "handle": 116,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-output",
+    "handle": 117,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-output",
+    "handle": 118,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-output",
+    "handle": 119,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "hl"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-output",
+    "handle": 120,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "hl"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-output",
+    "handle": 121,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "hl"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-output",
+    "handle": 122,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "hl"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-output",
+    "handle": 123,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "hl"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-output",
+    "handle": 124,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "hl"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-output",
+    "handle": 125,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip6",
+         "field": "saddr"
+        }
+       },
+       "right": {
+        "prefix": {
+         "addr": "fe80::",
+         "len": 10
+        }
+       }
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-output",
+    "handle": 126,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip6",
+         "field": "saddr"
+        }
+       },
+       "right": {
+        "prefix": {
+         "addr": "fe80::",
+         "len": 10
+        }
+       }
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-output",
+    "handle": 127,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip6",
+         "field": "saddr"
+        }
+       },
+       "right": {
+        "prefix": {
+         "addr": "fe80::",
+         "len": 10
+        }
+       }
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-output",
+    "handle": 128,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip6",
+         "field": "saddr"
+        }
+       },
+       "right": {
+        "prefix": {
+         "addr": "fe80::",
+         "len": 10
+        }
+       }
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "counter": {
+       "packets": 3,
+       "bytes": 288
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-output",
+    "handle": 129,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "hl"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-output",
+    "handle": 130,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "hl"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-output",
+    "handle": 131,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip6",
+         "field": "saddr"
+        }
+       },
+       "right": {
+        "prefix": {
+         "addr": "fe80::",
+         "len": 10
+        }
+       }
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "hl"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-output",
+    "handle": 132,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip6",
+         "field": "saddr"
+        }
+       },
+       "right": {
+        "prefix": {
+         "addr": "fe80::",
+         "len": 10
+        }
+       }
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "hl"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-output",
+    "handle": 133,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip6",
+         "field": "saddr"
+        }
+       },
+       "right": {
+        "prefix": {
+         "addr": "fe80::",
+         "len": 10
+        }
+       }
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "hl"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-output",
+    "handle": 180,
+    "expr": [
+     {
+      "counter": {
+       "packets": 3,
+       "bytes": 248
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw6-user-output"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-forward",
+    "handle": 85,
+    "expr": [
+     {
+      "xt": {
+       "type": "match",
+       "name": "rt"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "drop": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-forward",
+    "handle": 89,
+    "expr": [
+     {
+      "xt": {
+       "type": "match",
+       "name": "conntrack"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-forward",
+    "handle": 134,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-forward",
+    "handle": 135,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-forward",
+    "handle": 136,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-forward",
+    "handle": 137,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-forward",
+    "handle": 138,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-forward",
+    "handle": 139,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "ipv6-icmp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "icmp6"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-before-forward",
+    "handle": 181,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw6-user-forward"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-after-input",
+    "handle": 147,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "udp",
+         "field": "dport"
+        }
+       },
+       "right": 137
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw6-skip-to-policy-input"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-after-input",
+    "handle": 148,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "udp",
+         "field": "dport"
+        }
+       },
+       "right": 138
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw6-skip-to-policy-input"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-after-input",
+    "handle": 149,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 139
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw6-skip-to-policy-input"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-after-input",
+    "handle": 150,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 445
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw6-skip-to-policy-input"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-after-input",
+    "handle": 151,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "udp",
+         "field": "dport"
+        }
+       },
+       "right": 546
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw6-skip-to-policy-input"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-after-input",
+    "handle": 152,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "udp",
+         "field": "dport"
+        }
+       },
+       "right": 547
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw6-skip-to-policy-input"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-after-logging-input",
+    "handle": 185,
+    "expr": [
+     {
+      "limit": {
+       "rate": 3,
+       "burst": 10,
+       "per": "minute"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "xt": {
+       "type": "target",
+       "name": "LOG"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-after-logging-forward",
+    "handle": 186,
+    "expr": [
+     {
+      "limit": {
+       "rate": 3,
+       "burst": 10,
+       "per": "minute"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "xt": {
+       "type": "target",
+       "name": "LOG"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-track-output",
+    "handle": 72,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "tcp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "conntrack"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-track-output",
+    "handle": 73,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "udp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "conntrack"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "INPUT",
+    "handle": 53,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw6-before-logging-input"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "INPUT",
+    "handle": 54,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw6-before-input"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "INPUT",
+    "handle": 55,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw6-after-input"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "INPUT",
+    "handle": 56,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw6-after-logging-input"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "INPUT",
+    "handle": 57,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw6-reject-input"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "INPUT",
+    "handle": 58,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw6-track-input"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "OUTPUT",
+    "handle": 60,
+    "expr": [
+     {
+      "counter": {
+       "packets": 6,
+       "bytes": 536
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw6-before-logging-output"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "OUTPUT",
+    "handle": 61,
+    "expr": [
+     {
+      "counter": {
+       "packets": 6,
+       "bytes": 536
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw6-before-output"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "OUTPUT",
+    "handle": 62,
+    "expr": [
+     {
+      "counter": {
+       "packets": 3,
+       "bytes": 248
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw6-after-output"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "OUTPUT",
+    "handle": 63,
+    "expr": [
+     {
+      "counter": {
+       "packets": 3,
+       "bytes": 248
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw6-after-logging-output"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "OUTPUT",
+    "handle": 64,
+    "expr": [
+     {
+      "counter": {
+       "packets": 3,
+       "bytes": 248
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw6-reject-output"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "OUTPUT",
+    "handle": 65,
+    "expr": [
+     {
+      "counter": {
+       "packets": 3,
+       "bytes": 248
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw6-track-output"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-logging-deny",
+    "handle": 187,
+    "expr": [
+     {
+      "xt": {
+       "type": "match",
+       "name": "conntrack"
+      }
+     },
+     {
+      "limit": {
+       "rate": 3,
+       "burst": 10,
+       "per": "minute"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "return": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-logging-deny",
+    "handle": 188,
+    "expr": [
+     {
+      "limit": {
+       "rate": 3,
+       "burst": 10,
+       "per": "minute"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "xt": {
+       "type": "target",
+       "name": "LOG"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-logging-allow",
+    "handle": 189,
+    "expr": [
+     {
+      "limit": {
+       "rate": 3,
+       "burst": 10,
+       "per": "minute"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "xt": {
+       "type": "target",
+       "name": "LOG"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-skip-to-policy-input",
+    "handle": 79,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "drop": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-skip-to-policy-output",
+    "handle": 80,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-skip-to-policy-forward",
+    "handle": 81,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "drop": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-user-input",
+    "handle": 161,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 22
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-user-input",
+    "handle": 162,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "tcp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "multiport"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-user-input",
+    "handle": 163,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 2222
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "conntrack"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "recent"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-user-input",
+    "handle": 164,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 2222
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "conntrack"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "recent"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw6-user-limit"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-user-input",
+    "handle": 165,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 2222
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "ufw6-user-limit-accept"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-user-input",
+    "handle": 166,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "eth0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 3000
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-user-input",
+    "handle": 167,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "eth0"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "udp",
+         "field": "dport"
+        }
+       },
+       "right": 3000
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-user-input",
+    "handle": 168,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 53
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-user-input",
+    "handle": 169,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "udp",
+         "field": "dport"
+        }
+       },
+       "right": 53
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-user-input",
+    "handle": 170,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "meta": {
+         "key": "l4proto"
+        }
+       },
+       "right": "udp"
+      }
+     },
+     {
+      "xt": {
+       "type": "match",
+       "name": "multiport"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-user-limit",
+    "handle": 190,
+    "expr": [
+     {
+      "limit": {
+       "rate": 3,
+       "burst": 5,
+       "per": "minute"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "xt": {
+       "type": "target",
+       "name": "LOG"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-user-limit",
+    "handle": 177,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "xt": {
+       "type": "target",
+       "name": "REJECT"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "ufw6-user-limit-accept",
+    "handle": 178,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "accept": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "DOCKER-FORWARD",
+    "handle": 199,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "DOCKER-CT"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "DOCKER-FORWARD",
+    "handle": 198,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "DOCKER-INTERNAL"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip6",
+    "table": "filter",
+    "chain": "DOCKER-FORWARD",
+    "handle": 197,
+    "expr": [
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "jump": {
+       "target": "DOCKER-BRIDGE"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "table": {
+    "family": "ip",
+    "name": "raw",
+    "handle": 5
+   }
+  },
+  {
+   "chain": {
+    "family": "ip",
+    "table": "raw",
+    "name": "PREROUTING",
+    "handle": 1,
+    "type": "filter",
+    "hook": "prerouting",
+    "prio": -300,
+    "policy": "accept"
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "raw",
+    "chain": "PREROUTING",
+    "handle": 4,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "daddr"
+        }
+       },
+       "right": "172.18.0.2"
+      }
+     },
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "docker0"
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "drop": null
+     }
+    ]
+   }
+  },
+  {
+   "rule": {
+    "family": "ip",
+    "table": "raw",
+    "chain": "PREROUTING",
+    "handle": 5,
+    "expr": [
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "ip",
+         "field": "daddr"
+        }
+       },
+       "right": "127.0.0.1"
+      }
+     },
+     {
+      "match": {
+       "op": "!=",
+       "left": {
+        "meta": {
+         "key": "iifname"
+        }
+       },
+       "right": "lo"
+      }
+     },
+     {
+      "match": {
+       "op": "==",
+       "left": {
+        "payload": {
+         "protocol": "tcp",
+         "field": "dport"
+        }
+       },
+       "right": 5432
+      }
+     },
+     {
+      "counter": {
+       "packets": 0,
+       "bytes": 0
+      }
+     },
+     {
+      "drop": null
+     }
+    ]
+   }
+  }
+ ]
+}
