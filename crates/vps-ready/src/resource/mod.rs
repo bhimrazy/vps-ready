@@ -267,7 +267,8 @@ pub fn restore(sys: Sys, txn_dir: &Path, backup: &Backup) -> Result<(), Resource
     }
 }
 
-/// A [`Sys`] over `fs` whose runner fails every command; these resources run none.
+/// A [`Sys`] over `fs` whose runner fails every command, for tests whose
+/// resource runs no command.
 #[cfg(test)]
 fn test_sys(fs: &dyn crate::sys::Fs) -> Sys<'_> {
     struct NoRunner;

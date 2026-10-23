@@ -28,6 +28,9 @@ pub struct File {
 /// A command that must exit 0 on the `.after` copy of a [`File`] before the
 /// target is written. Every argument equal to [`Validate::PATH`] is replaced
 /// with the path of that copy, e.g. `apt-config -c {} dump`.
+///
+/// The path is the system path; the command runs on the host, so this
+/// matches [`crate::sys::Fs`] only when it is rooted at `/`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Validate {
     /// Program name or absolute path.
@@ -492,25 +495,27 @@ mod tests {
     }
 
     const APT: &str = "/etc/apt/apt.conf.d/52vps-ready";
+    const APT_CONTENT: &[u8] = b"APT::Periodic::Enable \"1\";\n";
 
     fn apt_drop_in() -> Resource {
         Resource::File(File {
             path: APT.into(),
-            content: "APT::Periodic::Enable \"1\";\n".into(),
+            content: APT_CONTENT.into(),
             owner: root_owner(),
             validate: Some(Validate::new("apt-config", ["-c", Validate::PATH, "dump"])),
         })
     }
 
     /// Snapshots [`apt_drop_in`] over an existing file with `runner`; returns
-    /// the result, the commands run and the target's bytes afterwards.
+    /// the result, the commands run and the bytes of the `.after` copy.
     fn snapshot_validated(
         runner: &FakeRunner,
     ) -> (Result<Backup, ResourceError>, Vec<Cmd>, Vec<u8>) {
         let fs = FakeFs::new().with_file(APT, "old\n");
         let sys = Sys { fs: &fs, runner };
         let result = apt_drop_in().snapshot(sys, Path::new(TXN), 2);
-        (result, runner.calls(), fs.read(Path::new(APT)).unwrap())
+        let after = fs.read(&after_path(Path::new(TXN), 2)).unwrap();
+        (result, runner.calls(), after)
     }
 
     fn expected_validate() -> Vec<Cmd> {
@@ -521,24 +526,24 @@ mod tests {
     #[test]
     fn validate_runs_on_the_after_copy() {
         let runner = FakeRunner::new().on("apt-config", ["-c"], Output::success(""));
-        let (result, calls, target) = snapshot_validated(&runner);
+        let (result, calls, after) = snapshot_validated(&runner);
         assert!(
             matches!(result, Ok(Backup::File { n: 2, .. })),
             "{result:?}"
         );
         assert_eq!(calls, expected_validate());
-        assert_eq!(target, b"old\n");
+        assert_eq!(after, APT_CONTENT);
     }
 
     #[test]
-    fn validate_failure_aborts_before_writing_the_target() {
+    fn validate_failure_is_invalid() {
         let rejected = Output {
             status: 100,
             stdout: Vec::new(),
             stderr: b"E: Syntax error\n".to_vec(),
         };
         let runner = FakeRunner::new().on("apt-config", ["-c"], rejected);
-        let (result, calls, target) = snapshot_validated(&runner);
+        let (result, calls, after) = snapshot_validated(&runner);
         let err = result.unwrap_err();
         assert_eq!(
             err.to_string(),
@@ -547,17 +552,17 @@ mod tests {
             )
         );
         assert_eq!(calls, expected_validate());
-        assert_eq!(target, b"old\n");
+        assert_eq!(after, APT_CONTENT);
     }
 
     #[test]
     fn validate_that_cannot_run_fails_closed() {
-        let (result, calls, target) = snapshot_validated(&FakeRunner::new());
+        let (result, calls, after) = snapshot_validated(&FakeRunner::new());
         assert!(
             matches!(result, Err(ResourceError::Invalid { ref reason, .. }) if reason.starts_with("could not run")),
             "{result:?}"
         );
         assert_eq!(calls, expected_validate());
-        assert_eq!(target, b"old\n");
+        assert_eq!(after, APT_CONTENT);
     }
 }

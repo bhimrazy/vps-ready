@@ -8,14 +8,17 @@ use crate::sys::{Cmd, Output, Sys};
 /// An apt package that must be installed. Debian family only.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Package {
-    /// Package name, e.g. `unattended-upgrades`.
+    /// A plain Debian package name, e.g. `unattended-upgrades`: no apt
+    /// suffix (`-`, `+`, `=version`, `/suite`) and no pattern characters.
     pub name: String,
 }
 
 /// cloud-init may still hold the dpkg lock on first boot; wait for it.
 const LOCK_TIMEOUT: &str = "DPkg::Lock::Timeout=300";
 
-/// Kill timeout of each `apt-get` command.
+/// Kill timeout of each `apt-get` command. It kills `apt-get`, not `dpkg`,
+/// so the dpkg database may then need `dpkg --configure -a`, which rollback
+/// does not run.
 const APT_TIMEOUT: Duration = Duration::from_secs(600);
 
 impl Package {
@@ -32,7 +35,9 @@ impl Package {
     }
 
     /// Refreshes the package lists, which a fresh image may lack, then
-    /// installs without recommends and keeps any existing config file.
+    /// installs without recommends and keeps any existing config file. A
+    /// source that `apt-get update` fails on with an error (exit 100) fails
+    /// the apply; one it reports only as a warning does not.
     pub(super) fn apply(&self, sys: Sys) -> Result<(), ResourceError> {
         run(sys, &apt_get(["update"]))?;
         run(
@@ -248,6 +253,33 @@ mod tests {
             "`apt-get` exited with status 100: E: Could not get lock"
         );
         assert_eq!(runner.calls(), expected_apply()[..1]);
+    }
+
+    #[test]
+    fn apply_fails_when_install_fails() {
+        let fs = FakeFs::new();
+        let runner = FakeRunner::new()
+            .on(
+                "apt-get",
+                ["-o", LOCK_TIMEOUT, "update"],
+                Output::success(""),
+            )
+            .on(
+                "apt-get",
+                ["-o", LOCK_TIMEOUT, "install"],
+                exit(100, "", "E: Unable to locate package unattended-upgrades\n"),
+            );
+        let sys = Sys {
+            fs: &fs,
+            runner: &runner,
+        };
+        let err = package().apply(sys).unwrap_err();
+        assert!(
+            matches!(err, ResourceError::Command { ref program, status: 100, ref stderr }
+                if program == "apt-get" && stderr == "E: Unable to locate package unattended-upgrades"),
+            "{err:?}"
+        );
+        assert_eq!(runner.calls(), expected_apply());
     }
 
     #[test]
