@@ -26,7 +26,7 @@
 
 **Shell is used only for** the POSIX `install.sh` (about 150 lines) and the fixture-capture script under `test/`.
 
-> Learning note: this project exercises the core of Rust without the hard corners: traits and trait objects (`Box<dyn Resource>`), enums with data plus `match`, error types with `thiserror`, `std::process::Command`, compile-time templates with `askama`, and testing with fakes behind a Cargo feature. No async, no lifetimes beyond the simple ones.
+> Learning note: this project exercises the core of Rust without the hard corners: traits and trait objects (`&dyn Module`, `&dyn Fs`), enums with data plus `match`, error types with `thiserror`, `std::process::Command`, compile-time templates with `askama`, and testing with fakes behind a Cargo feature. No async, no lifetimes beyond the simple ones.
 
 ## Layers
 
@@ -48,7 +48,7 @@ Each layer only calls the one below it. The bottom layer, `sys`, is the only cod
 
 Two traits, and nothing else in the codebase is allowed to run a process or touch a file directly:
 
-Target design. Today `Fs` is read-only (`read`, `exists`, `read_dir`, `metadata`; see `crates/vps-ready/src/sys/mod.rs`); writes arrive with the engine in M2.
+Today `Fs` is read-only; the write methods arrive with the engine in M2 ([the M2 plan](m2-plan.md)).
 
 ```rust
 pub trait Runner {
@@ -57,15 +57,15 @@ pub trait Runner {
 
 pub trait Fs {                                              // every path is resolved under a base dir
     fn read(&self, path: &Path) -> Result<Vec<u8>, SysError>;
-    fn write_atomic(&self, path: &Path, bytes: &[u8], meta: &FileMeta) -> Result<(), SysError>;
-    fn stat(&self, path: &Path) -> Result<FileMeta, SysError>;
-    fn exists(&self, path: &Path) -> Result<bool, SysError>;
-    // ... remove, read_dir
+    fn exists(&self, path: &Path) -> bool;
+    fn read_dir(&self, path: &Path) -> Result<Vec<PathBuf>, SysError>;
+    fn metadata(&self, path: &Path) -> Result<FileMeta, SysError>;   // lstat
+    // M2: write_atomic, write (for /proc/sys), append_sync, remove, create_dir_all
 }
 ```
-- `RealRunner` uses `std::process::Command` and kills the child if it exceeds its timeout. `RealFs` is rooted at `/`; `rustix` for `fsync` and `flock` is planned with the engine.
+- `RealRunner` uses `std::process::Command` and kills the child if it exceeds its timeout. `RealFs` is rooted at `/`. `fsync`, `fchown` and `flock` come from `std` (`File::sync_all`, `std::os::unix::fs::fchown`, `File::try_lock`).
 - `FakeRunner` (matches argv, returns canned output) and `FakeFs` (an in-memory map of paths to contents) live behind the `testing` Cargo feature, so integration tests can use them but release binaries don't contain them.
-- `Sys` bundles both, so higher layers take one `&dyn Sys` argument.
+- `Sys` (M2) is a small `Copy` struct holding `&dyn Fs` and `&dyn Runner`, so higher layers take one argument.
 
 ### Facts (`src/facts`)
 Detection runs once, read-only, into a typed `Facts` struct (`serde` `Serialize`, so `detect --json` is free):
@@ -88,23 +88,24 @@ Small traits chosen from facts: `PkgManager`, `ServiceManager`, `Firewall`, `Ssh
 - Pure-data differences (package names, paths, service names `ssh` vs `sshd`) live in a per-family data table with version overrides.
 
 ### Resources (`src/resource`)
-Idempotent primitives. Each one implements:
+Idempotent primitives. The set of kinds is closed, so `Resource` is an enum rather than a trait object: every `match` handles every kind, and it serializes with `serde` for the journal and `plan --json`.
 ```rust
-pub trait Resource {
-    fn id(&self) -> ResourceId;
-    fn current(&self, sys: &dyn Sys) -> Result<State>;
-    fn diff(&self, desired: &State) -> Change;              // an empty Change = nothing to do
-    fn snapshot(&self, sys: &dyn Sys) -> Result<Backup>;
-    fn apply(&self, sys: &dyn Sys) -> Result<()>;
-    fn restore(&self, sys: &dyn Sys, backup: &Backup) -> Result<()>;
-    fn reversibility(&self) -> Reversibility;
+pub enum Resource { File(File), Sysctl(Sysctl), Package(Package), /* M3: Service, User, AuthorizedKeys, FirewallRuleset */ }
+
+impl Resource {
+    pub fn id(&self) -> String;                                         // e.g. "file:/etc/sysctl.d/90-vps-ready.conf"
+    pub fn reversibility(&self) -> Reversibility;
+    pub fn diff(&self, sys: Sys) -> Result<Option<Change>>;             // None = nothing to do
+    pub fn snapshot(&self, sys: Sys) -> Result<Backup>;
+    pub fn apply(&self, sys: Sys) -> Result<()>;
 }
+pub fn restore(sys: Sys, backup: &Backup) -> Result<()>;               // needs only the journaled Backup
 
 pub enum Reversibility { Reversible, Partial, Irreversible }
 ```
-`Result<T>` here is `std::result::Result<T, ResourceError>`. The plan renderer matches on `Reversibility` without a `_ =>` arm, so if a fourth label is ever added, the code that prints the plan doesn't compile until it shows that label to the user.
+`Result<T>` here is `std::result::Result<T, ResourceError>`. Restore depends only on the `Backup` written to the journal, so `rollback` works in a later process without rebuilding any module's plan. The plan renderer matches on `Reversibility` without a `_ =>` arm, so if a fourth label is ever added, the code that prints the plan doesn't compile until it shows that label to the user.
 
-The kinds are `DropIn` (preferred), `File`, `LineInFile` (last resort), `Package`, `Service`, `Sysctl`, `User`, `AuthorizedKeys`, `FirewallRuleset`, and `Command` (guarded with `unless=`, discouraged).
+A drop-in is a `File` whose whole content we own (preferred). `LineInFile` and `Command` are added only if a module cannot do without them.
 
 ### Modules (`src/modules/<name>/`): policy only
 ```rust
@@ -112,14 +113,14 @@ pub trait Module {
     fn meta(&self) -> &Meta;                                // id, title, why, risk, requires, conflicts, families, needs_deadman
     fn applicable(&self, f: &Facts) -> Applicability;       // Applicable | NotApplicable { reason }
     fn params(&self) -> &[Param];                           // drives TUI form + TOML schema + validation
-    fn plan(&self, f: &Facts, p: &Params) -> Result<Vec<Box<dyn Resource>>>;
-    fn validate(&self, sys: &dyn Sys) -> Result<()>;        // sshd -t, nft -c -f, visudo -c
-    fn verify(&self, sys: &dyn Sys) -> Result<()>;          // post-apply: port listening, docker info
+    fn plan(&self, f: &Facts, p: &Params) -> Result<Vec<Resource>>;
+    fn validate(&self, sys: Sys) -> Result<()>;            // sshd -t, nft -c -f, visudo -c
+    fn verify(&self, sys: Sys) -> Result<()>;              // post-apply: port listening, docker info
 }
 ```
 **Modules don't have apply/rollback.** The engine does both generically from resource snapshots, so every module is small, readable and reversible in the same way.
 
-`plan` returns `Vec<Box<dyn Resource>>` because one module mixes kinds (a `DropIn`, a `Service`, a `User`). A trait object is how Rust holds different types behind one interface; it's why `Resource` has no generic methods.
+`plan` returns `Vec<Resource>`; one module can mix kinds (a `File`, a `Service`, a `User`). M2 ships a subset of this trait (no `params`, `validate`, `verify` or ordering; see [the M2 plan](m2-plan.md)).
 
 ### Controls catalog (declarative, auditable without reading Rust)
 Controls live in `src/audit/controls/<area>.toml`, one file per area (`ssh.toml`, `kernel.toml`, `network.toml`, later `firewall.toml`, ...), using a **closed** check vocabulary. They are separate from modules because some controls have no module that fixes them. The vocabulary must not grow into a DSL:
@@ -242,17 +243,16 @@ sequenceDiagram
 ## State layout
 
 ```
-/etc/vps-ready/config.toml            last-applied profile
-/var/lib/vps-ready/state.json         applied modules + managed-file hashes (drift detection)
-/var/lib/vps-ready/txn/<ULID>/
-    meta.json                        TxnState: planned | applied | pending-confirm | confirmed | rolled-back
-    plan.json  diff.patch
-    journal.jsonl                    append-only, fsync per step
-    backups/<escaped-path>           original bytes + stat
-/run/vps-ready/lock
-/var/log/vps-ready/<txn>.log          + journald when present
+/var/lib/vps-ready/                   0700 root:root
+    lock                             flock, held by apply and rollback
+    txn/<id>/                        <id> = UTC start time, e.g. 20261023T114246Z
+        journal.jsonl                append-only, fsync per line; the last "state" record is the TxnState
+        files/<n>.before             original bytes of a backed-up file (mode and owner are in the journal)
+        files/<n>.after              bytes vps-ready wrote
+/etc/vps-ready/config.toml            last-applied profile (M3, with profiles)
+/var/lib/vps-ready/state.json         managed-file hashes for drift detection (with `drift`)
 ```
-Commands that read this: `history`, `rollback [--txn|--last]`, `drift`.
+Commands that read this: `history`, `rollback [--txn|--last]`, later `drift`.
 
 ## CLI surface (v1)
 
@@ -319,7 +319,7 @@ crates/
     src/sys/               Runner + Fs traits; RealRunner/RealFs; FakeRunner/FakeFs (feature "testing")
     src/facts/             read-only detection into a `Facts` struct (serde)
     src/platform/          PkgManager, ServiceManager, Firewall, Sshd traits + per-family data tables (planned)
-    src/resource/          Resource trait (id, current, diff, snapshot, apply, restore, reversibility) (planned)
+    src/resource/          Resource enum (id, diff, snapshot, apply, reversibility) + restore (planned)
     src/engine/            plan, diff, txn, journal, deadman, lock (planned)
     src/audit/             controls catalog (controls/*.toml), evaluation, report
     src/modules/<name>/    mod.rs + templates/ (planned)
@@ -342,4 +342,4 @@ README.md SECURITY.md CONTRIBUTING.md LICENSE-APACHE LICENSE-MIT CODE_OF_CONDUCT
 - **`sshd-config` as its own crate:** the parser is useful outside this tool and has its own fuzz targets, so it gets its own crate and can be published on its own.
 - Adding a module = adding one directory + registering it in one line.
 
-**Direct dependencies (keep it to roughly these):** `clap` (derive), `serde`, `serde_json`, `toml`, `thiserror` (library errors), `anyhow` (binary and CLI layer only), `similar` (unified diffs), `ulid`, `tracing` + `tracing-subscriber`, `askama` (templates), `schemars`, `rustix` (`flock`, uid checks, `fsync`), `owo-colors`. Dev-only: `insta` (snapshots), `proptest`, `tempfile`, `assert_cmd`, `predicates`. Later: `inquire` and `ratatui` (M4), `cargo-fuzz` targets. **No async runtime:** the tool is sequential (one transaction, a handful of subprocesses), so `std::process::Command` with timeouts is enough ([D18](decisions.md)).
+**Direct dependencies (keep it to roughly these):** `clap` (derive), `serde`, `serde_json`, `toml`, `thiserror` (library errors), `anyhow` (binary and CLI layer only), `similar` (unified diffs), `tracing` + `tracing-subscriber`, `askama` (templates), `schemars`, `owo-colors`. `std` covers `flock`, `fsync` and `fchown`. Dev-only: `insta` (snapshots), `proptest`, `tempfile`, `assert_cmd`, `predicates`. Later: `inquire` and `ratatui` (M4), `cargo-fuzz` targets. **No async runtime:** the tool is sequential (one transaction, a handful of subprocesses), so `std::process::Command` with timeouts is enough ([D18](decisions.md)).
