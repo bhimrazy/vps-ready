@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use similar::TextDiff;
 
 use super::{Backup, FileCopy, ResourceError, after_path, before_path};
-use crate::sys::{FileKind, FileOwner, Sys, SysError};
+use crate::sys::{Cmd, FileKind, FileOwner, Sys, SysError};
 
 /// A whole file whose content, mode and owner vps-ready owns, such as a
 /// drop-in it created. Only regular files are managed: a symlink or special
@@ -21,6 +21,66 @@ pub struct File {
     pub content: Vec<u8>,
     /// Desired mode and owner.
     pub owner: FileOwner,
+    /// Checks the desired content before the target is written.
+    pub validate: Option<Validate>,
+}
+
+/// A command that must exit 0 on the `.after` copy of a [`File`] before the
+/// target is written. Every argument equal to [`Validate::PATH`] is replaced
+/// with the path of that copy, e.g. `apt-config -c {} dump`.
+///
+/// The path is the system path; the command runs on the host, so this
+/// matches [`crate::sys::Fs`] only when it is rooted at `/`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Validate {
+    /// Program name or absolute path.
+    pub program: String,
+    /// Arguments, not including the program.
+    pub args: Vec<String>,
+}
+
+impl Validate {
+    /// Placeholder for the path of the `.after` copy.
+    pub const PATH: &str = "{}";
+
+    /// `program` with `args`.
+    #[must_use]
+    pub fn new<I, S>(program: impl Into<String>, args: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        Self {
+            program: program.into(),
+            args: args.into_iter().map(Into::into).collect(),
+        }
+    }
+
+    /// Runs the command on `copy`. Fails closed: a non-zero exit or a
+    /// command that cannot run is [`ResourceError::Invalid`].
+    fn check(&self, sys: Sys, target: &Path, copy: &Path) -> Result<(), ResourceError> {
+        let invalid = |reason: String| ResourceError::Invalid {
+            path: target.to_path_buf(),
+            program: self.program.clone(),
+            reason,
+        };
+        let copy = copy
+            .to_str()
+            .ok_or_else(|| invalid(format!("cannot take non-UTF-8 path {}", copy.display())))?;
+        let args = self
+            .args
+            .iter()
+            .map(|a| if a == Self::PATH { copy } else { a.as_str() });
+        match sys.runner.run(&Cmd::new(&self.program).args(args)) {
+            Ok(out) if out.ok() => Ok(()),
+            Ok(out) => Err(invalid(format!(
+                "exited with status {}: {}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr).trim()
+            ))),
+            Err(e) => Err(invalid(format!("could not run: {e}"))),
+        }
+    }
 }
 
 impl File {
@@ -46,8 +106,8 @@ impl File {
         Ok(Some((summary, diff)))
     }
 
-    /// Records mode and owner, copies the current bytes to `files/<n>.before`
-    /// and writes the desired bytes to `files/<n>.after`.
+    /// Records mode and owner, copies the current bytes to `files/<n>.before`,
+    /// writes the desired bytes to `files/<n>.after` and validates that copy.
     pub(super) fn snapshot(
         &self,
         sys: Sys,
@@ -71,8 +131,11 @@ impl File {
             mode: 0o600,
             ..self.owner
         };
-        sys.fs
-            .write_atomic(&after_path(txn_dir, n), &self.content, copy)?;
+        let after = after_path(txn_dir, n);
+        sys.fs.write_atomic(&after, &self.content, copy)?;
+        if let Some(validate) = &self.validate {
+            validate.check(sys, &self.path, &after)?;
+        }
         Ok(Backup::File {
             path: self.path.clone(),
             n,
@@ -151,8 +214,8 @@ mod tests {
 
     use super::super::{Resource, restore, test_sys as sys};
     use super::*;
-    use crate::sys::fake::FakeFs;
-    use crate::sys::{Fs, RealFs};
+    use crate::sys::fake::{FakeFs, FakeRunner};
+    use crate::sys::{Fs, Output, RealFs};
 
     const PATH: &str = "/etc/sysctl.d/90-vps-ready.conf";
     const TXN: &str = "/var/lib/vps-ready/txn/20261023T114246Z";
@@ -170,6 +233,7 @@ mod tests {
             path: PATH.into(),
             content: content.into(),
             owner,
+            validate: None,
         })
     }
 
@@ -316,6 +380,7 @@ mod tests {
             path: "/etc/fifo".into(),
             content: Vec::new(),
             owner: root_owner(),
+            validate: None,
         })
         .diff(sys(&fs))
         .unwrap_err();
@@ -427,5 +492,77 @@ mod tests {
         let meta = fs.metadata(Path::new(PATH)).unwrap();
         assert_eq!(meta.owner(), root_owner());
         assert_eq!(fs.read(Path::new(PATH)).unwrap(), b"old = 1\n");
+    }
+
+    const APT: &str = "/etc/apt/apt.conf.d/52vps-ready";
+    const APT_CONTENT: &[u8] = b"APT::Periodic::Enable \"1\";\n";
+
+    fn apt_drop_in() -> Resource {
+        Resource::File(File {
+            path: APT.into(),
+            content: APT_CONTENT.into(),
+            owner: root_owner(),
+            validate: Some(Validate::new("apt-config", ["-c", Validate::PATH, "dump"])),
+        })
+    }
+
+    /// Snapshots [`apt_drop_in`] over an existing file with `runner`; returns
+    /// the result, the commands run and the bytes of the `.after` copy.
+    fn snapshot_validated(
+        runner: &FakeRunner,
+    ) -> (Result<Backup, ResourceError>, Vec<Cmd>, Vec<u8>) {
+        let fs = FakeFs::new().with_file(APT, "old\n");
+        let sys = Sys { fs: &fs, runner };
+        let result = apt_drop_in().snapshot(sys, Path::new(TXN), 2);
+        let after = fs.read(&after_path(Path::new(TXN), 2)).unwrap();
+        (result, runner.calls(), after)
+    }
+
+    fn expected_validate() -> Vec<Cmd> {
+        let after = after_path(Path::new(TXN), 2);
+        vec![Cmd::new("apt-config").args(["-c", after.to_str().unwrap(), "dump"])]
+    }
+
+    #[test]
+    fn validate_runs_on_the_after_copy() {
+        let runner = FakeRunner::new().on("apt-config", ["-c"], Output::success(""));
+        let (result, calls, after) = snapshot_validated(&runner);
+        assert!(
+            matches!(result, Ok(Backup::File { n: 2, .. })),
+            "{result:?}"
+        );
+        assert_eq!(calls, expected_validate());
+        assert_eq!(after, APT_CONTENT);
+    }
+
+    #[test]
+    fn validate_failure_is_invalid() {
+        let rejected = Output {
+            status: 100,
+            stdout: Vec::new(),
+            stderr: b"E: Syntax error\n".to_vec(),
+        };
+        let runner = FakeRunner::new().on("apt-config", ["-c"], rejected);
+        let (result, calls, after) = snapshot_validated(&runner);
+        let err = result.unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "refusing to write {APT}: `apt-config` exited with status 100: E: Syntax error"
+            )
+        );
+        assert_eq!(calls, expected_validate());
+        assert_eq!(after, APT_CONTENT);
+    }
+
+    #[test]
+    fn validate_that_cannot_run_fails_closed() {
+        let (result, calls, after) = snapshot_validated(&FakeRunner::new());
+        assert!(
+            matches!(result, Err(ResourceError::Invalid { ref reason, .. }) if reason.starts_with("could not run")),
+            "{result:?}"
+        );
+        assert_eq!(calls, expected_validate());
+        assert_eq!(after, APT_CONTENT);
     }
 }

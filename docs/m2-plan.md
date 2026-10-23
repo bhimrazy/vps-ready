@@ -122,9 +122,9 @@ create txn/<id>/ and journal.jsonl; fsync journal.jsonl, txn/<id>/ and txn/
 journal "begin"
 for each resource with a change, in plan order:
     backup = snapshot()
-    File: write files/<n>.before (if the file existed) and files/<n>.after, fsync them
+    File: write files/<n>.before (if the file existed) and files/<n>.after, fsync them,
+          then run validate on files/<n>.after if set
     journal "backup"                         (fsync)
-    File: run validate on files/<n>.after if set
     apply()
     journal "applied"                        (fsync)
 verify: diff() of every resource is None again
@@ -198,6 +198,7 @@ Transaction states:
   - Both values are allowed because a crash may have happened just before or after `apply()`.
 - **If the check fails:** nothing is restored. The command lists each resource that changed, the transaction's `files/` paths, and the by-hand step for each, e.g. "copy `files/1.before` to `/etc/...`" or "`sysctl -w fs.suid_dumpable=0`". There is no `--force` in M2. This also stops an older transaction from undoing a newer one on the same file.
 - `Package` restore is a no-op; the plan already labeled it `partial`.
+- An `apt-get` timeout kills `apt-get`, not `dpkg`, so the dpkg database may then need `dpkg --configure -a`, which rollback does not run.
 
 ### CLI and plan rendering
 
