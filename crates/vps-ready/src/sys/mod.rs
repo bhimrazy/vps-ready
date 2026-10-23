@@ -241,13 +241,13 @@ pub struct FileOwner {
 }
 
 /// A lock taken by [`Fs::try_lock`], released when dropped.
+#[must_use = "the lock is released when the guard is dropped"]
 pub struct FsLock {
     _guard: Box<dyn Send>,
 }
 
 impl FsLock {
     /// Wraps `guard`, whose drop releases the lock.
-    #[must_use]
     pub fn new(guard: impl Send + 'static) -> Self {
         Self {
             _guard: Box::new(guard),

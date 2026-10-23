@@ -16,8 +16,9 @@ impl StateDir {
     /// Where the state lives on a real host.
     pub const DEFAULT: &str = "/var/lib/vps-ready";
 
-    /// Creates `root` and `root/txn` (mode `0700`) if missing, then checks
-    /// `root` as [`StateDir::open`] does.
+    /// Creates `root` if missing, with mode `0700` for it and any missing
+    /// parents, checks it as [`StateDir::open`] does, then creates
+    /// `root/txn` (mode `0700`) if missing.
     ///
     /// # Errors
     ///
@@ -124,35 +125,37 @@ impl StateDir {
         Ok(txn)
     }
 
-    /// Every transaction, oldest first. Entries of `txn/` whose name is not
-    /// an ID are skipped with a warning.
+    /// Every transaction, oldest first. Entries of `txn/` that are not a
+    /// directory named by an ID are skipped with a warning.
     ///
     /// # Errors
     ///
-    /// [`EngineError::Sys`] if `txn/` exists but cannot be listed.
+    /// [`EngineError::Sys`] if `txn/` exists but it or an entry cannot be read.
     pub fn txns(&self, fs: &dyn Fs) -> Result<Vec<Txn>, EngineError> {
         let entries = match fs.read_dir(&self.txn_root()) {
             Ok(entries) => entries,
             Err(SysError::NotFound(_)) => return Ok(Vec::new()),
             Err(e) => return Err(e.into()),
         };
-        let mut txns: Vec<Txn> = entries
-            .into_iter()
-            .filter_map(|dir| {
-                let id = dir.file_name()?.to_str()?.to_owned();
-                if id::sort_key(&id).is_none() {
-                    tracing::warn!(path = %dir.display(), "skipping an entry that is not a transaction");
-                    return None;
+        let mut txns = Vec::new();
+        for dir in entries {
+            let id = dir.file_name().and_then(|n| n.to_str()).map(str::to_owned);
+            match id {
+                Some(id)
+                    if id::sort_key(&id).is_some() && fs.metadata(&dir)?.kind == FileKind::Dir =>
+                {
+                    txns.push(Txn { id, dir });
                 }
-                Some(Txn { id, dir })
-            })
-            .collect();
+                _ => {
+                    tracing::warn!(path = %dir.display(), "skipping an entry that is not a transaction");
+                }
+            }
+        }
         txns.sort_by(|a, b| id::sort_key(&a.id).cmp(&id::sort_key(&b.id)));
         Ok(txns)
     }
 
-    /// The transactions whose journal does not end with a `state` record,
-    /// oldest first.
+    /// The transactions that are [`journal::is_unfinished`], oldest first.
     ///
     /// # Errors
     ///
@@ -200,7 +203,8 @@ impl Txn {
         self.dir.join("files")
     }
 
-    /// Appends `record` as one line and returns once it is on disk.
+    /// Appends `record` as one line and returns once it is on disk. Callers
+    /// check [`journal::transition`] first; this does not.
     ///
     /// # Errors
     ///
@@ -212,7 +216,8 @@ impl Txn {
         Ok(())
     }
 
-    /// Reads the journal, as [`journal::parse`] does.
+    /// Reads the journal, as [`journal::parse`] does. A missing journal has
+    /// no records.
     ///
     /// # Errors
     ///
@@ -220,7 +225,31 @@ impl Txn {
     /// a line is bad.
     pub fn read(&self, fs: &dyn Fs) -> Result<Vec<Record>, EngineError> {
         let path = self.journal_path();
-        journal::parse(&path, &fs.read(&path)?)
+        match fs.read(&path) {
+            Ok(bytes) => journal::parse(&path, &bytes),
+            Err(SysError::NotFound(_)) => Ok(Vec::new()),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Reads the journal before appending to it again: a torn final line is
+    /// removed from the file, so the next record starts on a line of its own.
+    /// The kept bytes are rewritten as they were, unknown fields included.
+    /// Call it under [`StateDir::lock`].
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::Sys`] if it cannot be read or rewritten,
+    /// [`EngineError::Journal`] if a line is bad.
+    pub fn resume(&self, fs: &dyn Fs) -> Result<Vec<Record>, EngineError> {
+        let path = self.journal_path();
+        let bytes = fs.read(&path)?;
+        let clean = journal::clean_len(&bytes);
+        if clean < bytes.len() {
+            let owner = fs.metadata(&path)?.owner();
+            fs.write_atomic(&path, &bytes[..clean], owner)?;
+        }
+        journal::parse(&path, &bytes[..clean])
     }
 }
 
@@ -309,7 +338,7 @@ mod tests {
         let err = state.lock(&fs).unwrap_err();
         assert_eq!(err.to_string(), "another vps-ready is running");
         drop(held);
-        state.lock(&fs).unwrap();
+        let _held = state.lock(&fs).unwrap();
     }
 
     #[test]
@@ -408,13 +437,68 @@ mod tests {
             TxnState::Applied
         );
 
-        assert_eq!(state.unfinished(&fs).unwrap(), vec![open.clone(), empty]);
+        // An empty or missing journal changed nothing.
+        fs.remove(&empty.journal_path()).unwrap();
+        assert_eq!(empty.read(&fs).unwrap(), vec![]);
+        assert_eq!(state.unfinished(&fs).unwrap(), vec![open.clone()]);
 
         // A torn line after the final `state` record is ignored.
         fs.append_sync(&done.journal_path(), b"{\"at\":3,\"ev")
             .unwrap();
         assert_eq!(done.read(&fs).unwrap(), records);
         assert!(!journal::is_unfinished(&done.read(&fs).unwrap()));
+    }
+
+    #[test]
+    fn resume_removes_a_torn_line() {
+        let fs = FakeFs::new();
+        let state = StateDir::create(&fs, "/state", 0).unwrap();
+        let txn = state.create_txn(&fs, 0).unwrap();
+        let first =
+            b"{\"at\":1,\"event\":\"begin\",\"version\":\"0.2.0\",\"modules\":[],\"new\":1}\n";
+        fs.append_sync(&txn.journal_path(), first).unwrap();
+        fs.append_sync(&txn.journal_path(), b"{\"at\":2,\"ev")
+            .unwrap();
+
+        assert_eq!(txn.resume(&fs).unwrap().len(), 1);
+        // The kept line is rewritten byte for byte, unknown field included.
+        assert_eq!(fs.read(&txn.journal_path()).unwrap(), first);
+        assert_eq!(fs.metadata(&txn.journal_path()).unwrap().mode, 0o600);
+
+        let applied = Record {
+            at: 3,
+            event: Event::Applied {
+                resource: "r".into(),
+            },
+        };
+        txn.append(&fs, &applied).unwrap();
+        let records = txn.read(&fs).unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[1], applied);
+        // Nothing torn: nothing rewritten.
+        assert_eq!(txn.resume(&fs).unwrap(), records);
+    }
+
+    #[test]
+    fn unreadable_transactions_are_errors_or_skipped() {
+        let fs = FakeFs::new();
+        let state = StateDir::create(&fs, "/state", 0).unwrap();
+        let old = state.create_txn(&fs, 0).unwrap();
+        fs.append_sync(
+            &old.journal_path(),
+            b"not json\n{\"at\":1,\"event\":\"applied\",\"resource\":\"r\"}\n",
+        )
+        .unwrap();
+        let err = state.unfinished(&fs).unwrap_err();
+        assert!(
+            matches!(err, EngineError::Journal { line: 1, .. }),
+            "{err:?}"
+        );
+
+        // A regular file named like a transaction is skipped.
+        let fs = FakeFs::new().with_file("/state/txn/20261023T114246Z", "x");
+        let state = StateDir::create(&fs, "/state", 0).unwrap();
+        assert_eq!(state.txns(&fs).unwrap(), vec![]);
     }
 
     #[test]

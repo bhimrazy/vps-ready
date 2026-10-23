@@ -161,50 +161,49 @@ pub fn replay(records: &[Record]) -> Result<TxnState, EngineError> {
     Ok(state.unwrap_or(TxnState::Planned))
 }
 
-/// Whether the last record is not a `state` record: the transaction stopped
-/// during an apply or a rollback.
+/// Whether there are records and the last is not a `state` record: the
+/// transaction stopped during an apply or a rollback. A transaction with no
+/// records changed nothing.
 #[must_use]
 pub fn is_unfinished(records: &[Record]) -> bool {
-    !matches!(
-        records.last(),
-        Some(Record {
-            event: Event::State { .. },
-            ..
-        })
-    )
+    records
+        .last()
+        .is_some_and(|r| !matches!(r.event, Event::State { .. }))
+}
+
+/// The length of `bytes` up to and including the last newline: what is left
+/// after dropping a torn final line.
+#[must_use]
+pub fn clean_len(bytes: &[u8]) -> usize {
+    bytes.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1)
 }
 
 /// Parses journal bytes, one JSON record per line. Unknown fields are
-/// ignored. A final line without a newline that does not parse is a write
-/// torn by a crash, and is dropped.
+/// ignored. A final line without a newline is a write torn by a crash, and
+/// is dropped whether or not it parses.
 ///
 /// # Errors
 ///
 /// [`EngineError::Journal`] for any other line that does not parse,
 /// including an unknown event; `path` is only for the message.
 pub fn parse(path: &Path, bytes: &[u8]) -> Result<Vec<Record>, EngineError> {
-    let mut records = Vec::new();
-    let mut lines = bytes.split(|b| *b == b'\n').enumerate().peekable();
-    while let Some((i, line)) = lines.next() {
-        let last = lines.peek().is_none();
-        if last && line.is_empty() {
-            break;
-        }
-        match serde_json::from_slice(line) {
-            Ok(record) => records.push(record),
-            Err(_) if last => {
-                tracing::warn!(path = %path.display(), line = i + 1, "ignoring a torn final journal line");
-            }
-            Err(source) => {
-                return Err(EngineError::Journal {
-                    path: path.display().to_string(),
-                    line: i + 1,
-                    source,
-                });
-            }
-        }
+    let clean = clean_len(bytes);
+    if clean < bytes.len() {
+        tracing::warn!(path = %path.display(), "ignoring a torn final journal line");
     }
-    Ok(records)
+    let Some(body) = bytes[..clean].strip_suffix(b"\n") else {
+        return Ok(Vec::new());
+    };
+    body.split(|b| *b == b'\n')
+        .enumerate()
+        .map(|(i, line)| {
+            serde_json::from_slice(line).map_err(|source| EngineError::Journal {
+                path: path.display().to_string(),
+                line: i + 1,
+                source,
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -314,6 +313,21 @@ mod tests {
         let good = b"{\"at\":1,\"event\":\"applied\",\"resource\":\"r\"}\n";
         let torn = [&good[..], b"{\"at\":2,\"event\":\"appl"].concat();
         assert_eq!(parse(Path::new("j"), &torn).unwrap().len(), 1);
+        assert_eq!(clean_len(&torn), good.len());
+        assert_eq!(clean_len(b"no newline"), 0);
+
+        // A final line without a newline is dropped even if it parses.
+        let whole_but_unterminated = [&good[..], &good[..good.len() - 1]].concat();
+        assert_eq!(
+            parse(Path::new("j"), &whole_but_unterminated)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            parse(Path::new("j"), &good[..good.len() - 1]).unwrap(),
+            vec![]
+        );
 
         // The same bytes with a newline are not torn.
         let bad_last = [&torn[..], b"\n"].concat();
@@ -417,7 +431,7 @@ mod tests {
 
     #[test]
     fn unfinished_means_no_final_state_record() {
-        assert!(is_unfinished(&[]));
+        assert!(!is_unfinished(&[]));
         assert!(is_unfinished(&[rec(begin())]));
         assert!(is_unfinished(&[rec(begin()), rec(applied())]));
         let done = [rec(begin()), rec(applied()), rec(state(TxnState::Applied))];
