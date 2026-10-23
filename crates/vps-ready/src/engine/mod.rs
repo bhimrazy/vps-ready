@@ -12,7 +12,7 @@ mod tests;
 
 pub use journal::{Event, Record, RollbackReason, TxnState};
 pub use plan::{ModulePlan, ModuleStatus, Plan, Step, plan};
-pub use run::{ApplyOutcome, ByHand, Engine, Rollback, Target, TxnInfo, history};
+pub use run::{ApplyOutcome, ByHand, Engine, Progress, Rollback, Target, TxnInfo, history};
 pub use state::{StateDir, Txn};
 
 use crate::modules::ModuleError;

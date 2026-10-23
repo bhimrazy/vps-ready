@@ -3,12 +3,13 @@
 use std::collections::BTreeMap;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::*;
 use crate::engine::{Event, Record};
 use crate::facts::{AptUpdates, Virt, sysctl};
 use crate::sys::fake::{FakeFs, FakeRunner, Op};
-use crate::sys::{FileKind, Fs, Output};
+use crate::sys::{Cmd, FileKind, Fs, Output, Runner, SysError};
 
 const STATE: &str = "/var/lib/vps-ready";
 const DROP_IN: &str = crate::modules::kernel_sysctl::DROP_IN;
@@ -126,7 +127,7 @@ fn apply_answer(host: &Host, input: &mut dyn BufRead) -> (u8, String, String) {
 }
 
 fn rollback_last(host: &Host) -> (u8, String, String) {
-    run(|out, _| rollback(host, Target::Last, out))
+    run(|out, err| rollback(host, Target::Last, out, err))
 }
 
 fn history_text(host: &Host) -> String {
@@ -226,9 +227,10 @@ fn apply_history_rollback_cycle() {
     let original = tree(&fs);
 
     let (code, out, err) = apply_yes(&host);
-    assert_eq!((code, err.as_str()), (0, ""));
+    assert_eq!(code, 0);
     let applied = redact(&fs, &out, false);
     insta::assert_snapshot!("apply", applied);
+    insta::assert_snapshot!("apply-progress", err);
     assert_ne!(tree(&fs), original);
 
     let (code, out, _) = plan_cmd(&host, &[]);
@@ -239,12 +241,13 @@ fn apply_history_rollback_cycle() {
     assert!(out.ends_with("Nothing to do.\n"), "{out}");
     assert_eq!(txn_ids(&fs).len(), 1);
 
-    let (code, out, _) = rollback_last(&host);
+    let (code, out, err) = rollback_last(&host);
     assert_eq!(code, 0);
     assert_eq!(
         redact(&fs, &out, false),
         "Rolled back transaction <txn-1>: restored 8 changes.\n"
     );
+    insta::assert_snapshot!("rollback-progress", err);
     assert_eq!(tree(&fs), original);
 
     // A second transaction, so history has an applied and a rolled-back one.
@@ -418,7 +421,7 @@ fn rollback_refused_by_the_safety_check_exits_2() {
     );
     assert!(fs.exists(Path::new(DROP_IN)));
 
-    let (code, _, err) = run(|out, _| rollback(&host, Target::Txn("nope"), out));
+    let (code, _, err) = run(|out, err| rollback(&host, Target::Txn("nope"), out, err));
     assert_eq!((code, err.as_str()), (2, "error: no transaction nope\n"));
 }
 
@@ -443,7 +446,7 @@ fn failed_applies_exit_1_or_3() {
             break;
         }
         assert_eq!(code, 1, "{n}: {err}");
-        assert!(err.starts_with("error: apply failed: "), "{err}");
+        assert!(err.contains("\nerror: apply failed: "), "{err}");
         assert!(err.ends_with("is rolled-back (apply-failed).\n"), "{err}");
         assert_eq!(tree(&fs), original);
         seen.0 += 1;
@@ -481,6 +484,86 @@ fn an_incomplete_rollback_exits_3() {
     let (code, out, _) = rollback_last(&host);
     assert_eq!(code, 0);
     assert!(out.ends_with("restored 8 changes.\n"), "{out}");
+    assert_eq!(tree(&fs), original);
+}
+
+/// apt without `unattended-upgrades`: `apt-get install` answers `install`,
+/// and once it succeeds `dpkg-query` reports the package installed.
+struct Apt {
+    installed: AtomicBool,
+    install: Output,
+}
+
+impl Runner for Apt {
+    fn run(&self, cmd: &Cmd) -> Result<Output, SysError> {
+        let installed = self.installed.load(Ordering::SeqCst);
+        Ok(match cmd.program.as_str() {
+            "dpkg-query" if installed => Output::success("installed"),
+            "dpkg-query" => Output::success("not-installed"),
+            "apt-get" if cmd.args.iter().any(|a| a == "install") => {
+                self.installed.store(self.install.ok(), Ordering::SeqCst);
+                self.install.clone()
+            }
+            _ => Output::success(""),
+        })
+    }
+}
+
+fn apt_host<'a>(fs: &'a FakeFs, apt: &'a Apt) -> Host<'a> {
+    Host {
+        sys: Sys { fs, runner: apt },
+        ..host(fs)
+    }
+}
+
+/// The package step says it can take a while; rollback leaves the package.
+#[test]
+fn progress_of_a_package() {
+    let fs = fixture();
+    let apt = Apt {
+        installed: AtomicBool::new(false),
+        install: Output::success(""),
+    };
+    let host = apt_host(&fs, &apt);
+    let (code, _, err) = apply_yes(&host);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        err.contains(
+            "[8/9] install unattended-upgrades \
+             (apt-get update, then install; can take a few minutes)\n\
+             [9/9] create /etc/apt/apt.conf.d/52vps-ready (0644 0:0)\n\
+             verify: ok\n"
+        ),
+        "{err}"
+    );
+    let (code, _, err) = rollback_last(&host);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        err.starts_with(
+            "remove /etc/apt/apt.conf.d/52vps-ready\n\
+             leave unattended-upgrades as it is (rollback does not remove packages)\n"
+        ),
+        "{err}"
+    );
+}
+
+/// A failed install: each change made so far is restored, newest first,
+/// and the error ends with apt's stderr.
+#[test]
+fn progress_of_a_failed_apply() {
+    let fs = fixture();
+    let original = tree(&fs);
+    let apt = Apt {
+        installed: AtomicBool::new(false),
+        install: Output {
+            status: 100,
+            stdout: Vec::new(),
+            stderr: b"E: Unable to locate package unattended-upgrades\n".to_vec(),
+        },
+    };
+    let (code, _, err) = apply_yes(&apt_host(&fs, &apt));
+    assert_eq!(code, 1, "{err}");
+    insta::assert_snapshot!("failed-apply-progress", redact(&fs, &err, false));
     assert_eq!(tree(&fs), original);
 }
 

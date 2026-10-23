@@ -11,12 +11,12 @@ use owo_colors::OwoColorize;
 use super::{EXIT_ERROR, EXIT_INCOMPLETE, EXIT_ROLLED_BACK, print_report};
 use crate::audit::{self, Outcome};
 use crate::engine::{
-    self, ApplyOutcome, Engine, EngineError, ModuleStatus, Plan, StateDir, Target, TxnInfo,
-    TxnState,
+    self, ApplyOutcome, Engine, EngineError, ModuleStatus, Plan, Progress, StateDir, Target,
+    TxnInfo, TxnState,
 };
 use crate::facts::Facts;
 use crate::modules::Module;
-use crate::resource::{Resource, Reversibility};
+use crate::resource::{Backup, Resource, Reversibility};
 use crate::sys::Sys;
 
 /// What the commands act on.
@@ -111,7 +111,13 @@ pub(super) fn apply(
             return Ok(0);
         }
     }
-    match engine.apply(&plan)? {
+    // An interrupted apply leaves its transaction unfinished; `rollback
+    // --last` resumes and finishes it.
+    writeln!(
+        err,
+        "If this is interrupted, run `sudo vps-ready rollback --last` to undo it."
+    )?;
+    match engine.apply(&plan, &mut |p| print_progress(err, &p))? {
         ApplyOutcome::NothingToDo => writeln!(out, "Nothing to do.")?,
         ApplyOutcome::Applied { txn } => {
             writeln!(
@@ -137,10 +143,16 @@ pub(super) fn apply(
 }
 
 /// `rollback`: undoes one transaction.
-pub(super) fn rollback(host: &Host, target: Target, out: &mut dyn Write) -> anyhow::Result<u8> {
+pub(super) fn rollback(
+    host: &Host,
+    target: Target,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> anyhow::Result<u8> {
     require_root(host, "rollback")?;
     let state = StateDir::create(host.sys.fs, host.state_dir, host.state_uid)?;
-    let done = Engine::lock(&state, host.sys)?.rollback(target)?;
+    let done =
+        Engine::lock(&state, host.sys)?.rollback(target, &mut |p| print_progress(err, &p))?;
     writeln!(
         out,
         "Rolled back transaction {}: restored {} {}.",
@@ -322,6 +334,39 @@ fn print_plan(
             plural(modules, "module")
         )
     }
+}
+
+/// One line of progress, e.g. `[2/8] set kernel.kptr_restrict 0 -> 1`.
+/// Plain text, so it reads the same when stderr is a file. A failed write
+/// is ignored: it must not stop a transaction part way.
+fn print_progress(err: &mut dyn Write, progress: &Progress) {
+    let line = match progress {
+        Progress::Apply { n, total, step } => {
+            let summary = &step.change.summary;
+            let text = match &step.resource {
+                Resource::File(_) => summary.clone(),
+                Resource::Sysctl(_) => format!("set {summary}"),
+                Resource::Package(_) => {
+                    format!("{summary} (apt-get update, then install; can take a few minutes)")
+                }
+            };
+            format!("[{n}/{total}] {text}")
+        }
+        Progress::Verified => "verify: ok".to_owned(),
+        Progress::Restore(backup) => match backup {
+            Backup::File {
+                path,
+                original: Some(_),
+                ..
+            } => format!("restore {}", path.display()),
+            Backup::File { path, .. } => format!("remove {}", path.display()),
+            Backup::Sysctl { key, value, .. } => format!("restore {key} = {value}"),
+            Backup::Package { name, .. } => {
+                format!("leave {name} as it is (rollback does not remove packages)")
+            }
+        },
+    };
+    let _ = writeln!(err, "{line}");
 }
 
 /// One line per transaction, e.g.

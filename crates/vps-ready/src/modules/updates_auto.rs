@@ -334,7 +334,7 @@ mod tests {
             );
             let state = StateDir::create(&fs, STATE, meta.uid()).unwrap();
             let engine = Engine::lock(&state, sys).unwrap();
-            let outcome = engine.apply(&first).unwrap();
+            let outcome = engine.apply(&first, &mut |_| {}).unwrap();
             let ApplyOutcome::Applied { txn } = outcome else {
                 panic!("{existing:?}: {outcome:?}");
             };
@@ -351,7 +351,7 @@ mod tests {
             let next = plan(module, &fs, &apt, &facts);
             assert!(change_ids(&next).is_empty(), "{existing:?}");
 
-            engine.rollback(Target::Last).unwrap();
+            engine.rollback(Target::Last, &mut |_| {}).unwrap();
             assert_eq!(etc_tree(dir.path()), before, "{existing:?}");
             assert!(apt.installed.load(Ordering::SeqCst), "{existing:?}");
         }
