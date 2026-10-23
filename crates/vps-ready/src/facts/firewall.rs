@@ -246,9 +246,9 @@ const DOCKER_NFT_TABLE: &str = "docker-bridges";
 
 /// Ports Docker publishes beyond loopback and link-local, from the DNAT
 /// rules in its `nat` chain `DOCKER` (iptables backend) or
-/// `nat-prerouting-and-output` (nftables backend). `user_forward` lists the families of the forward
-/// filter chains outside Docker's tables. Swarm's ingress (`DOCKER-INGRESS`)
-/// is not read.
+/// `nat-prerouting-and-output` (nftables backend). `user_forward` lists
+/// the families of the forward filter chains outside Docker's tables.
+/// Swarm's ingress (`DOCKER-INGRESS`) is not read.
 fn published(
     rules: &HashMap<ChainKey, Vec<&[Value]>>,
     user_forward: &[String],
@@ -312,7 +312,7 @@ fn published(
 }
 
 /// The destination address `stmt` requires (`ip daddr 10.8.0.1`), and
-/// whether it is loopback or link-local, which only the host reaches.
+/// whether it is loopback or link-local, which the internet cannot reach.
 fn daddr(stmt: &Value) -> Option<(String, bool)> {
     let m = stmt.get("match")?;
     if m.get("op")?.as_str()? != "=="
@@ -392,11 +392,12 @@ fn collect_open_ports(
     rules: &HashMap<ChainKey, Vec<&[Value]>>,
     chain: &ChainKey,
     scoped: bool,
-    seen: &mut HashSet<ChainKey>,
+    seen: &mut HashSet<(ChainKey, bool)>,
     memo: &mut HashMap<ChainKey, Option<Fate>>,
     out: &mut OpenPorts,
 ) {
-    if !seen.insert(chain.clone()) {
+    // Per scope: firewalld jumps to a zone with `iifname`, then without.
+    if !seen.insert((chain.clone(), scoped)) {
         return;
     }
     for expr in rules.get(chain).into_iter().flatten() {
@@ -837,6 +838,13 @@ mod tests {
         let from_source = r#"[{"match": {"op": "==", "left": {"payload": {"protocol": "ip", "field": "saddr"}}, "right": {"prefix": {"addr": "203.0.113.0", "len": 24}}}}, {"jump": {"target": "zone"}}]"#;
         let on_eth0 = r#"[{"match": {"op": "==", "left": {"meta": {"key": "iifname"}}, "right": "eth0"}}, {"jump": {"target": "zone"}}]"#;
         assert!(open(&[("in", &[from_source]), ("zone", &[port_5432])]).is_empty());
+        // firewalld with an interface bound to the zone: the plain jump still
+        // opens the port to everyone, whichever jump comes first.
+        let plain = r#"[{"jump": {"target": "zone"}}]"#;
+        for rules in [[on_eth0, plain], [plain, on_eth0]] {
+            let fw = ruleset_of("drop", "", &[("in", &rules), ("zone", &[port_5432])]);
+            assert_eq!(fw.input_chains[0].blocks("tcp", 5432), Some(false));
+        }
         // An interface-bound zone: open on that interface only.
         let fw = ruleset_of("drop", "", &[("in", &[on_eth0]), ("zone", &[port_5432])]);
         assert_eq!(fw.input_chains[0].blocks("tcp", 5432), None);
