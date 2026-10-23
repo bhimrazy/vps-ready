@@ -158,13 +158,14 @@ pub(super) fn detect(runner: &dyn Runner, notices: &mut Vec<String>) -> Option<F
         notices.push(notice);
         return None;
     }
-    let Some(mut firewall) = parse(&out.stdout, &Multiport::new()) else {
+    let Some(mut firewall) = parse(&out.stdout, &Multiport::default()) else {
         notices.push("unrecognized `nft -j` output; the firewall is unknown".to_owned());
         return None;
     };
-    // nft does not show the ports of iptables' `multiport`; iptables-save
-    // does, for the same rules in the same order.
-    let mut multiport = Multiport::new();
+    // nft does not show the ports of iptables' `multiport`. iptables-save
+    // does, and with the nf_tables backend it lists the same rules in the
+    // same order.
+    let mut multiport = Multiport::default();
     for (family, program) in [("ip", "iptables-save"), ("ip6", "ip6tables-save")] {
         let unread = firewall
             .input_chains
@@ -179,25 +180,37 @@ pub(super) fn detect(runner: &dyn Runner, notices: &mut Vec<String>) -> Option<F
         if let Probe::Ran(out) = probe(runner, &cmd, notices)
             && out.ok()
         {
-            multiport.extend(parse_save(&String::from_utf8_lossy(&out.stdout), family));
+            parse_save(
+                &String::from_utf8_lossy(&out.stdout),
+                family,
+                &mut multiport,
+            );
         }
     }
-    if !multiport.is_empty() {
+    if !multiport.ports.is_empty() {
         firewall = parse(&out.stdout, &multiport)?;
     }
     Some(firewall)
 }
 
-/// Ports of iptables `multiport` rules in the `filter` table, by family,
-/// chain and the rule's position in it.
-type Multiport = HashMap<(String, String, usize), Vec<Ports>>;
+/// What iptables-save shows of the `filter` table.
+#[derive(Default)]
+struct Multiport {
+    /// Ports of `multiport` rules, by family, chain and position.
+    ports: HashMap<(String, String, usize), Vec<Ports>>,
+    /// Rules per chain, by family and chain, to check they line up with
+    /// nft's.
+    lengths: HashMap<(String, String), usize>,
+}
 
-/// Reads `iptables-save -t filter`: the destination ports of each rule
-/// with `-p <proto> -m multiport --dports 80,443` (or `60000:60010`). A
-/// rule with a `!` is skipped, so its ports stay unknown.
-fn parse_save(text: &str, family: &str) -> Multiport {
-    let mut out = Multiport::new();
-    let mut index: HashMap<&str, usize> = HashMap::new();
+/// Reads `iptables-save -t filter` of the nf_tables backend (the legacy
+/// one holds other rules): the destination ports of each rule with
+/// `-p <proto> -m multiport --dports 80,443` (or `60000:60010`).
+fn parse_save(text: &str, family: &str, out: &mut Multiport) {
+    let header = text.lines().find(|l| !l.trim().is_empty());
+    if !header.is_some_and(|l| l.contains("(nf_tables)")) {
+        return;
+    }
     for line in text.lines() {
         let mut words = line.split_whitespace();
         if words.next() != Some("-A") {
@@ -207,17 +220,22 @@ fn parse_save(text: &str, family: &str) -> Multiport {
             continue;
         };
         let words: Vec<&str> = words.collect();
-        let i = index.entry(chain).or_insert(0);
-        let position = *i;
-        *i += 1;
-        let after = |flag: &str| words.windows(2).find(|w| w[0] == flag).map(|w| w[1]);
-        let negated = words.contains(&"!");
-        let (Some(proto), Some(spec)) = (after("-p"), after("--dports")) else {
+        let length = out
+            .lengths
+            .entry((family.to_owned(), chain.to_owned()))
+            .or_insert(0);
+        let position = *length;
+        *length += 1;
+        // `-p` comes before any `-m`; `--dports` is read right after
+        // `-m multiport`, so `! --dports` and a comment's words are not.
+        let proto = words.windows(2).find(|w| w[0] == "-p").map(|w| w[1]);
+        let spec = words
+            .windows(3)
+            .find(|w| w[0] == "multiport" && w[1] == "--dports")
+            .map(|w| w[2]);
+        let (Some(proto @ ("tcp" | "udp" | "sctp")), Some(spec)) = (proto, spec) else {
             continue;
         };
-        if negated || !words.contains(&"multiport") || !matches!(proto, "tcp" | "udp" | "sctp") {
-            continue;
-        }
         let ports: Option<Vec<Ports>> = spec
             .split(',')
             .map(|r| {
@@ -230,10 +248,10 @@ fn parse_save(text: &str, family: &str) -> Multiport {
             })
             .collect();
         if let Some(ports) = ports {
-            out.insert((family.to_owned(), chain.to_owned(), position), ports);
+            out.ports
+                .insert((family.to_owned(), chain.to_owned(), position), ports);
         }
     }
-    out
 }
 
 /// A chain, as `(family, table, name)`.
@@ -472,6 +490,28 @@ struct Walk<'a, 'r> {
 }
 
 impl Walk<'_, '_> {
+    /// The ports iptables-save shows for rule `i` of `chain`, if that rule
+    /// is an opaque `multiport` one, the chain has as many rules in both
+    /// listings, and the protocols agree.
+    fn multiport_ports(&self, chain: &ChainKey, i: usize, rule: &Narrow) -> Option<&Vec<Ports>> {
+        let (family, table, name) = chain;
+        let length = self.rules.get(chain).map_or(0, Vec::len);
+        if rule.unread.is_empty()
+            || table != "filter"
+            || self.multiport.lengths.get(&(family.clone(), name.clone())) != Some(&length)
+        {
+            return None;
+        }
+        let ports = self
+            .multiport
+            .ports
+            .get(&(family.clone(), name.clone(), i))?;
+        ports
+            .iter()
+            .all(|p| rule.unread.contains(&p.proto))
+            .then_some(ports)
+    }
+
     /// Adds what `chain` opens to any source. A `jump` or `goto` is
     /// followed only if its rule is narrow too; if that rule also matches
     /// ports, they are open when the target accepts everything (as `ufw
@@ -489,10 +529,7 @@ impl Walk<'_, '_> {
             let Some(mut rule) = narrow(before) else {
                 continue;
             };
-            let key = (chain.0.clone(), chain.2.clone(), i);
-            if chain.1 == "filter"
-                && let Some(ports) = self.multiport.get(&key)
-            {
+            if let Some(ports) = self.multiport_ports(chain, i, &rule) {
                 rule.ports.extend(ports.iter().cloned());
                 rule.unread.clear();
             }
@@ -760,7 +797,7 @@ mod tests {
     /// Rulesets captured from real hosts with `nft -j list ruleset`.
     fn ruleset(name: &str) -> Firewall {
         let json = std::fs::read(testdata(&format!("nft/{name}.json"))).unwrap();
-        parse(&json, &Multiport::new()).unwrap()
+        parse(&json, &Multiport::default()).unwrap()
     }
 
     fn chains(fw: &Firewall) -> Vec<(&str, &str, bool)> {
@@ -1015,8 +1052,26 @@ mod tests {
                 );
             }
         }
-        let ran: Vec<String> = runner.calls().into_iter().map(|c| c.program).collect();
-        assert_eq!(ran, ["nft", "iptables-save", "ip6tables-save"]);
+        // Read-only, and run only for a multiport rule (see READ_ONLY_COMMANDS).
+        let ran: Vec<String> = runner
+            .calls()
+            .into_iter()
+            .map(|c| {
+                [c.program]
+                    .into_iter()
+                    .chain(c.args)
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect();
+        assert_eq!(
+            ran,
+            [
+                "nft -j list ruleset",
+                "iptables-save -t filter",
+                "ip6tables-save -t filter"
+            ]
+        );
         assert!(notices.is_empty(), "{notices:?}");
 
         // Without iptables-save the ports stay unknown.
@@ -1026,17 +1081,55 @@ mod tests {
 
     #[test]
     fn multiport_save_lines() {
-        let save = "-A in -p tcp -m tcp --dport 22 -j ACCEPT\n\
+        let save = "# Generated by iptables-save v1.8.10 (nf_tables)\n\
+                    -A in -p tcp -m tcp --dport 22 -j ACCEPT\n\
                     -A in -p tcp -m multiport --dports 80,443,8000:8010 -j ACCEPT\n\
                     -A in -p udp -m multiport --sports 53 -j ACCEPT\n\
-                    -A in -p tcp -m multiport ! --dports 25 -j ACCEPT\n";
-        let got = parse_save(save, "ip");
-        assert_eq!(got.len(), 1, "{got:?}");
-        let ports: Vec<String> = got[&("ip".to_owned(), "in".to_owned(), 1)]
-            .iter()
-            .map(|p| format!("{}/{}-{}", p.proto, p.first, p.last))
-            .collect();
-        assert_eq!(ports, ["tcp/80-80", "tcp/443-443", "tcp/8000-8010"]);
+                    -A in -p tcp -m multiport ! --dports 25 -j ACCEPT\n\
+                    -A in -p tcp -m comment --comment \"--dports 9\" -m multiport --dports 1 -j ACCEPT\n";
+        let mut got = Multiport::default();
+        parse_save(save, "ip", &mut got);
+        let ports = |i| -> Vec<String> {
+            got.ports[&("ip".to_owned(), "in".to_owned(), i)]
+                .iter()
+                .map(|p| format!("{}/{}-{}", p.proto, p.first, p.last))
+                .collect()
+        };
+        assert_eq!(got.ports.len(), 2);
+        assert_eq!(ports(1), ["tcp/80-80", "tcp/443-443", "tcp/8000-8010"]);
+        assert_eq!(ports(4), ["tcp/1-1"]);
+        assert_eq!(got.lengths[&("ip".to_owned(), "in".to_owned())], 5);
+
+        // The legacy backend holds other rules than nft shows.
+        let mut legacy = Multiport::default();
+        parse_save(&save.replace("(nf_tables)", "(legacy)"), "ip", &mut legacy);
+        assert!(legacy.ports.is_empty());
+    }
+
+    #[test]
+    fn misaligned_multiport_stays_unknown() {
+        let file = |name: &str| std::fs::read_to_string(testdata(&format!("nft/{name}"))).unwrap();
+        let open_8080 = |iptables: String| {
+            let runner = FakeRunner::new()
+                .on("nft", ["-j"], Output::success(file("ufw-multiport.json")))
+                .on("iptables-save", ["-t", "filter"], Output::success(iptables));
+            let fw = detect(&runner, &mut Vec::new()).unwrap();
+            let ip = fw.input_chains.iter().find(|c| c.family == "ip").unwrap();
+            (ip.blocks("tcp", 8080), ip.blocks("tcp", 443))
+        };
+        let save = file("ufw-multiport.iptables");
+        let ssh = "-A ufw-user-input -p tcp -m tcp --dport 22 -j ACCEPT";
+        assert!(save.contains(ssh));
+        // A multiport line where nft has a plain rule (a rule changed
+        // between the two reads).
+        let changed = save.replace(
+            ssh,
+            "-A ufw-user-input -p tcp -m multiport --dports 22,8080 -j ACCEPT",
+        );
+        assert_eq!(open_8080(changed), (Some(true), Some(false)));
+        // A rule fewer: positions no longer line up, so the chain is unread.
+        let fewer = save.replace(&format!("{ssh}\n"), "");
+        assert_eq!(open_8080(fewer), (None, None));
     }
 
     #[test]
@@ -1127,7 +1220,7 @@ mod tests {
             }
         }
         let json = format!(r#"{{"nftables": [{}]}}"#, objects.join(","));
-        parse(json.as_bytes(), &Multiport::new()).unwrap()
+        parse(json.as_bytes(), &Multiport::default()).unwrap()
     }
 
     #[test]
@@ -1213,7 +1306,11 @@ mod tests {
     #[test]
     fn unrecognized_output_is_none() {
         for json in ["", "{}", r#"{"nftables": {}}"#, "[1, 2]"] {
-            assert_eq!(parse(json.as_bytes(), &Multiport::new()), None, "{json:?}");
+            assert_eq!(
+                parse(json.as_bytes(), &Multiport::default()),
+                None,
+                "{json:?}"
+            );
         }
     }
 

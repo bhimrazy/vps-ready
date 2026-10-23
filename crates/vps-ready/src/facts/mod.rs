@@ -318,7 +318,9 @@ mod tests {
 
     /// `detect` and `audit` must never change the host, so collecting facts
     /// runs exactly these read-only commands. A new probe has to be added
-    /// here, where review sees it.
+    /// here, where review sees it. `iptables-save -t filter` and
+    /// `ip6tables-save -t filter` run only when nft shows a multiport rule,
+    /// so they are pinned in `firewall`'s tests.
     const READ_ONLY_COMMANDS: [&[&str]; 9] = [
         &["systemd-detect-virt", "--container"],
         &["systemd-detect-virt", "--vm"],
