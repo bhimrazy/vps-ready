@@ -36,6 +36,9 @@ pub struct Control {
     pub why: String,
     /// How the control is checked.
     pub check: Check,
+    /// ID of the module that fixes a failure, e.g. `kernel.sysctl`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fix: Option<String>,
 }
 
 /// How much a failed control matters.
@@ -806,7 +809,8 @@ mod tests {
         };
         let valid = r#"{ kind = "sshd_effective", key = "port", equals = "22" }"#;
         assert!(parse("", valid).is_ok());
-        assert!(parse("fix = \"x\"", valid).is_err());
+        assert!(parse("fix = \"x\"", valid).is_ok());
+        assert!(parse("refs = \"x\"", valid).is_err());
         assert!(
             parse(
                 "",

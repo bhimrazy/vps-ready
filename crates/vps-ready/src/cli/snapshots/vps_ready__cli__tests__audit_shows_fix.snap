@@ -1,0 +1,42 @@
+---
+source: crates/vps-ready/src/cli/mod.rs
+expression: "String::from_utf8(text).unwrap()"
+---
+Audit of a Debian 13 VM: 17 controls
+
+STATUS   ID       SEVERITY  CONTROL
+FAIL     KRN-001  low       Kernel pointers hidden
+                            kernel.kptr_restrict is 0, expected 1 or 2
+                            Kernel memory addresses help an attacker aim a kernel exploit; hiding
+                            them from normal users makes that harder.
+                            fix: sudo vps-ready apply --module kernel.sysctl
+PASS     KRN-002  low       Kernel log restricted to root
+PASS     KRN-003  medium    Unprivileged BPF disabled
+FAIL     KRN-004  medium    ptrace scope restricted
+                            kernel.yama.ptrace_scope is 0, expected 1, 2 or 3
+                            Otherwise a compromised process can read the memory of your other
+                            processes, including secrets such as keys held by ssh-agent.
+                            fix: sudo vps-ready apply --module kernel.sysctl
+PASS     KRN-005  medium    Symlink protection enabled
+PASS     KRN-006  medium    Hardlink protection enabled
+PASS     KRN-007  low       FIFO protection enabled
+PASS     KRN-008  low       Regular file protection enabled
+PASS     KRN-009  low       Setuid core dumps restricted
+PASS     KRN-010  medium    Address space randomization fully enabled
+PASS     KRN-011  low       Kernel profiling restricted
+PASS     NET-001  low       TCP SYN cookies enabled
+PASS     NET-002  low       Source-routed packets rejected
+PASS     NET-003  low       Broadcast pings ignored
+FAIL     NET-004  low       IPv4 reverse path filtering enabled
+                            reverse path filtering is not 1 (strict) or 2 (loose) on new interfaces
+                            (default) and eth0: rp_filter 0 in all and on each
+                            Reverse path filtering drops incoming packets whose source address the
+                            server has no route back to, which stops many spoofed packets.
+FAIL     NET-005  medium    IPv4 ICMP redirects not accepted
+                            ICMP redirects are accepted on new interfaces (default) and eth0:
+                            accept_redirects 1 in all and on each, forwarding 0 on each
+                            Accepted ICMP redirects change the server's routes, so a forged redirect
+                            can send its traffic through another machine on the local network.
+PASS     NET-006  low       IPv4 ICMP redirects not sent
+
+13 passed, 4 failed, 0 unknown

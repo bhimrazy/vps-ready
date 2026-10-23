@@ -1,0 +1,21 @@
+---
+source: crates/vps-ready/src/modules/kernel_sysctl/tests.rs
+expression: render(&plan)
+---
+kernel.sysctl: Harden kernel settings
+  create /etc/sysctl.d/90-vps-ready.conf (0644 0:0) (Reversible)
+      @@ -0,0 +1,8 @@
+      +# Written by vps-ready (kernel.sysctl). `vps-ready rollback --last`
+      +# restores the previous state; edits here are replaced by the next apply.
+      +kernel.kptr_restrict = 1
+      +kernel.dmesg_restrict = 1
+      +kernel.unprivileged_bpf_disabled = 2
+      +fs.protected_fifos = 1
+      +fs.protected_regular = 1
+      +net.ipv4.conf.all.accept_source_route = 0
+  kernel.kptr_restrict 0 -> 1 (Reversible)
+  kernel.dmesg_restrict 0 -> 1 (Reversible)
+  kernel.unprivileged_bpf_disabled 0 -> 2 (Reversible)
+  fs.protected_fifos 0 -> 1 (Reversible)
+  fs.protected_regular 0 -> 1 (Reversible)
+  net.ipv4.conf.all.accept_source_route 1 -> 0 (Reversible)

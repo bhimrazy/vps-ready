@@ -75,7 +75,7 @@ impl Sysctl {
     }
 }
 
-pub(super) fn detect(fs: &dyn Fs, notices: &mut Vec<String>) -> Sysctl {
+pub(crate) fn detect(fs: &dyn Fs, notices: &mut Vec<String>) -> Sysctl {
     if !fs.exists(Path::new("/proc/sys/kernel")) {
         notices.push("/proc/sys not found; kernel settings are unknown".to_owned());
         return Sysctl::default();
