@@ -3,7 +3,7 @@ members = ["crates/*"]
 resolver = "3"
 
 [workspace.package]
-version = "0.1.0-alpha.3"
+version = "0.1.0-alpha.4"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT OR Apache-2.0"
@@ -11,7 +11,7 @@ repository = "https://github.com/bhimrazy/vps-ready"
 
 [workspace.dependencies]
 # The alias crate pins the exact same version.
-vps-ready = { path = "crates/vps-ready", version = "=0.1.0-alpha.3" }
+vps-ready = { path = "crates/vps-ready", version = "=0.1.0-alpha.4" }
 
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive", "env", "wrap_help"] }

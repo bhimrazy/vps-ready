@@ -39,7 +39,7 @@ Auditors like Lynis tell you what is wrong but fix nothing. Ansible roles fix th
 On the server, as root. Installation is three steps on purpose: download, read, run.
 
 ```console
-# curl -fsSLO https://github.com/bhimrazy/vps-ready/releases/download/v0.1.0-alpha.3/install.sh
+# curl -fsSLO https://github.com/bhimrazy/vps-ready/releases/download/v0.1.0-alpha.4/install.sh
 # less install.sh
 # sh install.sh        # checks the SHA-256, verifies the signature if gh or cosign is installed
 # vps-ready detect
@@ -47,11 +47,11 @@ On the server, as root. Installation is three steps on purpose: download, read, 
 ```
 
 <p align="center">
-  <img src="assets/demo.png" alt="An SSH session on an Ubuntu 24.04 VPS: vps-ready detect shows the OS, init system, KVM, SSH settings, open ports and the admin's connection; vps-ready audit then checks 18 SSH, kernel and network controls, 16 passed and 2 failed, each failure showing the value found and why it matters" width="88%">
+  <img src="assets/demo.png" alt="An SSH session on an Ubuntu 24.04 VPS: vps-ready detect shows the OS, init system, KVM, SSH settings, open ports and the admin's connection; vps-ready audit then checks 20 SSH, kernel, network, update and firewall controls, 17 passed and 3 failed, each failure showing the value found and why it matters" width="88%">
   <br><sub>Example session on an Ubuntu 24.04 VPS.</sub>
 </p>
 
-The command is also installed as `vpsready`, without the hyphen. With Rust installed you can build from source instead: `cargo install vps-ready --version 0.1.0-alpha.3 --locked`. Signed packages for apt, dnf and apk are planned for v0.5. The trust model of each install channel is in [the release doc](docs/release.md).
+The command is also installed as `vpsready`, without the hyphen. With Rust installed you can build from source instead: `cargo install vps-ready --version 0.1.0-alpha.4 --locked`. Signed packages for apt, dnf and apk are planned for v0.5. The trust model of each install channel is in [the release doc](docs/release.md).
 
 ## What it does
 
