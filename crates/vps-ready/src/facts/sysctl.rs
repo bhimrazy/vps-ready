@@ -131,6 +131,29 @@ mod tests {
         fn metadata(&self, path: &Path) -> Result<crate::sys::FileMeta, SysError> {
             self.inner.metadata(path)
         }
+        fn write_atomic(
+            &self,
+            path: &Path,
+            bytes: &[u8],
+            owner: crate::sys::FileOwner,
+        ) -> Result<(), SysError> {
+            self.inner.write_atomic(path, bytes, owner)
+        }
+        fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), SysError> {
+            self.inner.write(path, bytes)
+        }
+        fn append_sync(&self, path: &Path, bytes: &[u8]) -> Result<(), SysError> {
+            self.inner.append_sync(path, bytes)
+        }
+        fn remove(&self, path: &Path) -> Result<(), SysError> {
+            self.inner.remove(path)
+        }
+        fn create_dir_all(&self, path: &Path, mode: u32) -> Result<(), SysError> {
+            self.inner.create_dir_all(path, mode)
+        }
+        fn sync_dir(&self, path: &Path) -> Result<(), SysError> {
+            self.inner.sync_dir(path)
+        }
     }
 
     #[test]

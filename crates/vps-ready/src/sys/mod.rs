@@ -1,15 +1,19 @@
-//! The system boundary: every process spawn and file read goes through the
+//! The system boundary: every process spawn and file access goes through the
 //! [`Runner`] and [`Fs`] traits.
 //!
-//! Production code receives `&dyn Runner` / `&dyn Fs` and never calls
-//! `std::process` or `std::fs` directly, so tests can substitute the fakes in
-//! `sys::fake` (available under `cfg(test)` or the `testing` feature).
+//! Production code receives `&dyn Runner` / `&dyn Fs` (or both as [`Sys`])
+//! and never calls `std::process` or `std::fs` directly, so tests can
+//! substitute the fakes in `sys::fake` (available under `cfg(test)` or the
+//! `testing` feature).
 //!
 //! Paths passed to [`Fs`] are always absolute paths *on the inspected system*
 //! (for example `/etc/os-release`); [`RealFs`] maps them under its root.
 
-use std::io::{self, Read};
-use std::os::unix::fs::MetadataExt as _;
+use std::fs::{DirBuilder, File, OpenOptions, Permissions};
+use std::io::{self, Read, Write as _};
+use std::os::unix::fs::{
+    DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
+};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -36,6 +40,9 @@ pub enum SysError {
         /// Timeout that elapsed.
         timeout: Duration,
     },
+    /// A write was refused because the target is a symlink.
+    #[error("refusing to write through a symlink: {0}")]
+    Symlink(String),
     /// Data that must be text was not valid UTF-8.
     #[error("{0} is not valid UTF-8")]
     NonUtf8(String),
@@ -206,10 +213,18 @@ pub struct FileMeta {
     pub gid: u32,
 }
 
-/// Read-only filesystem access.
-///
-/// Writes (`write_atomic`, `rename`, `chmod`, ...) are added in M2 together
-/// with the engine's snapshot and rollback support.
+/// Mode and owner of a file written by [`Fs::write_atomic`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileOwner {
+    /// Permission bits (`0o7777` at most).
+    pub mode: u32,
+    /// Owner user id.
+    pub uid: u32,
+    /// Owner group id.
+    pub gid: u32,
+}
+
+/// Filesystem access.
 pub trait Fs {
     /// Reads a whole file.
     ///
@@ -234,6 +249,72 @@ pub trait Fs {
     ///
     /// [`SysError::NotFound`], [`SysError::Permission`] or [`SysError::Io`].
     fn metadata(&self, path: &Path) -> Result<FileMeta, SysError>;
+
+    /// Replaces the file at `path` with `bytes`, `owner.mode`, `owner.uid`
+    /// and `owner.gid`, so that after a crash it holds either the old or the
+    /// new content, never a mix. Returns once the new file and its directory
+    /// entry are on disk. An error before the rename leaves the old file
+    /// unchanged; if only the final directory sync fails, the new file is in
+    /// place but may not survive a crash.
+    ///
+    /// # Errors
+    ///
+    /// [`SysError::Symlink`] if `path` is a symlink; [`SysError::NotFound`]
+    /// if the parent directory does not exist; [`SysError::Permission`] or
+    /// [`SysError::Io`].
+    fn write_atomic(&self, path: &Path, bytes: &[u8], owner: FileOwner) -> Result<(), SysError>;
+
+    /// Truncates the existing file at `path` and writes `bytes` in place,
+    /// without creating it, syncing it or changing its metadata. Only for
+    /// `/proc/sys`, where a file cannot be replaced by a rename.
+    ///
+    /// # Errors
+    ///
+    /// [`SysError::NotFound`], [`SysError::Permission`] or [`SysError::Io`].
+    fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), SysError>;
+
+    /// Appends `bytes` to `path`, creating it with mode `0600` if missing,
+    /// and returns once the data is on disk. A newly created file's directory
+    /// entry is not synced: call [`Fs::sync_dir`] on its parent for that.
+    ///
+    /// # Errors
+    ///
+    /// [`SysError::NotFound`] if the parent directory does not exist;
+    /// [`SysError::Permission`] or [`SysError::Io`].
+    fn append_sync(&self, path: &Path, bytes: &[u8]) -> Result<(), SysError>;
+
+    /// Removes the file or symlink at `path` (not a directory). The removal
+    /// is durable only after [`Fs::sync_dir`] on the parent.
+    ///
+    /// # Errors
+    ///
+    /// [`SysError::NotFound`], [`SysError::Permission`] or [`SysError::Io`].
+    fn remove(&self, path: &Path) -> Result<(), SysError>;
+
+    /// Creates `path` and any missing parents with `mode` (minus the umask,
+    /// on [`RealFs`]). Existing directories are left as they are.
+    ///
+    /// # Errors
+    ///
+    /// [`SysError::Permission`] or [`SysError::Io`].
+    fn create_dir_all(&self, path: &Path, mode: u32) -> Result<(), SysError>;
+
+    /// Flushes the directory `path` to disk, which makes the creation,
+    /// rename or removal of its entries durable.
+    ///
+    /// # Errors
+    ///
+    /// [`SysError::NotFound`], [`SysError::Permission`] or [`SysError::Io`].
+    fn sync_dir(&self, path: &Path) -> Result<(), SysError>;
+}
+
+/// The system boundary in one `Copy` value, so higher layers take one argument.
+#[derive(Clone, Copy)]
+pub struct Sys<'a> {
+    /// Filesystem access.
+    pub fs: &'a dyn Fs,
+    /// Command execution.
+    pub runner: &'a dyn Runner,
 }
 
 /// `PATH` for every command, systemd's default. The caller's `PATH` is not
@@ -349,6 +430,31 @@ impl RealFs {
     fn host_path(&self, path: &Path) -> PathBuf {
         self.root.join(path.strip_prefix("/").unwrap_or(path))
     }
+
+    /// Writes `bytes` to a new file at `tmp` with `owner`, and syncs it.
+    fn write_temp(tmp: &Path, bytes: &[u8], owner: FileOwner) -> io::Result<()> {
+        // `create_new` (O_EXCL) never follows a symlink planted at `tmp`, and
+        // 0600 keeps the content private until the final mode is set.
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(tmp)?;
+        file.write_all(bytes)?;
+        // Owner before mode: chown can clear the setuid and setgid bits.
+        std::os::unix::fs::fchown(&file, Some(owner.uid), Some(owner.gid))?;
+        file.set_permissions(Permissions::from_mode(owner.mode))?;
+        file.sync_all()
+    }
+}
+
+/// The temp file `write_atomic` uses for `path`: `.<name>.vps-ready-tmp` in
+/// the same directory, because `rename` cannot cross filesystems.
+fn temp_path(path: &Path) -> Option<PathBuf> {
+    let mut name = std::ffi::OsString::from(".");
+    name.push(path.file_name()?);
+    name.push(".vps-ready-tmp");
+    Some(path.with_file_name(name))
 }
 
 impl Fs for RealFs {
@@ -394,6 +500,81 @@ impl Fs for RealFs {
             uid: meta.uid(),
             gid: meta.gid(),
         })
+    }
+
+    fn write_atomic(&self, path: &Path, bytes: &[u8], owner: FileOwner) -> Result<(), SysError> {
+        let subject = || path.display().to_string();
+        let host = self.host_path(path);
+        match std::fs::symlink_metadata(&host) {
+            Ok(meta) if meta.file_type().is_symlink() => return Err(SysError::Symlink(subject())),
+            Ok(_) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(SysError::from_io(subject(), e)),
+        }
+        let (Some(tmp), Some(dir)) = (temp_path(&host), host.parent()) else {
+            return Err(SysError::Io {
+                context: subject(),
+                source: io::Error::from(io::ErrorKind::InvalidInput),
+            });
+        };
+        // A crash during an earlier call can leave the temp file behind.
+        match std::fs::remove_file(&tmp) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(SysError::from_io(subject(), e)),
+        }
+        let written =
+            Self::write_temp(&tmp, bytes, owner).and_then(|()| std::fs::rename(&tmp, &host));
+        if let Err(e) = written {
+            // Best effort: the original is untouched either way.
+            let _ = std::fs::remove_file(&tmp);
+            return Err(SysError::from_io(subject(), e));
+        }
+        // The rename is not durable until the directory itself is synced.
+        File::open(dir)
+            .and_then(|d| d.sync_all())
+            .map_err(|e| SysError::from_io(subject(), e))
+    }
+
+    fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), SysError> {
+        OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(self.host_path(path))
+            .and_then(|mut f| f.write_all(bytes))
+            .map_err(|e| SysError::from_io(path.display().to_string(), e))
+    }
+
+    fn append_sync(&self, path: &Path, bytes: &[u8]) -> Result<(), SysError> {
+        OpenOptions::new()
+            .append(true)
+            .create(true)
+            .mode(0o600)
+            .open(self.host_path(path))
+            .and_then(|mut f| {
+                f.write_all(bytes)?;
+                f.sync_all()
+            })
+            .map_err(|e| SysError::from_io(path.display().to_string(), e))
+    }
+
+    fn remove(&self, path: &Path) -> Result<(), SysError> {
+        std::fs::remove_file(self.host_path(path))
+            .map_err(|e| SysError::from_io(path.display().to_string(), e))
+    }
+
+    fn create_dir_all(&self, path: &Path, mode: u32) -> Result<(), SysError> {
+        DirBuilder::new()
+            .recursive(true)
+            .mode(mode)
+            .create(self.host_path(path))
+            .map_err(|e| SysError::from_io(path.display().to_string(), e))
+    }
+
+    fn sync_dir(&self, path: &Path) -> Result<(), SysError> {
+        File::open(self.host_path(path))
+            .and_then(|d| d.sync_all())
+            .map_err(|e| SysError::from_io(path.display().to_string(), e))
     }
 }
 
@@ -456,5 +637,150 @@ mod tests {
             fs.read(Path::new("/nope")),
             Err(SysError::NotFound(_))
         ));
+    }
+
+    /// The write behavior shared by [`RealFs`] and [`fake::FakeFs`]. `fs`
+    /// has a directory `/etc` and a symlink `/etc/link` to `/etc/real`, which
+    /// holds `real\n`. `owner` is one the caller may set.
+    fn write_contract(fs: &dyn Fs, owner: FileOwner) {
+        let path = Path::new("/etc/new.conf");
+        let mode = |p: &str| fs.metadata(Path::new(p)).unwrap().mode;
+
+        fs.write_atomic(
+            path,
+            b"a\n",
+            FileOwner {
+                mode: 0o640,
+                ..owner
+            },
+        )
+        .unwrap();
+        assert_eq!(fs.read(path).unwrap(), b"a\n");
+        assert_eq!(mode("/etc/new.conf"), 0o640);
+
+        fs.write_atomic(
+            path,
+            b"b\n",
+            FileOwner {
+                mode: 0o600,
+                ..owner
+            },
+        )
+        .unwrap();
+        assert_eq!(fs.read(path).unwrap(), b"b\n");
+        assert_eq!(mode("/etc/new.conf"), 0o600);
+        let tmp = fs
+            .read_dir(Path::new("/etc"))
+            .unwrap()
+            .into_iter()
+            .find(|p| p.to_string_lossy().ends_with(".vps-ready-tmp"));
+        assert_eq!(tmp, None);
+
+        let err = fs
+            .write_atomic(Path::new("/etc/link"), b"x\n", owner)
+            .unwrap_err();
+        assert!(matches!(err, SysError::Symlink(_)), "{err:?}");
+        assert_eq!(fs.read(Path::new("/etc/real")).unwrap(), b"real\n");
+        let link = fs.metadata(Path::new("/etc/link")).unwrap();
+        assert_eq!(link.kind, FileKind::Symlink);
+
+        let err = fs
+            .write_atomic(Path::new("/nope/x"), b"x\n", owner)
+            .unwrap_err();
+        assert!(matches!(err, SysError::NotFound(_)), "{err:?}");
+
+        fs.write(path, b"c").unwrap();
+        assert_eq!(fs.read(path).unwrap(), b"c");
+        assert_eq!(mode("/etc/new.conf"), 0o600);
+        let err = fs.write(Path::new("/etc/missing"), b"x").unwrap_err();
+        assert!(matches!(err, SysError::NotFound(_)), "{err:?}");
+        assert!(!fs.exists(Path::new("/etc/missing")));
+
+        let journal = Path::new("/etc/journal");
+        fs.append_sync(journal, b"1\n").unwrap();
+        fs.append_sync(journal, b"2\n").unwrap();
+        assert_eq!(fs.read(journal).unwrap(), b"1\n2\n");
+        assert_eq!(mode("/etc/journal"), 0o600);
+
+        fs.remove(journal).unwrap();
+        assert!(!fs.exists(journal));
+        assert!(matches!(fs.remove(journal), Err(SysError::NotFound(_))));
+
+        let state = Path::new("/var/lib/vps-ready");
+        fs.create_dir_all(state, 0o700).unwrap();
+        fs.create_dir_all(state, 0o755).unwrap();
+        let meta = fs.metadata(state).unwrap();
+        assert_eq!((meta.kind, meta.mode), (FileKind::Dir, 0o700));
+        fs.sync_dir(state).unwrap();
+        assert!(matches!(
+            fs.sync_dir(Path::new("/nope")),
+            Err(SysError::NotFound(_))
+        ));
+    }
+
+    /// A tempdir root with `/etc/real` and `/etc/link`, and an owner that a
+    /// non-root user may set: the one the tempdir already has.
+    fn real_root() -> (tempfile::TempDir, FileOwner) {
+        let dir = tempfile::tempdir().unwrap();
+        let etc = dir.path().join("etc");
+        std::fs::create_dir(&etc).unwrap();
+        std::fs::write(etc.join("real"), "real\n").unwrap();
+        std::os::unix::fs::symlink("/etc/real", etc.join("link")).unwrap();
+        let meta = std::fs::metadata(&etc).unwrap();
+        let owner = FileOwner {
+            mode: 0o644,
+            uid: meta.uid(),
+            gid: meta.gid(),
+        };
+        (dir, owner)
+    }
+
+    #[test]
+    fn real_fs_writes() {
+        let (dir, owner) = real_root();
+        write_contract(&RealFs::new(dir.path()), owner);
+    }
+
+    #[test]
+    fn fake_fs_writes() {
+        let fs = fake::FakeFs::new()
+            .with_file("/etc/real", "real\n")
+            .with_symlink("/etc/link", "/etc/real");
+        write_contract(
+            &fs,
+            FileOwner {
+                mode: 0o644,
+                uid: 0,
+                gid: 0,
+            },
+        );
+    }
+
+    #[test]
+    fn write_atomic_removes_a_stale_temp_file() {
+        let (dir, owner) = real_root();
+        let stale = dir.path().join("etc/.new.conf.vps-ready-tmp");
+        std::fs::write(&stale, "left by a crash").unwrap();
+        let fs = RealFs::new(dir.path());
+        fs.write_atomic(Path::new("/etc/new.conf"), b"a\n", owner)
+            .unwrap();
+        assert!(!stale.exists());
+        assert_eq!(fs.read(Path::new("/etc/new.conf")).unwrap(), b"a\n");
+    }
+
+    #[test]
+    fn failed_write_atomic_leaves_the_target_and_no_temp_file() {
+        let (dir, owner) = real_root();
+        // A non-empty directory at the target makes the final rename fail,
+        // for root too, after the temp file was written and synced.
+        let target = dir.path().join("etc/new.conf");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("keep"), "kept\n").unwrap();
+        let fs = RealFs::new(dir.path());
+
+        let err = fs.write_atomic(Path::new("/etc/new.conf"), b"a\n", owner);
+        assert!(err.is_err(), "{err:?}");
+        assert_eq!(std::fs::read(target.join("keep")).unwrap(), b"kept\n");
+        assert!(!dir.path().join("etc/.new.conf.vps-ready-tmp").exists());
     }
 }

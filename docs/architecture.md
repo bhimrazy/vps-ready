@@ -48,8 +48,6 @@ Each layer only calls the one below it. The bottom layer, `sys`, is the only cod
 
 Two traits, and nothing else in the codebase is allowed to run a process or touch a file directly:
 
-Today `Fs` is read-only; the write methods arrive with the engine in M2 ([the M2 plan](m2-plan.md)).
-
 ```rust
 pub trait Runner {
     fn run(&self, cmd: &Cmd) -> Result<Output, SysError>;   // Cmd = program, args, env, timeout
@@ -60,12 +58,17 @@ pub trait Fs {                                              // every path is res
     fn exists(&self, path: &Path) -> bool;
     fn read_dir(&self, path: &Path) -> Result<Vec<PathBuf>, SysError>;
     fn metadata(&self, path: &Path) -> Result<FileMeta, SysError>;   // lstat
-    // M2: write_atomic, write (for /proc/sys), append_sync, remove, create_dir_all
+    fn write_atomic(&self, path: &Path, bytes: &[u8], owner: FileOwner) -> Result<(), SysError>; // temp file, fsync, rename, fsync dir
+    fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), SysError>;          // in place, for /proc/sys only
+    fn append_sync(&self, path: &Path, bytes: &[u8]) -> Result<(), SysError>;    // the journal
+    fn remove(&self, path: &Path) -> Result<(), SysError>;
+    fn create_dir_all(&self, path: &Path, mode: u32) -> Result<(), SysError>;
+    fn sync_dir(&self, path: &Path) -> Result<(), SysError>;
 }
 ```
 - `RealRunner` uses `std::process::Command` and kills the child if it exceeds its timeout. `RealFs` is rooted at `/`. `fsync`, `fchown` and `flock` come from `std` (`File::sync_all`, `std::os::unix::fs::fchown`, `File::try_lock`).
-- `FakeRunner` (matches argv, returns canned output) and `FakeFs` (an in-memory map of paths to contents) live behind the `testing` Cargo feature, so integration tests can use them but release binaries don't contain them.
-- `Sys` (M2) is a small `Copy` struct holding `&dyn Fs` and `&dyn Runner`, so higher layers take one argument.
+- `FakeRunner` (matches argv, returns canned output) and `FakeFs` (an in-memory map of paths to contents and metadata, which can fail the n-th write, rename, remove or append) live behind the `testing` Cargo feature, so integration tests can use them but release binaries don't contain them.
+- `Sys` is a small `Copy` struct holding `&dyn Fs` and `&dyn Runner`, so higher layers take one argument.
 
 ### Facts (`src/facts`)
 Detection runs once, read-only, into a typed `Facts` struct (`serde` `Serialize`, so `detect --json` is free):
