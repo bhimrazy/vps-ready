@@ -51,7 +51,7 @@ tried them on a throwaway VM.
 ## Tests
 
 - Unit tests and, where output is rendered, an `insta` snapshot.
-- Container tests run in CI; VM tests are planned (see [docs/testing.md](docs/testing.md)). Say in the PR how you tried a change that touches the system.
+- Container tests run in CI on every PR, and VM tests on PRs that touch the engine or modules (see [docs/testing.md](docs/testing.md)). Say in the PR how you tried a change that touches the system.
 
 ## Lint policy
 
