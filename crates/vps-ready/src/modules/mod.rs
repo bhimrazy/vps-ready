@@ -5,6 +5,10 @@ use crate::facts::Facts;
 use crate::resource::{Resource, ResourceError};
 use crate::sys::{Sys, SysError};
 
+mod updates_auto;
+
+pub use updates_auto::UpdatesAuto;
+
 /// Errors from planning a module.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -39,6 +43,11 @@ pub trait Module {
     fn why(&self) -> &'static str;
     /// Whether it can run on this host.
     fn applicable(&self, facts: &Facts) -> Applicability;
+    /// What the plan should say besides its changes, e.g. something the
+    /// module leaves alone. Asked only when it applies.
+    fn notes(&self, _facts: &Facts) -> Vec<String> {
+        Vec::new()
+    }
     /// The resources in their desired state, in apply order. May read, never
     /// writes.
     ///
