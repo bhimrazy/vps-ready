@@ -5,7 +5,7 @@ A hardening tool that runs as root is a prime supply-chain target. Users who car
 ## Build
 
 - **Toolchain:** Rust stable (no exact version is pinned today; pinning is planned for reproducible builds, because a different compiler version produces different bytes), edition 2024.
-- **Targets:** `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`. musl targets link **statically** by default, so the binary runs on Ubuntu, Debian, Rocky and Alpine without caring about the host's glibc. Both targets build on an x86_64 `ubuntu-latest` runner, linked with `rust-lld` and the musl CRT bundled with the Rust target (see `.cargo/config.toml`), so no cross toolchain is needed. Later, maybe `armv7` and `riscv64`.
+- **Targets:** `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`. musl targets link **statically** by default, so the binary runs on Ubuntu, Debian, Rocky and Alpine without caring about the host's glibc. Both targets build on an x86_64 `ubuntu-24.04` runner, linked with `rust-lld` and the musl CRT bundled with the Rust target (see `.cargo/config.toml`), so no cross toolchain is needed. Later, maybe `armv7` and `riscv64`.
 - **Command:** `cargo build --release --locked --target <target>`. `--locked` makes the build fail if `Cargo.lock` would change, so CI builds exactly the dependency versions that were reviewed.
 - **Release profile** (in the workspace `Cargo.toml`):
 
