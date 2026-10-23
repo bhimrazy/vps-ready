@@ -39,7 +39,7 @@ Auditors like Lynis tell you what is wrong but fix nothing. Ansible roles fix th
 On the server, as root. Installation is three steps on purpose: download, read, run.
 
 ```console
-# curl -fsSLO https://github.com/bhimrazy/vps-ready/releases/download/v0.2.0/install.sh
+# curl -fsSLO https://github.com/bhimrazy/vps-ready/releases/download/v0.2.1/install.sh
 # less install.sh
 # sh install.sh        # checks the SHA-256, verifies the signature if gh or cosign is installed
 # vps-ready detect
