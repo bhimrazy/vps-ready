@@ -7,7 +7,7 @@
 
 <div align="center">
 
-**One static binary to audit a fresh Linux server and harden it, with rollback, and soon without locking you out.**
+**One static binary to audit a fresh Linux server and harden it, with a plan you review first and rollback after.**
 
 <pre>
 ✅ Detects distro, VM, container     ✅ Audits with stable control IDs    ✅ x86_64 and arm64
