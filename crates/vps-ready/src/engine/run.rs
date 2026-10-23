@@ -121,23 +121,30 @@ impl<'a> Engine<'a> {
     }
 
     /// Applies `plan`, the plan shown to the user. Each change is re-diffed
-    /// first, and nothing happens if one differs. Then, for each resource:
-    /// snapshot, `backup` line, apply, `applied` line; then every resource is
-    /// verified. On a failure the changes are rolled back without the safety
-    /// check of [`Engine::rollback`], since they were made under this lock a
-    /// moment ago and a change that did not verify would fail it.
+    /// first, and nothing happens if one differs. Resources that had no
+    /// change are not re-diffed: if they drifted since, the next plan shows
+    /// it. Then, for each resource: snapshot, `backup` line, apply, `applied`
+    /// line; then every resource is verified. On a failure the changes are
+    /// rolled back without the safety check of [`Engine::rollback`], since
+    /// they were made under this lock a moment ago.
     ///
     /// # Errors
     ///
     /// [`EngineError::RollbackIncomplete`] if a failure was not fully rolled
     /// back. Any other error means nothing was changed: an unfinished
-    /// transaction, [`EngineError::PlanChanged`], or a failure before the
-    /// first `backup` line.
+    /// transaction, [`EngineError::DuplicateResource`],
+    /// [`EngineError::PlanChanged`], or a failure before the first `backup`
+    /// line.
     pub fn apply(&self, plan: &Plan) -> Result<ApplyOutcome, EngineError> {
         self.ensure_finished()?;
         let steps: Vec<&Step> = plan.steps().collect();
         if steps.is_empty() {
             return Ok(ApplyOutcome::NothingToDo);
+        }
+        // Rollback tracks `restored` lines by resource ID.
+        let mut seen = BTreeSet::new();
+        if let Some(step) = steps.iter().find(|s| !seen.insert(&s.change.id)) {
+            return Err(EngineError::DuplicateResource(step.change.id.clone()));
         }
         for step in &steps {
             let now = diff(self.sys, &step.resource)?;
@@ -277,7 +284,9 @@ impl<'a> Engine<'a> {
     }
 
     /// Restores every backup without a `restored` line, newest first, then
-    /// writes the final state. Returns how many it restored.
+    /// writes the final state. A `rollback` record goes first, unless an
+    /// earlier run wrote one; its reason then wins over `reason`. Returns how
+    /// many it restored.
     fn roll_back(
         &self,
         open: &mut Open,
@@ -285,9 +294,11 @@ impl<'a> Engine<'a> {
         check: bool,
     ) -> Result<usize, EngineError> {
         let (id, dir) = (open.txn.id().to_owned(), open.txn.dir().to_path_buf());
-        let records = open
-            .records()
-            .map_err(|e| incomplete(&id, &dir, Vec::new(), e))?;
+        let records = open.records().map_err(|e| incomplete(&id, &dir, None, e))?;
+        let started = records.iter().rev().find_map(|r| match r.event {
+            Event::Rollback { reason } => Some(reason),
+            _ => None,
+        });
         let restored: BTreeSet<&str> = records
             .iter()
             .filter_map(|r| match &r.event {
@@ -304,19 +315,52 @@ impl<'a> Engine<'a> {
                 _ => None,
             })
             .collect();
+        let left = |upto: usize| {
+            Some(
+                pending[..upto]
+                    .iter()
+                    .filter_map(|(r, b)| by_hand(&dir, r, b))
+                    .collect(),
+            )
+        };
 
         if check {
             let mut changed = Vec::new();
             for (resource, backup) in &pending {
-                if !unchanged(self.sys, &dir, backup)? {
-                    changed.push(by_hand(&dir, resource, backup));
+                if unchanged(self.sys, &dir, backup)? {
+                    continue;
                 }
+                changed.extend(by_hand(&dir, resource, backup).map(|mut step| {
+                    if let Backup::File {
+                        n, original: None, ..
+                    } = backup
+                    {
+                        let after = after_path(&dir, *n);
+                        step.step += &format!("; it no longer matches {}", after.display());
+                    }
+                    step
+                }));
             }
             if !changed.is_empty() {
                 return Err(EngineError::Changed { txn: id, changed });
             }
         }
 
+        let reason = match started {
+            Some(reason) => reason,
+            None => {
+                // A failed `state applied` append may have landed; from
+                // `applied` only a manual rollback is legal.
+                let reason = if open.state == Some(TxnState::Applied) {
+                    RollbackReason::Manual
+                } else {
+                    reason
+                };
+                open.append(Event::Rollback { reason })
+                    .map_err(|e| incomplete(&id, &dir, left(pending.len()), e))?;
+                reason
+            }
+        };
         for (i, (resource, backup)) in pending.iter().enumerate().rev() {
             let result = restore(self.sys, &dir, backup)
                 .map_err(|source| EngineError::Resource {
@@ -329,17 +373,13 @@ impl<'a> Engine<'a> {
                     })
                 });
             if let Err(e) = result {
-                let left = pending[..=i]
-                    .iter()
-                    .map(|(r, b)| by_hand(&dir, r, b))
-                    .collect();
-                return Err(incomplete(&id, &dir, left, e));
+                return Err(incomplete(&id, &dir, left(i + 1), e));
             }
         }
         open.append(Event::State {
             state: TxnState::RolledBack { reason },
         })
-        .map_err(|e| incomplete(&id, &dir, Vec::new(), e))?;
+        .map_err(|e| incomplete(&id, &dir, left(0), e))?;
         Ok(pending.len())
     }
 }
@@ -384,7 +424,7 @@ fn diff(sys: Sys, resource: &Resource) -> Result<Option<crate::resource::Change>
     })
 }
 
-fn incomplete(id: &str, dir: &Path, left: Vec<ByHand>, source: EngineError) -> EngineError {
+fn incomplete(id: &str, dir: &Path, left: Option<Vec<ByHand>>, source: EngineError) -> EngineError {
     EngineError::RollbackIncomplete {
         txn: id.to_owned(),
         dir: dir.display().to_string(),
@@ -419,10 +459,10 @@ fn unchanged(sys: Sys, dir: &Path, backup: &Backup) -> Result<bool, EngineError>
             applied,
         } => {
             // `diff` is `None` when the running value matches.
-            for value in [applied, value] {
+            for candidate in [applied, value] {
                 let resource = Resource::Sysctl(Sysctl {
                     key: key.clone(),
-                    value: value.clone(),
+                    value: candidate.clone(),
                 });
                 if diff(sys, &resource)?.is_none() {
                     return Ok(true);
@@ -430,10 +470,14 @@ fn unchanged(sys: Sys, dir: &Path, backup: &Backup) -> Result<bool, EngineError>
             }
             Ok(false)
         }
+        // Restoring a package does nothing.
+        Backup::Package { .. } => Ok(true),
     }
 }
 
-fn by_hand(dir: &Path, resource: &str, backup: &Backup) -> ByHand {
+/// How to restore `backup` by hand; `None` for a package, which rollback
+/// leaves as it is.
+fn by_hand(dir: &Path, resource: &str, backup: &Backup) -> Option<ByHand> {
     let step = match backup {
         Backup::File {
             path,
@@ -453,11 +497,12 @@ fn by_hand(dir: &Path, resource: &str, backup: &Backup) -> ByHand {
             ..
         } => format!("remove {}", path.display()),
         Backup::Sysctl { key, value, .. } => format!("sysctl -w '{key}={value}'"),
+        Backup::Package { .. } => return None,
     };
-    ByHand {
+    Some(ByHand {
         resource: resource.to_owned(),
         step,
-    }
+    })
 }
 
 /// A transaction being written. Every append is checked with

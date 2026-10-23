@@ -58,6 +58,7 @@ fn file(path: &str, content: &str, mode: u32) -> Resource {
         path: path.into(),
         content: content.into(),
         owner: owner(mode),
+        validate: None,
     })
 }
 
@@ -244,6 +245,7 @@ fn applies_then_rolls_back_to_the_original_tree() {
             | Event::Restored { resource } => format!("{} {resource}", e.name()),
             Event::State { state } => format!("state {state}"),
             Event::Begin { .. } => "begin".into(),
+            Event::Rollback { .. } => "rollback".into(),
         })
         .collect();
     assert_eq!(
@@ -257,6 +259,7 @@ fn applies_then_rolls_back_to_the_original_tree() {
             "backup sysctl:kernel.kptr_restrict",
             "applied sysctl:kernel.kptr_restrict",
             "state applied",
+            "rollback",
             "restored sysctl:kernel.kptr_restrict",
             "restored file:/etc/demo.d/new.conf",
             "restored file:/etc/demo.conf",
@@ -349,26 +352,36 @@ fn a_failure_at_any_write_rename_remove_or_append_is_rolled_back() {
     let plan = plan_of(&fixture(), &facts, &[&demo()]);
     let original = host(&fixture());
 
-    for op in [Op::Write, Op::Rename, Op::Remove, Op::Append] {
+    // Calls of each op that fail apply, then rollback, for `demo()`.
+    let expected = [
+        (Op::Write, 6, 2),
+        (Op::Rename, 5, 1),
+        (Op::Remove, 0, 1),
+        (Op::Append, 9, 5),
+    ];
+    for (op, apply_calls, rollback_calls) in expected {
         let (mut in_apply, mut in_rollback) = (0, 0);
         for n in 1.. {
             assert!(n < 100, "{op:?} never stopped failing");
             let fs = fixture().fail(op, n);
             match apply(&fs, &plan) {
-                Ok(ApplyOutcome::Applied { .. }) => match rollback(&fs, Target::Last) {
+                Ok(ApplyOutcome::Applied { txn }) => match rollback(&fs, Target::Last) {
                     // Past the last call of `op`.
                     Ok(_) => break,
-                    Err(EngineError::RollbackIncomplete { txn, .. }) => {
+                    Err(EngineError::RollbackIncomplete { .. }) => {
                         in_rollback += 1;
-                        // Unfinished once a `restored` line is written. If the
-                        // first one failed, the journal still ends `applied`.
-                        if state(&fs).unfinished(&fs).unwrap().len() == 1 {
+                        // Unfinished unless the `rollback` line itself failed,
+                        // in which case nothing was restored.
+                        let started = events(&fs, &txn)
+                            .iter()
+                            .any(|e| matches!(e, Event::Rollback { .. }));
+                        if started {
                             assert!(
                                 matches!(apply(&fs, &plan), Err(EngineError::Unfinished(_))),
                                 "{op:?} {n}"
                             );
                         }
-                        rollback(&fs, Target::Txn(&txn)).unwrap();
+                        rollback(&fs, Target::Last).unwrap();
                     }
                     Err(e) => panic!("{op:?} {n}: {e:?}"),
                 },
@@ -393,10 +406,53 @@ fn a_failure_at_any_write_rename_remove_or_append_is_rolled_back() {
             assert_eq!(host(&fs), original, "{op:?} {n}");
             assert!(state(&fs).unfinished(&fs).unwrap().is_empty());
         }
-        assert!(in_rollback > 0, "{op:?}");
-        // Apply never removes a file.
-        assert_eq!(in_apply > 0, op != Op::Remove, "{op:?}");
+        assert_eq!(
+            (in_apply, in_rollback),
+            (apply_calls, rollback_calls),
+            "{op:?}"
+        );
     }
+}
+
+#[test]
+fn a_failed_first_restored_line_leaves_the_transaction_unfinished() {
+    let facts = facts();
+    let plan = plan_of(&fixture(), &facts, &[&demo()]);
+    let original = host(&fixture());
+    // Apply appends 9 lines (the empty journal counts); then `rollback`, then
+    // the first `restored`.
+    let fs = fixture().fail(Op::Append, 11);
+    let ApplyOutcome::Applied { txn } = apply(&fs, &plan).unwrap() else {
+        panic!("not applied");
+    };
+    let err = rollback(&fs, Target::Last).unwrap_err();
+    assert!(
+        matches!(&err, EngineError::RollbackIncomplete { left: Some(left), .. } if left.len() == 3),
+        "{err:?}"
+    );
+    assert!(matches!(
+        apply(&fs, &plan),
+        Err(EngineError::Unfinished(id)) if id == txn
+    ));
+    rollback(&fs, Target::Last).unwrap();
+    assert_eq!(host(&fs), original);
+}
+
+#[test]
+fn a_plan_that_changes_a_resource_twice_is_refused() {
+    let fs = fixture();
+    let facts = facts();
+    let twice = module(
+        "test.twice",
+        vec![file(CONF, "v1\n", 0o644), file(CONF, "v2\n", 0o644)],
+    );
+    let plan = plan_of(&fs, &facts, &[&twice]);
+    let err = apply(&fs, &plan).unwrap_err();
+    assert!(
+        matches!(&err, EngineError::DuplicateResource(id) if id == "file:/etc/demo.conf"),
+        "{err:?}"
+    );
+    assert!(state(&fs).txns(&fs).unwrap().is_empty());
 }
 
 #[test]
@@ -410,11 +466,20 @@ fn a_failed_rollback_after_a_failed_apply_finishes_on_a_rerun() {
         let fs = fixture().fail(Op::Write, n).fail(Op::Remove, 1);
         match apply(&fs, &plan) {
             Ok(ApplyOutcome::Applied { .. }) => break,
-            Err(EngineError::RollbackIncomplete { left, .. }) => {
+            Err(EngineError::RollbackIncomplete { txn, left, .. }) => {
                 incomplete += 1;
+                let left = left.unwrap();
                 assert_eq!(left.last().unwrap().step, format!("remove {NEW}"));
                 assert!(matches!(apply(&fs, &plan), Err(EngineError::Unfinished(_))));
                 rollback(&fs, Target::Last).unwrap();
+                // The rerun keeps the reason of the rollback it resumed.
+                assert_eq!(
+                    history(&state(&fs), &fs).unwrap()[0].state,
+                    TxnState::RolledBack {
+                        reason: RollbackReason::ApplyFailed
+                    },
+                    "{txn}"
+                );
             }
             Ok(ApplyOutcome::RolledBack { .. }) | Err(EngineError::Sys(_)) => {}
             Ok(other) => panic!("{n}: {other:?}"),
@@ -524,24 +589,38 @@ fn rollback_refuses_a_changed_file() {
     let facts = facts();
     apply(&fs, &plan_of(&fs, &facts, &[&demo()])).unwrap();
     fs.write(Path::new(CONF), b"edited\n").unwrap();
+    fs.write(Path::new(NEW), b"edited\n").unwrap();
     let edited = host(&fs);
 
     let err = rollback(&fs, Target::Last).unwrap_err();
     let EngineError::Changed { txn, changed } = &err else {
         panic!("{err:?}");
     };
+    let files = format!("{STATE}/txn/{txn}/files");
     assert_eq!(
         changed,
-        &[ByHand {
-            resource: "file:/etc/demo.conf".into(),
-            step: format!("copy {STATE}/txn/{txn}/files/1.before to {CONF} (mode 0644, owner 0:0)"),
-        }]
+        &[
+            ByHand {
+                resource: "file:/etc/demo.conf".into(),
+                step: format!("copy {files}/1.before to {CONF} (mode 0644, owner 0:0)"),
+            },
+            ByHand {
+                resource: "file:/etc/demo.d/new.conf".into(),
+                step: format!("remove {NEW}; it no longer matches {files}/2.after"),
+            }
+        ]
     );
-    assert!(err.to_string().contains("nothing was restored"), "{err}");
+    let message = err.to_string();
+    assert!(message.contains("nothing was restored"), "{message}");
+    assert!(
+        message.contains(&format!("rollback --txn {txn}` again")),
+        "{message}"
+    );
     assert_eq!(host(&fs), edited);
 
-    // Back as apply left it, the rollback goes ahead.
+    // Back as apply left them, the rollback goes ahead.
     fs.write(Path::new(CONF), b"new\n").unwrap();
+    fs.remove(Path::new(NEW)).unwrap();
     rollback(&fs, Target::Last).unwrap();
     assert_eq!(fs.read(Path::new(CONF)).unwrap(), b"old\n");
 }

@@ -102,7 +102,8 @@ pub enum EngineError {
     /// restored.
     #[error(
         "refusing to roll back transaction {txn}: these changed since apply, so nothing \
-         was restored. To restore them by hand:{}",
+         was restored and its other changes are untouched. Put these back by hand, then \
+         run `vps-ready rollback --txn {txn}` again:{}",
         list(.changed)
     )]
     Changed {
@@ -113,23 +114,35 @@ pub enum EngineError {
     },
     /// A rollback stopped part way; running it again continues it.
     #[error(
-        "rollback of transaction {txn} ({dir}) did not complete: {source}. Run \
-         `vps-ready rollback --txn {txn}` again, or restore by hand:{}",
-        list(.left)
+        "rollback of transaction {txn} ({dir}) did not complete: {source}. {}",
+        next_steps(.txn, .left.as_deref())
     )]
     RollbackIncomplete {
         /// Transaction ID.
         txn: String,
         /// The transaction directory.
         dir: String,
-        /// The resources not yet restored, in journal order.
-        left: Vec<ByHand>,
+        /// The resources not yet restored, in journal order; `None` if the
+        /// journal could not be re-read.
+        left: Option<Vec<ByHand>>,
         /// The failure.
         #[source]
         source: Box<EngineError>,
     },
+    /// Two steps of a plan change the same resource.
+    #[error("the plan changes {0} twice")]
+    DuplicateResource(String),
 }
 
 fn list(items: &[ByHand]) -> String {
     items.iter().map(|i| format!("\n  {i}")).collect()
+}
+
+fn next_steps(txn: &str, left: Option<&[ByHand]>) -> String {
+    let rerun = format!("`vps-ready rollback --txn {txn}`");
+    match left {
+        None => format!("The journal could not be re-read, so run {rerun} again."),
+        Some([]) => format!("Run {rerun} again."),
+        Some(left) => format!("Run {rerun} again, or restore by hand:{}", list(left)),
+    }
 }

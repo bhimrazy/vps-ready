@@ -41,6 +41,11 @@ pub enum Event {
         /// Resource ID.
         resource: String,
     },
+    /// A rollback started; written before its first restore.
+    Rollback {
+        /// Why. A resumed rollback ends with this reason.
+        reason: RollbackReason,
+    },
     /// A resource was restored from its backup.
     Restored {
         /// Resource ID.
@@ -62,6 +67,7 @@ impl Event {
             Self::Begin { .. } => "begin",
             Self::Backup { .. } => "backup",
             Self::Applied { .. } => "applied",
+            Self::Rollback { .. } => "rollback",
             Self::Restored { .. } => "restored",
             Self::State { .. } => "state",
         }
@@ -92,7 +98,9 @@ pub enum RollbackReason {
     ApplyFailed,
     /// A resource still had a change after apply.
     VerifyFailed,
-    /// The user ran `rollback`.
+    /// The user ran `rollback`. Also the reason for resuming a rollback whose
+    /// journal has no `rollback` record (one written before that record
+    /// existed).
     Manual,
 }
 
@@ -127,7 +135,8 @@ pub fn transition(state: Option<TxnState>, event: &Event) -> Result<TxnState, En
         (Some(Planned), Event::Backup { .. } | Event::Applied { .. } | Event::Restored { .. }) => {
             Ok(Planned)
         }
-        (Some(Applied), Event::Restored { .. }) => Ok(Applied),
+        (Some(Planned), Event::Rollback { .. }) => Ok(Planned),
+        (Some(Applied), Event::Restored { .. } | Event::Rollback { reason: Manual }) => Ok(Applied),
         (Some(Planned), Event::State { state: Applied }) => Ok(Applied),
         (
             Some(Planned),
@@ -275,6 +284,12 @@ mod tests {
             r#"{"at":7,"event":"state","state":"applied"}"#
         );
         assert_eq!(
+            line(Event::Rollback {
+                reason: RollbackReason::ApplyFailed
+            }),
+            r#"{"at":7,"event":"rollback","reason":"apply-failed"}"#
+        );
+        assert_eq!(
             line(state(rolled_back(RollbackReason::VerifyFailed))),
             r#"{"at":7,"event":"state","state":"rolled-back","reason":"verify-failed"}"#
         );
@@ -391,6 +406,9 @@ mod tests {
         let manual = [
             &applied_txn[..],
             &[
+                rec(Event::Rollback {
+                    reason: RollbackReason::Manual,
+                }),
                 rec(restored()),
                 rec(state(rolled_back(RollbackReason::Manual))),
             ],
@@ -409,6 +427,7 @@ mod tests {
             let failed = [
                 rec(begin()),
                 rec(applied()),
+                rec(Event::Rollback { reason }),
                 rec(restored()),
                 rec(state(rolled_back(reason))),
             ];
@@ -434,6 +453,17 @@ mod tests {
             (Some(Applied), state(Applied)),
             (Some(Applied), state(rolled_back(ApplyFailed))),
             (Some(Applied), state(rolled_back(VerifyFailed))),
+            (
+                Some(Applied),
+                Event::Rollback {
+                    reason: ApplyFailed,
+                },
+            ),
+            (
+                Some(rolled_back(Manual)),
+                Event::Rollback { reason: Manual },
+            ),
+            (None, Event::Rollback { reason: Manual }),
             (Some(rolled_back(Manual)), restored()),
             (Some(rolled_back(Manual)), state(rolled_back(Manual))),
             (Some(rolled_back(ApplyFailed)), state(Applied)),
@@ -461,5 +491,10 @@ mod tests {
         assert!(!is_unfinished(&done));
         // A rollback that stopped after a restore.
         assert!(is_unfinished(&[&done[..], &[rec(restored())]].concat()));
+        // A rollback that stopped before its first restore.
+        let started = rec(Event::Rollback {
+            reason: RollbackReason::Manual,
+        });
+        assert!(is_unfinished(&[&done[..], &[started]].concat()));
     }
 }

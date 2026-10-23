@@ -177,6 +177,15 @@ Journal records are a `#[serde(tag = "event")]` enum, and every line has `at` in
 {"at":1792745001,"event":"state","state":"applied"}
 ```
 
+A rollback of that transaction appends:
+
+```json
+{"at":1792748600,"event":"rollback","reason":"manual"}
+{"at":1792748600,"event":"restored","resource":"sysctl:kernel.kptr_restrict"}
+{"at":1792748600,"event":"restored","resource":"file:/etc/sysctl.d/90-vps-ready.conf"}
+{"at":1792748600,"event":"state","state":"rolled-back","reason":"manual"}
+```
+
 Reading the journal:
 - Unknown fields are ignored (an older binary can read a newer journal). An unknown event kind is an error.
 - A final line without a newline is a torn write from a crash: it is ignored, and removed from the file before a resumed transaction appends to it. Any other unparseable line is an error.
@@ -191,7 +200,8 @@ Transaction states:
 ### Rollback
 
 - `rollback --last` picks the unfinished transaction if there is one, otherwise the newest in state `applied`. `rollback --txn <id>` picks that one. It is an error if the transaction is already rolled back.
-- **Order:** backups are restored in reverse journal order, with a `restored` line (fsynced) after each, then `state rolled-back`. A rerun after a crash skips backups that already have a `restored` line.
+- **Order:** a `rollback` line with the reason (fsynced) comes before the first restore, so the transaction is unfinished from then on. Backups are then restored in reverse journal order, with a `restored` line (fsynced) after each, then `state rolled-back`. A rerun after a crash skips backups that already have a `restored` line, and ends with the reason from the `rollback` line (`manual` if there is none).
+- A plan that changes the same resource twice is refused before the transaction starts, since `restored` lines name resources by ID.
 - **Safety check first**, on every backup not yet restored:
   - **File:** the current content must equal `.after` or `.before`. If the file did not exist before, it must be absent or equal `.after`. Mode and owner are not compared; restore sets them back from the journal.
   - **Sysctl:** the current value must equal the applied value or the original.
