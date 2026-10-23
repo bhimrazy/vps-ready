@@ -7,9 +7,10 @@
 #
 # Before pushing the first tag, enable in the repository settings:
 #   - General > Releases: "Enable release immutability" (immutable releases).
-#   - Environments: `release` and `crates-io`, each with a required reviewer
-#     (needs a public repo on the free plan) and limited to `v*` tags.
-#   - Rules: a tag ruleset protecting `v*` from update and deletion.
+#   - Environments: `release` and `crates-io`, limited to `v*` tags. No
+#     required reviewer: pushing the tag is the approval.
+#   - Rules: a tag ruleset protecting `v*` from update and deletion, and one
+#     that lets only repository admins create `v*` tags.
 #
 # Verification instructions for users are in SECURITY.md.
 
