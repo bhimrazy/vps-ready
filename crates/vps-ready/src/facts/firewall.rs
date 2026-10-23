@@ -7,7 +7,9 @@
 //!
 //! A chain is judged by what it does to a packet that matches no rule with
 //! a condition. Rules that accept only some traffic (`iifname lo`, a port,
-//! `meta nfproto ipv4` in an `inet` chain) are assumed to be narrow.
+//! `meta nfproto ipv4` in an `inet` chain) are assumed to be narrow. Rules
+//! that `return` only some traffic are not: ufw returns every packet for a
+//! local address before the `drop` that ends `ufw-not-local`.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -119,6 +121,7 @@ fn parse(json: &[u8]) -> Option<Firewall> {
         }
     }
 
+    let mut memo = HashMap::new();
     let mut input_chains = Vec::new();
     for chain in objects.iter().filter_map(|o| o.get("chain")) {
         if field(chain, "hook").as_deref() != Some("input")
@@ -130,11 +133,9 @@ fn parse(json: &[u8]) -> Option<Firewall> {
         if dormant.contains(&(k.0.clone(), k.1.clone())) {
             continue;
         }
-        let drops_unmatched = match fate(&rules, &k, &mut HashSet::new()) {
-            Fate::Accept => false,
-            Fate::Drop => true,
-            Fate::Continue => field(chain, "policy").as_deref() == Some("drop"),
-        };
+        let fate = fate(&rules, &k, &mut memo);
+        let drops_unmatched =
+            !fate.accept && (!fate.cont || field(chain, "policy").as_deref() == Some("drop"));
         let (family, table, name) = k;
         input_chains.push(InputChain {
             family,
@@ -146,46 +147,103 @@ fn parse(json: &[u8]) -> Option<Firewall> {
     Some(Firewall { input_chains })
 }
 
-/// What a chain does to a packet that no conditional rule matches.
-#[derive(Debug, PartialEq, Eq)]
-enum Fate {
-    Accept,
-    Drop,
+/// What a chain can do to a packet that no conditional rule matches. More
+/// than one is possible when a conditional `return` lets some packets out.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Fate {
+    accept: bool,
+    drop: bool,
     /// It reaches the end of the chain, or a `return`: a base chain then
     /// applies its policy, a jump goes back to the calling chain.
-    Continue,
+    cont: bool,
+}
+
+impl Fate {
+    const ACCEPT: Self = Self {
+        accept: true,
+        drop: false,
+        cont: false,
+    };
+    const DROP: Self = Self {
+        accept: false,
+        drop: true,
+        cont: false,
+    };
+    const CONTINUE: Self = Self {
+        accept: false,
+        drop: false,
+        cont: true,
+    };
+
+    fn or(self, other: Self) -> Self {
+        Self {
+            accept: self.accept || other.accept,
+            drop: self.drop || other.drop,
+            cont: self.cont || other.cont,
+        }
+    }
 }
 
 /// Follows such a packet through `chain`: rules that match only some
 /// packets are passed over, and the first unconditional verdict decides.
-/// `jump` and `goto` are followed (nft rejects loops; `seen` guards anyway).
+/// `jump` and `goto` are followed. A conditional `return`, or a conditional
+/// `goto` to a chain that falls through, may let the packet out early.
+/// `memo` holds each chain's fate (`None` while it is being followed; nft
+/// rejects loops anyway).
 fn fate(
     rules: &HashMap<ChainKey, Vec<&[Value]>>,
     chain: &ChainKey,
-    seen: &mut HashSet<ChainKey>,
+    memo: &mut HashMap<ChainKey, Option<Fate>>,
 ) -> Fate {
-    if !seen.insert(chain.clone()) {
-        return Fate::Continue;
+    match memo.get(chain) {
+        Some(Some(known)) => return *known,
+        Some(None) => return Fate::CONTINUE,
+        None => {}
     }
+    memo.insert(chain.clone(), None);
+    let mut out = Fate::default();
+    let mut ended = false;
     for expr in rules.get(chain).into_iter().flatten() {
         let target = |t: &str| (chain.0.clone(), chain.1.clone(), t.to_owned());
-        match unconditional(expr) {
-            Some(Verdict::Accept) => return Fate::Accept,
-            Some(Verdict::Drop) => return Fate::Drop,
-            Some(Verdict::Return) => return Fate::Continue,
-            Some(Verdict::Jump(t)) => match fate(rules, &target(t), seen) {
-                Fate::Continue => {}
-                decided => return decided,
-            },
-            // After a goto, falling off the target ends this chain too.
-            Some(Verdict::Goto(t)) => return fate(rules, &target(t), seen),
-            None => {}
+        let Some(verdict) = verdict(expr) else {
+            continue;
+        };
+        if !matches_all(expr) {
+            match verdict {
+                Verdict::Return => out.cont = true,
+                Verdict::Goto(t) if fate(rules, &target(t), memo).cont => out.cont = true,
+                _ => {}
+            }
+            continue;
         }
+        match verdict {
+            Verdict::Accept => out = out.or(Fate::ACCEPT),
+            Verdict::Drop => out = out.or(Fate::DROP),
+            Verdict::Return => out = out.or(Fate::CONTINUE),
+            Verdict::Jump(t) => {
+                let then = fate(rules, &target(t), memo);
+                out = out.or(Fate {
+                    cont: false,
+                    ..then
+                });
+                if then.cont {
+                    continue;
+                }
+            }
+            // After a goto, falling off the target ends this chain too.
+            Verdict::Goto(t) => out = out.or(fate(rules, &target(t), memo)),
+        }
+        ended = true;
+        break;
     }
-    Fate::Continue
+    if !ended {
+        out.cont = true;
+    }
+    memo.insert(chain.clone(), Some(out));
+    out
 }
 
-/// The verdict of a rule that matches every packet.
+/// The verdict of a rule.
 #[derive(Debug, PartialEq, Eq)]
 enum Verdict<'a> {
     Accept,
@@ -196,20 +254,28 @@ enum Verdict<'a> {
     Goto(&'a str),
 }
 
-/// The verdict of `expr` if it matches every packet, e.g. `counter drop`:
-/// only statements that do not match (`counter`, `log`) before the verdict.
-fn unconditional(expr: &[Value]) -> Option<Verdict<'_>> {
-    let (verdict, before) = expr.split_last()?;
-    if !before
-        .iter()
-        .all(|s| s.get("counter").is_some() || s.get("log").is_some())
-    {
-        return None;
-    }
+/// Whether `expr` matches every packet, e.g. `counter drop`: only
+/// statements that do not match (`counter`, `log`) before the verdict.
+fn matches_all(expr: &[Value]) -> bool {
+    expr.split_last().is_some_and(|(_, before)| {
+        before
+            .iter()
+            .all(|s| s.get("counter").is_some() || s.get("log").is_some())
+    })
+}
+
+/// The verdict that ends `expr`, if it is one that decides for every
+/// packet it applies to. `reject with tcp reset` is not: it only rejects
+/// TCP, and other packets go on.
+fn verdict(expr: &[Value]) -> Option<Verdict<'_>> {
+    let verdict = expr.last()?;
     let target = |kind: &str| verdict.get(kind)?.get("target")?.as_str();
     if verdict.get("accept").is_some() {
         Some(Verdict::Accept)
-    } else if verdict.get("drop").is_some() || verdict.get("reject").is_some() {
+    } else if let Some(reject) = verdict.get("reject") {
+        let tcp_only = reject.get("type").and_then(Value::as_str) == Some("tcp reset");
+        (!tcp_only).then_some(Verdict::Drop)
+    } else if verdict.get("drop").is_some() {
         Some(Verdict::Drop)
     } else if verdict.get("return").is_some() {
         Some(Verdict::Return)
@@ -268,6 +334,12 @@ mod tests {
             chains(&ruleset("ufw-enabled")),
             [("ip", "INPUT", true), ("ip6", "INPUT", true)]
         );
+        // `ufw default allow incoming`: ufw-not-local returns every packet
+        // for a local address before its drop, so the accept policy decides.
+        assert_eq!(
+            chains(&ruleset("ufw-default-allow")),
+            [("ip", "INPUT", false), ("ip6", "INPUT", false)]
+        );
         // Installed but not enabled: nothing loaded.
         assert_eq!(chains(&ruleset("ufw-disabled")), []);
         // Debian's /etc/nftables.conf: an empty chain that accepts.
@@ -294,6 +366,9 @@ mod tests {
                 Some(Verdict::Drop),
             ),
             (r#"[{"reject": {"type": "icmpx"}}]"#, Some(Verdict::Drop)),
+            (r#"[{"reject": null}]"#, Some(Verdict::Drop)),
+            // UDP goes on.
+            (r#"[{"reject": {"type": "tcp reset"}}]"#, None),
             (r#"[{"accept": null}]"#, Some(Verdict::Accept)),
             (r#"[{"return": null}]"#, Some(Verdict::Return)),
             (r#"[{"jump": {"target": "x"}}]"#, Some(Verdict::Jump("x"))),
@@ -315,7 +390,13 @@ mod tests {
             ("[]", None),
         ];
         for (json, want) in cases {
-            assert_eq!(unconditional(&expr(json)), want, "{json}");
+            let expr = expr(json);
+            let got = if matches_all(&expr) {
+                verdict(&expr)
+            } else {
+                None
+            };
+            assert_eq!(got, want, "{json}");
         }
     }
 
@@ -380,6 +461,38 @@ mod tests {
         assert!(!drops(
             "accept",
             &[("in", &[goto_open, drop]), ("open", &[lo])]
+        ));
+        // A conditional return may let packets past a later drop, as in
+        // ufw-not-local: the policy decides for them.
+        let local_ret = r#"[{"fib": {"result": "type", "flags": ["daddr"]}}, {"return": null}]"#;
+        let jump_local = r#"[{"jump": {"target": "local"}}]"#;
+        assert!(!drops(
+            "accept",
+            &[("in", &[jump_local]), ("local", &[local_ret, drop])]
+        ));
+        assert!(drops(
+            "drop",
+            &[("in", &[jump_local]), ("local", &[local_ret, drop])]
+        ));
+        // So may a conditional goto to a chain that falls through. A chain
+        // reached twice is judged the same both times (firewalld's
+        // `iifname eth0 goto zone` then `goto zone`).
+        let lo_goto = |t: &str| {
+            format!(
+                r#"[{{"match": {{"op": "==", "left": {{"meta": {{"key": "iifname"}}}}, "right": "lo"}}}}, {{"goto": {{"target": "{t}"}}}}]"#
+            )
+        };
+        assert!(!drops(
+            "accept",
+            &[("in", &[&lo_goto("empty"), drop]), ("empty", &[lo])]
+        ));
+        let goto_drops = r#"[{"goto": {"target": "drops"}}]"#;
+        assert!(drops(
+            "accept",
+            &[
+                ("in", &[&lo_goto("drops"), goto_drops]),
+                ("drops", &[lo, drop])
+            ]
         ));
     }
 
