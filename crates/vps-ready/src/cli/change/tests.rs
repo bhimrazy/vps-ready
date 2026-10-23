@@ -6,12 +6,13 @@ use std::path::{Path, PathBuf};
 
 use super::*;
 use crate::engine::{Event, Record};
-use crate::facts::{Virt, sysctl};
+use crate::facts::{AptUpdates, Virt, sysctl};
 use crate::sys::fake::{FakeFs, FakeRunner, Op};
-use crate::sys::{FileKind, Fs};
+use crate::sys::{FileKind, Fs, Output};
 
 const STATE: &str = "/var/lib/vps-ready";
 const DROP_IN: &str = crate::modules::kernel_sysctl::DROP_IN;
+const APT_DROP_IN: &str = "/etc/apt/apt.conf.d/52vps-ready";
 
 /// Kernel defaults of a Debian 13 VM, without Yama; seven keys fail.
 const START: [(&str, &str); 13] = [
@@ -30,18 +31,37 @@ const START: [(&str, &str); 13] = [
     ("net.ipv4.icmp_echo_ignore_broadcasts", "1"),
 ];
 
+/// Kernel defaults as `/proc/sys`, and apt with `unattended-upgrades`
+/// installed but without vps-ready's drop-in.
 fn fixture() -> FakeFs {
     START.iter().fold(
-        FakeFs::new().with_file("/etc/sysctl.d/README.sysctl", "distro\n"),
+        FakeFs::new()
+            .with_file("/etc/sysctl.d/README.sysctl", "distro\n")
+            .with_file("/etc/apt/apt.conf.d/20auto-upgrades", "distro\n"),
         |fs, (key, value)| fs.with_file(format!("/proc/sys/{}", key.replace('.', "/")), *value),
     )
 }
 
-/// A captured Debian 13 host as a VM, with the sysctl values of the tree.
+/// A captured Debian 13 host as a VM, with the sysctl values of the tree
+/// and, as `apt-config dump` would report it, the `APT::Periodic` settings
+/// of the apt drop-in.
 fn vm(sys: Sys) -> anyhow::Result<Facts> {
     let mut facts = crate::facts::fixtures::host("debian-13", &[]);
     facts.virtualization.container = Virt::None;
     facts.sysctl = Some(sysctl::detect(sys.fs, &mut Vec::new()));
+    let drop_in = sys.fs.read(Path::new(APT_DROP_IN)).unwrap_or_default();
+    let periodic = String::from_utf8(drop_in)?
+        .lines()
+        .filter_map(|l| l.strip_prefix("APT::Periodic::")?.split_once(' '))
+        .map(|(k, v)| (k.to_owned(), v.trim_matches(['"', ';']).to_owned()))
+        .collect();
+    // The captured state of apt's systemd units.
+    let units = facts.updates.take().and_then(|u| u.units);
+    facts.updates = Some(AptUpdates {
+        unattended_upgrades: true,
+        periodic,
+        units,
+    });
     Ok(facts)
 }
 
@@ -51,7 +71,13 @@ fn container(_: Sys) -> anyhow::Result<Facts> {
 }
 
 fn host(fs: &FakeFs) -> Host<'_> {
-    static RUNNER: std::sync::LazyLock<FakeRunner> = std::sync::LazyLock::new(FakeRunner::new);
+    // `apt-config -c` validates a path on the fake fs, so it is answered
+    // here rather than run.
+    static RUNNER: std::sync::LazyLock<FakeRunner> = std::sync::LazyLock::new(|| {
+        FakeRunner::new()
+            .on("dpkg-query", ["-W"], Output::success("installed"))
+            .on("apt-config", ["-c"], Output::success(""))
+    });
     Host {
         sys: Sys {
             fs,
@@ -216,7 +242,7 @@ fn apply_history_rollback_cycle() {
     assert_eq!(code, 0);
     assert_eq!(
         redact(&fs, &out, false),
-        "Rolled back transaction <txn-1>: restored 7 changes.\n"
+        "Rolled back transaction <txn-1>: restored 8 changes.\n"
     );
     assert_eq!(tree(&fs), original);
 
@@ -230,7 +256,7 @@ fn apply_history_rollback_cycle() {
     assert_eq!(json[0]["state"], "applied");
     assert_eq!(json[1]["state"], "rolled-back");
     assert_eq!(json[1]["reason"], "manual");
-    assert_eq!(json[1]["changes"], 7);
+    assert_eq!(json[1]["changes"], 8);
 }
 
 #[test]
@@ -268,7 +294,7 @@ fn apply_asks_first() {
         let (code, out, _) = apply_answer(&host, &mut answer.as_bytes());
         assert_eq!(code, 0);
         assert!(
-            out.ends_with("Apply 7 changes? [y/N] Nothing was changed.\n"),
+            out.ends_with("Apply 8 changes? [y/N] Nothing was changed.\n"),
             "{out}"
         );
     }
@@ -285,7 +311,7 @@ fn apply_asks_first() {
 
     let (code, out, _) = apply_answer(&host, &mut "Y\n".as_bytes());
     assert_eq!(code, 0);
-    assert!(out.contains("Applied 7 changes"), "{out}");
+    assert!(out.contains("Applied 8 changes"), "{out}");
 }
 
 /// Answers `y`, after changing a sysctl the plan shows.
@@ -365,10 +391,11 @@ fn apply_errors_exit_2() {
         "error: kernel.sysctl does not apply to this host: \
          kernel settings belong to the host inside a container\n"
     );
-    // Without --module, it is skipped.
+    // Without --module, it is skipped and updates.auto is applied.
     let (code, out, _) = apply_yes(&host);
     assert_eq!(code, 0);
-    assert!(out.ends_with("Nothing to do.\n"), "{out}");
+    assert!(out.contains("Applied 1 change "), "{out}");
+    assert!(!fs.exists(Path::new(DROP_IN)));
 }
 
 #[test]
@@ -417,7 +444,7 @@ fn failed_applies_exit_1_or_3() {
         assert_eq!(tree(&fs), original);
         seen.0 += 1;
 
-        // Removing the drop-in, once created, is the rollback's only remove.
+        // The first remove of the rollback is the newest drop-in it created.
         let fs = fixture().fail(Op::Write, n).fail(Op::Remove, 1);
         let (code, _, err) = apply_yes(&host(&fs));
         if code == 3 {
@@ -434,7 +461,8 @@ fn failed_applies_exit_1_or_3() {
     assert!(seen.0 > 0 && seen.1 > 0, "{seen:?}");
 }
 
-/// A rollback that stops part way exits 3; running it again finishes.
+/// A rollback that stops part way exits 3; running it again finishes. The
+/// first restore removes the apt drop-in, the last change applied.
 #[test]
 fn an_incomplete_rollback_exits_3() {
     let fs = fixture().fail(Op::Remove, 1);
@@ -444,10 +472,11 @@ fn an_incomplete_rollback_exits_3() {
     let (code, _, err) = rollback_last(&host);
     assert_eq!(code, 3, "{err}");
     assert!(err.contains("did not complete"), "{err}");
-    assert!(err.contains(&format!("remove {DROP_IN}")), "{err}");
+    assert!(err.contains(&format!("remove {APT_DROP_IN}")), "{err}");
+    // The failed remove was the first restore, so the rerun does them all.
     let (code, out, _) = rollback_last(&host);
     assert_eq!(code, 0);
-    assert!(out.ends_with("restored 1 change.\n"), "{out}");
+    assert!(out.ends_with("restored 8 changes.\n"), "{out}");
     assert_eq!(tree(&fs), original);
 }
 

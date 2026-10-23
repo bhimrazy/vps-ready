@@ -19,11 +19,17 @@ kernel.sysctl: Harden kernel settings (fixes KRN-001, KRN-002, KRN-003, KRN-007,
   ~ fs.protected_fifos 0 -> 1                                             reversible
   ~ fs.protected_regular 0 -> 1                                           reversible
   ~ net.ipv4.conf.all.accept_source_route 1 -> 0                          reversible
+updates.auto: Install security updates automatically (fixes UPD-001)
+  + /etc/apt/apt.conf.d/52vps-ready (0644 0:0)                            reversible
+      @@ -0,0 +1,3 @@
+      +APT::Periodic::Enable "1";
+      +APT::Periodic::Update-Package-Lists "1";
+      +APT::Periodic::Unattended-Upgrade "1";
 
-7 changes in 1 module.
-Applied 7 changes (transaction <txn-1>). Undo with `sudo vps-ready rollback --last`.
+8 changes in 2 modules.
+Applied 8 changes (transaction <txn-1>). Undo with `sudo vps-ready rollback --last`.
 
-Audit of this host after apply: 14 controls
+Audit of this host after apply: 15 controls
 
 STATUS   ID       SEVERITY  CONTROL
 PASS     KRN-001  low       Kernel pointers hidden
@@ -41,6 +47,7 @@ PASS     KRN-011  low       Kernel profiling restricted
 PASS     NET-001  low       TCP SYN cookies enabled
 PASS     NET-002  low       Source-routed packets rejected
 PASS     NET-003  low       Broadcast pings ignored
+PASS     UPD-001  medium    Security updates installed automatically
 
-13 passed, 0 failed, 1 unknown
+14 passed, 0 failed, 1 unknown
 Unknown controls could not be checked; the warnings on stderr say why.
