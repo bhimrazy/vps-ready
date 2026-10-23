@@ -7,8 +7,10 @@ use crate::resource::{Resource, ResourceError};
 use crate::sys::{Sys, SysError};
 
 pub mod kernel_sysctl;
+mod updates_auto;
 
 pub use kernel_sysctl::KernelSysctl;
+pub use updates_auto::UpdatesAuto;
 
 /// Errors from planning a module.
 #[derive(Debug, thiserror::Error)]
@@ -70,7 +72,7 @@ pub trait Module {
 /// Every module, in the order the plan lists and applies them.
 #[must_use]
 pub fn all() -> &'static [&'static dyn Module] {
-    &[&KernelSysctl::ROOT]
+    &[&KernelSysctl::ROOT, &UpdatesAuto::ROOT]
 }
 
 #[cfg(test)]

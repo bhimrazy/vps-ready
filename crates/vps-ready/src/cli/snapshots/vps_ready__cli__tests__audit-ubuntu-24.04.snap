@@ -45,6 +45,7 @@ FAIL     UPD-001  medium    Security updates installed automatically
                             Attackers scan for a flaw soon after its fix is published. Unattended
                             upgrades install security fixes on their own, so a server nobody logs
                             into still gets them.
+                            fix: sudo vps-ready apply --module updates.auto
 FAIL     FW-001   medium    Incoming traffic denied by default
                             no firewall rules filter incoming traffic
                             Without it, any service listening on all addresses, such as a database
