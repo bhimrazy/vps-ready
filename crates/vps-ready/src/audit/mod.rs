@@ -92,8 +92,9 @@ pub enum Check {
     /// Docker publishes no port that the input firewall would block: its
     /// DNAT sends that traffic down the forward path, past the input rules
     /// of ufw and firewalld. Unknown when the user's own forward rules
-    /// (`DOCKER-USER`) may filter it, or a rule whose ports nft does not
-    /// show may allow it; skipped without Docker.
+    /// (`DOCKER-USER`) may filter it, or a rule for one input interface or
+    /// one whose ports nft does not show may allow it; skipped without
+    /// Docker.
     PublishedPorts,
 }
 
@@ -348,7 +349,7 @@ fn published_ports(firewall: &Firewall, ipv6: bool, docker: bool) -> Outcome {
             .filter(|c| c.covers(p.family == "ip6"))
             .map(|c| c.blocks(&p.proto, p.port))
             .collect();
-        let port = (p.proto.as_str(), p.port);
+        let port = (p.proto.as_str(), p.port, p.address.as_deref());
         if verdicts.contains(&Some(true)) {
             if p.filtered {
                 user_filtered.push(port);
@@ -369,8 +370,8 @@ fn published_ports(firewall: &Firewall, ipv6: bool, docker: bool) -> Outcome {
     } else if !maybe.is_empty() {
         Outcome::Unknown {
             reason: format!(
-                "a firewall rule whose ports nft does not show (iptables multiport) may \
-                 allow ports Docker publishes: {}",
+                "a firewall rule for one input interface, or one whose ports nft does not \
+                 show (iptables multiport), may allow ports Docker publishes: {}",
                 port_list(&maybe)
             ),
         }
@@ -387,28 +388,34 @@ fn published_ports(firewall: &Firewall, ipv6: bool, docker: bool) -> Outcome {
     }
 }
 
-/// `tcp/80, udp/60000-60005`: sorted, deduplicated, consecutive ports joined.
-fn port_list(ports: &[(&str, u16)]) -> String {
+/// `tcp/80, udp/60000-60005, tcp/5432 on 10.8.0.1`: sorted, deduplicated,
+/// consecutive ports on the same address joined.
+fn port_list(ports: &[(&str, u16, Option<&str>)]) -> String {
     let mut ports = ports.to_vec();
-    ports.sort_unstable();
+    ports.sort_unstable_by_key(|&(proto, port, address)| (address, proto, port));
     ports.dedup();
-    let mut ranges: Vec<(&str, u16, u16)> = Vec::new();
-    for (proto, port) in ports {
+    let mut ranges: Vec<(&str, u16, u16, Option<&str>)> = Vec::new();
+    for (proto, port, address) in ports {
         match ranges.last_mut() {
-            Some((p, _, last)) if *p == proto && u32::from(*last) + 1 == u32::from(port) => {
+            Some((p, _, last, a))
+                if *p == proto && *a == address && u32::from(*last) + 1 == u32::from(port) =>
+            {
                 *last = port;
             }
-            _ => ranges.push((proto, port, port)),
+            _ => ranges.push((proto, port, port, address)),
         }
     }
     ranges
         .iter()
-        .map(|&(proto, first, last)| {
-            if first == last {
-                format!("{proto}/{first}")
-            } else {
-                format!("{proto}/{first}-{last}")
+        .map(|&(proto, first, last, address)| {
+            let mut s = format!("{proto}/{first}");
+            if last != first {
+                s.push_str(&format!("-{last}"));
             }
+            if let Some(a) = address {
+                s.push_str(&format!(" on {a}"));
+            }
+            s
         })
         .collect::<Vec<_>>()
         .join(", ")
@@ -696,6 +703,7 @@ mod tests {
                 name: "input".to_owned(),
                 drops_unmatched: true,
                 open_ports: Vec::new(),
+                interface_ports: Vec::new(),
                 unread_ports: Vec::new(),
             }],
             ..Firewall::default()
@@ -793,6 +801,7 @@ mod tests {
             name: "input".to_owned(),
             drops_unmatched,
             open_ports: Vec::new(),
+            interface_ports: Vec::new(),
             unread_ports: Vec::new(),
         };
         let mut facts = host("debian-13", &[]);
@@ -847,12 +856,14 @@ mod tests {
                 first: 22,
                 last: 22,
             }],
+            interface_ports: Vec::new(),
             unread_ports: Vec::new(),
         };
         let port = |family: &str, port, filtered| PublishedPort {
             family: family.to_owned(),
             proto: "tcp".to_owned(),
             port,
+            address: None,
             filtered,
         };
         let mut facts = host("debian-13", &[]);
@@ -881,6 +892,17 @@ mod tests {
             Outcome::Fail {
                 found: "Docker publishes ports the firewall would otherwise block: \
                         tcp/5432, tcp/9000-9001"
+                    .to_owned()
+            }
+        );
+        // A private address may be a cloud server's primary one, so it counts.
+        let mut bound = port("ip", 5432, false);
+        bound.address = Some("10.8.0.1".to_owned());
+        assert_eq!(
+            eval(vec![bound], false),
+            Outcome::Fail {
+                found: "Docker publishes ports the firewall would otherwise block: \
+                        tcp/5432 on 10.8.0.1"
                     .to_owned()
             }
         );

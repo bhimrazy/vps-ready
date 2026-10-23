@@ -34,16 +34,15 @@ pub struct Firewall {
     /// Filter chains on the input hook, in ruleset order. Every incoming
     /// packet passes each of them.
     pub input_chains: Vec<InputChain>,
-    /// Container ports Docker publishes on all addresses or a public one.
-    /// Their traffic is forwarded to the container, so input chains do not
-    /// see it.
+    /// Container ports Docker publishes beyond loopback and link-local
+    /// addresses. Their traffic is forwarded to the container, so input
+    /// chains do not see it.
     pub published: Vec<PublishedPort>,
 }
 
 /// A port Docker forwards to a container, from a DNAT rule in its `nat`
 /// table (iptables backend) or `docker-bridges` table (nftables backend).
-/// Ports published only on an address the internet cannot reach (loopback,
-/// private, CGNAT, link-local or ULA) are left out.
+/// Ports published only on a loopback or link-local address are left out.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PublishedPort {
     /// `ip` (IPv4) or `ip6`.
@@ -52,6 +51,10 @@ pub struct PublishedPort {
     pub proto: String,
     /// Port on the host.
     pub port: u16,
+    /// The host address it is bound to (`-p 10.8.0.1:5432:5432`); `None`
+    /// for all addresses. A private address can still be reachable, e.g.
+    /// a cloud server's primary address behind its provider's NAT.
+    pub address: Option<String>,
     /// Whether the user's own rules may filter it: a rule in `DOCKER-USER`
     /// (iptables backend), or a forward chain outside Docker's tables
     /// (nftables backend; a forwarded packet passes every forward chain).
@@ -89,10 +92,14 @@ pub struct InputChain {
     /// or by a `drop` policy, and not first accepted by a rule that accepts
     /// everything, also behind a `jump` or `goto`.
     pub drops_unmatched: bool,
-    /// Ports it accepts from any source: rules that match only ports,
-    /// protocol, connection state or input interface (`ufw allow 443/tcp`),
-    /// in this chain or one it reaches through such rules.
+    /// Ports it accepts from any source on any interface: rules that match
+    /// only ports, protocol or connection state (`ufw allow 443/tcp`), in
+    /// this chain or one it reaches through such rules.
     pub open_ports: Vec<Ports>,
+    /// Ports it accepts that way only on some input interfaces (`ufw allow
+    /// in on wg0 to any port 5432`). Whether that is the public interface
+    /// is not known, so they may be open.
+    pub interface_ports: Vec<Ports>,
     /// Protocols with such a rule whose ports nft does not show (iptables
     /// `multiport`, as ufw writes `allow 80,443/tcp`): any of their ports
     /// may be open.
@@ -107,13 +114,15 @@ impl InputChain {
     }
 
     /// Whether the chain drops packets to `port`: it drops by default and
-    /// does not open the port. `None` when a rule whose ports nft does not
-    /// show may open it.
+    /// does not open the port. `None` when it may open it on some interface
+    /// only, or by a rule whose ports nft does not show.
     #[must_use]
     pub fn blocks(&self, proto: &str, port: u16) -> Option<bool> {
         if !self.drops_unmatched || self.open_ports.iter().any(|p| p.contains(proto, port)) {
             Some(false)
-        } else if self.unread_ports.iter().any(|p| p == proto) {
+        } else if self.unread_ports.iter().any(|p| p == proto)
+            || self.interface_ports.iter().any(|p| p.contains(proto, port))
+        {
             None
         } else {
             Some(true)
@@ -212,17 +221,17 @@ fn parse(json: &[u8]) -> Option<Firewall> {
         let fate = fate(&rules, &k, &mut memo);
         let drops_unmatched =
             !fate.accept && (!fate.cont || field(chain, "policy").as_deref() == Some("drop"));
-        let mut open = (Vec::new(), Vec::new());
-        collect_open_ports(&rules, &k, &mut HashSet::new(), &mut memo, &mut open);
-        let (open_ports, unread_ports) = open;
+        let mut open = OpenPorts::default();
+        collect_open_ports(&rules, &k, false, &mut HashSet::new(), &mut memo, &mut open);
         let (family, table, name) = k;
         input_chains.push(InputChain {
             family,
             table,
             name,
             drops_unmatched,
-            open_ports,
-            unread_ports,
+            open_ports: open.any,
+            interface_ports: open.by_interface,
+            unread_ports: open.unread,
         });
     }
     let published = published(&rules, &user_forward);
@@ -235,9 +244,9 @@ fn parse(json: &[u8]) -> Option<Firewall> {
 /// The table of Docker's nftables firewall backend.
 const DOCKER_NFT_TABLE: &str = "docker-bridges";
 
-/// Ports Docker publishes on all addresses, from the DNAT rules in its
-/// `nat` chain `DOCKER` (iptables backend) or `nat-prerouting-and-output`
-/// (nftables backend). `user_forward` lists the families of the forward
+/// Ports Docker publishes beyond loopback and link-local, from the DNAT
+/// rules in its `nat` chain `DOCKER` (iptables backend) or
+/// `nat-prerouting-and-output` (nftables backend). `user_forward` lists the families of the forward
 /// filter chains outside Docker's tables. Swarm's ingress (`DOCKER-INGRESS`)
 /// is not read.
 fn published(
@@ -271,9 +280,11 @@ fn published(
                                 && xt.get("name").and_then(Value::as_str) == Some("DNAT")
                         })
                 });
-                if !dnat || expr.iter().any(binds_locally) {
+                let address = expr.iter().find_map(daddr);
+                if !dnat || address.as_ref().is_some_and(|&(_, local)| local) {
                     continue;
                 }
+                let address = address.map(|(a, _)| a);
                 for ports in expr
                     .iter()
                     .filter_map(|s| s.get("match"))
@@ -285,6 +296,7 @@ fn published(
                                 family: family.to_owned(),
                                 proto: p.proto.clone(),
                                 port,
+                                address: address.clone(),
                                 filtered,
                             };
                             if !out.contains(&found) {
@@ -299,36 +311,24 @@ fn published(
     out
 }
 
-/// Whether `stmt` requires a destination the internet cannot reach:
-/// loopback, private, CGNAT (`100.64.0.0/10`), link-local or ULA, as in
-/// `-p 127.0.0.1:5432:5432` or a port bound to a VPN address.
-fn binds_locally(stmt: &Value) -> bool {
-    let Some(m) = stmt.get("match") else {
-        return false;
-    };
-    let daddr = m
-        .get("left")
-        .and_then(|l| l.get("payload"))
-        .and_then(|p| p.get("field"))
-        .and_then(Value::as_str)
-        == Some("daddr");
-    let right = m.get("right");
+/// The destination address `stmt` requires (`ip daddr 10.8.0.1`), and
+/// whether it is loopback or link-local, which only the host reaches.
+fn daddr(stmt: &Value) -> Option<(String, bool)> {
+    let m = stmt.get("match")?;
+    if m.get("op")?.as_str()? != "=="
+        || m.get("left")?.get("payload")?.get("field")?.as_str()? != "daddr"
+    {
+        return None;
+    }
+    let right = m.get("right")?;
     let addr = right
-        .and_then(Value::as_str)
-        .or_else(|| right?.get("prefix")?.get("addr")?.as_str())
-        .and_then(|a| a.parse::<IpAddr>().ok());
-    let local = match addr {
-        Some(IpAddr::V4(a)) => {
-            let [first, second, ..] = a.octets();
-            a.is_loopback()
-                || a.is_private()
-                || a.is_link_local()
-                || (first == 100 && second & 0xc0 == 64)
-        }
-        Some(IpAddr::V6(a)) => a.is_loopback() || a.is_unique_local() || a.is_unicast_link_local(),
-        None => false,
+        .as_str()
+        .or_else(|| right.get("prefix")?.get("addr")?.as_str())?;
+    let local = match addr.parse::<IpAddr>().ok()? {
+        IpAddr::V4(a) => a.is_loopback() || a.is_link_local(),
+        IpAddr::V6(a) => a.is_loopback() || a.is_unicast_link_local(),
     };
-    m.get("op").and_then(Value::as_str) == Some("==") && daddr && local
+    Some((addr.to_owned(), local))
 }
 
 /// The ports of a `tcp dport 443` match, also a set or range of ports.
@@ -376,16 +376,25 @@ fn dports(m: &Value) -> Option<Vec<Ports>> {
     )
 }
 
-/// Adds what `chain` opens to any source (see [`InputChain::open_ports`]
-/// and [`InputChain::unread_ports`]). A `jump` or `goto` is followed only
-/// if its rule is narrow too; if that rule also matches ports, they are
-/// open when the target accepts everything (as `ufw limit` does).
+/// What input chains accept from any source; see [`InputChain`].
+#[derive(Default)]
+struct OpenPorts {
+    any: Vec<Ports>,
+    by_interface: Vec<Ports>,
+    unread: Vec<String>,
+}
+
+/// Adds what `chain` opens to any source. A `jump` or `goto` is followed
+/// only if its rule is narrow too; if that rule also matches ports, they
+/// are open when the target accepts everything (as `ufw limit` does).
+/// `scoped` is set below a jump that matched an input interface.
 fn collect_open_ports(
     rules: &HashMap<ChainKey, Vec<&[Value]>>,
     chain: &ChainKey,
+    scoped: bool,
     seen: &mut HashSet<ChainKey>,
     memo: &mut HashMap<ChainKey, Option<Fate>>,
-    out: &mut (Vec<Ports>, Vec<String>),
+    out: &mut OpenPorts,
 ) {
     if !seen.insert(chain.clone()) {
         return;
@@ -394,15 +403,16 @@ fn collect_open_ports(
         let (Some(v), Some((_, before))) = (verdict(expr), expr.split_last()) else {
             continue;
         };
-        let Some((ports, unread)) = narrow_ports(before) else {
+        let Some(rule) = narrow(before) else {
             continue;
         };
+        let scoped = scoped || rule.interface;
         let opens = match v {
             Verdict::Accept => true,
             Verdict::Jump(t) | Verdict::Goto(t) => {
                 let target = (chain.0.clone(), chain.1.clone(), t.to_owned());
-                if ports.is_empty() && unread.is_empty() {
-                    collect_open_ports(rules, &target, seen, memo, out);
+                if rule.ports.is_empty() && rule.unread.is_empty() {
+                    collect_open_ports(rules, &target, scoped, seen, memo, out);
                     false
                 } else {
                     fate(rules, &target, memo) == Fate::ACCEPT
@@ -411,33 +421,50 @@ fn collect_open_ports(
             _ => false,
         };
         if opens {
-            out.0.extend(ports);
-            out.1.extend(unread);
+            if scoped {
+                &mut out.by_interface
+            } else {
+                &mut out.any
+            }
+            .extend(rule.ports);
+            out.unread.extend(rule.unread);
         }
     }
 }
 
-/// The ports a rule matches, given the statements `before` its verdict,
-/// if each of them still admits any source: a port, protocol, connection
-/// state or input interface match, a counter or a log. Also the protocols
-/// of an iptables `multiport` match (ufw's `allow 80,443/tcp`), whose
-/// ports nft does not show.
-fn narrow_ports(before: &[Value]) -> Option<(Vec<Ports>, Vec<String>)> {
+/// A rule whose matches all still admit any source.
+struct Narrow {
+    /// The ports it matches; empty if it matches no port.
+    ports: Vec<Ports>,
+    /// Protocols of an iptables `multiport` match (ufw's `allow
+    /// 80,443/tcp`), whose ports nft does not show.
+    unread: Vec<String>,
+    /// Whether it matches an input interface.
+    interface: bool,
+}
+
+/// The rule given the statements `before` its verdict, if each is a port,
+/// protocol, connection state or input interface match, a counter or a
+/// log. iptables-nft shows `-m conntrack` and `-m multiport` as `xt`.
+fn narrow(before: &[Value]) -> Option<Narrow> {
     let mut ports = Vec::new();
     let mut proto = None;
     let mut multiport = false;
+    let mut interface = false;
     for s in before {
         if s.get("counter").is_some() || s.get("log").is_some() {
             continue;
         }
         if let Some(xt) = s.get("xt") {
-            let name = xt.get("name").and_then(Value::as_str);
-            if xt.get("type").and_then(Value::as_str) == Some("match") && name == Some("multiport")
-            {
-                multiport = true;
-                continue;
+            if xt.get("type").and_then(Value::as_str) != Some("match") {
+                return None;
             }
-            return None;
+            match xt.get("name").and_then(Value::as_str) {
+                Some("multiport") => multiport = true,
+                Some("conntrack") => {}
+                _ => return None,
+            }
+            continue;
         }
         let m = s.get("match")?;
         if let Some(p) = dports(m) {
@@ -455,7 +482,8 @@ fn narrow_ports(before: &[Value]) -> Option<(Vec<Ports>, Vec<String>)> {
             (Some("l4proto"), ..) | (_, _, Some("protocol" | "nexthdr")) => {
                 proto = m.get("right").and_then(Value::as_str);
             }
-            (Some("nfproto" | "iifname" | "iif"), ..) | (_, Some("state"), _) => {}
+            (Some("iifname" | "iif"), ..) => interface = true,
+            (Some("nfproto"), ..) | (_, Some("state"), _) => {}
             _ => return None,
         }
     }
@@ -464,7 +492,11 @@ fn narrow_ports(before: &[Value]) -> Option<(Vec<Ports>, Vec<String>)> {
         (true, Some(p)) => vec![p.to_owned()],
         (true, None) => ["tcp", "udp", "sctp"].map(str::to_owned).to_vec(),
     };
-    Some((ports, unread))
+    Some(Narrow {
+        ports,
+        unread,
+        interface,
+    })
 }
 
 /// What a chain can do to a packet that no conditional rule matches. More
@@ -764,27 +796,28 @@ mod tests {
             .iter()
             .map(|p| format!("{}/{}", p.proto, p.first))
             .collect();
-        assert_eq!(
-            open,
-            [
-                "tcp/22", "tcp/2222", "tcp/3000", "udp/3000", "tcp/53", "udp/53"
-            ]
-        );
+        assert_eq!(open, ["tcp/22", "tcp/2222", "tcp/53", "udp/53"]);
+        // `allow in on eth0`: vps-ready does not know eth0 is the public one.
+        assert_eq!(input.blocks("tcp", 3000), None);
         // The multiport allows: their ports are not in the JSON.
         assert_eq!(input.unread_ports, ["tcp", "udp"]);
         assert_eq!(input.blocks("tcp", 2222), Some(false));
         assert_eq!(input.blocks("tcp", 5555), None);
 
-        // `-p 127.0.0.1:5432:81` and `-p 172.18.0.1:8081:82` are left out.
+        // `-p 127.0.0.1:5432:81` is left out; `-p 172.18.0.1:8081:82` keeps
+        // its address.
         let published: Vec<String> = fw
             .published
             .iter()
-            .map(|p| format!("{}/{}", p.proto, p.port))
+            .map(|p| format!("{}/{} {:?}", p.proto, p.port, p.address))
             .collect();
-        for port in ["tcp/5432", "tcp/8081"] {
-            assert!(!published.contains(&port.to_owned()), "{port}");
-        }
-        for port in ["tcp/80", "tcp/443", "tcp/5555", "udp/60000", "udp/60005"] {
+        assert!(!published.iter().any(|p| p.starts_with("tcp/5432 ")));
+        for port in [
+            "tcp/80 None",
+            "tcp/5555 None",
+            "udp/60005 None",
+            r#"tcp/8081 Some("172.18.0.1")"#,
+        ] {
             assert!(published.contains(&port.to_owned()), "{port}");
         }
     }
@@ -804,36 +837,43 @@ mod tests {
         let from_source = r#"[{"match": {"op": "==", "left": {"payload": {"protocol": "ip", "field": "saddr"}}, "right": {"prefix": {"addr": "203.0.113.0", "len": 24}}}}, {"jump": {"target": "zone"}}]"#;
         let on_eth0 = r#"[{"match": {"op": "==", "left": {"meta": {"key": "iifname"}}, "right": "eth0"}}, {"jump": {"target": "zone"}}]"#;
         assert!(open(&[("in", &[from_source]), ("zone", &[port_5432])]).is_empty());
-        assert_eq!(
-            open(&[("in", &[on_eth0]), ("zone", &[port_5432])]),
-            ["tcp/5432"]
-        );
+        // An interface-bound zone: open on that interface only.
+        let fw = ruleset_of("drop", "", &[("in", &[on_eth0]), ("zone", &[port_5432])]);
+        assert_eq!(fw.input_chains[0].blocks("tcp", 5432), None);
         // `ufw limit 2222/tcp`: the port is on the jump, the target accepts.
         let limit = r#"[{"match": {"op": "==", "left": {"payload": {"protocol": "tcp", "field": "dport"}}, "right": 2222}}, {"jump": {"target": "ok"}}]"#;
         assert_eq!(open(&[("in", &[limit]), ("ok", &[accept])]), ["tcp/2222"]);
     }
 
     #[test]
-    fn local_bindings() {
-        let daddr = |addr: &str| -> Value {
+    fn bound_addresses() {
+        let stmt = |addr: &str| -> Value {
             serde_json::from_str(&format!(
                 r#"{{"match": {{"op": "==", "left": {{"payload": {{"protocol": "ip", "field": "daddr"}}}}, "right": "{addr}"}}}}"#
             ))
             .unwrap()
         };
-        for addr in [
-            "127.0.0.1",
-            "10.8.0.1",
-            "172.18.0.1",
-            "100.100.1.1",
-            "::1",
-            "fd00::1",
-        ] {
-            assert!(binds_locally(&daddr(addr)), "{addr}");
+        for addr in ["127.0.0.1", "169.254.1.1", "::1", "fe80::1"] {
+            assert_eq!(daddr(&stmt(addr)), Some((addr.to_owned(), true)), "{addr}");
         }
-        for addr in ["203.0.113.5", "2001:db8::5"] {
-            assert!(!binds_locally(&daddr(addr)), "{addr}");
+        for addr in ["10.8.0.1", "100.100.1.1", "203.0.113.5", "fd00::1"] {
+            assert_eq!(daddr(&stmt(addr)), Some((addr.to_owned(), false)), "{addr}");
         }
+    }
+
+    #[test]
+    fn interface_and_conntrack_accepts() {
+        let chain = |rule: &str| ruleset_of("drop", "", &[("in", &[rule])]).input_chains;
+        // `ufw allow in on wg0 to any port 5432`: maybe open, not to all.
+        let wg0 = chain(
+            r#"[{"match": {"op": "==", "left": {"meta": {"key": "iifname"}}, "right": "wg0"}}, {"match": {"op": "==", "left": {"payload": {"protocol": "tcp", "field": "dport"}}, "right": 5432}}, {"accept": null}]"#,
+        );
+        assert_eq!(wg0[0].blocks("tcp", 5432), None);
+        // `-p tcp --dport 80 -m conntrack --ctstate NEW -j ACCEPT`.
+        let new80 = chain(
+            r#"[{"match": {"op": "==", "left": {"payload": {"protocol": "tcp", "field": "dport"}}, "right": 80}}, {"xt": {"type": "match", "name": "conntrack"}}, {"accept": null}]"#,
+        );
+        assert_eq!(new80[0].blocks("tcp", 80), Some(false));
     }
 
     #[test]
