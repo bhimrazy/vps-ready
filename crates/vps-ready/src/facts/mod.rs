@@ -128,7 +128,7 @@ pub fn collect(fs: &dyn Fs, runner: &dyn Runner, env: &Env) -> Result<Facts, Fac
     let virtualization = virt::detect(fs, runner, &mut notices);
     let ssh = ssh::detect(runner, &mut notices);
     let listeners = listeners::detect(runner, &mut notices);
-    let firewall = firewall::detect(runner, &mut notices);
+    let firewall = firewall::detect(fs, runner, &mut notices);
     let ipv6 = firewall::has_ipv6(fs);
     let session = session::detect(env, &mut notices);
     let sysctl = (!virtualization.in_container()).then(|| sysctl::detect(fs, &mut notices));

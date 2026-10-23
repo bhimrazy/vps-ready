@@ -230,6 +230,7 @@ listeners:
 firewall:
   input_chains: []
   published: []
+  legacy_filter: false
 ipv6: false
 session:
   client: "127.0.0.1:47450"

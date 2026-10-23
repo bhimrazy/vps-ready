@@ -345,7 +345,17 @@ fn evaluate(check: &Check, facts: &Facts) -> Outcome {
             }
         }
         Check::PublishedPorts => match &facts.firewall {
-            Some(firewall) => published_ports(firewall, facts.ipv6, facts.docker),
+            Some(firewall) => match published_ports(firewall, facts.ipv6, facts.docker) {
+                // Docker with iptables-legacy publishes ports in rules that
+                // nft does not show.
+                Outcome::Pass if firewall.legacy_filter && facts.docker => Outcome::Unknown {
+                    reason: "Docker is installed and the filter table of iptables-legacy is \
+                             loaded; vps-ready does not read its rules, which would show the \
+                             ports Docker publishes"
+                        .to_owned(),
+                },
+                outcome => outcome,
+            },
             None if facts.docker => Outcome::Unknown {
                 reason: "the firewall ruleset could not be read".to_owned(),
             },
@@ -452,8 +462,12 @@ fn port_list(ports: &[(&str, u16, Option<&str>)]) -> String {
 /// Which incoming traffic no chain drops by default, e.g. `IPv6`.
 fn inbound_default_deny(firewall: &Firewall, ipv6: bool) -> Outcome {
     if firewall.input_chains.is_empty() {
-        return Outcome::Fail {
-            found: "no firewall rules filter incoming traffic".to_owned(),
+        return if firewall.legacy_filter {
+            legacy_unknown("nft shows no rules that filter incoming traffic")
+        } else {
+            Outcome::Fail {
+                found: "no firewall rules filter incoming traffic".to_owned(),
+            }
         };
     }
     let drops = |v6: bool| {
@@ -469,6 +483,11 @@ fn inbound_default_deny(firewall: &Firewall, ipv6: bool) -> Outcome {
         .collect();
     if open.is_empty() {
         Outcome::Pass
+    } else if firewall.legacy_filter {
+        legacy_unknown(&format!(
+            "nft shows incoming {} traffic that no rule allows as accepted",
+            open.join(" and ")
+        ))
     } else {
         Outcome::Fail {
             found: format!(
@@ -476,6 +495,17 @@ fn inbound_default_deny(firewall: &Firewall, ipv6: bool) -> Outcome {
                 open.join(" and ")
             ),
         }
+    }
+}
+
+/// The outcome when only nftables was read but the `filter` table of
+/// iptables-legacy is loaded too, and its rules also filter incoming traffic.
+fn legacy_unknown(seen: &str) -> Outcome {
+    Outcome::Unknown {
+        reason: format!(
+            "{seen}, and the filter table of iptables-legacy is loaded; vps-ready does not \
+             read its rules"
+        ),
     }
 }
 
@@ -873,6 +903,63 @@ mod tests {
         ));
     }
 
+    /// Rules in iptables-legacy are not in nftables: without a nft chain
+    /// that drops, FW-001 and FW-002 cannot tell.
+    #[test]
+    fn iptables_legacy_makes_unseen_rules_unknown() {
+        let chain = |drops_unmatched| crate::facts::InputChain {
+            family: "inet".to_owned(),
+            table: "t".to_owned(),
+            name: "input".to_owned(),
+            drops_unmatched,
+            open_ports: Vec::new(),
+            interface_ports: Vec::new(),
+            unread_ports: Vec::new(),
+        };
+        let mut facts = host("debian-13", &[]);
+        facts.docker = true;
+        facts.ipv6 = false;
+        let mut eval = |check: &Check, chains: Vec<crate::facts::InputChain>| {
+            facts.firewall = Some(Firewall {
+                input_chains: chains,
+                legacy_filter: true,
+                ..Firewall::default()
+            });
+            evaluate(check, &facts)
+        };
+        assert_eq!(
+            eval(&Check::InboundDefaultDeny, vec![]),
+            Outcome::Unknown {
+                reason: "nft shows no rules that filter incoming traffic, and the filter table \
+                         of iptables-legacy is loaded; vps-ready does not read its rules"
+                    .to_owned()
+            }
+        );
+        assert_eq!(
+            eval(&Check::InboundDefaultDeny, vec![chain(false)]),
+            Outcome::Unknown {
+                reason: "nft shows incoming IPv4 traffic that no rule allows as accepted, and \
+                         the filter table of iptables-legacy is loaded; vps-ready does not read \
+                         its rules"
+                    .to_owned()
+            }
+        );
+        // A nft chain that drops decides: a packet passes both.
+        assert_eq!(
+            eval(&Check::InboundDefaultDeny, vec![chain(true)]),
+            Outcome::Pass
+        );
+        assert!(matches!(
+            eval(&Check::PublishedPorts, vec![chain(true)]),
+            Outcome::Unknown { reason } if reason.contains("iptables-legacy")
+        ));
+        facts.docker = false;
+        assert!(matches!(
+            evaluate(&Check::PublishedPorts, &facts),
+            Outcome::Skip { .. }
+        ));
+    }
+
     #[test]
     fn evaluates_published_ports() {
         // An input chain that drops all but tcp/22, as `ufw allow 22/tcp`.
@@ -902,6 +989,7 @@ mod tests {
             facts.firewall = Some(Firewall {
                 input_chains: vec![ufw.clone()],
                 published,
+                ..Firewall::default()
             });
             facts.ipv6 = ipv6;
             evaluate(&Check::PublishedPorts, &facts)
@@ -949,6 +1037,7 @@ mod tests {
         facts.firewall = Some(Firewall {
             input_chains: vec![multiport],
             published: vec![port("ip", 443, false)],
+            ..Firewall::default()
         });
         assert!(matches!(
             evaluate(&Check::PublishedPorts, &facts),
@@ -959,6 +1048,7 @@ mod tests {
         facts.firewall = Some(Firewall {
             input_chains: vec![],
             published: vec![port("ip", 5432, false)],
+            ..Firewall::default()
         });
         assert_eq!(evaluate(&Check::PublishedPorts, &facts), Outcome::Pass);
 
