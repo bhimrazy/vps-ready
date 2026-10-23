@@ -1,0 +1,12 @@
+---
+source: crates/vps-ready/src/cli/change/tests.rs
+expression: err
+---
+remove /etc/apt/apt.conf.d/52vps-ready
+leave net.ipv4.conf.all.accept_source_route as it is (the host rebooted since apply; the next boot sets it)
+leave fs.protected_regular as it is (the host rebooted since apply; the next boot sets it)
+leave fs.protected_fifos as it is (the host rebooted since apply; the next boot sets it)
+leave kernel.unprivileged_bpf_disabled as it is (the host rebooted since apply; the next boot sets it)
+leave kernel.dmesg_restrict as it is (the host rebooted since apply; the next boot sets it)
+leave kernel.kptr_restrict as it is (the host rebooted since apply; the next boot sets it)
+remove /etc/sysctl.d/90-vps-ready.conf

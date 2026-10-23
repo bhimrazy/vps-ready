@@ -321,6 +321,73 @@ fn apply_asks_first() {
     assert!(out.contains("Applied 8 changes"), "{out}");
 }
 
+/// The summary counts steps by kind, with singular and plural forms; the
+/// footnote appears with a package, which rollback does not remove.
+#[test]
+fn plan_summary_counts_kinds() {
+    let fs = fixture();
+    let (_, out, _) = plan_cmd(&host(&fs), &[]);
+    assert!(
+        out.contains("\n8 changes in 2 modules: 2 files, 6 kernel settings.\n"),
+        "{out}"
+    );
+    assert!(out.contains("(mode 0644, root:root)"), "{out}");
+    assert!(!out.contains("partial:"), "{out}");
+
+    let apt = Apt {
+        installed: AtomicBool::new(false),
+        install: Output::success(""),
+    };
+    let (_, out, _) = plan_cmd(&apt_host(&fs, &apt), &[]);
+    assert!(
+        out.contains("\n9 changes in 2 modules: 2 files, 6 kernel settings, 1 package.\n"),
+        "{out}"
+    );
+    assert!(
+        out.ends_with(
+            "partial: rollback restores the files but leaves installed packages in place.\n\
+             Run `sudo vps-ready apply` to make them.\n"
+        ),
+        "{out}"
+    );
+
+    let host = Host {
+        facts: container,
+        ..host(&fs)
+    };
+    let (_, out, _) = plan_cmd(&host, &[]);
+    assert!(out.contains("\n1 change in 1 module: 1 file.\n"), "{out}");
+    assert!(out.ends_with("to make it.\n"), "{out}");
+}
+
+#[test]
+fn owner_is_spelled_out() {
+    assert_eq!(
+        show_owner("/etc/a (0644 0:0)"),
+        "/etc/a (mode 0644, root:root)"
+    );
+    assert_eq!(
+        show_owner("/etc/a (0644 0:0 -> 0600 1000:100)"),
+        "/etc/a (mode 0644, root:root -> mode 0600, 1000:100)"
+    );
+    assert_eq!(show_owner("/etc/a"), "/etc/a");
+}
+
+/// The success line names the journal, under the state directory.
+#[test]
+fn applied_line_names_the_journal() {
+    let fs = fixture();
+    let (_, out, _) = apply_yes(&host(&fs));
+    let id = &txn_ids(&fs)[0];
+    assert!(
+        out.contains(&format!(
+            "Applied 8 changes (transaction {id}, journal {STATE}/txn/{id}). \
+             Undo with `sudo vps-ready rollback --last`.\n"
+        )),
+        "{out}"
+    );
+}
+
 /// Answers `y`, after changing a sysctl the plan shows.
 struct Meddler<'a>(&'a FakeFs, bool);
 
@@ -405,9 +472,40 @@ fn apply_errors_exit_2() {
     assert!(!fs.exists(Path::new(DROP_IN)));
 }
 
+/// After a reboot, rollback leaves the kernel settings as the boot set them
+/// and names them.
+#[test]
+fn rollback_after_a_reboot() {
+    let boot_id = Path::new(crate::resource::sysctl::BOOT_ID);
+    let fs = fixture().with_file(boot_id, "boot-1\n");
+    let host = host(&fs);
+    assert_eq!(apply_yes(&host).0, 0);
+    fs.write(boot_id, b"boot-2\n").unwrap();
+    // As on Ubuntu, a later sysctl.d file set `fs.protected_regular` after the drop-in.
+    fs.write(Path::new("/proc/sys/fs/protected_regular"), b"2")
+        .unwrap();
+
+    let (code, out, err) = rollback_last(&host);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        redact(&fs, &out, false),
+        "Rolled back transaction <txn-1>: restored 2 changes.\n\
+         6 kernel settings keep their running value until the next boot: \
+         net.ipv4.conf.all.accept_source_route, fs.protected_regular, fs.protected_fifos, \
+         kernel.unprivileged_bpf_disabled, kernel.dmesg_restrict, kernel.kptr_restrict\n"
+    );
+    insta::assert_snapshot!("rollback-after-reboot-progress", err);
+    assert!(!fs.exists(Path::new(DROP_IN)));
+    assert_eq!(
+        fs.read(Path::new("/proc/sys/fs/protected_regular"))
+            .unwrap(),
+        b"2"
+    );
+}
+
 #[test]
 fn rollback_refused_by_the_safety_check_exits_2() {
-    let fs = fixture();
+    let fs = fixture().with_file(crate::resource::sysctl::BOOT_ID, "boot-1\n");
     let host = host(&fs);
     assert_eq!(apply_yes(&host).0, 0);
     fs.write(Path::new("/proc/sys/kernel/kptr_restrict"), b"2")
@@ -619,7 +717,7 @@ fn several_modules() {
     let (code, out, _) = plan_cmd(&host, &[]);
     assert_eq!(code, 0);
     assert!(
-        out.contains("test.noapt: not applicable (apt not found)\n\n7 changes in 1 module."),
+        out.contains("test.noapt: not applicable (apt not found)\n\n7 changes in 1 module: 1 file, 6 kernel settings."),
         "{out}"
     );
     let (code, out, _) = plan_cmd(&host, &["test.noapt"]);

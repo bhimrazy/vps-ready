@@ -85,8 +85,11 @@ impl Module for KernelSysctl {
     /// A key goes into the drop-in if its running value fails its control or
     /// the existing drop-in lists it; only failing keys are also set at
     /// runtime. Keeping listed keys makes a second run a no-op, and leaving
-    /// out passing ones keeps a distro's stricter value (Ubuntu's
-    /// `perf_event_paranoid=4`) at the next boot.
+    /// out passing ones keeps a distro's stricter running value (Ubuntu's
+    /// `perf_event_paranoid=4`) at the next boot. A key lowered at runtime
+    /// below the kernel's compiled-in default, which cannot be read, is
+    /// persisted at the module's value, which passes its control; rollback
+    /// removes the line and the next boot returns to the default.
     fn plan(&self, facts: &Facts, sys: Sys) -> Result<Vec<Resource>, ModuleError> {
         let Some(running) = &facts.sysctl else {
             return Ok(Vec::new());

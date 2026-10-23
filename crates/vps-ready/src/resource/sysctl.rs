@@ -1,9 +1,12 @@
 //! The [`Sysctl`] resource.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::{Backup, ResourceError};
-use crate::sys::{Sys, SysError};
+use crate::sys::{Fs, Sys, SysError};
+
+/// A random ID the kernel picks at each boot.
+pub(crate) const BOOT_ID: &str = "/proc/sys/kernel/random/boot_id";
 
 /// The running value of a kernel parameter, read and written through
 /// `/proc/sys/<key with dots as slashes>`. It does not persist across a
@@ -29,6 +32,7 @@ impl Sysctl {
             key: self.key.clone(),
             value: read(sys, &self.key)?,
             applied: self.value.clone(),
+            boot_id: boot_id(sys.fs),
         })
     }
 
@@ -39,6 +43,12 @@ impl Sysctl {
 
 pub(super) fn restore(sys: Sys, key: &str, value: &str) -> Result<(), ResourceError> {
     Ok(sys.fs.write(&proc_path(key), value.as_bytes())?)
+}
+
+/// The ID of the current boot, or `None` if it cannot be read.
+pub(crate) fn boot_id(fs: &dyn Fs) -> Option<String> {
+    let bytes = fs.read(Path::new(BOOT_ID)).ok()?;
+    Some(String::from_utf8(bytes).ok()?.trim().to_owned())
 }
 
 /// Whether two values are equal up to whitespace: the kernel separates the
@@ -64,11 +74,8 @@ fn read(sys: Sys, key: &str) -> Result<String, ResourceError> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
     use super::super::{Change, Resource, Reversibility, restore, test_sys as sys};
     use super::*;
-    use crate::sys::Fs as _;
     use crate::sys::fake::FakeFs;
 
     const PROC: &str = "/proc/sys/kernel/kptr_restrict";
@@ -140,6 +147,7 @@ mod tests {
                 key: "kernel.kptr_restrict".into(),
                 value: "0".into(),
                 applied: "1".into(),
+                boot_id: None,
             }
         );
         resource.apply(sys).unwrap();
@@ -148,5 +156,18 @@ mod tests {
 
         restore(sys, txn, &backup).unwrap();
         assert_eq!(fs.read(Path::new(PROC)).unwrap(), b"0");
+    }
+
+    #[test]
+    fn snapshot_records_the_boot() {
+        let fs = FakeFs::new()
+            .with_file(PROC, "0\n")
+            .with_file(BOOT_ID, "8f3c\n");
+        let txn = Path::new("/var/lib/vps-ready/txn/20261023T114246Z");
+        let backup = kptr("1").snapshot(sys(&fs), txn, 1).unwrap();
+        assert!(
+            matches!(&backup, Backup::Sysctl { boot_id: Some(id), .. } if id == "8f3c"),
+            "{backup:?}"
+        );
     }
 }

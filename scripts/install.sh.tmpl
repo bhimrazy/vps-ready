@@ -80,8 +80,7 @@ verify_signature() {
 		say "signature verified with cosign"
 		return 0
 	fi
-	say "WARNING: signature NOT verified (install gh or cosign to enable)."
-	say "WARNING: relying on the SHA-256 embedded in this script only."
+	echo "note: checked the SHA-256 embedded in this script; to also verify the Sigstore signature, see docs/release.md (needs cosign or gh)" >&2
 }
 
 main() {
@@ -146,6 +145,7 @@ main() {
 	ln -sfn vps-ready "$prefix/vpsready"
 	say "installed $prefix/vps-ready (also available as vpsready)"
 	"$prefix/vps-ready" version
+	echo "next: vps-ready detect"
 }
 
 main "$@"

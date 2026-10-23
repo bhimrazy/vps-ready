@@ -14,7 +14,7 @@ use crate::sys::{FileKind, FileOwner, Sys, SysError};
 
 mod file;
 mod package;
-mod sysctl;
+pub(crate) mod sysctl;
 
 pub use file::{File, Validate};
 pub use package::Package;
@@ -197,6 +197,10 @@ pub enum Backup {
         value: String,
         /// Value that apply writes.
         applied: String,
+        /// Boot in which `value` was read; `None` if it could not be read, or in
+        /// journals from before 0.2.1.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        boot_id: Option<String>,
     },
     /// An apt package.
     Package {
@@ -315,8 +319,18 @@ mod tests {
                     key: "kernel.kptr_restrict".into(),
                     value: "0".into(),
                     applied: "1".into(),
+                    boot_id: None,
                 },
                 r#"{"kind":"sysctl","key":"kernel.kptr_restrict","value":"0","applied":"1"}"#,
+            ),
+            (
+                Backup::Sysctl {
+                    key: "kernel.kptr_restrict".into(),
+                    value: "0".into(),
+                    applied: "1".into(),
+                    boot_id: Some("8f3c".into()),
+                },
+                r#"{"kind":"sysctl","key":"kernel.kptr_restrict","value":"0","applied":"1","boot_id":"8f3c"}"#,
             ),
             (
                 Backup::Package {

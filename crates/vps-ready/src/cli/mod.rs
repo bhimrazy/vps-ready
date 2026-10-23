@@ -7,6 +7,7 @@
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Context;
 use clap::builder::PossibleValuesParser;
@@ -35,9 +36,24 @@ pub const EXIT_ROLLED_BACK: u8 = 1;
 /// Exit code of `apply` and `rollback` when a rollback did not complete.
 pub const EXIT_INCOMPLETE: u8 = 3;
 
+/// Shown at the end of the help, which a bare `vps-ready` prints.
+const FIRST_RUN: &str = "\
+Typical first run, as root:
+  vps-ready detect          what this server is
+  vps-ready audit           what fails and why
+  vps-ready plan            what apply would change (read-only)
+  vps-ready apply           make the changes; undo with `rollback --last`";
+
 /// Command-line arguments of `vps-ready`.
 #[derive(Debug, Parser)]
-#[command(name = "vps-ready", version, about, long_about = None)]
+#[command(
+    name = "vps-ready",
+    version,
+    about,
+    long_about = None,
+    arg_required_else_help = true,
+    after_help = FIRST_RUN,
+)]
 pub struct Cli {
     /// Print machine-readable JSON instead of text.
     #[arg(long, global = true)]
@@ -92,8 +108,14 @@ pub enum Command {
         /// Do not ask; required when stdin is not a terminal.
         #[arg(long, short)]
         yes: bool,
+        /// Show the plan and change nothing, like `plan`.
+        #[arg(long, short = 'n', conflicts_with = "yes")]
+        dry_run: bool,
     },
     /// Undo the changes of a transaction. Needs root.
+    ///
+    /// If the host rebooted since apply, kernel settings keep their running
+    /// values until the next boot, which reads the restored configuration.
     ///
     /// Exits 0 when rolled back, 2 on error (including a refusal because
     /// something changed since apply), and 3 when it did not complete.
@@ -146,9 +168,17 @@ pub fn main() -> ExitCode {
     }
 }
 
+/// Whether notices print as `vps-ready: <notice>` instead of log lines.
+static PLAIN_NOTICES: AtomicBool = AtomicBool::new(false);
+
 /// Logs go to stderr. `RUST_LOG` wins when set; otherwise `-v` raises the
-/// level from `warn` to `info`, `debug` and `trace`.
+/// level from `warn` to `info`, `debug` and `trace`. Without either, notices
+/// are plain lines and only errors from the logs remain.
 fn init_tracing(verbose: u8, ansi: bool) {
+    PLAIN_NOTICES.store(
+        verbose == 0 && std::env::var_os("RUST_LOG").is_none(),
+        Ordering::Relaxed,
+    );
     let default = match verbose {
         0 => "warn",
         1 => "info",
@@ -228,7 +258,15 @@ pub fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
             let n = change::plan(&real_host(cli), modules, cli.json, &mut out)?;
             code = ExitCode::from(n);
         }
-        Command::Apply { modules, yes } => {
+        Command::Apply {
+            modules,
+            dry_run: true,
+            ..
+        } => {
+            let n = change::plan(&real_host(cli), modules, cli.json, &mut out)?;
+            code = ExitCode::from(n);
+        }
+        Command::Apply { modules, yes, .. } => {
             no_json(cli, "apply")?;
             let stdin = io::stdin();
             let mut stdin = stdin.is_terminal().then(|| stdin.lock());
@@ -294,8 +332,7 @@ fn host_facts(sys: Sys) -> anyhow::Result<Facts> {
     facts::collect(sys.fs, sys.runner, &Env::from_process()).context("detecting facts")
 }
 
-/// Collects facts, logging each notice except those in `quiet` as a warning
-/// on stderr. All notices stay in the facts, and so in `--json` output.
+/// Collects facts, printing each notice except those in `quiet` on stderr. All notices stay in the facts, and so in `--json` output.
 fn collect_facts(root: &Path, quiet: &[&str]) -> anyhow::Result<Facts> {
     let facts = facts::collect(&RealFs::new(root), &RealRunner, &Env::from_process())
         .with_context(|| format!("detecting facts under {}", root.display()))?;
@@ -303,14 +340,19 @@ fn collect_facts(root: &Path, quiet: &[&str]) -> anyhow::Result<Facts> {
     Ok(facts)
 }
 
-/// Logs each notice except those in `quiet` as a warning on stderr.
+/// Prints each notice except those in `quiet` on stderr: as
+/// `vps-ready: <notice>`, or as a warning log line with `-v` or `RUST_LOG`.
 fn log_notices(facts: &Facts, quiet: &[&str]) {
     for notice in facts
         .notices
         .iter()
         .filter(|n| !quiet.contains(&n.as_str()))
     {
-        tracing::warn!("{notice}");
+        if PLAIN_NOTICES.load(Ordering::Relaxed) {
+            eprintln!("vps-ready: {notice}");
+        } else {
+            tracing::warn!("{notice}");
+        }
     }
 }
 
@@ -358,8 +400,10 @@ fn root_would_help(report: &Report, facts: &Facts) -> bool {
 /// 3 passed, 2 failed, 0 unknown
 /// ```
 ///
-/// A failed control that a module fixes ends with the command to apply it,
-/// e.g. `fix: sudo vps-ready apply --module kernel.sysctl`.
+/// A failed control ends with the command to fix it, e.g. `fix: sudo
+/// vps-ready apply --module kernel.sysctl`, or `fix: not automated yet`. When
+/// any failed control has a fix, the last line counts them and points to
+/// `vps-ready plan`.
 ///
 /// Skipped controls get a row without details, and each distinct reason is
 /// printed once after the summary.
@@ -417,8 +461,11 @@ fn print_report(
                     writeln!(out, "{INDENT}{line}")?;
                 }
             }
-            if let Some(module) = &control.fix {
-                writeln!(out, "{INDENT}fix: sudo vps-ready apply --module {module}")?;
+            match &control.fix {
+                Some(module) => {
+                    writeln!(out, "{INDENT}fix: sudo vps-ready apply --module {module}")?;
+                }
+                None => writeln!(out, "{INDENT}fix: not automated yet")?,
             }
         }
     }
@@ -435,7 +482,7 @@ fn print_report(
     if s.unknown > 0 {
         write!(
             out,
-            "Unknown controls could not be checked; the warnings on stderr say why."
+            "Unknown controls could not be checked; the notices on stderr say why."
         )?;
         if root_hint {
             write!(out, " Run it with sudo: some checks need root.")?;
@@ -452,6 +499,23 @@ fn print_report(
     }
     for reason in reasons {
         writeln!(out, "Skipped: {reason}.")?;
+    }
+    let fixable = report
+        .findings
+        .iter()
+        .filter(|f| matches!(f.outcome, Outcome::Fail { .. }) && f.control.fix.is_some())
+        .count();
+    if fixable > 0 {
+        let (noun, verb) = if fixable == 1 {
+            ("control", "has")
+        } else {
+            ("controls", "have")
+        };
+        writeln!(
+            out,
+            "{fixable} failed {noun} {verb} an automatic fix. \
+             Run `vps-ready plan` to see what it would change."
+        )?;
     }
     Ok(())
 }
@@ -602,6 +666,60 @@ mod tests {
         print_report(&mut text, &report, "this host", false, false).unwrap();
         let text = String::from_utf8(text).unwrap();
         assert!(!text.contains("Run it with sudo"), "{text}");
+    }
+
+    /// With a fixable failure the output ends with the next step; a failure
+    /// no module fixes says so.
+    #[test]
+    fn audit_text_points_to_plan() {
+        let mut facts = host("debian-13", &[]);
+        facts.virtualization.container = crate::facts::Virt::None;
+        let mut sysctl = crate::facts::Sysctl::default();
+        for key in crate::facts::sysctl::KEYS {
+            sysctl.values.insert(key.to_owned(), "1".to_owned());
+        }
+        sysctl
+            .values
+            .insert("kernel.kptr_restrict".to_owned(), "0".to_owned());
+        sysctl.values.insert(
+            "kernel.unprivileged_bpf_disabled".to_owned(),
+            "0".to_owned(),
+        );
+        facts.sysctl = Some(sysctl);
+        let controls = |ids: &[&str]| -> Vec<_> {
+            audit::catalog()
+                .unwrap()
+                .into_iter()
+                .filter(|c| ids.contains(&c.id.as_str()))
+                .collect()
+        };
+        let text = |ids: &[&str]| {
+            let report = audit::run(controls(ids), &facts);
+            let mut text = Vec::new();
+            print_report(&mut text, &report, "this host", false, false).unwrap();
+            String::from_utf8(text).unwrap()
+        };
+
+        let both = text(&["KRN-001", "MAC-001"]);
+        assert!(both.contains("fix: not automated yet"), "{both}");
+        assert!(
+            both.ends_with(
+                "1 failed control has an automatic fix. \
+                 Run `vps-ready plan` to see what it would change.\n"
+            ),
+            "{both}"
+        );
+
+        let two = text(&["KRN-001", "KRN-003", "MAC-001"]);
+        assert!(
+            two.contains("\n2 failed controls have an automatic fix. "),
+            "{two}"
+        );
+
+        let unfixable = text(&["MAC-001"]);
+        assert!(unfixable.contains("fix: not automated yet"), "{unfixable}");
+        assert!(!unfixable.contains("automatic fix"), "{unfixable}");
+        assert!(!text(&["KRN-002"]).contains("automatic fix"));
     }
 
     /// A kernel setting that only root can read is worth a sudo hint; one
