@@ -86,7 +86,7 @@ impl Host {
         let state = self.state();
         let outcome = Engine::lock(&state, self.sys())
             .unwrap()
-            .apply(plan)
+            .apply(plan, &mut |_| {})
             .unwrap();
         assert!(
             matches!(
@@ -101,7 +101,7 @@ impl Host {
         let state = self.state();
         Engine::lock(&state, self.sys())
             .unwrap()
-            .rollback(Target::Last)
+            .rollback(Target::Last, &mut |_| {})
             .unwrap();
     }
 

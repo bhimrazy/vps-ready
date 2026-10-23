@@ -50,6 +50,26 @@ pub enum Target<'a> {
     Txn(&'a str),
 }
 
+/// What [`Engine::apply`] or [`Engine::rollback`] is about to do or has
+/// done, for the caller to show.
+#[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
+pub enum Progress<'a> {
+    /// A step is about to be applied.
+    Apply {
+        /// Position, from 1.
+        n: usize,
+        /// How many steps the plan has.
+        total: usize,
+        /// The step.
+        step: &'a Step,
+    },
+    /// Every change was applied and verified.
+    Verified,
+    /// A backup is about to be restored.
+    Restore(&'a Backup),
+}
+
 /// A finished [`Engine::rollback`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rollback {
@@ -126,7 +146,8 @@ impl<'a> Engine<'a> {
     /// it. Then, for each resource: snapshot, `backup` line, apply, `applied`
     /// line; then every resource is verified. On a failure the changes are
     /// rolled back without the safety check of [`Engine::rollback`], since
-    /// they were made under this lock a moment ago.
+    /// they were made under this lock a moment ago. Each step and restore is
+    /// reported to `progress` before it runs, and a passed verify after it.
     ///
     /// # Errors
     ///
@@ -135,7 +156,11 @@ impl<'a> Engine<'a> {
     /// transaction, [`EngineError::DuplicateResource`],
     /// [`EngineError::PlanChanged`], or a failure before the first `backup`
     /// line.
-    pub fn apply(&self, plan: &Plan) -> Result<ApplyOutcome, EngineError> {
+    pub fn apply(
+        &self,
+        plan: &Plan,
+        progress: &mut dyn FnMut(Progress),
+    ) -> Result<ApplyOutcome, EngineError> {
         self.ensure_finished()?;
         let steps: Vec<&Step> = plan.steps().collect();
         if steps.is_empty() {
@@ -161,21 +186,24 @@ impl<'a> Engine<'a> {
             modules: plan.changed_modules(),
         })?;
 
-        let failure = match self.run(&mut open, &steps) {
+        let failure = match self.run(&mut open, &steps, progress) {
             Err(e) => (RollbackReason::ApplyFailed, e),
             Ok(()) => match self.verify(&steps) {
                 Err(failure) => failure,
-                Ok(()) => match open.append(Event::State {
-                    state: TxnState::Applied,
-                }) {
-                    Ok(()) => return Ok(ApplyOutcome::Applied { txn: id }),
-                    Err(e) => (RollbackReason::ApplyFailed, e),
-                },
+                Ok(()) => {
+                    progress(Progress::Verified);
+                    match open.append(Event::State {
+                        state: TxnState::Applied,
+                    }) {
+                        Ok(()) => return Ok(ApplyOutcome::Applied { txn: id }),
+                        Err(e) => (RollbackReason::ApplyFailed, e),
+                    }
+                }
             },
         };
         let (reason, cause) = failure;
         tracing::error!(txn = %id, "{cause}; rolling back");
-        self.roll_back(&mut open, reason, false)?;
+        self.roll_back(&mut open, reason, false, progress)?;
         Ok(ApplyOutcome::RolledBack {
             txn: id,
             reason,
@@ -183,10 +211,20 @@ impl<'a> Engine<'a> {
         })
     }
 
-    fn run(&self, open: &mut Open, steps: &[&Step]) -> Result<(), EngineError> {
+    fn run(
+        &self,
+        open: &mut Open,
+        steps: &[&Step],
+        progress: &mut dyn FnMut(Progress),
+    ) -> Result<(), EngineError> {
         let mut n = 0;
-        for step in steps {
+        for (i, step) in steps.iter().enumerate() {
             n += 1;
+            progress(Progress::Apply {
+                n: i + 1,
+                total: steps.len(),
+                step,
+            });
             let id = &step.change.id;
             let backup = step
                 .resource
@@ -234,7 +272,7 @@ impl<'a> Engine<'a> {
 
     /// Rolls back `target`, resuming it if it is unfinished. First checks
     /// that no backed-up resource changed since apply; if one did, nothing is
-    /// restored.
+    /// restored. Each restore is reported to `progress` before it runs.
     ///
     /// # Errors
     ///
@@ -242,7 +280,11 @@ impl<'a> Engine<'a> {
     /// [`EngineError::RollbackIncomplete`] if a restore or journal line
     /// failed (running it again continues); [`EngineError::NothingToRollBack`],
     /// [`EngineError::UnknownTxn`] or [`EngineError::AlreadyRolledBack`].
-    pub fn rollback(&self, target: Target) -> Result<Rollback, EngineError> {
+    pub fn rollback(
+        &self,
+        target: Target,
+        progress: &mut dyn FnMut(Progress),
+    ) -> Result<Rollback, EngineError> {
         let fs = self.sys.fs;
         let txn = match target {
             Target::Last => match self.state.unfinished(fs)?.pop() {
@@ -270,7 +312,7 @@ impl<'a> Engine<'a> {
         }
         let id = txn.id().to_owned();
         let mut open = Open::new(fs, txn, records)?;
-        let restored = self.roll_back(&mut open, RollbackReason::Manual, true)?;
+        let restored = self.roll_back(&mut open, RollbackReason::Manual, true, progress)?;
         Ok(Rollback { txn: id, restored })
     }
 
@@ -292,6 +334,7 @@ impl<'a> Engine<'a> {
         open: &mut Open,
         reason: RollbackReason,
         check: bool,
+        progress: &mut dyn FnMut(Progress),
     ) -> Result<usize, EngineError> {
         let (id, dir) = (open.txn.id().to_owned(), open.txn.dir().to_path_buf());
         let records = open.records().map_err(|e| incomplete(&id, &dir, None, e))?;
@@ -362,6 +405,7 @@ impl<'a> Engine<'a> {
             }
         };
         for (i, (resource, backup)) in pending.iter().enumerate().rev() {
+            progress(Progress::Restore(backup));
             let result = restore(self.sys, &dir, backup)
                 .map_err(|source| EngineError::Resource {
                     id: resource.clone(),

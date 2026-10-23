@@ -121,12 +121,12 @@ fn plan_of(fs: &dyn Fs, facts: &Facts, modules: &[&dyn Module]) -> Plan {
 
 fn apply(fs: &dyn Fs, plan: &Plan) -> Result<ApplyOutcome, EngineError> {
     let state = state(fs);
-    Engine::lock(&state, sys(fs))?.apply(plan)
+    Engine::lock(&state, sys(fs))?.apply(plan, &mut |_| {})
 }
 
 fn rollback(fs: &dyn Fs, target: Target) -> Result<Rollback, EngineError> {
     let state = state(fs);
-    Engine::lock(&state, sys(fs))?.rollback(target)
+    Engine::lock(&state, sys(fs))?.rollback(target, &mut |_| {})
 }
 
 fn events(fs: &dyn Fs, id: &str) -> Vec<Event> {

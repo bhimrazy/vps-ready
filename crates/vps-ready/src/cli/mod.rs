@@ -253,7 +253,7 @@ pub fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
                     Target::Last
                 }
             };
-            let n = change::rollback(&real_host(cli), target, &mut out)?;
+            let n = change::rollback(&real_host(cli), target, &mut out, &mut io::stderr())?;
             code = ExitCode::from(n);
         }
         Command::History => {

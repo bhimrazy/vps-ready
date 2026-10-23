@@ -1,0 +1,12 @@
+---
+source: crates/vps-ready/src/cli/change/tests.rs
+expression: err
+---
+remove /etc/apt/apt.conf.d/52vps-ready
+restore net.ipv4.conf.all.accept_source_route = 1
+restore fs.protected_regular = 0
+restore fs.protected_fifos = 0
+restore kernel.unprivileged_bpf_disabled = 0
+restore kernel.dmesg_restrict = 0
+restore kernel.kptr_restrict = 0
+remove /etc/sysctl.d/90-vps-ready.conf
