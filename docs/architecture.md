@@ -160,7 +160,7 @@ Config files a module writes (sshd drop-ins, jail.local, nftables rulesets) are 
    - never set `ip_forward=0` when Docker/Tailscale is present.
 3. **Apply (transaction):**
    1. `flock`
-   2. snapshot (bytes + mode/owner/SELinux context)
+   2. snapshot (bytes + mode/owner; later the SELinux context)
    3. stage
    4. `validate`
    5. atomic write (temp → fsync → rename)
@@ -169,7 +169,7 @@ Config files a module writes (sshd drop-ins, jail.local, nftables rulesets) are 
    8. if anything fails, roll back automatically in reverse order
 4. **Idempotency:** a second `apply` produces an empty plan. Tests assert this.
 
-The transaction's lifecycle is the `TxnState` enum, persisted in `meta.json`:
+The transaction's lifecycle is the `TxnState` enum; the current state is the last `state` record in the transaction's journal:
 
 ```rust
 pub enum TxnState {
