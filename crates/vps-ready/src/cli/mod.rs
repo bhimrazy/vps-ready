@@ -480,7 +480,7 @@ mod tests {
         let mut text = Vec::new();
         print_report(&mut text, &report, "this host", false, false).unwrap();
         let text = String::from_utf8(text).unwrap();
-        assert!(!text.contains("sudo"), "{text}");
+        assert!(!text.contains("Run it with sudo"), "{text}");
     }
 
     /// A kernel setting that only root can read is worth a sudo hint; one

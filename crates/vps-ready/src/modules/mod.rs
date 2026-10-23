@@ -72,7 +72,7 @@ pub trait Module {
 /// Every module, in the order the plan lists and applies them.
 #[must_use]
 pub fn all() -> &'static [&'static dyn Module] {
-    &[&KernelSysctl::ROOT]
+    &[&KernelSysctl::ROOT, &UpdatesAuto::ROOT]
 }
 
 #[cfg(test)]

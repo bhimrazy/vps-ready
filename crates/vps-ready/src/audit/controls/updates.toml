@@ -8,3 +8,4 @@ severity = "medium"
 title = "Security updates installed automatically"
 why = "Attackers scan for a flaw soon after its fix is published. Unattended upgrades install security fixes on their own, so a server nobody logs into still gets them."
 check = { kind = "auto_updates" }
+fix = "updates.auto"
