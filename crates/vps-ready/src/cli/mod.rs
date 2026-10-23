@@ -209,6 +209,10 @@ fn root_would_help(report: &Report, facts: &Facts) -> bool {
                 // `nft list ruleset` needs root.
                 Check::InboundDefaultDeny | Check::PublishedPorts => facts.firewall.is_none(),
                 Check::Apparmor => false,
+                // `/proc/sys/net/ipv4/conf` is readable by anyone.
+                Check::ReversePathFilter
+                | Check::IcmpRedirectsIgnored
+                | Check::IcmpRedirectsNotSent => false,
             }
     })
 }

@@ -9,6 +9,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::facts::sysctl::Ipv4Conf;
 use crate::facts::{AptUpdates, Facts, Firewall, OsFamily};
 
 /// The embedded catalog, as `(file name, contents)`.
@@ -100,6 +101,19 @@ pub enum Check {
     /// The kernel has AppArmor enabled. Debian and Ubuntu only so far;
     /// skipped elsewhere and inside a container.
     Apparmor,
+    /// Every interface filters packets by reverse path: the larger of
+    /// `net.ipv4.conf.all.rp_filter` and the interface's own is 1 (strict)
+    /// or 2 (loose). Like the next two, it also checks `default`, the values
+    /// a new interface starts with, and is skipped inside a container.
+    ReversePathFilter,
+    /// No interface accepts ICMP redirects. With forwarding on the interface,
+    /// it accepts them when both `all` and its own `accept_redirects` are
+    /// on; with forwarding off, when either is.
+    IcmpRedirectsIgnored,
+    /// No interface sends ICMP redirects: the kernel sends them only for
+    /// packets it forwards, so from an interface with forwarding on and
+    /// either `all` or its own `send_redirects` on.
+    IcmpRedirectsNotSent,
 }
 
 /// The result of checking one control.
@@ -156,7 +170,10 @@ impl Finding {
                 Check::AutoUpdates
                 | Check::InboundDefaultDeny
                 | Check::PublishedPorts
-                | Check::Apparmor,
+                | Check::Apparmor
+                | Check::ReversePathFilter
+                | Check::IcmpRedirectsIgnored
+                | Check::IcmpRedirectsNotSent,
             ) => Some(found.clone()),
             (Outcome::Unknown { reason } | Outcome::Skip { reason }, _) => Some(reason.clone()),
         }
@@ -351,6 +368,166 @@ fn evaluate(check: &Check, facts: &Facts) -> Outcome {
             },
             None => docker_absent(),
         },
+        // ip-sysctl.rst: "The max value from conf/{all,interface}/rp_filter
+        // is used when doing source validation on the {interface}."
+        Check::ReversePathFilter => per_interface(
+            facts,
+            "reverse path filtering is not 1 (strict) or 2 (loose) on",
+            |all, dev| !matches!(all.rp_filter.max(dev.rp_filter), 1 | 2),
+            &["rp_filter"],
+        ),
+        // ip-sysctl.rst: "accept_redirects for the interface will be enabled
+        // if: both conf/{all,interface}/accept_redirects are TRUE in the case
+        // forwarding for the interface is enabled or at least one of
+        // conf/{all,interface}/accept_redirects is TRUE in the case
+        // forwarding for the interface is disabled".
+        // secure_redirects only narrows which redirects are accepted, and
+        // shared_media (on by default) overrides it, so it is not consulted.
+        Check::IcmpRedirectsIgnored => per_interface(
+            facts,
+            "ICMP redirects are accepted on",
+            |all, dev| {
+                if dev.forwarding != 0 {
+                    all.accept_redirects != 0 && dev.accept_redirects != 0
+                } else {
+                    all.accept_redirects != 0 || dev.accept_redirects != 0
+                }
+            },
+            &["accept_redirects", "forwarding"],
+        ),
+        // ip-sysctl.rst: "send_redirects for the interface will be enabled if
+        // at least one of conf/{all,interface}/send_redirects is set to
+        // TRUE". The kernel sends a redirect only for a packet it forwards
+        // out of the interface it arrived on, and forwarding "controls
+        // whether packets received _on_ this interface can be forwarded".
+        Check::IcmpRedirectsNotSent => per_interface(
+            facts,
+            "ICMP redirects are sent from",
+            |all, dev| dev.forwarding != 0 && (all.send_redirects != 0 || dev.send_redirects != 0),
+            &["send_redirects", "forwarding"],
+        ),
+    }
+}
+
+/// The settings of one directory under `/proc/sys/net/ipv4/conf`, as the
+/// integers the kernel stores. A boolean is on when it is not 0.
+#[derive(Clone, Copy)]
+struct DevConf {
+    accept_redirects: i64,
+    forwarding: i64,
+    rp_filter: i64,
+    send_redirects: i64,
+}
+
+impl DevConf {
+    fn parse(conf: &Ipv4Conf) -> Option<Self> {
+        let get = |key: &str| conf.get(key)?.parse().ok();
+        Some(Self {
+            accept_redirects: get("accept_redirects")?,
+            forwarding: get("forwarding")?,
+            rp_filter: get("rp_filter")?,
+            send_redirects: get("send_redirects")?,
+        })
+    }
+}
+
+/// How many interfaces a failure names before `and N more`.
+const MAX_NAMED: usize = 5;
+
+/// Fails when `offends(all, interface)` holds for an interface, or for
+/// `default`, which new interfaces copy. `what` leads the failure, e.g.
+/// `ICMP redirects are accepted on`, and `keys` are the values it lists.
+fn per_interface(
+    facts: &Facts,
+    what: &str,
+    offends: impl Fn(DevConf, DevConf) -> bool,
+    keys: &[&str],
+) -> Outcome {
+    if facts.virtualization.in_container() {
+        return Outcome::Skip {
+            reason: "kernel settings are not checked inside a container".to_owned(),
+        };
+    }
+    let Some((confs, all_conf, all)) = facts.sysctl.as_ref().and_then(|s| {
+        let all_conf = s.ipv4_conf.get("all")?;
+        Some((&s.ipv4_conf, all_conf, DevConf::parse(all_conf)?))
+    }) else {
+        return Outcome::Unknown {
+            reason: "/proc/sys/net/ipv4/conf/all could not be read".to_owned(),
+        };
+    };
+    let (mut offending, mut unreadable) = (Vec::new(), Vec::new());
+    // `default` first, so a long list of interfaces does not hide it.
+    let dirs = confs.get_key_value("default").into_iter().chain(
+        confs
+            .iter()
+            .filter(|(n, _)| !matches!(n.as_str(), "all" | "default")),
+    );
+    for (name, conf) in dirs {
+        match DevConf::parse(conf) {
+            Some(dev) if offends(all, dev) => offending.push((name.as_str(), conf)),
+            Some(_) => {}
+            None => unreadable.push(name.as_str()),
+        }
+    }
+    if offending.is_empty() {
+        return if unreadable.is_empty() {
+            Outcome::Pass
+        } else {
+            Outcome::Unknown {
+                reason: format!(
+                    "the settings under /proc/sys/net/ipv4/conf could not be read for {}",
+                    unreadable.join(", ")
+                ),
+            }
+        };
+    }
+    let shown = &offending[..offending.len().min(MAX_NAMED)];
+    let mut names: Vec<&str> = shown
+        .iter()
+        .map(|&(n, _)| if n == "default" { "new interfaces" } else { n })
+        .collect();
+    let more = format!("{} more", offending.len() - shown.len());
+    if offending.len() > shown.len() {
+        names.push(&more);
+    }
+    let get = |conf: &Ipv4Conf, key: &str| conf.get(key).map_or("", String::as_str).to_owned();
+    let values: Vec<String> = keys
+        .iter()
+        .map(|&key| {
+            // `all` has no say in forwarding: the kernel reads the interface's own.
+            let all = (key != "forwarding").then(|| get(all_conf, key));
+            let first = get(offending[0].1, key);
+            if offending.len() > 1 && offending.iter().all(|&(_, c)| get(c, key) == first) {
+                return match all {
+                    Some(all) if all == first => format!("{key} {all} in all and on each"),
+                    Some(all) => format!("{key} {all} in all and {first} on each"),
+                    None => format!("{key} {first} on each"),
+                };
+            }
+            let pairs: Vec<String> = all
+                .map(|v| format!("all={v}"))
+                .into_iter()
+                .chain(
+                    shown
+                        .iter()
+                        .map(|&(dir, c)| format!("{dir}={}", get(c, key))),
+                )
+                .collect();
+            format!("{key} {}", pairs.join(" "))
+        })
+        .collect();
+    Outcome::Fail {
+        found: format!("{what} {}: {}", and_list(&names), values.join(", ")),
+    }
+}
+
+/// `["a", "b", "c"]` as `a, b and c`.
+fn and_list(items: &[&str]) -> String {
+    match items {
+        [] => String::new(),
+        [only] => (*only).to_owned(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
     }
 }
 
@@ -565,6 +742,11 @@ mod tests {
                     assert!(facts.firewall.is_some(), "{}", c.id);
                 }
                 Check::Apparmor => assert!(facts.apparmor.is_some(), "{}", c.id),
+                // The captured hosts are containers, which do not read
+                // `/proc/sys`; the `evaluates_*` tests below cover these.
+                Check::ReversePathFilter
+                | Check::IcmpRedirectsIgnored
+                | Check::IcmpRedirectsNotSent => {}
             }
         }
     }
@@ -715,6 +897,252 @@ mod tests {
         );
     }
 
+    /// Checks of kernel settings under `/proc/sys`, skipped in a container.
+    fn reads_proc_sys(check: &Check) -> bool {
+        matches!(
+            check,
+            Check::Sysctl { .. }
+                | Check::ReversePathFilter
+                | Check::IcmpRedirectsIgnored
+                | Check::IcmpRedirectsNotSent
+        )
+    }
+
+    /// Facts of a VM with these directories under `/proc/sys/net/ipv4/conf`,
+    /// each with `[accept_redirects, forwarding, rp_filter, send_redirects]`.
+    fn vm_conf(dirs: &[(&str, [u8; 4])]) -> Facts {
+        let files: Vec<(String, String)> = dirs
+            .iter()
+            .flat_map(|(dir, values)| {
+                sysctl::CONF_KEYS.iter().zip(values).map(move |(key, v)| {
+                    (
+                        format!("/proc/sys/net/ipv4/conf/{dir}/{key}"),
+                        format!("{v}\n"),
+                    )
+                })
+            })
+            .collect();
+        let files: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(p, v)| (p.as_str(), v.as_str()))
+            .collect();
+        vm(&files)
+    }
+
+    fn fail(found: &str) -> Outcome {
+        Outcome::Fail {
+            found: found.to_owned(),
+        }
+    }
+
+    /// The effective value is the larger of `all` and the interface's.
+    #[test]
+    fn evaluates_reverse_path_filter() {
+        let eval = |dirs: &[(&str, [u8; 4])]| evaluate(&Check::ReversePathFilter, &vm_conf(dirs));
+        // Upstream systemd's 50-default.conf: default and every interface 2,
+        // all left at 0.
+        assert_eq!(
+            eval(&[
+                ("all", [1, 0, 0, 1]),
+                ("default", [1, 0, 2, 1]),
+                ("eth0", [1, 0, 2, 1]),
+                ("lo", [1, 0, 2, 1]),
+            ]),
+            Outcome::Pass
+        );
+        // Ubuntu's 10-network-security.conf: all and default 2, which
+        // covers an interface left at 0.
+        assert_eq!(
+            eval(&[
+                ("all", [1, 0, 2, 1]),
+                ("default", [1, 0, 2, 1]),
+                ("eth0", [1, 0, 0, 1]),
+            ]),
+            Outcome::Pass
+        );
+        // Debian sets nothing: the kernel's 0 everywhere.
+        assert_eq!(
+            eval(&[
+                ("all", [1, 0, 0, 1]),
+                ("default", [1, 0, 0, 1]),
+                ("eth0", [1, 0, 0, 1]),
+            ]),
+            fail(
+                "reverse path filtering is not 1 (strict) or 2 (loose) on new interfaces and \
+                 eth0: rp_filter 0 in all and on each"
+            )
+        );
+        // Strict on eth0 alone leaves interfaces created later unfiltered.
+        assert_eq!(
+            eval(&[
+                ("all", [1, 0, 0, 1]),
+                ("default", [1, 0, 0, 1]),
+                ("eth0", [1, 0, 1, 1]),
+            ]),
+            fail(
+                "reverse path filtering is not 1 (strict) or 2 (loose) on new interfaces: \
+                 rp_filter all=0 default=0"
+            )
+        );
+    }
+
+    /// With forwarding on, both `all` and the interface must accept
+    /// redirects; with it off, either is enough.
+    #[test]
+    fn evaluates_icmp_redirects_ignored() {
+        let eval =
+            |dirs: &[(&str, [u8; 4])]| evaluate(&Check::IcmpRedirectsIgnored, &vm_conf(dirs));
+        // Debian's defaults: the kernel's 1 everywhere, no forwarding.
+        assert_eq!(
+            eval(&[
+                ("all", [1, 0, 0, 1]),
+                ("default", [1, 0, 0, 1]),
+                ("eth0", [1, 0, 0, 1]),
+            ]),
+            fail(
+                "ICMP redirects are accepted on new interfaces and eth0: \
+                 accept_redirects 1 in all and on each, forwarding 0 on each"
+            )
+        );
+        // Without forwarding, `all` at 1 is enough.
+        assert_eq!(
+            eval(&[
+                ("all", [1, 0, 0, 1]),
+                ("default", [0, 0, 0, 1]),
+                ("eth0", [1, 0, 0, 1]),
+            ]),
+            fail(
+                "ICMP redirects are accepted on new interfaces and eth0: \
+                 accept_redirects all=1 default=0 eth0=1, forwarding 0 on each"
+            )
+        );
+        // `all` at 0 is not enough without forwarding.
+        assert_eq!(
+            eval(&[
+                ("all", [0, 0, 0, 1]),
+                ("default", [0, 0, 0, 1]),
+                ("eth0", [1, 0, 0, 1]),
+            ]),
+            fail(
+                "ICMP redirects are accepted on eth0: \
+                 accept_redirects all=0 eth0=1, forwarding eth0=0"
+            )
+        );
+        // Docker turned forwarding on, which also set all to 0.
+        assert_eq!(
+            eval(&[
+                ("all", [0, 1, 0, 1]),
+                ("default", [1, 1, 0, 1]),
+                ("docker0", [1, 1, 0, 1]),
+                ("eth0", [1, 1, 0, 1]),
+            ]),
+            Outcome::Pass
+        );
+        assert_eq!(
+            eval(&[
+                ("all", [1, 1, 0, 1]),
+                ("default", [0, 1, 0, 1]),
+                ("eth0", [1, 1, 0, 1]),
+            ]),
+            fail(
+                "ICMP redirects are accepted on eth0: \
+                 accept_redirects all=1 eth0=1, forwarding eth0=1"
+            )
+        );
+        assert_eq!(
+            eval(&[
+                ("all", [0, 0, 0, 1]),
+                ("default", [0, 0, 0, 1]),
+                ("eth0", [0, 0, 0, 1]),
+            ]),
+            Outcome::Pass
+        );
+    }
+
+    /// Only an interface that forwards sends redirects, when `all` or its
+    /// own `send_redirects` is on.
+    #[test]
+    fn evaluates_icmp_redirects_not_sent() {
+        let eval =
+            |dirs: &[(&str, [u8; 4])]| evaluate(&Check::IcmpRedirectsNotSent, &vm_conf(dirs));
+        // Debian's defaults: send_redirects is 1, but nothing forwards.
+        assert_eq!(
+            eval(&[
+                ("all", [1, 0, 0, 1]),
+                ("default", [1, 0, 0, 1]),
+                ("eth0", [1, 0, 0, 1]),
+            ]),
+            Outcome::Pass
+        );
+        // A Docker host with the defaults.
+        assert_eq!(
+            eval(&[
+                ("all", [0, 1, 0, 1]),
+                ("default", [1, 1, 0, 1]),
+                ("docker0", [1, 1, 0, 1]),
+                ("eth0", [1, 1, 0, 1]),
+            ]),
+            fail(
+                "ICMP redirects are sent from new interfaces, docker0 and eth0: \
+                 send_redirects 1 in all and on each, forwarding 1 on each"
+            )
+        );
+        // `all` at 0 alone leaves the interfaces' own 1.
+        assert_eq!(
+            eval(&[
+                ("all", [0, 1, 0, 0]),
+                ("default", [1, 1, 0, 0]),
+                ("eth0", [1, 1, 0, 1]),
+            ]),
+            fail(
+                "ICMP redirects are sent from eth0: \
+                 send_redirects all=0 eth0=1, forwarding eth0=1"
+            )
+        );
+        assert_eq!(
+            eval(&[
+                ("all", [0, 1, 0, 0]),
+                ("default", [1, 1, 0, 0]),
+                ("eth0", [1, 1, 0, 0]),
+            ]),
+            Outcome::Pass
+        );
+    }
+
+    #[test]
+    fn per_interface_lists_at_most_five_and_reports_unknown() {
+        let mut dirs = vec![("all", [0, 1, 0, 1]), ("default", [0, 1, 0, 1])];
+        let names = ["veth1", "veth2", "veth3", "veth4", "veth5", "veth6"];
+        dirs.extend(names.iter().map(|n| (*n, [0, 1, 0, 1])));
+        assert_eq!(
+            evaluate(&Check::IcmpRedirectsNotSent, &vm_conf(&dirs)),
+            fail(
+                "ICMP redirects are sent from new interfaces, veth1, veth2, veth3, veth4 and \
+                 2 more: send_redirects 1 in all and on each, forwarding 1 on each"
+            )
+        );
+
+        let mut facts = vm_conf(&[("all", [0, 0, 0, 0]), ("eth0", [0, 0, 0, 0])]);
+        let conf = &mut facts.sysctl.as_mut().unwrap().ipv4_conf;
+        conf.get_mut("eth0")
+            .unwrap()
+            .insert("forwarding".to_owned(), "x".to_owned());
+        assert!(matches!(
+            evaluate(&Check::IcmpRedirectsNotSent, &facts),
+            Outcome::Unknown { reason } if reason.ends_with("for eth0")
+        ));
+        facts.sysctl.as_mut().unwrap().ipv4_conf.remove("all");
+        assert!(matches!(
+            evaluate(&Check::ReversePathFilter, &facts),
+            Outcome::Unknown { .. }
+        ));
+        facts.virtualization.container = Virt::Detected("docker".to_owned());
+        assert!(matches!(
+            evaluate(&Check::ReversePathFilter, &facts),
+            Outcome::Skip { .. }
+        ));
+    }
+
     /// Kernel settings belong to the host, so in a container they are
     /// skipped, and skipping does not fail the audit.
     #[test]
@@ -742,7 +1170,7 @@ mod tests {
         let sysctl_controls = report
             .findings
             .iter()
-            .filter(|f| matches!(f.control.check, Check::Sysctl { .. }))
+            .filter(|f| reads_proc_sys(&f.control.check))
             .count();
         assert!(sysctl_controls > 0);
         // Plus MAC-001 (in a container) and FW-002 (no Docker).
@@ -1020,7 +1448,7 @@ mod tests {
         let sysctl_controls = report
             .findings
             .iter()
-            .filter(|f| matches!(f.control.check, Check::Sysctl { .. }))
+            .filter(|f| reads_proc_sys(&f.control.check))
             .count();
         let summary = serde_json::to_value(report.summary).unwrap();
         assert_eq!(summary["skipped"], sysctl_controls + 2);

@@ -3,6 +3,10 @@
 //! Only the settings in [`KEYS`] are read, without running a command. Most
 //! are readable by anyone, but older kernels restrict a few to root: the
 //! `fs.protected_*` files before Linux 5.18, e.g. Ubuntu 22.04's 5.15.
+//!
+//! The IPv4 settings in [`CONF_KEYS`] are also read for each interface,
+//! because the kernel combines `net.ipv4.conf.all` with the interface's own
+//! value.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -30,6 +34,18 @@ pub const KEYS: [&str; 14] = [
     "net.ipv4.tcp_syncookies",
 ];
 
+/// The IPv4 settings read from each directory under `/proc/sys/net/ipv4/conf`.
+pub const CONF_KEYS: [&str; 4] = [
+    "accept_redirects",
+    "forwarding",
+    "rp_filter",
+    "send_redirects",
+];
+
+/// The [`CONF_KEYS`] of one directory under `/proc/sys/net/ipv4/conf`, by
+/// setting name.
+pub type Ipv4Conf = BTreeMap<String, String>;
+
 /// The settings in [`KEYS`] that could be read.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Sysctl {
@@ -38,6 +54,11 @@ pub struct Sysctl {
     pub values: BTreeMap<String, String>,
     /// Settings that exist but are readable only by root on this kernel.
     pub unreadable: Vec<String>,
+    /// [`CONF_KEYS`] under `/proc/sys/net/ipv4/conf`, by directory: `all`,
+    /// `default` (the values a new interface starts with) and each interface
+    /// but `lo`, where only the host's own packets arrive. An interface
+    /// removed while it was being read is absent.
+    pub ipv4_conf: BTreeMap<String, Ipv4Conf>,
 }
 
 impl Sysctl {
@@ -75,6 +96,7 @@ pub(super) fn detect(fs: &dyn Fs, notices: &mut Vec<String>) -> Sysctl {
             Err(err) => notices.push(format!("reading {path}: {err}")),
         }
     }
+    sysctl.ipv4_conf = ipv4_conf(fs, notices);
     // One notice, not one per file: on such kernels it is always a group.
     if !sysctl.unreadable.is_empty() {
         notices.push(format!(
@@ -85,6 +107,45 @@ pub(super) fn detect(fs: &dyn Fs, notices: &mut Vec<String>) -> Sysctl {
         ));
     }
     sysctl
+}
+
+fn ipv4_conf(fs: &dyn Fs, notices: &mut Vec<String>) -> BTreeMap<String, Ipv4Conf> {
+    let dir = Path::new("/proc/sys/net/ipv4/conf");
+    let entries = match fs.read_dir(dir) {
+        Ok(entries) => entries,
+        // The kernel was built without IPv4.
+        Err(SysError::NotFound(_)) => return BTreeMap::new(),
+        Err(err) => {
+            notices.push(format!("reading {}: {err}", dir.display()));
+            return BTreeMap::new();
+        }
+    };
+    let mut confs = BTreeMap::new();
+    'dirs: for entry in entries {
+        let Some(name) = entry.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if name == "lo" {
+            continue;
+        }
+        let mut conf = Ipv4Conf::new();
+        for key in CONF_KEYS {
+            let path = entry.join(key);
+            match fs.read(&path) {
+                Ok(bytes) => {
+                    conf.insert(
+                        key.to_owned(),
+                        String::from_utf8_lossy(&bytes).trim().to_owned(),
+                    );
+                }
+                // The interface was removed after it was listed.
+                Err(SysError::NotFound(_)) => continue 'dirs,
+                Err(err) => notices.push(format!("reading {}: {err}", path.display())),
+            }
+        }
+        confs.insert(name.to_owned(), conf);
+    }
+    confs
 }
 
 #[cfg(test)]
@@ -106,6 +167,33 @@ mod tests {
             Some("0")
         );
         assert_eq!(sysctl.get("kernel.dmesg_restrict"), None);
+    }
+
+    #[test]
+    fn reads_ipv4_conf_per_interface_but_lo() {
+        let fs = ["all", "default", "eth0", "lo"]
+            .iter()
+            .fold(FakeFs::new(), |fs, dir| {
+                CONF_KEYS.iter().fold(fs, |fs, key| {
+                    fs.with_file(format!("/proc/sys/net/ipv4/conf/{dir}/{key}"), "1\n")
+                })
+            })
+            .with_file("/proc/sys/kernel/kptr_restrict", "1\n")
+            // An interface removed between listing and reading.
+            .with_file("/proc/sys/net/ipv4/conf/veth0/forwarding", "1\n");
+        let mut notices = Vec::new();
+        let sysctl = detect(&fs, &mut notices);
+        assert!(notices.is_empty(), "{notices:?}");
+        assert_eq!(
+            sysctl.ipv4_conf.keys().collect::<Vec<_>>(),
+            ["all", "default", "eth0"]
+        );
+        assert_eq!(
+            sysctl.ipv4_conf["eth0"]
+                .get("rp_filter")
+                .map(String::as_str),
+            Some("1")
+        );
     }
 
     /// Reads like `FakeFs`, but refuses the paths in `denied`, as a kernel
