@@ -26,8 +26,9 @@ They can follow in a v0.2.x once the engine is proven.
 - `kptr_restrict=1`, not the baseline's `2`: `2` hides `/proc/kallsyms` from root too and breaks `perf` and `bpftrace`. Ubuntu ships `1`.
 - A key goes into the drop-in only if its running value fails the control or the existing drop-in already lists it. Without this, a distro's stricter value (Ubuntu's `perf_event_paranoid=4`) would be lowered at the next boot. Keeping keys the drop-in already lists keeps a second run a no-op.
 - Skipped keys:
-  - a key the kernel does not have (e.g. no Yama) is skipped;
-  - a key that could not be read (non-root `plan`) is skipped with a note in the plan.
+  - a key the kernel does not have (e.g. no Yama) is skipped, and dropped from the drop-in if it is listed there;
+  - a key that could not be read (non-root `plan`) is skipped with a note in the plan. It is never added to the drop-in, but stays there if it is already listed, so a non-root `plan` does not show a removal.
+- With no key to write, the module plans nothing, even if the drop-in exists.
 - Values the kernel will not take back at runtime are not used: `unprivileged_bpf_disabled=1` and `ptrace_scope=3` cannot be lowered until a reboot, so rollback could not restore them. A unit test lists these values and fails if the module emits one.
 - It never writes `ip_forward`, `accept_ra` or `rp_filter` (see the baseline's "Never set"). A unit test enforces this.
 - Known limits:

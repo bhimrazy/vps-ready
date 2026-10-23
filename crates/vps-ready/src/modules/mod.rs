@@ -72,3 +72,27 @@ pub trait Module {
 pub fn all() -> &'static [&'static dyn Module] {
     &[&KernelSysctl::ROOT]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn module_ids_are_unique() {
+        let mut ids: Vec<_> = all().iter().map(|m| m.id()).collect();
+        let count = ids.len();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), count, "{ids:?}");
+    }
+
+    #[test]
+    fn every_fix_names_a_registered_module() {
+        let ids: Vec<_> = all().iter().map(|m| m.id()).collect();
+        for c in crate::audit::catalog().unwrap() {
+            if let Some(fix) = &c.fix {
+                assert!(ids.contains(&fix.as_str()), "{}: fix = {fix:?}", c.id);
+            }
+        }
+    }
+}

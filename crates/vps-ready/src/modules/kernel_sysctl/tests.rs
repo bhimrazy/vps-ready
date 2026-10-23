@@ -368,8 +368,8 @@ fn absent_and_unreadable_keys_are_skipped() {
     );
     assert_eq!(
         host.module.notes(&facts),
-        ["skipped 1 settings that only root can read on this kernel \
-          (fs.protected_symlinks); run with sudo to plan them"]
+        ["1 kernel setting is readable only by root on this kernel \
+          (fs.protected_symlinks), so the plan skips it; run with sudo to plan it"]
     );
 }
 
@@ -377,13 +377,17 @@ fn absent_and_unreadable_keys_are_skipped() {
 /// its running value passes; one the kernel lacks is dropped.
 #[test]
 fn listed_keys_stay_in_the_drop_in() {
-    let drop_in =
-        "kernel.kptr_restrict = 1\nfs.protected_symlinks = 1\nkernel.yama.ptrace_scope = 1\n";
+    // A `;` comment, a `-` prefix (ignore errors) and a `/` key, as sysctl.d allows.
+    let drop_in = "; kernel.dmesg_restrict = 1\n-kernel.kptr_restrict = 1\n\
+                   fs/protected_symlinks = 1\nkernel.yama.ptrace_scope = 1\n";
     let host = Host::new(&[("kernel.kptr_restrict", "2")], Some(drop_in));
     let mut running = crate::facts::Sysctl::default();
     running
         .values
         .insert("kernel.kptr_restrict".into(), "2".into());
+    running
+        .values
+        .insert("kernel.dmesg_restrict".into(), "1".into());
     running.unreadable.push("fs.protected_symlinks".into());
     let resources = resources(&host, &facts_with(running));
     assert_eq!(
@@ -396,9 +400,11 @@ fn listed_keys_stay_in_the_drop_in() {
 }
 
 #[test]
-fn nothing_to_do_without_a_failing_key_or_a_drop_in() {
-    let host = Host::new(&[("kernel.kptr_restrict", "1")], None);
-    assert!(resources(&host, &host.facts()).is_empty());
+fn nothing_to_do_without_a_failing_or_listed_key() {
+    for drop_in in [None, Some("# none of ours\nvm.swappiness = 10\n")] {
+        let host = Host::new(&[("kernel.kptr_restrict", "1")], drop_in);
+        assert!(resources(&host, &host.facts()).is_empty(), "{drop_in:?}");
+    }
 }
 
 #[test]

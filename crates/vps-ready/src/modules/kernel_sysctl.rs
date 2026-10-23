@@ -10,8 +10,9 @@ use crate::facts::Facts;
 use crate::resource::{File, Resource, Sysctl};
 use crate::sys::{FileOwner, Sys, SysError};
 
-/// The drop-in. It sorts after the distros' own files, so its values win at
-/// boot.
+/// The drop-in. It sorts after the distros' defaults; a `99-*` file or
+/// `/etc/sysctl.conf` (read through Debian's `99-sysctl.conf`) can still
+/// override it at boot.
 pub const DROP_IN: &str = "/etc/sysctl.d/90-vps-ready.conf";
 
 /// The value written for each key, in drop-in order. Each is in its
@@ -36,8 +37,8 @@ pub const VALUES: [(&str, &str); 14] = [
     ("net.ipv4.icmp_echo_ignore_broadcasts", "1"),
 ];
 
-const HEADER: &str = "# Written by vps-ready (kernel.sysctl). `vps-ready rollback` restores the\n\
-                      # previous state; edits here are replaced by the next apply.\n";
+const HEADER: &str = "# Written by vps-ready (kernel.sysctl). `vps-ready rollback --last`\n\
+                      # restores the previous state; edits here are replaced by the next apply.\n";
 
 /// The `kernel.sysctl` module.
 #[derive(Debug, Clone, Copy)]
@@ -52,7 +53,7 @@ impl KernelSysctl {
 
     /// The drop-in owned by `uid:gid`, for tests that cannot `chown` to root.
     #[cfg(test)]
-    const fn owned_by(uid: u32, gid: u32) -> Self {
+    fn owned_by(uid: u32, gid: u32) -> Self {
         Self { uid, gid }
     }
 }
@@ -121,7 +122,7 @@ impl Module for KernelSysctl {
                 lines.push_str(&format!("{key} = {value}\n"));
             }
         }
-        if lines.is_empty() && !sys.fs.exists(Path::new(DROP_IN)) {
+        if lines.is_empty() {
             return Ok(Vec::new());
         }
         let file = Resource::File(File {
@@ -149,9 +150,14 @@ impl Module for KernelSysctl {
         if skipped.is_empty() {
             return Vec::new();
         }
+        let (noun, verb, them) = if skipped.len() == 1 {
+            ("setting", "is", "it")
+        } else {
+            ("settings", "are", "them")
+        };
         vec![format!(
-            "skipped {} settings that only root can read on this kernel ({}); \
-             run with sudo to plan them",
+            "{} kernel {noun} {verb} readable only by root on this kernel ({}), so the plan \
+             skips {them}; run with sudo to plan {them}",
             skipped.len(),
             skipped.join(", ")
         )]
