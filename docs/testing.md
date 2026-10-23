@@ -35,11 +35,11 @@ The cheap layers run on every change; the slow, expensive ones run only where th
 
 ## Layer 2: containers (every PR, minutes)
 
-**Today:** the `containers` CI job runs `test/container-audit.sh` on Ubuntu 22.04, Ubuntu 24.04, Debian 12 and Debian 13 (x86_64).
+**Today:** the `containers` CI job runs `test/container-audit.sh` and `test/container-apply.sh` on Ubuntu 22.04, Ubuntu 24.04, Debian 12 and Debian 13 (x86_64).
 
 - The script boots the systemd test image (`--privileged --cgroupns=private`, 512 MB, 1 CPU), copies in the static musl binary built by `build-musl`, logs in over SSH once (which starts sshd on Ubuntu 24.04, where `ssh.socket` starts it on demand), and runs `detect` and `audit` as root, in human and `--json` form.
 - It asserts that `detect` exits 0 and `audit` exits 0 or 1, never 2; that every `SSH-*` finding is pass or fail (so `sshd -T` worked); that every `KRN-*` and `NET-*` finding is skipped, since kernel settings belong to the host; and that a container is detected. It does not assert a total control count, so adding controls does not break it.
-- The audit is read-only, so there is no apply or rollback to test yet.
+- `test/container-apply.sh` runs the `updates.auto` cycle in a fresh container: `apply --yes` exits 0, `plan --json` shows no changes, `UPD-001` passes, `history` shows the transaction as applied, and `rollback --last` restores the managed files (`52vps-ready` is gone; `unattended-upgrades` stays installed by design). `apply` runs `apt-get`, so the container needs network access. The image removes Docker's `/etc/apt/apt.conf.d/docker-*` files, which would otherwise disable periodic updates, as a cloud image does not have them.
 
 **Planned:**
 
