@@ -44,8 +44,6 @@ pub enum ResourceError {
 pub enum Reversibility {
     /// Rollback restores the previous state exactly.
     Reversible,
-    /// Rollback leaves part of the change in place (an installed package).
-    Partial,
 }
 
 /// One change a resource would make, as the plan shows it.
@@ -111,8 +109,9 @@ impl Resource {
 
     /// Records the current state, so that [`restore`] can bring it back.
     ///
-    /// For a [`File`] that exists, this also writes its bytes to
-    /// [`before_path`]`(txn_dir, n)` and makes them durable, so the caller
+    /// For a [`File`], this also writes the desired bytes to
+    /// [`after_path`]`(txn_dir, n)` and, if the file exists, its current bytes
+    /// to [`before_path`]`(txn_dir, n)`, and makes both durable, so the caller
     /// can journal the returned [`Backup`] right away. `n` must be unique
     /// within the transaction; other kinds ignore `txn_dir` and `n`.
     ///
@@ -143,7 +142,8 @@ impl Resource {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Backup {
-    /// A file, whose bytes (if it existed) are in [`before_path`]`(txn_dir, n)`.
+    /// A file, whose bytes (if it existed) are in [`before_path`]`(txn_dir, n)`
+    /// and whose applied bytes are in [`after_path`]`(txn_dir, n)`.
     File {
         /// Target path.
         path: PathBuf,
@@ -156,8 +156,10 @@ pub enum Backup {
     Sysctl {
         /// Dotted key, e.g. `kernel.kptr_restrict`.
         key: String,
-        /// Value as read, without the trailing newline.
+        /// Value as read, trimmed.
         value: String,
+        /// Value that apply writes.
+        applied: String,
     },
 }
 
@@ -198,6 +200,12 @@ pub fn before_path(txn_dir: &Path, n: u32) -> PathBuf {
     txn_dir.join("files").join(format!("{n}.before"))
 }
 
+/// Where the bytes that apply writes for file `n` are kept: `files/<n>.after`.
+#[must_use]
+pub fn after_path(txn_dir: &Path, n: u32) -> PathBuf {
+    txn_dir.join("files").join(format!("{n}.after"))
+}
+
 /// Puts back the state recorded in `backup`, with the file copies of the
 /// transaction in `txn_dir`. Restoring a file that did not exist removes
 /// it, if it is there.
@@ -209,7 +217,7 @@ pub fn before_path(txn_dir: &Path, n: u32) -> PathBuf {
 pub fn restore(sys: Sys, txn_dir: &Path, backup: &Backup) -> Result<(), ResourceError> {
     match backup {
         Backup::File { path, n, original } => file::restore(sys, txn_dir, path, *n, *original),
-        Backup::Sysctl { key, value } => sysctl::restore(sys, key, value),
+        Backup::Sysctl { key, value, .. } => sysctl::restore(sys, key, value),
     }
 }
 
@@ -259,8 +267,9 @@ mod tests {
                 Backup::Sysctl {
                     key: "kernel.kptr_restrict".into(),
                     value: "0".into(),
+                    applied: "1".into(),
                 },
-                r#"{"kind":"sysctl","key":"kernel.kptr_restrict","value":"0"}"#,
+                r#"{"kind":"sysctl","key":"kernel.kptr_restrict","value":"0","applied":"1"}"#,
             ),
         ];
         for (backup, json) in cases {
@@ -268,7 +277,8 @@ mod tests {
             assert_eq!(serde_json::from_str::<Backup>(json).unwrap(), backup);
         }
         // A newer binary may add fields; an older one must still read the line.
-        let newer = r#"{"kind":"sysctl","key":"fs.suid_dumpable","value":"2","extra":1}"#;
+        let newer =
+            r#"{"kind":"sysctl","key":"fs.suid_dumpable","value":"2","applied":"0","extra":1}"#;
         assert!(serde_json::from_str::<Backup>(newer).is_ok());
     }
 

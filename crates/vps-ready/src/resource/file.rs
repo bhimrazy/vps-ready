@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use similar::TextDiff;
 
-use super::{Backup, FileCopy, ResourceError, before_path};
+use super::{Backup, FileCopy, ResourceError, after_path, before_path};
 use crate::sys::{FileKind, FileOwner, Sys, SysError};
 
 /// A whole file whose content, mode and owner vps-ready owns, such as a
@@ -29,7 +29,8 @@ impl File {
         let Some(owner) = self.current(sys)? else {
             self.require_parent(sys)?;
             let summary = format!("create {} ({})", self.path.display(), fmt_owner(self.owner));
-            return Ok(Some((summary, Some(unified(b"", &self.content)))));
+            let diff = (!self.content.is_empty()).then(|| unified(b"", &self.content));
+            return Ok(Some((summary, diff)));
         };
         let current = sys.fs.read(&self.path)?;
         if current == self.content && owner == self.owner {
@@ -45,7 +46,8 @@ impl File {
         Ok(Some((summary, diff)))
     }
 
-    /// Records mode and owner, and copies the bytes to `files/<n>.before`.
+    /// Records mode and owner, copies the current bytes to `files/<n>.before`
+    /// and writes the desired bytes to `files/<n>.after`.
     pub(super) fn snapshot(
         &self,
         sys: Sys,
@@ -53,12 +55,11 @@ impl File {
         n: u32,
     ) -> Result<Backup, ResourceError> {
         let original = self.current(sys)?;
-        if let Some(owner) = original {
-            let bytes = sys.fs.read(&self.path)?;
-            let files = txn_dir.join("files");
-            sys.fs.create_dir_all(&files, 0o700)?;
-            sys.fs.sync_dir(txn_dir)?;
-            // 0600: the copy may hold secrets the original's mode protected.
+        let before = original.map(|_| sys.fs.read(&self.path)).transpose()?;
+        sys.fs.create_dir_all(&txn_dir.join("files"), 0o700)?;
+        sys.fs.sync_dir(txn_dir)?;
+        // Both copies are 0600; `.before` has the original's owner, `.after` the desired one.
+        if let (Some(owner), Some(bytes)) = (original, before) {
             let copy = FileOwner {
                 mode: 0o600,
                 ..owner
@@ -66,6 +67,12 @@ impl File {
             sys.fs
                 .write_atomic(&before_path(txn_dir, n), &bytes, copy)?;
         }
+        let copy = FileOwner {
+            mode: 0o600,
+            ..self.owner
+        };
+        sys.fs
+            .write_atomic(&after_path(txn_dir, n), &self.content, copy)?;
         Ok(Backup::File {
             path: self.path.clone(),
             n,
@@ -91,15 +98,12 @@ impl File {
     }
 
     fn require_parent(&self, sys: Sys) -> Result<(), ResourceError> {
-        let is_dir = self
-            .path
-            .parent()
-            .and_then(|p| sys.fs.metadata(p).ok())
-            .is_some_and(|m| m.kind == FileKind::Dir);
-        if is_dir {
-            Ok(())
-        } else {
-            Err(ResourceError::MissingParent(self.path.clone()))
+        let missing = || ResourceError::MissingParent(self.path.clone());
+        let parent = self.path.parent().ok_or_else(missing)?;
+        match sys.fs.metadata(parent) {
+            Ok(meta) if meta.kind == FileKind::Dir => Ok(()),
+            Ok(_) | Err(SysError::NotFound(_)) => Err(missing()),
+            Err(e) => Err(e.into()),
         }
     }
 }
@@ -117,14 +121,16 @@ pub(super) fn restore(
         return Ok(());
     }
     match sys.fs.remove(path) {
+        Ok(()) => {
+            if let Some(dir) = path.parent() {
+                sys.fs.sync_dir(dir)?;
+            }
+            Ok(())
+        }
         // Already absent: apply never ran, or an earlier restore removed it.
-        Ok(()) | Err(SysError::NotFound(_)) => {}
-        Err(e) => return Err(e.into()),
+        Err(SysError::NotFound(_)) => Ok(()),
+        Err(e) => Err(e.into()),
     }
-    if let Some(dir) = path.parent() {
-        sys.fs.sync_dir(dir)?;
-    }
-    Ok(())
 }
 
 fn fmt_owner(o: FileOwner) -> String {
@@ -180,6 +186,50 @@ mod tests {
             change.diff.as_deref(),
             Some("@@ -0,0 +1,2 @@\n+a = 1\n+b = 2\n")
         );
+    }
+
+    #[test]
+    fn diff_of_an_empty_new_file_has_no_unified_diff() {
+        let fs = FakeFs::new().with_file("/etc/sysctl.d/10-other.conf", "");
+        let change = resource("", root_owner()).diff(sys(&fs)).unwrap().unwrap();
+        assert_eq!(change.summary, format!("create {PATH} (0644 0:0)"));
+        assert_eq!(change.diff, None);
+    }
+
+    #[test]
+    fn restore_fails_without_the_before_copy() {
+        let fs = FakeFs::new().with_file(PATH, "new = 1\n");
+        let backup = Backup::File {
+            path: PATH.into(),
+            n: 1,
+            original: Some(root_owner().into()),
+        };
+        let err = restore(sys(&fs), Path::new(TXN), &backup).unwrap_err();
+        assert!(
+            matches!(err, ResourceError::Sys(SysError::NotFound(_))),
+            "{err:?}"
+        );
+        assert_eq!(fs.read(Path::new(PATH)).unwrap(), b"new = 1\n");
+    }
+
+    #[test]
+    fn restore_refuses_a_target_that_is_now_a_symlink() {
+        let txn = Path::new(TXN);
+        let fs = FakeFs::new()
+            .with_file(before_path(txn, 1), "old = 1\n")
+            .with_file("/etc/shadow", "secret\n")
+            .with_symlink(PATH, "/etc/shadow");
+        let backup = Backup::File {
+            path: PATH.into(),
+            n: 1,
+            original: Some(root_owner().into()),
+        };
+        let err = restore(sys(&fs), txn, &backup).unwrap_err();
+        assert!(
+            matches!(err, ResourceError::Sys(SysError::Symlink(_))),
+            "{err:?}"
+        );
+        assert_eq!(fs.read(Path::new("/etc/shadow")).unwrap(), b"secret\n");
     }
 
     #[test]
@@ -331,6 +381,7 @@ mod tests {
         );
         let copy = fs.read(&before_path(txn, 3)).ok();
         assert_eq!(copy.as_deref(), before.map(str::as_bytes));
+        assert_eq!(fs.read(&after_path(txn, 3)).unwrap(), b"new = 1\n");
 
         file.apply(sys).unwrap();
         assert_eq!(file.diff(sys).unwrap(), None);

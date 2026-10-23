@@ -20,7 +20,7 @@ impl Sysctl {
     /// The summary of the change, or `None`.
     pub(super) fn diff(&self, sys: Sys) -> Result<Option<(String, Option<String>)>, ResourceError> {
         let current = read(sys, &self.key)?;
-        Ok((current != self.value)
+        Ok((!same_value(&current, &self.value))
             .then(|| (format!("{} {current} -> {}", self.key, self.value), None)))
     }
 
@@ -28,6 +28,7 @@ impl Sysctl {
         Ok(Backup::Sysctl {
             key: self.key.clone(),
             value: read(sys, &self.key)?,
+            applied: self.value.clone(),
         })
     }
 
@@ -40,8 +41,16 @@ pub(super) fn restore(sys: Sys, key: &str, value: &str) -> Result<(), ResourceEr
     Ok(sys.fs.write(&proc_path(key), value.as_bytes())?)
 }
 
+/// Whether two values are equal up to whitespace: the kernel separates the
+/// fields of a multi-value key with tabs.
+pub(crate) fn same_value(a: &str, b: &str) -> bool {
+    a.split_whitespace().eq(b.split_whitespace())
+}
+
+/// Not `Path::join`, which would replace the base with an absolute key. With
+/// every dot replaced, the result has no `..` component.
 fn proc_path(key: &str) -> PathBuf {
-    PathBuf::from("/proc/sys").join(key.replace('.', "/"))
+    PathBuf::from(format!("/proc/sys/{}", key.replace('.', "/")))
 }
 
 /// The value without surrounding whitespace (the kernel appends a newline).
@@ -87,6 +96,27 @@ mod tests {
     }
 
     #[test]
+    fn diff_ignores_whitespace_between_fields() {
+        let fs =
+            FakeFs::new().with_file("/proc/sys/net/ipv4/ip_local_port_range", "32768\t60999\n");
+        let range = |value: &str| {
+            Resource::Sysctl(Sysctl {
+                key: "net.ipv4.ip_local_port_range".into(),
+                value: value.into(),
+            })
+        };
+        assert_eq!(range("32768 60999").diff(sys(&fs)).unwrap(), None);
+        assert_eq!(range("32768 60999\n").diff(sys(&fs)).unwrap(), None);
+        assert!(range("1024 60999").diff(sys(&fs)).unwrap().is_some());
+    }
+
+    #[test]
+    fn keys_stay_under_proc_sys() {
+        assert!(proc_path(".etc.passwd").starts_with("/proc/sys/"));
+        assert!(proc_path("/etc/passwd").starts_with("/proc/sys/"));
+    }
+
+    #[test]
     fn missing_key_is_an_error() {
         let fs = FakeFs::new();
         let err = kptr("1").diff(sys(&fs)).unwrap_err();
@@ -109,6 +139,7 @@ mod tests {
             Backup::Sysctl {
                 key: "kernel.kptr_restrict".into(),
                 value: "0".into(),
+                applied: "1".into(),
             }
         );
         resource.apply(sys).unwrap();

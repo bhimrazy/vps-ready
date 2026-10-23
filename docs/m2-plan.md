@@ -64,7 +64,7 @@ impl Resource {
 
 pub enum Backup {                       // serde: written to the journal
     File { path: PathBuf, n: u32, original: Option<FileCopy> },  // bytes in files/<n>.before|after; None = did not exist
-    Sysctl { key: String, value: String },
+    Sysctl { key: String, value: String, applied: String },
     Package { name: String, was_installed: bool },
 }
 pub struct FileCopy { mode: u32, uid: u32, gid: u32 }
@@ -122,9 +122,9 @@ create txn/<id>/ and journal.jsonl; fsync journal.jsonl, txn/<id>/ and txn/
 journal "begin"
 for each resource with a change, in plan order:
     backup = snapshot()
-    File: write files/<n>.before (if the file existed), fsync it
+    File: write files/<n>.before (if the file existed) and files/<n>.after, fsync them
     journal "backup"                         (fsync)
-    File: write files/<n>.after, fsync it; run validate on it if set
+    File: run validate on files/<n>.after if set
     apply()
     journal "applied"                        (fsync)
 verify: diff() of every resource is None again
@@ -172,7 +172,7 @@ Journal records are a `#[serde(tag = "event")]` enum, and every line has `at` in
 {"at":1792745000,"event":"begin","version":"0.2.0","modules":["kernel.sysctl"]}
 {"at":1792745000,"event":"backup","resource":"file:/etc/sysctl.d/90-vps-ready.conf","backup":{"kind":"file","path":"/etc/sysctl.d/90-vps-ready.conf","n":1,"original":null}}
 {"at":1792745000,"event":"applied","resource":"file:/etc/sysctl.d/90-vps-ready.conf"}
-{"at":1792745000,"event":"backup","resource":"sysctl:kernel.kptr_restrict","backup":{"kind":"sysctl","key":"kernel.kptr_restrict","value":"0"}}
+{"at":1792745000,"event":"backup","resource":"sysctl:kernel.kptr_restrict","backup":{"kind":"sysctl","key":"kernel.kptr_restrict","value":"0","applied":"1"}}
 {"at":1792745000,"event":"applied","resource":"sysctl:kernel.kptr_restrict"}
 {"at":1792745001,"event":"state","state":"applied"}
 ```
