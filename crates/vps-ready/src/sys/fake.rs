@@ -233,7 +233,9 @@ fn io_error(path: &Path, kind: io::ErrorKind) -> SysError {
 /// [`FakeFs::with_file`] are `0644 root:root`.
 ///
 /// [`FakeFs::fail`] makes one call of a write operation fail, to test what
-/// the caller does after a failure. A failed call changes no entry.
+/// the caller does after a failure. A failed call changes no entry: the fake
+/// models only that case, not a real `append_sync` whose bytes landed before
+/// its `sync_all` failed.
 #[derive(Debug, Default)]
 pub struct FakeFs {
     state: Mutex<State>,
@@ -262,8 +264,10 @@ impl FakeFs {
         self
     }
 
-    /// Makes the `n`-th call (counting from 1) of `op` fail with
-    /// [`SysError::Io`]. Only that call fails.
+    /// Makes the `n`-th call of `op` that reaches the write (counting from 1)
+    /// fail with [`SysError::Io`]. Calls rejected before that, e.g. with
+    /// [`SysError::NotFound`] or [`SysError::Symlink`], are not counted.
+    /// Only that call fails.
     #[must_use]
     pub fn fail(self, op: Op, n: usize) -> Self {
         self.lock().fail_at.insert(op, n);
@@ -394,6 +398,12 @@ impl Fs for FakeFs {
         }
         state.tick(Op::Remove, path)?;
         state.entries.remove(path);
+        // Keep a parent that existed only implicitly through this entry, as a
+        // real directory outlives its last entry.
+        if let Some(parent) = path.parent().filter(|p| !state.is_dir(p)) {
+            let entry = Entry::new(Node::Dir, 0o755);
+            state.entries.insert(parent.to_path_buf(), entry);
+        }
         Ok(())
     }
 

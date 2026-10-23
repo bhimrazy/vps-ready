@@ -213,6 +213,18 @@ pub struct FileMeta {
     pub gid: u32,
 }
 
+impl FileMeta {
+    /// The mode and owner, in the form [`Fs::write_atomic`] takes.
+    #[must_use]
+    pub fn owner(&self) -> FileOwner {
+        FileOwner {
+            mode: self.mode,
+            uid: self.uid,
+            gid: self.gid,
+        }
+    }
+}
+
 /// Mode and owner of a file written by [`Fs::write_atomic`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileOwner {
@@ -514,7 +526,7 @@ impl Fs for RealFs {
         let (Some(tmp), Some(dir)) = (temp_path(&host), host.parent()) else {
             return Err(SysError::Io {
                 context: subject(),
-                source: io::Error::from(io::ErrorKind::InvalidInput),
+                source: io::Error::new(io::ErrorKind::InvalidInput, "path has no file name"),
             });
         };
         // A crash during an earlier call can leave the temp file behind.
@@ -640,8 +652,9 @@ mod tests {
     }
 
     /// The write behavior shared by [`RealFs`] and [`fake::FakeFs`]. `fs`
-    /// has a directory `/etc` and a symlink `/etc/link` to `/etc/real`, which
-    /// holds `real\n`. `owner` is one the caller may set.
+    /// has a directory `/etc`, a symlink `/etc/link` to `/etc/real`, which
+    /// holds `real\n`, and a file `/etc/only/x`, the only entry of its
+    /// directory. `owner` is one the caller may set.
     fn write_contract(fs: &dyn Fs, owner: FileOwner) {
         let path = Path::new("/etc/new.conf");
         let mode = |p: &str| fs.metadata(Path::new(p)).unwrap().mode;
@@ -706,6 +719,19 @@ mod tests {
         assert!(!fs.exists(journal));
         assert!(matches!(fs.remove(journal), Err(SysError::NotFound(_))));
 
+        // Removing a directory's last entry keeps the directory.
+        fs.remove(Path::new("/etc/only/x")).unwrap();
+        fs.sync_dir(Path::new("/etc/only")).unwrap();
+        let only = fs.metadata(Path::new("/etc/only")).unwrap();
+        assert_eq!(only.kind, FileKind::Dir);
+
+        // Removing a symlink removes only the link.
+        fs.remove(Path::new("/etc/link")).unwrap();
+        assert!(fs.metadata(Path::new("/etc/link")).is_err());
+        assert_eq!(fs.read(Path::new("/etc/real")).unwrap(), b"real\n");
+
+        assert!(fs.create_dir_all(Path::new("/etc/real"), 0o755).is_err());
+
         let state = Path::new("/var/lib/vps-ready");
         fs.create_dir_all(state, 0o700).unwrap();
         fs.create_dir_all(state, 0o755).unwrap();
@@ -718,7 +744,7 @@ mod tests {
         ));
     }
 
-    /// A tempdir root with `/etc/real` and `/etc/link`, and an owner that a
+    /// A tempdir root with `/etc/real`, `/etc/link` and `/etc/only/x`, and an owner that a
     /// non-root user may set: the one the tempdir already has.
     fn real_root() -> (tempfile::TempDir, FileOwner) {
         let dir = tempfile::tempdir().unwrap();
@@ -726,6 +752,8 @@ mod tests {
         std::fs::create_dir(&etc).unwrap();
         std::fs::write(etc.join("real"), "real\n").unwrap();
         std::os::unix::fs::symlink("/etc/real", etc.join("link")).unwrap();
+        std::fs::create_dir(etc.join("only")).unwrap();
+        std::fs::write(etc.join("only/x"), "x\n").unwrap();
         let meta = std::fs::metadata(&etc).unwrap();
         let owner = FileOwner {
             mode: 0o644,
@@ -745,7 +773,8 @@ mod tests {
     fn fake_fs_writes() {
         let fs = fake::FakeFs::new()
             .with_file("/etc/real", "real\n")
-            .with_symlink("/etc/link", "/etc/real");
+            .with_symlink("/etc/link", "/etc/real")
+            .with_file("/etc/only/x", "x\n");
         write_contract(
             &fs,
             FileOwner {
