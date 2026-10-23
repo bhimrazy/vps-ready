@@ -69,6 +69,9 @@ pub struct Facts {
     pub updates: Option<AptUpdates>,
     /// Whether Docker is installed. Docker changes firewall and sysctl rules.
     pub docker: bool,
+    /// Whether the kernel has AppArmor enabled. `None` when that could not
+    /// be read.
+    pub apparmor: Option<bool>,
     /// Human-readable notes about facts that could not be determined.
     pub notices: Vec<String>,
 }
@@ -135,6 +138,7 @@ pub fn collect(fs: &dyn Fs, runner: &dyn Runner, env: &Env) -> Result<Facts, Fac
         None
     };
     let docker = DOCKER_PATHS.iter().any(|p| fs.exists(Path::new(p)));
+    let apparmor = apparmor(fs, &mut notices);
     Ok(Facts {
         os,
         init,
@@ -147,8 +151,22 @@ pub fn collect(fs: &dyn Fs, runner: &dyn Runner, env: &Env) -> Result<Facts, Fac
         sysctl,
         updates,
         docker,
+        apparmor,
         notices,
     })
+}
+
+/// `Y` in `/sys/module/apparmor/parameters/enabled`. The file is missing
+/// when the kernel has no AppArmor, which counts as not enabled.
+fn apparmor(fs: &dyn Fs, notices: &mut Vec<String>) -> Option<bool> {
+    match fs.read(Path::new("/sys/module/apparmor/parameters/enabled")) {
+        Ok(bytes) => Some(String::from_utf8_lossy(&bytes).trim() == "Y"),
+        Err(SysError::NotFound(_)) => Some(false),
+        Err(err) => {
+            notices.push(format!("reading AppArmor's state: {err}"));
+            None
+        }
+    }
 }
 
 /// The outcome of running a probe command, or of interpreting its output.
@@ -348,6 +366,16 @@ mod tests {
             "apt-daily-upgrade.service",
         ],
     ];
+
+    #[test]
+    fn apparmor_state() {
+        let path = "/sys/module/apparmor/parameters/enabled";
+        let read = |fs: FakeFs| apparmor(&fs, &mut Vec::new());
+        assert_eq!(read(FakeFs::new().with_file(path, "Y\n")), Some(true));
+        assert_eq!(read(FakeFs::new().with_file(path, "N\n")), Some(false));
+        // A kernel without AppArmor has no such file.
+        assert_eq!(read(FakeFs::new()), Some(false));
+    }
 
     #[test]
     fn runs_only_read_only_commands() {
