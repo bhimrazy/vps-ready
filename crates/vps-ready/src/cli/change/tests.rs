@@ -629,7 +629,7 @@ fn progress_of_a_package() {
         err.contains(
             "[8/9] install unattended-upgrades \
              (apt-get update, then install; can take a few minutes)\n\
-             [9/9] create /etc/apt/apt.conf.d/52vps-ready (0644 0:0)\n\
+             [9/9] create /etc/apt/apt.conf.d/52vps-ready (mode 0644, root:root)\n\
              verify: ok\n"
         ),
         "{err}"
