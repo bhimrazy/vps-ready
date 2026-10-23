@@ -1,0 +1,17 @@
+---
+source: crates/vps-ready/src/modules/updates_auto.rs
+expression: plan
+---
+modules:
+  - id: updates.auto
+    title: Install security updates automatically
+    status: applicable
+    changes:
+      - id: "package:unattended-upgrades"
+        summary: install unattended-upgrades
+        diff: ~
+        reversibility: partial
+      - id: "file:/etc/apt/apt.conf.d/52vps-ready"
+        summary: "create /etc/apt/apt.conf.d/52vps-ready (0644 0:0)"
+        diff: "@@ -0,0 +1,3 @@\n+APT::Periodic::Enable \"1\";\n+APT::Periodic::Update-Package-Lists \"1\";\n+APT::Periodic::Unattended-Upgrade \"1\";\n"
+        reversibility: reversible
