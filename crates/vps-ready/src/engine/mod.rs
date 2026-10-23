@@ -1,13 +1,22 @@
-//! The transaction engine. So far: the state directory, its lock, and the
-//! journal that records each transaction.
+//! The transaction engine: planning, apply with automatic rollback, manual
+//! rollback and history, over the state directory, its lock and the journal
+//! that records each transaction.
 
 pub mod id;
 pub mod journal;
+mod plan;
+mod run;
 mod state;
+#[cfg(test)]
+mod tests;
 
 pub use journal::{Event, Record, RollbackReason, TxnState};
+pub use plan::{ModulePlan, ModuleStatus, Plan, Step, plan};
+pub use run::{ApplyOutcome, ByHand, Engine, Rollback, Target, TxnInfo, history};
 pub use state::{StateDir, Txn};
 
+use crate::modules::ModuleError;
+use crate::resource::ResourceError;
 use crate::sys::SysError;
 
 /// Errors from the engine.
@@ -53,4 +62,74 @@ pub enum EngineError {
         /// The event's tag.
         event: &'static str,
     },
+    /// A module failed to plan.
+    #[error("planning {module}: {source}")]
+    Module {
+        /// Module ID.
+        module: &'static str,
+        /// The failure.
+        #[source]
+        source: ModuleError,
+    },
+    /// A resource failed to diff, snapshot, apply or restore.
+    #[error("{id}: {source}")]
+    Resource {
+        /// Resource ID.
+        id: String,
+        /// The failure.
+        #[source]
+        source: ResourceError,
+    },
+    /// A transaction stopped during an apply or a rollback.
+    #[error("transaction {0} did not finish; run `vps-ready rollback --txn {0}`")]
+    Unfinished(String),
+    /// A change differs from the plan that was shown.
+    #[error("the plan changed after it was shown ({0}); nothing was changed")]
+    PlanChanged(String),
+    /// Resources still differ from their desired state after apply.
+    #[error("not in the desired state after apply: {}", .0.join(", "))]
+    VerifyFailed(Vec<String>),
+    /// No transaction to roll back.
+    #[error("nothing to roll back")]
+    NothingToRollBack,
+    /// No transaction has this ID.
+    #[error("no transaction {0}")]
+    UnknownTxn(String),
+    /// The transaction was already rolled back.
+    #[error("transaction {0} is already rolled back")]
+    AlreadyRolledBack(String),
+    /// The safety check found resources changed since apply; nothing was
+    /// restored.
+    #[error(
+        "refusing to roll back transaction {txn}: these changed since apply, so nothing \
+         was restored. To restore them by hand:{}",
+        list(.changed)
+    )]
+    Changed {
+        /// Transaction ID.
+        txn: String,
+        /// Each changed resource.
+        changed: Vec<ByHand>,
+    },
+    /// A rollback stopped part way; running it again continues it.
+    #[error(
+        "rollback of transaction {txn} ({dir}) did not complete: {source}. Run \
+         `vps-ready rollback --txn {txn}` again, or restore by hand:{}",
+        list(.left)
+    )]
+    RollbackIncomplete {
+        /// Transaction ID.
+        txn: String,
+        /// The transaction directory.
+        dir: String,
+        /// The resources not yet restored, in journal order.
+        left: Vec<ByHand>,
+        /// The failure.
+        #[source]
+        source: Box<EngineError>,
+    },
+}
+
+fn list(items: &[ByHand]) -> String {
+    items.iter().map(|i| format!("\n  {i}")).collect()
 }

@@ -16,7 +16,9 @@
 //!   testable with fakes.
 //! - [`facts`]: read-only discovery of what the host is (OS, init system, ...).
 //! - [`audit`]: checks the facts against the embedded controls catalog.
-//! - [`engine`]: the state directory, its lock and the transaction journal.
+//! - [`engine`]: plans modules, applies the plan as a journaled transaction,
+//!   and rolls it back.
+//! - [`modules`]: the [`modules::Module`] trait; a module plans resources.
 //! - [`resource`]: the things a fix changes (files, sysctl values), with
 //!   diff, snapshot, apply and restore.
 //!
@@ -31,6 +33,7 @@ pub mod audit;
 pub mod cli;
 pub mod engine;
 pub mod facts;
+pub mod modules;
 pub mod resource;
 pub mod sys;
 
