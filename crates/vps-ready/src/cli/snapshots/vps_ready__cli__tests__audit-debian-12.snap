@@ -2,7 +2,7 @@
 source: crates/vps-ready/src/cli/mod.rs
 expression: "String::from_utf8(text).unwrap()"
 ---
-Audit of Debian GNU/Linux 12 (bookworm): 24 controls
+Audit of Debian GNU/Linux 12 (bookworm): 25 controls
 
 STATUS   ID       SEVERITY  CONTROL
 FAIL     SSH-001  medium    Root login disabled
@@ -48,7 +48,8 @@ FAIL     FW-001   medium    Incoming traffic denied by default
                             left at its defaults, is reachable from the internet. A firewall at your
                             provider also protects the server, but this check cannot see it.
 SKIP     FW-002   medium    Container ports do not bypass the firewall
+SKIP     MAC-001  medium    AppArmor enabled
 
-4 passed, 5 failed, 0 unknown, 15 skipped
+4 passed, 5 failed, 0 unknown, 16 skipped
 Skipped: kernel settings are not checked inside a container.
 Skipped: Docker is not installed.

@@ -12,12 +12,13 @@ use serde::{Deserialize, Serialize};
 use crate::facts::{AptUpdates, Facts, Firewall, OsFamily};
 
 /// The embedded catalog, as `(file name, contents)`.
-const CATALOG: [(&str, &str); 5] = [
+const CATALOG: [(&str, &str); 6] = [
     ("ssh.toml", include_str!("controls/ssh.toml")),
     ("kernel.toml", include_str!("controls/kernel.toml")),
     ("network.toml", include_str!("controls/network.toml")),
     ("updates.toml", include_str!("controls/updates.toml")),
     ("firewall.toml", include_str!("controls/firewall.toml")),
+    ("mac.toml", include_str!("controls/mac.toml")),
 ];
 
 /// One security control.
@@ -96,6 +97,9 @@ pub enum Check {
     /// one whose ports nft does not show may allow it; skipped without
     /// Docker.
     PublishedPorts,
+    /// The kernel has AppArmor enabled. Debian and Ubuntu only so far;
+    /// skipped elsewhere and inside a container.
+    Apparmor,
 }
 
 /// The result of checking one control.
@@ -149,7 +153,10 @@ impl Finding {
             }
             (
                 Outcome::Fail { found },
-                Check::AutoUpdates | Check::InboundDefaultDeny | Check::PublishedPorts,
+                Check::AutoUpdates
+                | Check::InboundDefaultDeny
+                | Check::PublishedPorts
+                | Check::Apparmor,
             ) => Some(found.clone()),
             (Outcome::Unknown { reason } | Outcome::Skip { reason }, _) => Some(reason.clone()),
         }
@@ -316,6 +323,27 @@ fn evaluate(check: &Check, facts: &Facts) -> Outcome {
                 reason: "the firewall ruleset could not be read".to_owned(),
             },
         },
+        Check::Apparmor => {
+            if facts.virtualization.in_container() {
+                Outcome::Skip {
+                    reason: "kernel settings are not checked inside a container".to_owned(),
+                }
+            } else if facts.os.family != OsFamily::Debian {
+                Outcome::Skip {
+                    reason: "AppArmor is checked only on Debian and Ubuntu so far".to_owned(),
+                }
+            } else {
+                match facts.apparmor {
+                    Some(true) => Outcome::Pass,
+                    Some(false) => Outcome::Fail {
+                        found: "AppArmor is not enabled in the kernel".to_owned(),
+                    },
+                    None => Outcome::Unknown {
+                        reason: "AppArmor's state could not be read".to_owned(),
+                    },
+                }
+            }
+        }
         Check::PublishedPorts => match &facts.firewall {
             Some(firewall) => published_ports(firewall, facts.ipv6, facts.docker),
             None if facts.docker => Outcome::Unknown {
@@ -536,6 +564,7 @@ mod tests {
                 Check::InboundDefaultDeny | Check::PublishedPorts => {
                     assert!(facts.firewall.is_some(), "{}", c.id);
                 }
+                Check::Apparmor => assert!(facts.apparmor.is_some(), "{}", c.id),
             }
         }
     }
@@ -716,8 +745,8 @@ mod tests {
             .filter(|f| matches!(f.control.check, Check::Sysctl { .. }))
             .count();
         assert!(sysctl_controls > 0);
-        // And FW-002: the fixture has no Docker.
-        assert_eq!(report.summary.skipped, sysctl_controls + 1);
+        // Plus MAC-001 (in a container) and FW-002 (no Docker).
+        assert_eq!(report.summary.skipped, sysctl_controls + 2);
         assert!(report.all_passed(), "{:?}", report.summary);
     }
 
@@ -946,6 +975,31 @@ mod tests {
     }
 
     #[test]
+    fn evaluates_apparmor() {
+        let mut facts = host("debian-13", &[]);
+        facts.virtualization.container = Virt::None;
+        let mut eval = |apparmor| {
+            facts.apparmor = apparmor;
+            evaluate(&Check::Apparmor, &facts)
+        };
+        assert_eq!(eval(Some(true)), Outcome::Pass);
+        assert!(matches!(eval(Some(false)), Outcome::Fail { .. }));
+        assert!(matches!(eval(None), Outcome::Unknown { .. }));
+
+        facts.os.family = OsFamily::Rhel;
+        assert!(matches!(
+            evaluate(&Check::Apparmor, &facts),
+            Outcome::Skip { .. }
+        ));
+        // Inside a container AppArmor belongs to the host.
+        let facts = host("debian-13", &[]);
+        assert!(matches!(
+            evaluate(&Check::Apparmor, &facts),
+            Outcome::Skip { .. }
+        ));
+    }
+
+    #[test]
     fn report_json_flattens_control_and_outcome() {
         let report = run(catalog().unwrap(), &host("debian-12", &[]));
         let json = serde_json::to_value(&report.findings[1]).unwrap();
@@ -969,6 +1023,6 @@ mod tests {
             .filter(|f| matches!(f.control.check, Check::Sysctl { .. }))
             .count();
         let summary = serde_json::to_value(report.summary).unwrap();
-        assert_eq!(summary["skipped"], sysctl_controls + 1);
+        assert_eq!(summary["skipped"], sysctl_controls + 2);
     }
 }

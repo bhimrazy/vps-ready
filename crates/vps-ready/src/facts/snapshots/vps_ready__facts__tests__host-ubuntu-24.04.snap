@@ -234,4 +234,5 @@ updates:
     apt-daily.service: ok
     apt-daily.timer: ok
 docker: false
+apparmor: false
 notices: []

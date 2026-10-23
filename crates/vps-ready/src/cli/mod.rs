@@ -208,6 +208,7 @@ fn root_would_help(report: &Report, facts: &Facts) -> bool {
                 Check::AutoUpdates => false,
                 // `nft list ruleset` needs root.
                 Check::InboundDefaultDeny | Check::PublishedPorts => facts.firewall.is_none(),
+                Check::Apparmor => false,
             }
     })
 }

@@ -1,0 +1,8 @@
+# Mandatory access control. Checks read the kernel's state from /sys.
+
+[[control]]
+id = "MAC-001"
+severity = "medium"
+title = "AppArmor enabled"
+why = "AppArmor confines programs that have a profile, limiting what a compromised one can read, write or run. Debian and Ubuntu enable it by default."
+check = { kind = "apparmor" }
