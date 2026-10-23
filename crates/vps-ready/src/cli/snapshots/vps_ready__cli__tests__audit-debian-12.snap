@@ -9,16 +9,19 @@ FAIL     SSH-001  medium    Root login disabled
                             permitrootlogin is without-password, expected no
                             Root is the one account name every scanner tries, and its actions are
                             not tied to a person. Log in as a named user and use sudo.
+                            fix: not automated yet
 FAIL     SSH-002  high      Password authentication disabled
                             passwordauthentication is yes, expected no
                             Passwords can be guessed or reused from leaks; SSH keys cannot be
                             brute-forced.
+                            fix: not automated yet
 PASS     SSH-003  high      Keyboard-interactive authentication disabled
 PASS     SSH-004  high      Empty passwords rejected
 FAIL     SSH-005  low       X11 forwarding disabled
                             x11forwarding is yes, expected no
                             A server has no use for graphical apps, and a forwarded display lets the
                             server reach into your desktop session.
+                            fix: not automated yet
 PASS     SSH-006  low       Host-based authentication disabled
 PASS     SSH-007  low       User environment files ignored
 SKIP     KRN-001  low       Kernel pointers hidden
@@ -51,9 +54,11 @@ FAIL     FW-001   medium    Incoming traffic denied by default
                             Without it, any service listening on all addresses, such as a database
                             left at its defaults, is reachable from the internet. A firewall at your
                             provider also protects the server, but this check cannot see it.
+                            fix: not automated yet
 SKIP     FW-002   medium    Container ports do not bypass the firewall
 SKIP     MAC-001  medium    AppArmor enabled
 
 4 passed, 5 failed, 0 unknown, 19 skipped
 Skipped: kernel settings are not checked inside a container.
 Skipped: Docker is not installed.
+1 failed control has an automatic fix. Run `vps-ready plan` to see what it would change.

@@ -32,11 +32,14 @@ FAIL     NET-004  low       IPv4 reverse path filtering enabled
                             (default) and eth0: rp_filter 0 in all and on each
                             Reverse path filtering drops incoming packets whose source address the
                             server has no route back to, which stops many spoofed packets.
+                            fix: not automated yet
 FAIL     NET-005  medium    IPv4 ICMP redirects not accepted
                             ICMP redirects are accepted on new interfaces (default) and eth0:
                             accept_redirects 1 in all and on each, forwarding 0 on each
                             Accepted ICMP redirects change the server's routes, so a forged redirect
                             can send its traffic through another machine on the local network.
+                            fix: not automated yet
 PASS     NET-006  low       IPv4 ICMP redirects not sent
 
 13 passed, 4 failed, 0 unknown
+2 failed controls have an automatic fix. Run `vps-ready plan` to see what it would change.
