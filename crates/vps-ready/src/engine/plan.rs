@@ -25,6 +25,9 @@ pub struct ModulePlan {
     /// Whether it applies, and its changes if it does.
     #[serde(flatten)]
     pub status: ModuleStatus,
+    /// [`Module::notes`]; empty when it does not apply.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
 }
 
 /// Whether a module applies, with its changes.
@@ -83,9 +86,11 @@ impl Plan {
 pub fn plan(modules: &[&dyn Module], facts: &Facts, sys: Sys) -> Result<Plan, EngineError> {
     let mut plans = Vec::new();
     for module in modules {
+        let mut notes = Vec::new();
         let status = match module.applicable(facts) {
             Applicability::NotApplicable { reason } => ModuleStatus::NotApplicable { reason },
             Applicability::Applicable => {
+                notes = module.notes(facts);
                 let resources = module
                     .plan(facts, sys)
                     .map_err(|source| EngineError::Module {
@@ -109,6 +114,7 @@ pub fn plan(modules: &[&dyn Module], facts: &Facts, sys: Sys) -> Result<Plan, En
             id: module.id(),
             title: module.title(),
             status,
+            notes,
         });
     }
     Ok(Plan { modules: plans })

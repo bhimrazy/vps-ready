@@ -135,7 +135,7 @@ title    = "Password authentication disabled"
 why      = "Passwords can be brute-forced; keys cannot."
 check    = { kind = "sshd_effective", key = "passwordauthentication", equals = "no" }
 ```
-Check kinds: `sshd_effective`, `sysctl`, `auto_updates`, `inbound_default_deny`, `published_ports`, `apparmor`, `reverse_path_filter`, `icmp_redirects_ignored` and `icmp_redirects_not_sent` are implemented; planned are `file_mode`, `file_contains`, `pkg_installed`, `service_state`, `port_listening`, `user_property`, `fw_allows`. Each is added with the first control that needs it. Later fields: `fix` (the module setting that resolves it, M2) and `refs` (CIS and Lynis IDs).
+Check kinds: `sshd_effective`, `sysctl`, `auto_updates`, `inbound_default_deny`, `published_ports`, `apparmor`, `reverse_path_filter`, `icmp_redirects_ignored` and `icmp_redirects_not_sent` are implemented; planned are `file_mode`, `file_contains`, `pkg_installed`, `service_state`, `port_listening`, `user_property`, `fw_allows`. Each is added with the first control that needs it. The optional `fix` names the module that resolves a failure (`fix = "kernel.sysctl"`); `audit` then prints `fix: sudo vps-ready apply --module <id>` under the failed control, and `--json` has it as `"fix": "<id>"`. A later field: `refs` (CIS and Lynis IDs).
 
 An outcome is `pass`, `fail` (with the value found), `unknown` (the fact could not be read, usually for lack of root) or `skip` (the control is not checked here, e.g. kernel settings inside a container). Unknown never counts as a pass. `audit` exits 0 when no control fails or is unknown, 1 otherwise, and 2 on error.
 

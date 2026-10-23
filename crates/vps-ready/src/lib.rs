@@ -18,7 +18,8 @@
 //! - [`audit`]: checks the facts against the embedded controls catalog.
 //! - [`engine`]: plans modules, applies the plan as a journaled transaction,
 //!   and rolls it back.
-//! - [`modules`]: the [`modules::Module`] trait; a module plans resources.
+//! - [`modules`]: the [`modules::Module`] trait and the registry
+//!   [`modules::all`]; a module plans resources.
 //! - [`resource`]: the things a fix changes (files, sysctl values), with
 //!   diff, snapshot, apply and restore.
 //!
