@@ -466,3 +466,58 @@ fn colors_only_when_asked() {
     .1;
     assert!(colored.contains('\x1b'));
 }
+
+/// A second module that does not apply here.
+struct NoApt;
+
+impl Module for NoApt {
+    fn id(&self) -> &'static str {
+        "test.noapt"
+    }
+    fn title(&self) -> &'static str {
+        "Needs apt"
+    }
+    fn why(&self) -> &'static str {
+        "For tests."
+    }
+    fn applicable(&self, _: &Facts) -> crate::modules::Applicability {
+        crate::modules::Applicability::NotApplicable {
+            reason: "apt not found".into(),
+        }
+    }
+    fn plan(&self, _: &Facts, _: Sys) -> Result<Vec<Resource>, crate::modules::ModuleError> {
+        Ok(Vec::new())
+    }
+}
+
+/// Without `--module` every module is listed and only those that apply are
+/// applied; `--module` selects in registry order.
+#[test]
+fn several_modules() {
+    let fs = fixture();
+    let modules: &[&dyn Module] = &[crate::modules::all()[0], &NoApt];
+    let host = Host {
+        modules,
+        ..host(&fs)
+    };
+    let (code, out, _) = plan_cmd(&host, &[]);
+    assert_eq!(code, 0);
+    assert!(
+        out.contains("test.noapt: not applicable (apt not found)\n\n7 changes in 1 module."),
+        "{out}"
+    );
+    let (code, out, _) = plan_cmd(&host, &["test.noapt"]);
+    assert_eq!(code, 0);
+    assert!(!out.contains("kernel.sysctl"), "{out}");
+
+    let ids = ["test.noapt".to_owned(), "kernel.sysctl".to_owned()];
+    let (code, _, err) = run(|out, err| apply(&host, &ids, true, None, out, err));
+    assert_eq!(code, 2);
+    assert_eq!(
+        err,
+        "error: test.noapt does not apply to this host: apt not found\n"
+    );
+    let (code, out, _) = apply_yes(&host);
+    assert_eq!(code, 0);
+    assert!(out.contains("Applied 7 changes"), "{out}");
+}
