@@ -35,9 +35,9 @@ SKIP     KRN-011  low       Kernel profiling restricted
 SKIP     NET-001  low       TCP SYN cookies enabled
 SKIP     NET-002  low       Source-routed packets rejected
 SKIP     NET-003  low       Broadcast pings ignored
-SKIP     NET-004  low       Reverse path filtering enabled
-SKIP     NET-005  medium    ICMP redirects not accepted
-SKIP     NET-006  low       ICMP redirects not sent
+SKIP     NET-004  low       IPv4 reverse path filtering enabled
+SKIP     NET-005  medium    IPv4 ICMP redirects not accepted
+SKIP     NET-006  low       IPv4 ICMP redirects not sent
 FAIL     UPD-001  medium    Security updates installed automatically
                             unattended-upgrades is not installed;
                             APT::Periodic::Update-Package-Lists is not set;

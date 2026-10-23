@@ -24,7 +24,8 @@ title = "Broadcast pings ignored"
 why = "Answering broadcast pings lets the server be used to amplify attacks on others."
 check = { kind = "sysctl", key = "net.ipv4.icmp_echo_ignore_broadcasts", one_of = ["1"] }
 
-# The next three combine `all` with each interface's own setting, as the
+# The next three read only IPv4 settings (net.ipv4.conf), so they say nothing
+# about IPv6. They combine `all` with each interface's own setting, as the
 # kernel does, and check `default` too, whose values a new interface (a
 # Docker veth, a VPN tunnel) starts with.
 
@@ -33,7 +34,7 @@ check = { kind = "sysctl", key = "net.ipv4.icmp_echo_ignore_broadcasts", one_of 
 [[control]]
 id = "NET-004"
 severity = "low"
-title = "Reverse path filtering enabled"
+title = "IPv4 reverse path filtering enabled"
 why = "Reverse path filtering drops incoming packets whose source address the server has no route back to, which stops many spoofed packets."
 check = { kind = "reverse_path_filter" }
 
@@ -42,7 +43,7 @@ check = { kind = "reverse_path_filter" }
 [[control]]
 id = "NET-005"
 severity = "medium"
-title = "ICMP redirects not accepted"
+title = "IPv4 ICMP redirects not accepted"
 why = "Accepted ICMP redirects change the server's routes, so a forged redirect can send its traffic through another machine on the local network."
 check = { kind = "icmp_redirects_ignored" }
 
@@ -52,6 +53,6 @@ check = { kind = "icmp_redirects_ignored" }
 [[control]]
 id = "NET-006"
 severity = "low"
-title = "ICMP redirects not sent"
-why = "ICMP redirects tell other hosts on the network to change their routes, which only a router should do."
+title = "IPv4 ICMP redirects not sent"
+why = "ICMP redirects tell other hosts on the network to change their routes. A server that forwards packets only for its own containers or tunnels is not the network's router, so it has no reason to send them."
 check = { kind = "icmp_redirects_not_sent" }

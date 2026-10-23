@@ -418,7 +418,7 @@ fn evaluate(check: &Check, facts: &Facts) -> Outcome {
         // whether packets received _on_ this interface can be forwarded".
         Check::IcmpRedirectsNotSent => per_interface(
             facts,
-            "ICMP redirects are sent from",
+            "ICMP redirects can be sent from",
             |all, dev| dev.forwarding != 0 && (all.send_redirects != 0 || dev.send_redirects != 0),
             &["send_redirects", "forwarding"],
         ),
@@ -501,7 +501,13 @@ fn per_interface(
     let shown = &offending[..offending.len().min(MAX_NAMED)];
     let mut names: Vec<&str> = shown
         .iter()
-        .map(|&(n, _)| if n == "default" { "new interfaces" } else { n })
+        .map(|&(n, _)| {
+            if n == "default" {
+                "new interfaces (default)"
+            } else {
+                n
+            }
+        })
         .collect();
     let more = format!("{} more", offending.len() - shown.len());
     if offending.len() > shown.len() {
@@ -1006,7 +1012,7 @@ mod tests {
                 ("eth0", [1, 0, 0, 1]),
             ]),
             fail(
-                "reverse path filtering is not 1 (strict) or 2 (loose) on new interfaces and \
+                "reverse path filtering is not 1 (strict) or 2 (loose) on new interfaces (default) and \
                  eth0: rp_filter 0 in all and on each"
             )
         );
@@ -1018,7 +1024,7 @@ mod tests {
                 ("eth0", [1, 0, 1, 1]),
             ]),
             fail(
-                "reverse path filtering is not 1 (strict) or 2 (loose) on new interfaces: \
+                "reverse path filtering is not 1 (strict) or 2 (loose) on new interfaces (default): \
                  rp_filter all=0 default=0"
             )
         );
@@ -1038,7 +1044,7 @@ mod tests {
                 ("eth0", [1, 0, 0, 1]),
             ]),
             fail(
-                "ICMP redirects are accepted on new interfaces and eth0: \
+                "ICMP redirects are accepted on new interfaces (default) and eth0: \
                  accept_redirects 1 in all and on each, forwarding 0 on each"
             )
         );
@@ -1050,8 +1056,20 @@ mod tests {
                 ("eth0", [1, 0, 0, 1]),
             ]),
             fail(
-                "ICMP redirects are accepted on new interfaces and eth0: \
+                "ICMP redirects are accepted on new interfaces (default) and eth0: \
                  accept_redirects all=1 default=0 eth0=1, forwarding 0 on each"
+            )
+        );
+        // Nor is `all` at 0.
+        assert_eq!(
+            eval(&[
+                ("all", [0, 0, 0, 1]),
+                ("default", [1, 0, 0, 1]),
+                ("eth0", [1, 0, 0, 1]),
+            ]),
+            fail(
+                "ICMP redirects are accepted on new interfaces (default) and eth0: \
+                 accept_redirects 0 in all and 1 on each, forwarding 0 on each"
             )
         );
         // `all` at 0 is not enough without forwarding.
@@ -1121,7 +1139,7 @@ mod tests {
                 ("eth0", [1, 1, 0, 1]),
             ]),
             fail(
-                "ICMP redirects are sent from new interfaces, docker0 and eth0: \
+                "ICMP redirects can be sent from new interfaces (default), docker0 and eth0: \
                  send_redirects 1 in all and on each, forwarding 1 on each"
             )
         );
@@ -1133,7 +1151,7 @@ mod tests {
                 ("eth0", [1, 1, 0, 1]),
             ]),
             fail(
-                "ICMP redirects are sent from eth0: \
+                "ICMP redirects can be sent from eth0: \
                  send_redirects all=0 eth0=1, forwarding eth0=1"
             )
         );
@@ -1155,7 +1173,7 @@ mod tests {
         assert_eq!(
             evaluate(&Check::IcmpRedirectsNotSent, &vm_conf(&dirs)),
             fail(
-                "ICMP redirects are sent from new interfaces, veth1, veth2, veth3, veth4 and \
+                "ICMP redirects can be sent from new interfaces (default), veth1, veth2, veth3, veth4 and \
                  2 more: send_redirects 1 in all and on each, forwarding 1 on each"
             )
         );
