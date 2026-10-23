@@ -5,12 +5,12 @@ use crate::modules::{Applicability, Module, ModuleError};
 use crate::resource::{File, Package, Resource, Validate};
 use crate::sys::{FileOwner, Sys};
 
-/// The drop-in this module owns. apt reads `apt.conf.d` in order, so it
-/// overrides the package's `20auto-upgrades`.
+/// The drop-in this module owns. apt reads `apt.conf.d` in name order, so
+/// it overrides the package's `20auto-upgrades`.
 const DROP_IN: &str = "/etc/apt/apt.conf.d/52vps-ready";
 
-/// `Enable` is needed because some images (Ubuntu 24.04) set it to `0`.
-/// `Unattended-Upgrade::Automatic-Reboot` is left to the admin.
+/// `Enable` defaults to on; it is set so that an earlier file cannot turn
+/// every job off. `Unattended-Upgrade::Automatic-Reboot` is left to the admin.
 const DROP_IN_CONTENT: &str = "\
 APT::Periodic::Enable \"1\";
 APT::Periodic::Update-Package-Lists \"1\";
@@ -19,8 +19,22 @@ APT::Periodic::Unattended-Upgrade \"1\";
 
 /// Installs `unattended-upgrades` and turns on apt's daily update and
 /// upgrade jobs. Debian family only. It does not touch apt's systemd units.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct UpdatesAuto;
+#[derive(Debug, Clone, Copy)]
+pub struct UpdatesAuto {
+    uid: u32,
+    gid: u32,
+}
+
+impl UpdatesAuto {
+    /// The drop-in owned by root:root.
+    pub const ROOT: Self = Self { uid: 0, gid: 0 };
+
+    /// The drop-in owned by `uid:gid`, for tests that cannot `chown` to root.
+    #[cfg(test)]
+    const fn owned_by(uid: u32, gid: u32) -> Self {
+        Self { uid, gid }
+    }
+}
 
 impl Module for UpdatesAuto {
     fn id(&self) -> &'static str {
@@ -63,8 +77,7 @@ impl Module for UpdatesAuto {
             return Vec::new();
         }
         vec![format!(
-            "{}; vps-ready leaves apt's systemd units as they are, so the daily \
-             jobs stay off until they are turned back on",
+            "{}; apt's systemd units are left as they are, so the daily jobs stay off",
             off.join(", ")
         )]
     }
@@ -79,8 +92,8 @@ impl Module for UpdatesAuto {
                 content: DROP_IN_CONTENT.into(),
                 owner: FileOwner {
                     mode: 0o644,
-                    uid: 0,
-                    gid: 0,
+                    uid: self.uid,
+                    gid: self.gid,
                 },
                 validate: Some(Validate::new("apt-config", ["-c", Validate::PATH, "dump"])),
             }),
@@ -100,7 +113,7 @@ mod tests {
     use crate::facts::AptUpdates;
     use crate::facts::fixtures::host;
     use crate::sys::fake::FakeRunner;
-    use crate::sys::{Cmd, FileMeta, Fs, FsLock, Output, RealFs, Runner, SysError};
+    use crate::sys::{Cmd, Fs, Output, RealFs, Runner, SysError};
 
     const STATE: &str = "/var/lib/vps-ready";
 
@@ -114,96 +127,18 @@ mod tests {
         FakeRunner::new().on("dpkg-query", ["-W"], Output::success(status))
     }
 
-    /// A tempdir with `/etc/apt/apt.conf.d`, holding the package's own
-    /// `20auto-upgrades` and, if given, an existing drop-in.
-    fn root(drop_in: Option<&str>) -> tempfile::TempDir {
+    /// A tempdir with an empty `/etc/apt/apt.conf.d`, or one holding the
+    /// drop-in with `existing` content.
+    fn root(existing: Option<&str>) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         let conf_d = dir.path().join("etc/apt/apt.conf.d");
         std::fs::create_dir_all(&conf_d).unwrap();
-        std::fs::write(
-            conf_d.join("20auto-upgrades"),
-            "APT::Periodic::Unattended-Upgrade \"0\";\n",
-        )
-        .unwrap();
-        if let Some(content) = drop_in {
+        if let Some(content) = existing {
             let path = conf_d.join("52vps-ready");
             std::fs::write(&path, content).unwrap();
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
         }
         dir
-    }
-
-    /// [`RealFs`] that shows the test user's files as root's and writes
-    /// root's files as the test user's, since tests cannot `chown`.
-    struct AsRoot {
-        fs: RealFs,
-        uid: u32,
-        gid: u32,
-    }
-
-    impl AsRoot {
-        fn new(dir: &Path) -> Self {
-            let meta = std::fs::metadata(dir).unwrap();
-            Self {
-                fs: RealFs::new(dir),
-                uid: meta.uid(),
-                gid: meta.gid(),
-            }
-        }
-    }
-
-    impl Fs for AsRoot {
-        fn read(&self, path: &Path) -> Result<Vec<u8>, SysError> {
-            self.fs.read(path)
-        }
-        fn exists(&self, path: &Path) -> bool {
-            self.fs.exists(path)
-        }
-        fn read_dir(&self, path: &Path) -> Result<Vec<PathBuf>, SysError> {
-            self.fs.read_dir(path)
-        }
-        fn metadata(&self, path: &Path) -> Result<FileMeta, SysError> {
-            let mut meta = self.fs.metadata(path)?;
-            if meta.uid == self.uid {
-                meta.uid = 0;
-            }
-            if meta.gid == self.gid {
-                meta.gid = 0;
-            }
-            Ok(meta)
-        }
-        fn write_atomic(
-            &self,
-            path: &Path,
-            bytes: &[u8],
-            owner: FileOwner,
-        ) -> Result<(), SysError> {
-            assert_eq!((owner.uid, owner.gid), (0, 0), "{}", path.display());
-            let owner = FileOwner {
-                uid: self.uid,
-                gid: self.gid,
-                ..owner
-            };
-            self.fs.write_atomic(path, bytes, owner)
-        }
-        fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), SysError> {
-            self.fs.write(path, bytes)
-        }
-        fn append_sync(&self, path: &Path, bytes: &[u8]) -> Result<(), SysError> {
-            self.fs.append_sync(path, bytes)
-        }
-        fn remove(&self, path: &Path) -> Result<(), SysError> {
-            self.fs.remove(path)
-        }
-        fn create_dir_all(&self, path: &Path, mode: u32) -> Result<(), SysError> {
-            self.fs.create_dir_all(path, mode)
-        }
-        fn sync_dir(&self, path: &Path) -> Result<(), SysError> {
-            self.fs.sync_dir(path)
-        }
-        fn try_lock(&self, path: &Path) -> Result<FsLock, SysError> {
-            self.fs.try_lock(path)
-        }
     }
 
     /// apt on a host without `unattended-upgrades`: `dpkg-query` reports it
@@ -242,8 +177,8 @@ mod tests {
         }
     }
 
-    fn plan(fs: &dyn Fs, runner: &dyn Runner, facts: &Facts) -> Plan {
-        engine::plan(&[&UpdatesAuto], facts, Sys { fs, runner }).unwrap()
+    fn plan(module: UpdatesAuto, fs: &dyn Fs, runner: &dyn Runner, facts: &Facts) -> Plan {
+        engine::plan(&[&module], facts, Sys { fs, runner }).unwrap()
     }
 
     fn change_ids(plan: &Plan) -> Vec<String> {
@@ -272,17 +207,20 @@ mod tests {
     #[test]
     fn applies_only_with_apt() {
         let mut facts = facts();
-        assert_eq!(UpdatesAuto.applicable(&facts), Applicability::Applicable);
+        assert_eq!(
+            UpdatesAuto::ROOT.applicable(&facts),
+            Applicability::Applicable
+        );
         facts.updates = None;
         assert_eq!(
-            UpdatesAuto.applicable(&facts),
+            UpdatesAuto::ROOT.applicable(&facts),
             Applicability::NotApplicable {
                 reason: "apt not found, or `apt-config` failed".into()
             }
         );
         facts.os.family = OsFamily::Rhel;
         assert_eq!(
-            UpdatesAuto.applicable(&facts),
+            UpdatesAuto::ROOT.applicable(&facts),
             Applicability::NotApplicable {
                 reason: "apt is supported only on Debian and Ubuntu".into()
             }
@@ -293,7 +231,8 @@ mod tests {
     fn plans_the_package_then_the_drop_in() {
         let dir = root(None);
         let plan = plan(
-            &AsRoot::new(dir.path()),
+            UpdatesAuto::ROOT,
+            &RealFs::new(dir.path()),
             &dpkg_query("not-installed"),
             &facts(),
         );
@@ -303,16 +242,21 @@ mod tests {
     #[test]
     fn plans_only_the_drop_in_when_the_package_is_installed() {
         let dir = root(None);
-        let plan = plan(&AsRoot::new(dir.path()), &dpkg_query("installed"), &facts());
+        let plan = plan(
+            UpdatesAuto::ROOT,
+            &RealFs::new(dir.path()),
+            &dpkg_query("installed"),
+            &facts(),
+        );
         assert_eq!(change_ids(&plan), [format!("file:{DROP_IN}")]);
     }
 
     #[test]
     fn validates_the_drop_in_with_apt_config() {
         let dir = root(None);
-        let fs = AsRoot::new(dir.path());
+        let fs = RealFs::new(dir.path());
         let runner = FakeRunner::new();
-        let resources = UpdatesAuto.plan(
+        let resources = UpdatesAuto::ROOT.plan(
             &facts(),
             Sys {
                 fs: &fs,
@@ -342,16 +286,21 @@ mod tests {
             ])
         };
         facts.updates.as_mut().unwrap().units = Some(units("ok"));
-        assert!(UpdatesAuto.notes(&facts).is_empty());
+        assert!(UpdatesAuto::ROOT.notes(&facts).is_empty());
 
         facts.updates.as_mut().unwrap().units = Some(units("masked"));
         let dir = root(None);
-        let plan = plan(&AsRoot::new(dir.path()), &dpkg_query("installed"), &facts);
+        let plan = plan(
+            UpdatesAuto::ROOT,
+            &RealFs::new(dir.path()),
+            &dpkg_query("installed"),
+            &facts,
+        );
         assert_eq!(
             plan.modules[0].notes,
             [
-                "apt-daily-upgrade.timer is masked; vps-ready leaves apt's systemd units as \
-                 they are, so the daily jobs stay off until they are turned back on"
+                "apt-daily-upgrade.timer is masked; apt's systemd units are left as they \
+                 are, so the daily jobs stay off"
             ]
         );
         assert_eq!(change_ids(&plan), [format!("file:{DROP_IN}")]);
@@ -363,7 +312,9 @@ mod tests {
     fn apply_is_idempotent_and_rolls_back() {
         for existing in [None, Some("APT::Periodic::Enable \"0\";\n")] {
             let dir = root(existing);
-            let fs = AsRoot::new(dir.path());
+            let fs = RealFs::new(dir.path());
+            let meta = std::fs::metadata(dir.path()).unwrap();
+            let module = UpdatesAuto::owned_by(meta.uid(), meta.gid());
             let apt = Apt::new();
             let sys = Sys {
                 fs: &fs,
@@ -372,19 +323,20 @@ mod tests {
             let facts = facts();
             let before = etc_tree(dir.path());
 
-            let first = plan(&fs, &apt, &facts);
+            let first = plan(module, &fs, &apt, &facts);
             assert_eq!(
                 change_ids(&first),
                 [
                     "package:unattended-upgrades".to_owned(),
                     format!("file:{DROP_IN}")
-                ]
+                ],
+                "{existing:?}"
             );
-            let state = StateDir::create(&fs, STATE, 0).unwrap();
+            let state = StateDir::create(&fs, STATE, meta.uid()).unwrap();
             let engine = Engine::lock(&state, sys).unwrap();
             let outcome = engine.apply(&first).unwrap();
             let ApplyOutcome::Applied { txn } = outcome else {
-                panic!("{outcome:?}");
+                panic!("{existing:?}: {outcome:?}");
             };
             let drop_in = String::from_utf8(fs.read(Path::new(DROP_IN)).unwrap()).unwrap();
             insta::assert_snapshot!("drop-in", drop_in);
@@ -392,15 +344,16 @@ mod tests {
             let validate = Cmd::new("apt-config").args(["-c", after.as_str(), "dump"]);
             assert!(
                 apt.runner.calls().contains(&validate),
-                "{:?}",
+                "{existing:?}: {:?}",
                 apt.runner.calls()
             );
 
-            assert!(change_ids(&plan(&fs, &apt, &facts)).is_empty());
+            let next = plan(module, &fs, &apt, &facts);
+            assert!(change_ids(&next).is_empty(), "{existing:?}");
 
             engine.rollback(Target::Last).unwrap();
             assert_eq!(etc_tree(dir.path()), before, "{existing:?}");
-            assert!(apt.installed.load(Ordering::SeqCst));
+            assert!(apt.installed.load(Ordering::SeqCst), "{existing:?}");
         }
     }
 }

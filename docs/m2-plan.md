@@ -37,9 +37,9 @@ They can follow in a v0.2.x once the engine is proven.
 
 **`updates.auto` details:**
 - The drop-in sets `APT::Periodic::Enable "1"`, `APT::Periodic::Update-Package-Lists "1"` and `APT::Periodic::Unattended-Upgrade "1"`.
-  - `Enable` is needed because the captured Ubuntu 24.04 image sets it to `"0"`.
+  - `Enable` defaults to on; the drop-in sets it so that an earlier file cannot turn every job off.
   - It does not set `Unattended-Upgrade::Automatic-Reboot`: `false` is already the default, and setting it would override an admin's own choice. `UPD-001` does not check it.
-  - apt reads `apt.conf.d` in order, so `52` overrides the package's `20auto-upgrades`.
+  - apt reads `apt.conf.d` in name order, so `52` overrides the package's `20auto-upgrades`.
 - Installing the package:
   - It runs `apt-get update`, then `apt-get install -y --no-install-recommends`, the way Ansible's `update_cache` does. A fresh image's package lists can be missing or stale.
   - Both commands run under `DEBIAN_FRONTEND=noninteractive` with `-o DPkg::Lock::Timeout=300` (cloud-init may still hold the dpkg lock on first boot) and a 10-minute command timeout.
