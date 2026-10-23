@@ -122,9 +122,9 @@ create txn/<id>/ and journal.jsonl; fsync journal.jsonl, txn/<id>/ and txn/
 journal "begin"
 for each resource with a change, in plan order:
     backup = snapshot()
-    File: write files/<n>.before (if the file existed) and files/<n>.after, fsync them
+    File: write files/<n>.before (if the file existed) and files/<n>.after, fsync them,
+          then run validate on files/<n>.after if set
     journal "backup"                         (fsync)
-    File: run validate on files/<n>.after if set
     apply()
     journal "applied"                        (fsync)
 verify: diff() of every resource is None again

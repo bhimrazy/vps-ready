@@ -13,9 +13,11 @@ use serde::{Deserialize, Serialize};
 use crate::sys::{FileKind, FileOwner, Sys, SysError};
 
 mod file;
+mod package;
 mod sysctl;
 
-pub use file::File;
+pub use file::{File, Validate};
+pub use package::Package;
 pub use sysctl::Sysctl;
 
 /// Errors from diffing, snapshotting, applying or restoring a resource.
@@ -33,6 +35,27 @@ pub enum ResourceError {
     /// The directory that would hold a [`File`] does not exist.
     #[error("refusing to create {0}: its parent directory does not exist")]
     MissingParent(PathBuf),
+    /// The [`Validate`] command of a [`File`] rejected its `.after` copy or
+    /// could not run; the target was not written.
+    #[error("refusing to write {path}: `{program}` {reason}")]
+    Invalid {
+        /// Target path.
+        path: PathBuf,
+        /// Validate program.
+        program: String,
+        /// Exit status and stderr, or why it could not run.
+        reason: String,
+    },
+    /// A command exited with a non-zero status.
+    #[error("`{program}` exited with status {status}: {stderr}")]
+    Command {
+        /// Program that was run.
+        program: String,
+        /// Exit code; `-1` if killed by a signal.
+        status: i32,
+        /// Standard error, trimmed.
+        stderr: String,
+    },
     /// The system boundary failed.
     #[error(transparent)]
     Sys(#[from] SysError),
@@ -44,6 +67,8 @@ pub enum ResourceError {
 pub enum Reversibility {
     /// Rollback restores the previous state exactly.
     Reversible,
+    /// Rollback leaves part of the change in place.
+    Partial,
 }
 
 /// One change a resource would make, as the plan shows it.
@@ -66,16 +91,19 @@ pub enum Resource {
     File(File),
     /// A kernel parameter under `/proc/sys`.
     Sysctl(Sysctl),
+    /// An apt package that must be installed.
+    Package(Package),
 }
 
 impl Resource {
     /// A stable identifier, e.g. `file:/etc/sysctl.d/90-vps-ready.conf` or
-    /// `sysctl:kernel.kptr_restrict`.
+    /// `sysctl:kernel.kptr_restrict` or `package:unattended-upgrades`.
     #[must_use]
     pub fn id(&self) -> String {
         match self {
             Self::File(f) => format!("file:{}", f.path.display()),
             Self::Sysctl(s) => format!("sysctl:{}", s.key),
+            Self::Package(p) => format!("package:{}", p.name),
         }
     }
 
@@ -84,6 +112,8 @@ impl Resource {
     pub fn reversibility(&self) -> Reversibility {
         match self {
             Self::File(_) | Self::Sysctl(_) => Reversibility::Reversible,
+            // Rollback leaves an installed package installed.
+            Self::Package(_) => Reversibility::Partial,
         }
     }
 
@@ -93,11 +123,13 @@ impl Resource {
     /// # Errors
     ///
     /// For a [`File`], [`ResourceError::NotRegularFile`] or
-    /// [`ResourceError::MissingParent`]; any [`SysError`] from reading.
+    /// [`ResourceError::MissingParent`]; for a [`Package`],
+    /// [`ResourceError::Command`]; any [`SysError`] from reading.
     pub fn diff(&self, sys: Sys) -> Result<Option<Change>, ResourceError> {
         let change = match self {
             Self::File(f) => f.diff(sys)?,
             Self::Sysctl(s) => s.diff(sys)?,
+            Self::Package(p) => p.diff(sys)?,
         };
         Ok(change.map(|(summary, diff)| Change {
             id: self.id(),
@@ -111,17 +143,21 @@ impl Resource {
     ///
     /// For a [`File`], this also writes the desired bytes to
     /// [`after_path`]`(txn_dir, n)` and, if the file exists, its current bytes
-    /// to [`before_path`]`(txn_dir, n)`, and makes both durable, so the caller
-    /// can journal the returned [`Backup`] right away. `n` must be unique
-    /// within the transaction; other kinds ignore `txn_dir` and `n`.
+    /// to [`before_path`]`(txn_dir, n)`, and makes both durable, then runs
+    /// its [`Validate`] command, if any, on the `.after` copy. Once this
+    /// returns, the caller can journal the [`Backup`] and apply. `n` must be
+    /// unique within the transaction; other kinds ignore `txn_dir` and `n`.
     ///
     /// # Errors
     ///
-    /// For a [`File`], [`ResourceError::NotRegularFile`]; any [`SysError`].
+    /// For a [`File`], [`ResourceError::NotRegularFile`] or
+    /// [`ResourceError::Invalid`]; for a [`Package`],
+    /// [`ResourceError::Command`]; any [`SysError`].
     pub fn snapshot(&self, sys: Sys, txn_dir: &Path, n: u32) -> Result<Backup, ResourceError> {
         match self {
             Self::File(f) => f.snapshot(sys, txn_dir, n),
             Self::Sysctl(s) => s.snapshot(sys),
+            Self::Package(p) => p.snapshot(sys),
         }
     }
 
@@ -129,11 +165,12 @@ impl Resource {
     ///
     /// # Errors
     ///
-    /// Any [`SysError`] from writing.
+    /// For a [`Package`], [`ResourceError::Command`]; any [`SysError`].
     pub fn apply(&self, sys: Sys) -> Result<(), ResourceError> {
         match self {
             Self::File(f) => f.apply(sys),
             Self::Sysctl(s) => s.apply(sys),
+            Self::Package(p) => p.apply(sys),
         }
     }
 }
@@ -160,6 +197,13 @@ pub enum Backup {
         value: String,
         /// Value that apply writes.
         applied: String,
+    },
+    /// An apt package.
+    Package {
+        /// Package name.
+        name: String,
+        /// Whether it was installed.
+        was_installed: bool,
     },
 }
 
@@ -208,7 +252,8 @@ pub fn after_path(txn_dir: &Path, n: u32) -> PathBuf {
 
 /// Puts back the state recorded in `backup`, with the file copies of the
 /// transaction in `txn_dir`. Restoring a file that did not exist removes
-/// it, if it is there.
+/// it, if it is there. Restoring a package does nothing: removing it could
+/// take other packages with it.
 ///
 /// # Errors
 ///
@@ -218,6 +263,7 @@ pub fn restore(sys: Sys, txn_dir: &Path, backup: &Backup) -> Result<(), Resource
     match backup {
         Backup::File { path, n, original } => file::restore(sys, txn_dir, path, *n, *original),
         Backup::Sysctl { key, value, .. } => sysctl::restore(sys, key, value),
+        Backup::Package { .. } => Ok(()),
     }
 }
 
@@ -270,6 +316,13 @@ mod tests {
                     applied: "1".into(),
                 },
                 r#"{"kind":"sysctl","key":"kernel.kptr_restrict","value":"0","applied":"1"}"#,
+            ),
+            (
+                Backup::Package {
+                    name: "unattended-upgrades".into(),
+                    was_installed: false,
+                },
+                r#"{"kind":"package","name":"unattended-upgrades","was_installed":false}"#,
             ),
         ];
         for (backup, json) in cases {
