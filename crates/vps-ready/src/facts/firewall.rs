@@ -10,6 +10,12 @@
 //! `meta nfproto ipv4` in an `inet` chain) are assumed to be narrow. Rules
 //! that `return` only some traffic are not: ufw returns every packet for a
 //! local address before the `drop` that ends `ufw-not-local`.
+//!
+//! Both guesses can be wrong. An accept for a whole interface (firewalld's
+//! `iifname eth0 goto filter_IN_trusted`) is taken as narrow, so the chain
+//! may pass while that interface is open. A narrow return (`iifname lo
+//! return` before a `drop`) is taken as wide, so under an `accept` policy
+//! the chain fails though it drops everything else.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
