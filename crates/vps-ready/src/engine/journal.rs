@@ -6,9 +6,10 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use super::EngineError;
+use crate::resource::Backup;
 
 /// One journal line: when it was written and what happened.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Record {
     /// Unix seconds.
     pub at: u64,
@@ -18,7 +19,7 @@ pub struct Record {
 }
 
 /// What a journal line records.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "kebab-case")]
 pub enum Event {
     /// The transaction started.
@@ -32,9 +33,8 @@ pub enum Event {
     Backup {
         /// Resource ID, e.g. `sysctl:kernel.kptr_restrict`.
         resource: String,
-        /// The resource's backup. Kept as raw JSON until the `resource`
-        /// module's `Backup` type is wired in.
-        backup: serde_json::Value,
+        /// What restoring the resource needs.
+        backup: Backup,
     },
     /// A resource was changed.
     Applied {
@@ -251,9 +251,24 @@ mod tests {
         assert_eq!(
             line(Event::Backup {
                 resource: "sysctl:kernel.kptr_restrict".into(),
-                backup: serde_json::json!({"kind": "sysctl", "key": "kernel.kptr_restrict", "value": "0"}),
+                backup: Backup::Sysctl {
+                    key: "kernel.kptr_restrict".into(),
+                    value: "0".into(),
+                    applied: "1".into(),
+                },
             }),
-            r#"{"at":7,"event":"backup","resource":"sysctl:kernel.kptr_restrict","backup":{"key":"kernel.kptr_restrict","kind":"sysctl","value":"0"}}"#
+            r#"{"at":7,"event":"backup","resource":"sysctl:kernel.kptr_restrict","backup":{"kind":"sysctl","key":"kernel.kptr_restrict","value":"0","applied":"1"}}"#
+        );
+        assert_eq!(
+            line(Event::Backup {
+                resource: "file:/etc/sysctl.d/90-vps-ready.conf".into(),
+                backup: Backup::File {
+                    path: "/etc/sysctl.d/90-vps-ready.conf".into(),
+                    n: 1,
+                    original: None,
+                },
+            }),
+            r#"{"at":7,"event":"backup","resource":"file:/etc/sysctl.d/90-vps-ready.conf","backup":{"kind":"file","path":"/etc/sysctl.d/90-vps-ready.conf","n":1,"original":null}}"#
         );
         assert_eq!(
             line(state(TxnState::Applied)),
@@ -271,7 +286,15 @@ mod tests {
             rec(begin()),
             rec(Event::Backup {
                 resource: "file:/etc/x".into(),
-                backup: serde_json::json!({"kind": "file", "n": 1, "original": null}),
+                backup: Backup::File {
+                    path: "/etc/x".into(),
+                    n: 1,
+                    original: Some(crate::resource::FileCopy {
+                        mode: 0o644,
+                        uid: 0,
+                        gid: 0,
+                    }),
+                },
             }),
             rec(applied()),
             rec(restored()),
