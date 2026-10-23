@@ -206,8 +206,14 @@ fn root_would_help(report: &Report, facts: &Facts) -> bool {
                 }
                 // `apt-config` and `systemctl show` work without root.
                 Check::AutoUpdates => false,
-                // `nft list ruleset` needs root.
-                Check::InboundDefaultDeny | Check::PublishedPorts => facts.firewall.is_none(),
+                // Sudo helps only when nft was refused for lack of privileges.
+                Check::InboundDefaultDeny | Check::PublishedPorts => {
+                    facts.firewall.is_none()
+                        && facts
+                            .notices
+                            .iter()
+                            .any(|n| n.ends_with(crate::facts::firewall::NEEDS_ROOT))
+                }
                 Check::Apparmor => false,
             }
     })
@@ -488,6 +494,36 @@ mod tests {
         facts.sysctl = Some(sysctl);
         let report = audit::run(audit::catalog().unwrap(), &facts);
         assert!(root_would_help(&report, &facts));
+    }
+
+    /// Without nft, or when it fails for another reason, sudo would not help
+    /// FW-001; when nft is refused for lack of privileges, it would.
+    #[test]
+    fn root_hint_for_firewall_depends_on_why_nft_failed() {
+        let mut facts = host("debian-13", &[]);
+        facts.virtualization.container = crate::facts::Virt::None;
+        let mut sysctl = crate::facts::Sysctl::default();
+        for key in crate::facts::sysctl::KEYS {
+            sysctl.values.insert(key.to_owned(), "1".to_owned());
+        }
+        facts.sysctl = Some(sysctl);
+        facts.firewall = None;
+        for (notice, hint) in [
+            ("nft not found; the firewall is unknown", false),
+            (
+                "`nft list ruleset` failed (Error: no nf_tables); the firewall is unknown",
+                false,
+            ),
+            (
+                "`nft list ruleset` failed (Operation not permitted); the firewall is unknown. \
+                 Reading the ruleset needs root (CAP_NET_ADMIN)",
+                true,
+            ),
+        ] {
+            facts.notices = vec![notice.to_owned()];
+            let report = audit::run(audit::catalog().unwrap(), &facts);
+            assert_eq!(root_would_help(&report, &facts), hint, "{notice}");
+        }
     }
 
     #[test]
