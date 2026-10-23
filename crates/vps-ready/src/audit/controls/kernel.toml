@@ -72,3 +72,10 @@ severity = "medium"
 title = "Address space randomization fully enabled"
 why = "A random memory layout makes memory-corruption bugs much harder to exploit reliably."
 check = { kind = "sysctl", key = "kernel.randomize_va_space", one_of = ["2"] }
+
+[[control]]
+id = "KRN-011"
+severity = "low"
+title = "Kernel profiling restricted"
+why = "perf events can expose kernel addresses and timing to any user, and the subsystem has had privilege-escalation bugs. 2 is the kernel's own restriction; Debian adds 3 and Ubuntu 4, which block more."
+check = { kind = "sysctl", key = "kernel.perf_event_paranoid", one_of = ["2", "3", "4"] }

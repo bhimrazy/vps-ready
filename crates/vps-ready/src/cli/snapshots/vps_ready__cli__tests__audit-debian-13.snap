@@ -2,7 +2,7 @@
 source: crates/vps-ready/src/cli/mod.rs
 expression: "String::from_utf8(text).unwrap()"
 ---
-Audit of Debian GNU/Linux 13 (trixie): 21 controls
+Audit of Debian GNU/Linux 13 (trixie): 24 controls
 
 STATUS   ID       SEVERITY  CONTROL
 FAIL     SSH-001  medium    Root login disabled
@@ -19,6 +19,8 @@ FAIL     SSH-005  low       X11 forwarding disabled
                             x11forwarding is yes, expected no
                             A server has no use for graphical apps, and a forwarded display lets the
                             server reach into your desktop session.
+PASS     SSH-006  low       Host-based authentication disabled
+PASS     SSH-007  low       User environment files ignored
 SKIP     KRN-001  low       Kernel pointers hidden
 SKIP     KRN-002  low       Kernel log restricted to root
 SKIP     KRN-003  medium    Unprivileged BPF disabled
@@ -29,6 +31,7 @@ SKIP     KRN-007  low       FIFO protection enabled
 SKIP     KRN-008  low       Regular file protection enabled
 SKIP     KRN-009  low       Setuid core dumps restricted
 SKIP     KRN-010  medium    Address space randomization fully enabled
+SKIP     KRN-011  low       Kernel profiling restricted
 SKIP     NET-001  low       TCP SYN cookies enabled
 SKIP     NET-002  low       Source-routed packets rejected
 SKIP     NET-003  low       Broadcast pings ignored
@@ -46,6 +49,6 @@ FAIL     FW-001   medium    Incoming traffic denied by default
                             provider also protects the server, but this check cannot see it.
 SKIP     FW-002   medium    Container ports do not bypass the firewall
 
-2 passed, 5 failed, 0 unknown, 14 skipped
+4 passed, 5 failed, 0 unknown, 15 skipped
 Skipped: kernel settings are not checked inside a container.
 Skipped: Docker is not installed.

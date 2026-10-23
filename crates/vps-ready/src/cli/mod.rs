@@ -457,7 +457,7 @@ mod tests {
         let mut text = Vec::new();
         print_report(&mut text, &report, "this host", true, false).unwrap();
         let text = String::from_utf8(text).unwrap();
-        assert!(text.contains("0 passed, 2 failed, 5 unknown"), "{text}");
+        assert!(text.contains("0 passed, 2 failed, 7 unknown"), "{text}");
         assert!(text.contains("Run it with sudo"), "{text}");
 
         let mut text = Vec::new();
