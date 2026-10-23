@@ -1,28 +1,39 @@
 //! Command-line interface: argument definitions and command dispatch.
 //!
-//! Today: `version`, `detect` and `audit`. Further commands (`plan`,
-//! `apply`, `confirm`, `rollback`, ...) are added as their milestones land;
-//! see the GitHub milestones.
+//! Today: `version`, `detect`, `audit`, `plan`, `apply`, `rollback` and
+//! `history`. Further commands (`confirm`, ...) are added as their milestones
+//! land; see the GitHub milestones.
 
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::Context;
-use clap::{ArgAction, Parser, Subcommand};
+use clap::builder::PossibleValuesParser;
+use clap::{ArgAction, ArgGroup, Parser, Subcommand};
 use owo_colors::OwoColorize;
 use tracing_subscriber::EnvFilter;
 
 use crate::VERSION_INFO;
 use crate::audit::{self, Check, Outcome, Report};
+use crate::engine::{StateDir, Target};
 use crate::facts::{self, Env, Facts, Listener};
-use crate::sys::{RealFs, RealRunner};
+use crate::modules;
+use crate::sys::{RealFs, RealRunner, Sys};
+
+mod change;
 
 /// Exit code of `audit` when a control failed or could not be checked.
 pub const EXIT_AUDIT_FAILED: u8 = 1;
 
 /// Exit code for errors, the same code clap uses for usage errors.
 pub const EXIT_ERROR: u8 = 2;
+
+/// Exit code of `apply` when it failed and every change was rolled back.
+pub const EXIT_ROLLED_BACK: u8 = 1;
+
+/// Exit code of `apply` and `rollback` when a rollback did not complete.
+pub const EXIT_INCOMPLETE: u8 = 3;
 
 /// Command-line arguments of `vps-ready`.
 #[derive(Debug, Parser)]
@@ -62,6 +73,46 @@ pub enum Command {
     /// Exits 0 when no control fails or is unknown, 1 otherwise, and 2 on
     /// error. Some checks need root, so run it with sudo.
     Audit,
+    /// Show what `apply` would change. Does not need root, but then skips
+    /// what only root can read.
+    Plan {
+        /// Plan only this module (repeatable). Default: every module.
+        #[arg(long = "module", value_name = "ID", value_parser = module_ids())]
+        modules: Vec<String>,
+    },
+    /// Make the changes of the plan, after asking. Needs root.
+    ///
+    /// Exits 0 when applied or nothing to do, 1 when it failed and every
+    /// change was rolled back, 2 on error, and 3 when the rollback after a
+    /// failure did not complete.
+    Apply {
+        /// Apply only this module (repeatable). Default: every applicable module.
+        #[arg(long = "module", value_name = "ID", value_parser = module_ids())]
+        modules: Vec<String>,
+        /// Do not ask; required when stdin is not a terminal.
+        #[arg(long, short)]
+        yes: bool,
+    },
+    /// Undo the changes of a transaction. Needs root.
+    ///
+    /// Exits 0 when rolled back, 2 on error (including a refusal because
+    /// something changed since apply), and 3 when it did not complete.
+    #[command(group(ArgGroup::new("target").required(true)))]
+    Rollback {
+        /// The unfinished transaction if there is one, otherwise the newest applied one.
+        #[arg(long, group = "target")]
+        last: bool,
+        /// The transaction with this ID (see `history`).
+        #[arg(long, value_name = "ID", group = "target")]
+        txn: Option<String>,
+    },
+    /// List the transactions, newest first. Needs root.
+    History,
+}
+
+/// `--module` accepts the IDs of the registry.
+fn module_ids() -> PossibleValuesParser {
+    PossibleValuesParser::new(modules::all().iter().map(|m| m.id()))
 }
 
 impl Cli {
@@ -90,7 +141,7 @@ pub fn main() -> ExitCode {
         Err(err) => {
             // `{:#}` prints the context chain on one line, without a backtrace.
             eprintln!("error: {err:#}");
-            ExitCode::from(EXIT_ERROR)
+            ExitCode::from(change::exit_code(&err))
         }
     }
 }
@@ -173,9 +224,74 @@ pub fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
                 other => other?,
             }
         }
+        Command::Plan { modules } => {
+            let n = change::plan(&real_host(cli), modules, cli.json, &mut out)?;
+            code = ExitCode::from(n);
+        }
+        Command::Apply { modules, yes } => {
+            no_json(cli, "apply")?;
+            let stdin = io::stdin();
+            let mut stdin = stdin.is_terminal().then(|| stdin.lock());
+            let input = stdin.as_mut().map(|s| s as &mut dyn BufRead);
+            let n = change::apply(
+                &real_host(cli),
+                modules,
+                *yes,
+                input,
+                &mut out,
+                &mut io::stderr(),
+            )?;
+            code = ExitCode::from(n);
+        }
+        Command::Rollback { last, txn } => {
+            no_json(cli, "rollback")?;
+            let target = match txn {
+                Some(id) => Target::Txn(id),
+                // clap requires exactly one of the two.
+                None => {
+                    debug_assert!(*last);
+                    Target::Last
+                }
+            };
+            let n = change::rollback(&real_host(cli), target, &mut out)?;
+            code = ExitCode::from(n);
+        }
+        Command::History => {
+            let n = change::history(&real_host(cli), cli.json, &mut out)?;
+            code = ExitCode::from(n);
+        }
     }
     out.flush()?;
     Ok(code)
+}
+
+fn no_json(cli: &Cli, command: &str) -> anyhow::Result<()> {
+    if cli.json {
+        anyhow::bail!("{command} has no JSON output");
+    }
+    Ok(())
+}
+
+/// This machine, with the state in [`StateDir::DEFAULT`] owned by root.
+fn real_host(cli: &Cli) -> change::Host<'static> {
+    static FS: std::sync::LazyLock<RealFs> = std::sync::LazyLock::new(|| RealFs::new("/"));
+    change::Host {
+        sys: Sys {
+            fs: &*FS,
+            runner: &RealRunner,
+        },
+        modules: modules::all(),
+        state_dir: Path::new(StateDir::DEFAULT),
+        state_uid: 0,
+        root: running_as_root(),
+        facts: host_facts,
+        color: cli.color_enabled(),
+    }
+}
+
+/// Facts of this machine for the change commands, which log the notices.
+fn host_facts(sys: Sys) -> anyhow::Result<Facts> {
+    facts::collect(sys.fs, sys.runner, &Env::from_process()).context("detecting facts")
 }
 
 /// Collects facts, logging each notice except those in `quiet` as a warning
@@ -183,6 +299,12 @@ pub fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
 fn collect_facts(root: &Path, quiet: &[&str]) -> anyhow::Result<Facts> {
     let facts = facts::collect(&RealFs::new(root), &RealRunner, &Env::from_process())
         .with_context(|| format!("detecting facts under {}", root.display()))?;
+    log_notices(&facts, quiet);
+    Ok(facts)
+}
+
+/// Logs each notice except those in `quiet` as a warning on stderr.
+fn log_notices(facts: &Facts, quiet: &[&str]) {
     for notice in facts
         .notices
         .iter()
@@ -190,7 +312,6 @@ fn collect_facts(root: &Path, quiet: &[&str]) -> anyhow::Result<Facts> {
     {
         tracing::warn!("{notice}");
     }
-    Ok(facts)
 }
 
 /// Whether running as root would let an unknown control be checked: when
@@ -243,7 +364,7 @@ fn root_would_help(report: &Report, facts: &Facts) -> bool {
 /// Skipped controls get a row without details, and each distinct reason is
 /// printed once after the summary.
 fn print_report(
-    out: &mut impl Write,
+    out: &mut (impl Write + ?Sized),
     report: &Report,
     host: &str,
     root_hint: bool,

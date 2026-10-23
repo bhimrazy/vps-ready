@@ -1,0 +1,6 @@
+---
+source: crates/vps-ready/src/cli/change/tests.rs
+expression: "redact(&fs, &history_text(&host), true)"
+---
+<txn-2>               applied                     kernel.sysctl,updates.auto  8 changes
+<txn-1>               rolled-back (manual)        kernel.sysctl,updates.auto  8 changes
