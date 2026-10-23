@@ -23,3 +23,36 @@ severity = "low"
 title = "Broadcast pings ignored"
 why = "Answering broadcast pings lets the server be used to amplify attacks on others."
 check = { kind = "sysctl", key = "net.ipv4.icmp_echo_ignore_broadcasts", one_of = ["1"] }
+
+# The next three read only IPv4 settings (net.ipv4.conf), so they say nothing
+# about IPv6. They combine `all` with each interface's own setting, as the
+# kernel does, and check `default` too, whose values a new interface (a
+# Docker veth, a VPN tunnel) starts with.
+
+# Ubuntu sets all and default to 2. Upstream systemd sets default and each
+# interface to 2 but leaves all at 0. Debian sets none, so all are 0.
+[[control]]
+id = "NET-004"
+severity = "low"
+title = "IPv4 reverse path filtering enabled"
+why = "Reverse path filtering drops incoming packets whose source address the server has no route back to, which stops many spoofed packets."
+check = { kind = "reverse_path_filter" }
+
+# Turning forwarding on, as Docker does, sets all.accept_redirects to 0, so
+# forwarding interfaces accept no redirects unless it is set to 1 again.
+[[control]]
+id = "NET-005"
+severity = "medium"
+title = "IPv4 ICMP redirects not accepted"
+why = "Accepted ICMP redirects change the server's routes, so a forged redirect can send its traffic through another machine on the local network."
+check = { kind = "icmp_redirects_ignored" }
+
+# Only forwarding interfaces send redirects. send_redirects defaults to 1, so
+# a Docker host fails unless it is 0 in all and on every forwarding interface,
+# default included.
+[[control]]
+id = "NET-006"
+severity = "low"
+title = "IPv4 ICMP redirects not sent"
+why = "ICMP redirects tell other hosts on the network to change their routes. A server that forwards packets only for its own containers or tunnels is not the network's router, so it has no reason to send them."
+check = { kind = "icmp_redirects_not_sent" }

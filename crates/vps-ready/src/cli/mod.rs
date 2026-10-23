@@ -215,6 +215,10 @@ fn root_would_help(report: &Report, facts: &Facts) -> bool {
                             .any(|n| n.ends_with(crate::facts::firewall::NEEDS_ROOT))
                 }
                 Check::Apparmor => false,
+                // `/proc/sys/net/ipv4/conf` is readable by anyone.
+                Check::ReversePathFilter
+                | Check::IcmpRedirectsIgnored
+                | Check::IcmpRedirectsNotSent => false,
             }
     })
 }

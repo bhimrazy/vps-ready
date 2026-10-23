@@ -77,7 +77,7 @@ Detection runs once, read-only, into a typed `Facts` struct (`serde` `Serialize`
 - the firewall: input chains of the live nftables ruleset (`nft -j list ruleset`, root only), which also holds ufw, firewalld and iptables-nft rules, with the ports each accepts from any source (`iptables-save -t filter` adds the ports of iptables `multiport` rules, which nft does not show); whether the `filter` table of iptables-legacy is loaded, for IPv4 and IPv6 each (`/proc/net/ip_tables_names`, `ip6_tables_names`), whose rules are not read; the ports Docker publishes beyond loopback and link-local, from its DNAT rules; whether the host has a global IPv6 address (`/proc/net/if_inet6`)
 - whether the kernel has AppArmor enabled (`/sys/module/apparmor/parameters/enabled`)
 - automatic updates on Debian and Ubuntu: `unattended-upgrades` installed, the effective `APT::Periodic` settings (`apt-config dump`) and whether systemd starts apt's daily jobs (timers and services)
-- kernel settings from `/proc/sys` (not read inside a detected container, where they mostly belong to the host; a container that `systemd-detect-virt` and the Docker/Podman markers miss is read as if it were the host)
+- kernel settings from `/proc/sys`, including the IPv4 forwarding, redirect and reverse path settings of `all`, `default` and each interface but `lo` under `/proc/sys/net/ipv4/conf` (not read inside a detected container, where they mostly belong to the host; a container that `systemd-detect-virt` and the Docker/Podman markers miss is read as if it were the host)
 
 `Facts` is plain data with no methods that touch the system, so a test can build one by hand for any distro.
 
@@ -132,11 +132,11 @@ title    = "Password authentication disabled"
 why      = "Passwords can be brute-forced; keys cannot."
 check    = { kind = "sshd_effective", key = "passwordauthentication", equals = "no" }
 ```
-Check kinds: `sshd_effective`, `sysctl`, `auto_updates`, `inbound_default_deny`, `published_ports` and `apparmor` are implemented; planned are `file_mode`, `file_contains`, `pkg_installed`, `service_state`, `port_listening`, `user_property`, `fw_allows`. Each is added with the first control that needs it. Later fields: `fix` (the module setting that resolves it, M2) and `refs` (CIS and Lynis IDs).
+Check kinds: `sshd_effective`, `sysctl`, `auto_updates`, `inbound_default_deny`, `published_ports`, `apparmor`, `reverse_path_filter`, `icmp_redirects_ignored` and `icmp_redirects_not_sent` are implemented; planned are `file_mode`, `file_contains`, `pkg_installed`, `service_state`, `port_listening`, `user_property`, `fw_allows`. Each is added with the first control that needs it. Later fields: `fix` (the module setting that resolves it, M2) and `refs` (CIS and Lynis IDs).
 
 An outcome is `pass`, `fail` (with the value found), `unknown` (the fact could not be read, usually for lack of root) or `skip` (the control is not checked here, e.g. kernel settings inside a container). Unknown never counts as a pass. `audit` exits 0 when no control fails or is unknown, 1 otherwise, and 2 on error.
 
-`sysctl` checks read `/proc/sys` directly, with no command, and only outside containers. Settings whose effect depends on several files, such as ICMP redirects (the kernel combines `all`, the interface and its forwarding state), need a check kind of their own and come later.
+`sysctl` checks read `/proc/sys` directly, with no command, and only outside containers. Settings whose effect depends on several files have a check kind of their own: for reverse path filtering and ICMP redirects the kernel combines `all` with each interface's value (and, for redirects, the interface's forwarding state), as `Documentation/networking/ip-sysctl.rst` describes, so these checks apply that rule to every interface and to `default`, whose values a new interface starts with.
 
 Facts collection runs only read-only commands. A unit test pins the exact list, and every command runs with a fixed system `PATH` and a timeout.
 
