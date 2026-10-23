@@ -143,7 +143,7 @@ jobs:
   containers:
     needs: build-musl
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -170,6 +170,8 @@ jobs:
             -t "vps-ready-test:$DISTRO" test/images
       - name: Run detect and audit in the container
         run: test/container-audit.sh "$DISTRO" bin/vps-ready
+      - name: Apply and roll back updates.auto in the container
+        run: test/container-apply.sh "$DISTRO" bin/vps-ready
 
   # Single required check for branch protection.
   ci-ok:

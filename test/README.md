@@ -28,8 +28,14 @@ argument, then `$VPS_READY_BIN`, then `target/release/vps-ready`. It must match 
 container's CPU architecture; the static musl build runs on every distro. CI runs
 it for four distros against the x86_64 musl artifact.
 
+`test/container-apply.sh <distro> [binary]` runs the `updates.auto` cycle in a
+fresh container: `apply --yes`, `plan --json` shows no changes, `UPD-001`
+passes, `history` shows the transaction, `rollback --last`, and the managed files
+match their state before. It needs network access for `apt-get`.
+
 ```sh
 cargo build --release --target aarch64-unknown-linux-musl   # x86_64-... on Intel
 docker build -f test/images/Containerfile --build-arg BASE=ubuntu:24.04 -t vps-ready-test:ubuntu-24.04 test/images
 test/container-audit.sh ubuntu-24.04 target/aarch64-unknown-linux-musl/release/vps-ready
+test/container-apply.sh ubuntu-24.04 target/aarch64-unknown-linux-musl/release/vps-ready
 ```

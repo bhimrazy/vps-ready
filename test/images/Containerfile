@@ -13,5 +13,9 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/* \
  && rm -f /etc/machine-id && touch /etc/machine-id
 
+# Docker's base images disable periodic apt runs; cloud images do not, and that
+# file would override the updates.auto drop-in.
+RUN rm -f /etc/apt/apt.conf.d/docker-*
+
 STOPSIGNAL SIGRTMIN+3
 CMD ["/sbin/init"]
