@@ -179,7 +179,7 @@ Journal records are a `#[serde(tag = "event")]` enum, and every line has `at` in
 
 Reading the journal:
 - Unknown fields are ignored (an older binary can read a newer journal). An unknown event kind is an error.
-- A final line without a newline that does not parse is a torn write from a crash: it is ignored. Any other unparseable line is an error.
+- A final line without a newline is a torn write from a crash: it is ignored, and removed from the file before a resumed transaction appends to it. Any other unparseable line is an error.
 
 Transaction states:
 - **State** is the last `state` record, or `planned` if there is none.

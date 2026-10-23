@@ -2,12 +2,12 @@
 //!
 //! Compiled under `cfg(test)` and with the `testing` feature.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use super::{Cmd, FileKind, FileMeta, FileOwner, Fs, Output, Runner, SysError};
+use super::{Cmd, FileKind, FileMeta, FileOwner, Fs, FsLock, Output, Runner, SysError};
 
 /// A scripted [`Runner`]. Each rule matches a program plus a prefix of its
 /// arguments; the first matching rule wins. Unmatched commands fail with
@@ -239,6 +239,23 @@ fn io_error(path: &Path, kind: io::ErrorKind) -> SysError {
 #[derive(Debug, Default)]
 pub struct FakeFs {
     state: Mutex<State>,
+    /// Paths locked by [`Fs::try_lock`], shared with the guards that unlock them.
+    locks: Arc<Mutex<BTreeSet<PathBuf>>>,
+}
+
+/// Removes its path from [`FakeFs::locks`] when dropped.
+struct FakeLock {
+    locks: Arc<Mutex<BTreeSet<PathBuf>>>,
+    path: PathBuf,
+}
+
+impl Drop for FakeLock {
+    fn drop(&mut self) {
+        self.locks
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.path);
+    }
 }
 
 impl FakeFs {
@@ -433,6 +450,27 @@ impl Fs for FakeFs {
         } else {
             Err(not_found(path))
         }
+    }
+
+    fn try_lock(&self, path: &Path) -> Result<FsLock, SysError> {
+        let mut state = self.lock();
+        match state.entries.get(path).map(|e| &e.node) {
+            Some(Node::File(_)) => {}
+            Some(_) => return Err(io_error(path, io::ErrorKind::IsADirectory)),
+            None => {
+                state.require_parent(path)?;
+                let entry = Entry::new(Node::File(Vec::new()), 0o600);
+                state.entries.insert(path.to_path_buf(), entry);
+            }
+        }
+        let mut locks = self.locks.lock().unwrap_or_else(PoisonError::into_inner);
+        if !locks.insert(path.to_path_buf()) {
+            return Err(SysError::Locked(path.display().to_string()));
+        }
+        Ok(FsLock::new(FakeLock {
+            locks: Arc::clone(&self.locks),
+            path: path.to_path_buf(),
+        }))
     }
 }
 

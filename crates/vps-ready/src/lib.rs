@@ -16,6 +16,7 @@
 //!   testable with fakes.
 //! - [`facts`]: read-only discovery of what the host is (OS, init system, ...).
 //! - [`audit`]: checks the facts against the embedded controls catalog.
+//! - [`engine`]: the state directory, its lock and the transaction journal.
 //! - [`resource`]: the things a fix changes (files, sysctl values), with
 //!   diff, snapshot, apply and restore.
 //!
@@ -28,6 +29,7 @@ use serde::Serialize;
 
 pub mod audit;
 pub mod cli;
+pub mod engine;
 pub mod facts;
 pub mod resource;
 pub mod sys;

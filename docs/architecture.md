@@ -189,10 +189,10 @@ The data lives inside the variant: a confirm code can only exist while the trans
 stateDiagram-v2
   [*] --> Planned
   Planned --> Applied: all steps written and verified
-  Planned --> RolledBack: validate or apply failed
+  Planned --> RolledBack: apply or verify failed
   Applied --> PendingConfirm: needs dead-man, timer armed
   Applied --> Confirmed: no dead-man needed
-  Applied --> RolledBack: verify failed
+  Applied --> RolledBack: manual rollback
   PendingConfirm --> Confirmed: confirm from a new session
   PendingConfirm --> RolledBack: timeout or reboot
   Confirmed --> RolledBack: manual rollback

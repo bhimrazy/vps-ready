@@ -9,7 +9,8 @@
 //! Paths passed to [`Fs`] are always absolute paths *on the inspected system*
 //! (for example `/etc/os-release`); [`RealFs`] maps them under its root.
 
-use std::fs::{DirBuilder, File, OpenOptions, Permissions};
+use std::fmt;
+use std::fs::{DirBuilder, File, OpenOptions, Permissions, TryLockError};
 use std::io::{self, Read, Write as _};
 use std::os::unix::fs::{
     DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
@@ -43,6 +44,9 @@ pub enum SysError {
     /// A write was refused because the target is a symlink.
     #[error("refusing to write through a symlink: {0}")]
     Symlink(String),
+    /// A lock is held through another open file, usually by another process.
+    #[error("{0} is locked by another process")]
+    Locked(String),
     /// Data that must be text was not valid UTF-8.
     #[error("{0} is not valid UTF-8")]
     NonUtf8(String),
@@ -236,6 +240,27 @@ pub struct FileOwner {
     pub gid: u32,
 }
 
+/// A lock taken by [`Fs::try_lock`], released when dropped.
+#[must_use = "the lock is released when the guard is dropped"]
+pub struct FsLock {
+    _guard: Box<dyn Send>,
+}
+
+impl FsLock {
+    /// Wraps `guard`, whose drop releases the lock.
+    pub fn new(guard: impl Send + 'static) -> Self {
+        Self {
+            _guard: Box::new(guard),
+        }
+    }
+}
+
+impl fmt::Debug for FsLock {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("FsLock")
+    }
+}
+
 /// Filesystem access.
 pub trait Fs {
     /// Reads a whole file.
@@ -318,6 +343,17 @@ pub trait Fs {
     ///
     /// [`SysError::NotFound`], [`SysError::Permission`] or [`SysError::Io`].
     fn sync_dir(&self, path: &Path) -> Result<(), SysError>;
+
+    /// Takes an exclusive lock on `path`, creating the file with mode `0600`
+    /// if missing, without waiting. The lock lasts until the returned guard
+    /// is dropped or the process exits.
+    ///
+    /// # Errors
+    ///
+    /// [`SysError::Locked`] if the lock is already held;
+    /// [`SysError::NotFound`] if the parent directory does not exist;
+    /// [`SysError::Permission`] or [`SysError::Io`].
+    fn try_lock(&self, path: &Path) -> Result<FsLock, SysError>;
 }
 
 /// The system boundary in one `Copy` value, so higher layers take one argument.
@@ -588,6 +624,23 @@ impl Fs for RealFs {
             .and_then(|d| d.sync_all())
             .map_err(|e| SysError::from_io(path.display().to_string(), e))
     }
+
+    fn try_lock(&self, path: &Path) -> Result<FsLock, SysError> {
+        let subject = || path.display().to_string();
+        let file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .open(self.host_path(path))
+            .map_err(|e| SysError::from_io(subject(), e))?;
+        match file.try_lock() {
+            // Closing the file releases the lock.
+            Ok(()) => Ok(FsLock::new(file)),
+            Err(TryLockError::WouldBlock) => Err(SysError::Locked(subject())),
+            Err(TryLockError::Error(e)) => Err(SysError::from_io(subject(), e)),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -783,6 +836,31 @@ mod tests {
                 gid: 0,
             },
         );
+    }
+
+    /// The lock behavior shared by [`RealFs`] and [`fake::FakeFs`]. `fs` has
+    /// a directory `/etc`.
+    fn lock_contract(fs: &dyn Fs) {
+        let path = Path::new("/etc/lock");
+        let first = fs.try_lock(path).unwrap();
+        assert_eq!(fs.metadata(path).unwrap().mode, 0o600);
+        let err = fs.try_lock(path).unwrap_err();
+        assert!(matches!(err, SysError::Locked(_)), "{err:?}");
+        drop(first);
+        let _again = fs.try_lock(path).unwrap();
+        let err = fs.try_lock(Path::new("/nope/lock")).unwrap_err();
+        assert!(matches!(err, SysError::NotFound(_)), "{err:?}");
+    }
+
+    #[test]
+    fn real_fs_locks() {
+        let (dir, _) = real_root();
+        lock_contract(&RealFs::new(dir.path()));
+    }
+
+    #[test]
+    fn fake_fs_locks() {
+        lock_contract(&fake::FakeFs::new().with_file("/etc/real", "real\n"));
     }
 
     #[test]
