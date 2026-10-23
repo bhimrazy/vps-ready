@@ -17,7 +17,9 @@
 #   kernel.sysctl, same boot: weaken five keys -> apply -> the controls pass
 #     -> rollback --last -> the keys are weak again and the drop-in is gone.
 #   kernel.sysctl, across a reboot: weaken -> plan -> apply -> reboot -> every
-#     control the module fixes passes and the plan is empty -> rollback --last.
+#     control the module fixes passes and the plan is empty -> rollback --last
+#     exits 0 and removes the drop-in -> reboot -> the keys have the values
+#     they had at the first boot.
 #   updates.auto: apply -> the plan is empty and UPD-001 passes -> rollback
 #     --last -> the apt.conf.d files match their state before.
 set -eu
@@ -124,6 +126,8 @@ reboot_vm() {
 # neither the weak nor the applied value after a reboot.
 weak_keys="kernel.kptr_restrict=0 kernel.dmesg_restrict=0 fs.protected_fifos=0 fs.protected_regular=0 net.ipv4.conf.all.accept_source_route=1"
 weaken() { for kv in $weak_keys; do vm sudo sysctl -q -w "$kv"; done; }
+# The running values of those keys, as "key = value" lines.
+key_values() { for kv in $weak_keys; do vm sudo sysctl "${kv%=*}"; done; }
 # expect_keys weak|hardened: hardened means no longer the weak value; the
 # controls check the exact values.
 expect_keys() {
@@ -180,6 +184,7 @@ jq -e '[.findings[] | select(.id | test("^(KRN|NET)-"))
        | select(.status == "skip" or .status == "unknown")] | length == 0' "$tmp/audit.json" >/dev/null ||
   die "a KRN or NET control was not checked"
 vm test ! -e "$dropin" || die "$dropin exists before apply"
+key_values >"$tmp/boot-defaults.txt"
 
 echo "== $distro: kernel.sysctl, same boot"
 weaken
@@ -208,19 +213,19 @@ expect_sysctl_controls_pass
 expect_empty_plan kernel.sysctl
 
 echo "== $distro: vps-ready rollback --last after the reboot"
-# TODO(after-reboot-rollback): set to 1 once fix/sysctl-boot-rollback is on
-# main. Until then rollback after a reboot is refused on Ubuntu 24.04
-# (fs.protected_regular), so its exit code is only reported.
-assert_after_reboot_rollback=0
-rc=0; vr rollback --last || rc=$?
-if [ "$assert_after_reboot_rollback" = 1 ]; then
-  [ "$rc" -eq 0 ] || die "rollback after reboot exited $rc, expected 0"
-  expect_newest rolled-back
-  reboot_vm
-  vm test ! -e "$dropin" || die "$dropin still exists after rollback and reboot"
-else
-  echo "TODO(after-reboot-rollback): rollback exited $rc (not asserted)"
-fi
+# Kernel settings are left to the boot config, so they change at the next boot.
+rc=0; vr rollback --last >"$tmp/rollback.out" || rc=$?
+cat "$tmp/rollback.out"
+[ "$rc" -eq 0 ] || die "rollback after reboot exited $rc, expected 0"
+grep -q 'keep their running value until the next boot' "$tmp/rollback.out" ||
+  die "rollback did not list the kernel settings left until the next boot"
+expect_newest rolled-back
+vm test ! -e "$dropin" || die "$dropin still exists after rollback"
+echo "== $distro: rebooting"
+reboot_vm
+key_values >"$tmp/after.txt"
+diff "$tmp/boot-defaults.txt" "$tmp/after.txt" ||
+  die "kernel settings differ from the boot defaults after rollback and reboot"
 
 echo "== $distro: updates.auto"
 vm "cd $apt_conf && test ! -e 52vps-ready && sha256sum * >/tmp/apt-before.sha"
