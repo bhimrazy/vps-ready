@@ -106,7 +106,7 @@ pub enum Command {
         #[arg(long, value_name = "ID", group = "target")]
         txn: Option<String>,
     },
-    /// List the transactions, newest first.
+    /// List the transactions, newest first. Needs root.
     History,
 }
 
@@ -289,13 +289,9 @@ fn real_host(cli: &Cli) -> change::Host<'static> {
     }
 }
 
-/// Facts of this machine for the change commands, which do not use the SSH
-/// session.
+/// Facts of this machine for the change commands, which log the notices.
 fn host_facts(sys: Sys) -> anyhow::Result<Facts> {
-    let facts =
-        facts::collect(sys.fs, sys.runner, &Env::from_process()).context("detecting facts")?;
-    log_notices(&facts, &[facts::session::UNSET_NOTICE]);
-    Ok(facts)
+    facts::collect(sys.fs, sys.runner, &Env::from_process()).context("detecting facts")
 }
 
 /// Collects facts, logging each notice except those in `quiet` as a warning

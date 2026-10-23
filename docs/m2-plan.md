@@ -221,7 +221,7 @@ vps-ready history  [--json]
 ```
 
 - No `--module` means every applicable module. `plan --module X` for a module that does not apply shows it as not applicable. `apply --module X` for such a module is an error that gives the reason.
-- `apply` and `rollback` require root (the existing `/proc/self/status` check).
+- `apply`, `rollback` and `history` require root (the existing `/proc/self/status` check); the state directory is `0700 root:root`. `history` on a host without a state directory prints "No transactions." and does not create it.
 - `plan` does not; as non-root it skips the sysctl keys it cannot read and says so.
 - `history` prints one line per transaction (ID, state, modules, number of changes), newest first.
 
@@ -234,13 +234,15 @@ Exit codes:
 | 2 | error | error: usage, lock busy, not root, unfinished transaction, module not applicable, plan changed after the prompt | error, including refused by the safety check (nothing restored) |
 | 3 | | failed, and the rollback did not complete | did not complete |
 
+Declining the prompt changes nothing and exits 0.
+
 When exit code 3 is returned, the message names the transaction directory and the files left to restore by hand.
 
 Text plan (an `insta` snapshot pins it); `+` create, `~` change, colors only on a TTY:
 
 ```
 kernel.sysctl: Harden kernel settings (fixes KRN-001, KRN-003, NET-001)
-  + /etc/sysctl.d/90-vps-ready.conf (0644 root:root)                     reversible
+  + /etc/sysctl.d/90-vps-ready.conf (0644 0:0)                            reversible
       @@ -0,0 +1,3 @@
       +kernel.kptr_restrict = 1
       +kernel.unprivileged_bpf_disabled = 2

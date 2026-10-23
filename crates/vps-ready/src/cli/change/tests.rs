@@ -14,7 +14,8 @@ const STATE: &str = "/var/lib/vps-ready";
 const DROP_IN: &str = crate::modules::kernel_sysctl::DROP_IN;
 const APT_DROP_IN: &str = "/etc/apt/apt.conf.d/52vps-ready";
 
-/// Kernel defaults of a Debian 13 VM, without Yama; seven keys fail.
+/// Kernel defaults of a Debian 13 VM, without Yama; six keys fail, which
+/// with the drop-in makes seven changes.
 const START: [(&str, &str); 13] = [
     ("kernel.kptr_restrict", "0"),
     ("kernel.dmesg_restrict", "0"),
@@ -267,7 +268,7 @@ fn history_without_a_state_dir_is_empty() {
 }
 
 #[test]
-fn apply_and_rollback_need_root() {
+fn apply_rollback_and_history_need_root() {
     let fs = fixture();
     let host = Host {
         root: false,
@@ -280,6 +281,9 @@ fn apply_and_rollback_need_root() {
     let (code, _, err) = rollback_last(&host);
     assert_eq!(code, 2);
     assert_eq!(err, "error: rollback needs root; run it with sudo\n");
+    let (code, _, err) = run(|out, _| history(&host, false, out));
+    assert_eq!(code, 2);
+    assert_eq!(err, "error: history needs root; run it with sudo\n");
     assert_eq!(tree(&fs), original);
     assert!(!fs.exists(Path::new(STATE)));
 }

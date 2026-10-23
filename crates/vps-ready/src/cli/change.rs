@@ -52,6 +52,7 @@ pub(super) fn plan(
 ) -> anyhow::Result<u8> {
     let modules = select(host.modules, ids)?;
     let facts = (host.facts)(host.sys)?;
+    log_notices(&facts);
     let plan = engine::plan(&modules, &facts, host.sys)?;
     if json {
         serde_json::to_writer_pretty(&mut *out, &plan)?;
@@ -83,6 +84,7 @@ pub(super) fn apply(
     let engine = Engine::lock(&state, host.sys)?;
     engine.ensure_finished()?;
     let facts = (host.facts)(host.sys)?;
+    log_notices(&facts);
     let plan = engine::plan(&modules, &facts, host.sys)?;
     if !ids.is_empty() {
         for m in &plan.modules {
@@ -149,8 +151,11 @@ pub(super) fn rollback(host: &Host, target: Target, out: &mut dyn Write) -> anyh
     Ok(0)
 }
 
-/// `history`: every transaction, newest first. Takes no lock.
+/// `history`: every transaction, newest first. Needs root, since the state
+/// dir is private; takes no lock.
 pub(super) fn history(host: &Host, json: bool, out: &mut dyn Write) -> anyhow::Result<u8> {
+    require_root(host, "history")?;
+    // A fresh host has no state dir; listing must not create it.
     let txns = if host.sys.fs.exists(host.state_dir) {
         let state = StateDir::open(host.sys.fs, host.state_dir, host.state_uid)?;
         engine::history(&state, host.sys.fs)?
@@ -164,6 +169,12 @@ pub(super) fn history(host: &Host, json: bool, out: &mut dyn Write) -> anyhow::R
         print_history(out, &txns)?;
     }
     Ok(0)
+}
+
+/// Logs the notices of `facts`, except the SSH session one: these commands
+/// do not use the session.
+fn log_notices(facts: &Facts) {
+    super::log_notices(facts, &[crate::facts::session::UNSET_NOTICE]);
 }
 
 fn require_root(host: &Host, command: &str) -> anyhow::Result<()> {
@@ -206,7 +217,8 @@ fn fixed_by(modules: &[String]) -> anyhow::Result<Vec<audit::Control>> {
         .collect())
 }
 
-/// Audits the controls the applied modules fix, with fresh facts.
+/// Audits the controls the applied modules fix, with fresh facts. Their
+/// notices were logged before apply, so they are not logged again.
 fn audit_fixed(host: &Host, plan: &Plan, out: &mut dyn Write) -> anyhow::Result<()> {
     let facts = (host.facts)(host.sys)?;
     let report = audit::run(fixed_by(&plan.changed_modules())?, &facts);
@@ -318,20 +330,26 @@ fn print_history(out: &mut dyn Write, txns: &[TxnInfo]) -> io::Result<()> {
     if txns.is_empty() {
         return writeln!(out, "No transactions.");
     }
-    for t in txns {
+    let modules: Vec<String> = txns
+        .iter()
+        .map(|t| {
+            if t.modules.is_empty() {
+                "-".to_owned()
+            } else {
+                t.modules.join(",")
+            }
+        })
+        .collect();
+    let width = modules.iter().map(String::len).max().unwrap_or(0);
+    for (t, modules) in txns.iter().zip(&modules) {
         let state = if t.unfinished {
             format!("unfinished ({})", t.state)
         } else {
             t.state.to_string()
         };
-        let modules = if t.modules.is_empty() {
-            "-".to_owned()
-        } else {
-            t.modules.join(",")
-        };
         writeln!(
             out,
-            "{:<20}  {state:<26}  {modules:<16}  {} {}",
+            "{:<20}  {state:<26}  {modules:<width$}  {} {}",
             t.id,
             t.changes,
             plural(t.changes, "change")
