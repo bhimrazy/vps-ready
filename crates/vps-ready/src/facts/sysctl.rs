@@ -13,7 +13,7 @@ use crate::sys::{Fs, SysError};
 
 /// The settings that are read, by their `sysctl` name. The audit catalog may
 /// only use names listed here.
-pub const KEYS: [&str; 13] = [
+pub const KEYS: [&str; 14] = [
     "fs.protected_fifos",
     "fs.protected_hardlinks",
     "fs.protected_regular",
@@ -21,6 +21,7 @@ pub const KEYS: [&str; 13] = [
     "fs.suid_dumpable",
     "kernel.dmesg_restrict",
     "kernel.kptr_restrict",
+    "kernel.perf_event_paranoid",
     "kernel.randomize_va_space",
     "kernel.unprivileged_bpf_disabled",
     "kernel.yama.ptrace_scope",

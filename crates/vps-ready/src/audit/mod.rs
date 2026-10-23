@@ -693,7 +693,8 @@ mod tests {
         let mut facts = host("debian-13", &["sshd-T-dropin-00"]);
         facts.ssh.effective = Some(SshdConfig::parse(
             "permitrootlogin no\npasswordauthentication no\nkbdinteractiveauthentication no\n\
-             permitemptypasswords no\nx11forwarding no\n",
+             permitemptypasswords no\nx11forwarding no\nhostbasedauthentication no\n\
+             permituserenvironment no\n",
         ));
         facts.updates = Some(updating());
         facts.firewall = Some(Firewall {

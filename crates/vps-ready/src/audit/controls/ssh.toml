@@ -35,3 +35,17 @@ severity = "low"
 title = "X11 forwarding disabled"
 why = "A server has no use for graphical apps, and a forwarded display lets the server reach into your desktop session."
 check = { kind = "sshd_effective", key = "x11forwarding", equals = "no" }
+
+[[control]]
+id = "SSH-006"
+severity = "low"
+title = "Host-based authentication disabled"
+why = "It lets a client machine vouch for its users, so a compromised machine the server trusts can log in as them without their keys."
+check = { kind = "sshd_effective", key = "hostbasedauthentication", equals = "no" }
+
+[[control]]
+id = "SSH-007"
+severity = "low"
+title = "User environment files ignored"
+why = "With it on, a user's ~/.ssh/environment can set variables such as LD_PRELOAD, which can bypass restrictions like a forced command."
+check = { kind = "sshd_effective", key = "permituserenvironment", equals = "no" }
