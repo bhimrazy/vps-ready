@@ -158,11 +158,82 @@ pub(super) fn detect(runner: &dyn Runner, notices: &mut Vec<String>) -> Option<F
         notices.push(notice);
         return None;
     }
-    let parsed = parse(&out.stdout);
-    if parsed.is_none() {
+    let Some(mut firewall) = parse(&out.stdout, &Multiport::new()) else {
         notices.push("unrecognized `nft -j` output; the firewall is unknown".to_owned());
+        return None;
+    };
+    // nft does not show the ports of iptables' `multiport`; iptables-save
+    // does, for the same rules in the same order.
+    let mut multiport = Multiport::new();
+    for (family, program) in [("ip", "iptables-save"), ("ip6", "ip6tables-save")] {
+        let unread = firewall
+            .input_chains
+            .iter()
+            .any(|c| c.family == family && !c.unread_ports.is_empty());
+        if !unread {
+            continue;
+        }
+        let cmd = Cmd::new(program)
+            .args(["-t", "filter"])
+            .timeout(Duration::from_secs(10));
+        if let Probe::Ran(out) = probe(runner, &cmd, notices)
+            && out.ok()
+        {
+            multiport.extend(parse_save(&String::from_utf8_lossy(&out.stdout), family));
+        }
     }
-    parsed
+    if !multiport.is_empty() {
+        firewall = parse(&out.stdout, &multiport)?;
+    }
+    Some(firewall)
+}
+
+/// Ports of iptables `multiport` rules in the `filter` table, by family,
+/// chain and the rule's position in it.
+type Multiport = HashMap<(String, String, usize), Vec<Ports>>;
+
+/// Reads `iptables-save -t filter`: the destination ports of each rule
+/// with `-p <proto> -m multiport --dports 80,443` (or `60000:60010`). A
+/// rule with a `!` is skipped, so its ports stay unknown.
+fn parse_save(text: &str, family: &str) -> Multiport {
+    let mut out = Multiport::new();
+    let mut index: HashMap<&str, usize> = HashMap::new();
+    for line in text.lines() {
+        let mut words = line.split_whitespace();
+        if words.next() != Some("-A") {
+            continue;
+        }
+        let Some(chain) = words.next() else {
+            continue;
+        };
+        let words: Vec<&str> = words.collect();
+        let i = index.entry(chain).or_insert(0);
+        let position = *i;
+        *i += 1;
+        let after = |flag: &str| words.windows(2).find(|w| w[0] == flag).map(|w| w[1]);
+        let negated = words.contains(&"!");
+        let (Some(proto), Some(spec)) = (after("-p"), after("--dports")) else {
+            continue;
+        };
+        if negated || !words.contains(&"multiport") || !matches!(proto, "tcp" | "udp" | "sctp") {
+            continue;
+        }
+        let ports: Option<Vec<Ports>> = spec
+            .split(',')
+            .map(|r| {
+                let (first, last) = r.split_once(':').unwrap_or((r, r));
+                Some(Ports {
+                    proto: proto.to_owned(),
+                    first: first.parse().ok()?,
+                    last: last.parse().ok()?,
+                })
+            })
+            .collect();
+        if let Some(ports) = ports {
+            out.insert((family.to_owned(), chain.to_owned(), position), ports);
+        }
+    }
+    out
 }
 
 /// A chain, as `(family, table, name)`.
@@ -170,7 +241,7 @@ type ChainKey = (String, String, String);
 
 /// Parses `nft -j list ruleset`: a list of objects, each holding one table,
 /// chain or rule. Rules follow their chain, in order.
-fn parse(json: &[u8]) -> Option<Firewall> {
+fn parse(json: &[u8], multiport: &Multiport) -> Option<Firewall> {
     let root: Value = serde_json::from_slice(json).ok()?;
     let objects = root.get("nftables")?.as_array()?;
     let field = |v: &Value, key: &str| v.get(key).and_then(Value::as_str).map(str::to_owned);
@@ -222,7 +293,13 @@ fn parse(json: &[u8]) -> Option<Firewall> {
         let drops_unmatched =
             !fate.accept && (!fate.cont || field(chain, "policy").as_deref() == Some("drop"));
         let mut open = OpenPorts::default();
-        collect_open_ports(&rules, &k, false, &mut HashSet::new(), &mut memo, &mut open);
+        let mut walk = Walk {
+            rules: &rules,
+            multiport,
+            seen: HashSet::new(),
+            memo: &mut memo,
+        };
+        walk.open_ports(&k, false, &mut open);
         let (family, table, name) = k;
         input_chains.push(InputChain {
             family,
@@ -384,51 +461,64 @@ struct OpenPorts {
     unread: Vec<String>,
 }
 
-/// Adds what `chain` opens to any source. A `jump` or `goto` is followed
-/// only if its rule is narrow too; if that rule also matches ports, they
-/// are open when the target accepts everything (as `ufw limit` does).
-/// `scoped` is set below a jump that matched an input interface.
-fn collect_open_ports(
-    rules: &HashMap<ChainKey, Vec<&[Value]>>,
-    chain: &ChainKey,
-    scoped: bool,
-    seen: &mut HashSet<(ChainKey, bool)>,
-    memo: &mut HashMap<ChainKey, Option<Fate>>,
-    out: &mut OpenPorts,
-) {
-    // Per scope: firewalld jumps to a zone with `iifname`, then without.
-    if !seen.insert((chain.clone(), scoped)) {
-        return;
-    }
-    for expr in rules.get(chain).into_iter().flatten() {
-        let (Some(v), Some((_, before))) = (verdict(expr), expr.split_last()) else {
-            continue;
-        };
-        let Some(rule) = narrow(before) else {
-            continue;
-        };
-        let scoped = scoped || rule.interface;
-        let opens = match v {
-            Verdict::Accept => true,
-            Verdict::Jump(t) | Verdict::Goto(t) => {
-                let target = (chain.0.clone(), chain.1.clone(), t.to_owned());
-                if rule.ports.is_empty() && rule.unread.is_empty() {
-                    collect_open_ports(rules, &target, scoped, seen, memo, out);
-                    false
-                } else {
-                    fate(rules, &target, memo) == Fate::ACCEPT
+/// A walk over the chains reachable from an input chain.
+struct Walk<'a, 'r> {
+    rules: &'a HashMap<ChainKey, Vec<&'r [Value]>>,
+    multiport: &'a Multiport,
+    /// Chains visited, per scope: firewalld jumps to a zone with
+    /// `iifname`, then without.
+    seen: HashSet<(ChainKey, bool)>,
+    memo: &'a mut HashMap<ChainKey, Option<Fate>>,
+}
+
+impl Walk<'_, '_> {
+    /// Adds what `chain` opens to any source. A `jump` or `goto` is
+    /// followed only if its rule is narrow too; if that rule also matches
+    /// ports, they are open when the target accepts everything (as `ufw
+    /// limit` does). `scoped` is set below a jump that matched an input
+    /// interface.
+    fn open_ports(&mut self, chain: &ChainKey, scoped: bool, out: &mut OpenPorts) {
+        if !self.seen.insert((chain.clone(), scoped)) {
+            return;
+        }
+        let rules = self.rules;
+        for (i, expr) in rules.get(chain).into_iter().flatten().enumerate() {
+            let (Some(v), Some((_, before))) = (verdict(expr), expr.split_last()) else {
+                continue;
+            };
+            let Some(mut rule) = narrow(before) else {
+                continue;
+            };
+            let key = (chain.0.clone(), chain.2.clone(), i);
+            if chain.1 == "filter"
+                && let Some(ports) = self.multiport.get(&key)
+            {
+                rule.ports.extend(ports.iter().cloned());
+                rule.unread.clear();
+            }
+            let scoped = scoped || rule.interface;
+            let opens = match v {
+                Verdict::Accept => true,
+                Verdict::Jump(t) | Verdict::Goto(t) => {
+                    let target = (chain.0.clone(), chain.1.clone(), t.to_owned());
+                    if rule.ports.is_empty() && rule.unread.is_empty() {
+                        self.open_ports(&target, scoped, out);
+                        false
+                    } else {
+                        fate(rules, &target, self.memo) == Fate::ACCEPT
+                    }
                 }
+                _ => false,
+            };
+            if opens {
+                if scoped {
+                    &mut out.by_interface
+                } else {
+                    &mut out.any
+                }
+                .extend(rule.ports);
+                out.unread.extend(rule.unread);
             }
-            _ => false,
-        };
-        if opens {
-            if scoped {
-                &mut out.by_interface
-            } else {
-                &mut out.any
-            }
-            .extend(rule.ports);
-            out.unread.extend(rule.unread);
         }
     }
 }
@@ -670,7 +760,7 @@ mod tests {
     /// Rulesets captured from real hosts with `nft -j list ruleset`.
     fn ruleset(name: &str) -> Firewall {
         let json = std::fs::read(testdata(&format!("nft/{name}.json"))).unwrap();
-        parse(&json).unwrap()
+        parse(&json, &Multiport::new()).unwrap()
     }
 
     fn chains(fw: &Firewall) -> Vec<(&str, &str, bool)> {
@@ -885,6 +975,71 @@ mod tests {
     }
 
     #[test]
+    fn reads_multiport_ports_from_iptables_save() {
+        // Ubuntu 24.04, ufw and Docker 29: `allow 22/tcp`, `allow 80,443/tcp`,
+        // `allow 60000:60010/udp`, `limit 2222/tcp`, `allow from
+        // 203.0.113.0/24 to any port 5432 proto tcp`; captured together.
+        let file = |name: &str| std::fs::read(testdata(&format!("nft/{name}"))).unwrap();
+        let nft = Output::success(file("ufw-multiport.json"));
+        let runner = FakeRunner::new()
+            .on("nft", ["-j"], nft.clone())
+            .on(
+                "iptables-save",
+                ["-t", "filter"],
+                Output::success(file("ufw-multiport.iptables")),
+            )
+            .on(
+                "ip6tables-save",
+                ["-t", "filter"],
+                Output::success(file("ufw-multiport.ip6tables")),
+            );
+        let mut notices = Vec::new();
+        let fw = detect(&runner, &mut notices).unwrap();
+        assert_eq!(fw.input_chains.len(), 2);
+        for c in &fw.input_chains {
+            assert!(c.unread_ports.is_empty(), "{}", c.family);
+            for (proto, port) in [("tcp", 443), ("udp", 60005), ("tcp", 2222)] {
+                assert_eq!(
+                    c.blocks(proto, port),
+                    Some(false),
+                    "{} {proto}/{port}",
+                    c.family
+                );
+            }
+            for (proto, port) in [("tcp", 8080), ("tcp", 5432), ("udp", 60011)] {
+                assert_eq!(
+                    c.blocks(proto, port),
+                    Some(true),
+                    "{} {proto}/{port}",
+                    c.family
+                );
+            }
+        }
+        let ran: Vec<String> = runner.calls().into_iter().map(|c| c.program).collect();
+        assert_eq!(ran, ["nft", "iptables-save", "ip6tables-save"]);
+        assert!(notices.is_empty(), "{notices:?}");
+
+        // Without iptables-save the ports stay unknown.
+        let fw = detect(&FakeRunner::new().on("nft", ["-j"], nft), &mut notices).unwrap();
+        assert_eq!(fw.input_chains[0].blocks("tcp", 443), None);
+    }
+
+    #[test]
+    fn multiport_save_lines() {
+        let save = "-A in -p tcp -m tcp --dport 22 -j ACCEPT\n\
+                    -A in -p tcp -m multiport --dports 80,443,8000:8010 -j ACCEPT\n\
+                    -A in -p udp -m multiport --sports 53 -j ACCEPT\n\
+                    -A in -p tcp -m multiport ! --dports 25 -j ACCEPT\n";
+        let got = parse_save(save, "ip");
+        assert_eq!(got.len(), 1, "{got:?}");
+        let ports: Vec<String> = got[&("ip".to_owned(), "in".to_owned(), 1)]
+            .iter()
+            .map(|p| format!("{}/{}-{}", p.proto, p.first, p.last))
+            .collect();
+        assert_eq!(ports, ["tcp/80-80", "tcp/443-443", "tcp/8000-8010"]);
+    }
+
+    #[test]
     fn port_matches() {
         let ports = |right: &str, proto: &str| {
             let m: Value = serde_json::from_str(&format!(
@@ -972,7 +1127,7 @@ mod tests {
             }
         }
         let json = format!(r#"{{"nftables": [{}]}}"#, objects.join(","));
-        parse(json.as_bytes()).unwrap()
+        parse(json.as_bytes(), &Multiport::new()).unwrap()
     }
 
     #[test]
@@ -1058,7 +1213,7 @@ mod tests {
     #[test]
     fn unrecognized_output_is_none() {
         for json in ["", "{}", r#"{"nftables": {}}"#, "[1, 2]"] {
-            assert_eq!(parse(json.as_bytes()), None, "{json:?}");
+            assert_eq!(parse(json.as_bytes(), &Multiport::new()), None, "{json:?}");
         }
     }
 
