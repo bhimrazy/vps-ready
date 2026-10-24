@@ -72,6 +72,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_test_registry_is_the_registry_and_this_module() {
+        let ids = |ms: &[&dyn Module]| ms.iter().map(|m| m.id()).collect::<Vec<_>>();
+        let mut expected = ids(super::super::all());
+        expected.push("test.deadman");
+        assert_eq!(ids(super::super::with_test()), expected);
+    }
+
+    #[test]
     fn needs_the_dead_man_and_systemd() {
         let mut facts = crate::facts::fixtures::host("debian-13", &[]);
         assert!(DeadmanTest.needs_deadman() && DeadmanTest.force_restore());

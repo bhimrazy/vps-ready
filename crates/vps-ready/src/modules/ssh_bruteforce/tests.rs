@@ -324,7 +324,9 @@ fn apply_is_idempotent_and_rolls_back() {
 
         let state = StateDir::create(&fs, STATE, meta.uid()).unwrap();
         let engine = Engine::lock(&state, sys).unwrap();
-        let outcome = engine.apply(&first, &mut |_| {}).unwrap();
+        let outcome = engine
+            .apply(&first, &crate::engine::Deadman::default(), &mut |_| {})
+            .unwrap();
         assert!(
             matches!(outcome, ApplyOutcome::Applied { .. }),
             "{start:?}: {outcome:?}"

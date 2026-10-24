@@ -185,7 +185,12 @@ pub fn all() -> &'static [&'static dyn Module] {
 #[cfg(feature = "testing")]
 #[must_use]
 pub fn with_test() -> &'static [&'static dyn Module] {
-    &[&KernelSysctl::ROOT, &UpdatesAuto::ROOT, &DeadmanTest]
+    &[
+        &SshBruteforce::ROOT,
+        &KernelSysctl::ROOT,
+        &UpdatesAuto::ROOT,
+        &DeadmanTest,
+    ]
 }
 
 #[cfg(test)]
