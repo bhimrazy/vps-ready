@@ -4,7 +4,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use super::file::{fmt_owner, unified};
-use super::user::account;
+use super::user::lookup;
 use super::{Backup, FileCopy, ResourceError, after_path, before_path, file};
 use crate::sys::{FileKind, FileOwner, Sys, SysError};
 
@@ -144,7 +144,7 @@ impl AuthorizedKeys {
 
     /// The file and its directory; `None` if the user does not exist.
     fn target(&self, sys: Sys) -> Result<Option<Target>, ResourceError> {
-        let Some(entry) = account(sys, &self.user)? else {
+        let Some(entry) = lookup(sys, &self.user)? else {
             return Ok(None);
         };
         let dir = entry.home.join(".ssh");
