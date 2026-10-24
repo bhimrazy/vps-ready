@@ -1,5 +1,6 @@
 # SSH controls. Checks read the effective config from `sshd -T`, so sshd's own
-# rules (drop-ins, first value wins) are already applied.
+# rules (drop-ins, first value wins) are already applied. SSH-008 also asks
+# `fail2ban-client` whether the sshd jail runs.
 
 [[control]]
 id = "SSH-001"
@@ -49,3 +50,11 @@ severity = "low"
 title = "User environment files ignored"
 why = "With it on, a user's ~/.ssh/environment can set variables such as LD_PRELOAD, which can bypass restrictions like a forced command."
 check = { kind = "sshd_effective", key = "permituserenvironment", equals = "no" }
+
+[[control]]
+id = "SSH-008"
+severity = "low"
+title = "Repeated failed logins are slowed down"
+why = "Bots try common passwords all day. Holding back an address that keeps failing cuts the log noise and slows down a guess at a weak password."
+check = { kind = "ssh_rate_limited" }
+fix = "ssh.bruteforce"

@@ -172,6 +172,8 @@ jobs:
         run: test/container-audit.sh "$DISTRO" bin/vps-ready
       - name: Apply and roll back updates.auto in the container
         run: test/container-apply.sh "$DISTRO" bin/vps-ready
+      - name: Apply and roll back ssh.bruteforce in the container
+        run: test/container-bruteforce.sh "$DISTRO" bin/vps-ready
 
   # Single required check for branch protection.
   ci-ok:

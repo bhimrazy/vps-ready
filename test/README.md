@@ -32,6 +32,9 @@ it for four distros against the x86_64 musl artifact.
 fresh container: `apply --yes`, `plan --json` shows no changes, `UPD-001`
 passes, `history` shows the transaction, `rollback --last`, and the managed files
 match their state before. It needs network access for `apt-get`.
+`test/container-bruteforce.sh <distro> [binary]` runs the same kind of cycle
+for `ssh.bruteforce`: the jail runs, reads the journal and bans into
+nftables, `SSH-008` passes, and rollback removes the drop-in.
 
 ```sh
 cargo build --release --target aarch64-unknown-linux-musl   # x86_64-... on Intel

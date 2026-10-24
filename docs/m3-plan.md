@@ -13,7 +13,7 @@ Debian 12/13 and Ubuntu 22.04/24.04 with systemd only, as in M2.
 | `user.admin` | a login user (created or existing), its `~/.ssh/authorized_keys`, `/etc/sudoers.d/90-vps-ready-admin` | none (a precondition for `ssh.server`) | yes: the confirm is "Challenge 1" |
 | `ssh.server` | `/etc/ssh/sshd_config.d/00-vps-ready.conf`; reloads sshd | `SSH-001` to `SSH-007` | yes |
 | `firewall.inbound` | installs `nftables` if missing; `/etc/vps-ready/firewall.nft`, `/etc/systemd/system/vps-ready-firewall.service`, which it enables and starts | `FW-001` | yes |
-| `ssh.bruteforce` | installs `fail2ban` and `python3-systemd`; `/etc/fail2ban/jail.d/90-vps-ready.local`; enables and starts `fail2ban` | `SSH-008` (new) | no |
+| `ssh.bruteforce` | installs `nftables`, `python3-systemd` and `fail2ban`; `/etc/fail2ban/jail.d/90-vps-ready.local`; enables and starts `fail2ban` | `SSH-008` (new) | no |
 
 The registry order is `user.admin`, `ssh.server`, `firewall.inbound`, `ssh.bruteforce`, `kernel.sysctl`, `updates.auto`. A fixed order is enough: the only dependency (`ssh.server` needs a working admin) is a plan-time check, not an ordering problem, so there is still no `requires` or topological sort.
 
@@ -83,10 +83,10 @@ table inet vps_ready {
 
 **`ssh.bruteforce` details** (open question 2: fail2ban by default, CrowdSec later):
 - Only in the `web` profile. Once SSH is key-only, brute force is mostly log noise, and OpenSSH 9.8+ has `PerSourcePenalties` on by default (Debian 13 has it; Debian 12 and Ubuntu 22.04/24.04 do not).
-- Packages `fail2ban` and `python3-systemd` (Debian 12+ has no `auth.log` by default, so the jail reads the journal).
-- The packaged `defaults-debian.conf` already sets `banaction = nftables` and `backend = systemd` (Debian 13 under `[sshd]`, Ubuntu 24.04 under `[DEFAULT]`). The drop-in sets them again under `[DEFAULT]` (harmless where they match, and needed if Debian 12 or Ubuntu 22.04 differ), plus `[sshd] enabled = true` with `ignoreip = 127.0.0.1/8 ::1 <admin ip>`. `jail.d/*.local` is read after `jail.d/*.conf`, so it wins.
+- Packages `nftables`, `python3-systemd` and `fail2ban` (Debian 12+ has no `auth.log` by default, so the jail reads the journal; `nft` is missing on Debian 13's cloud image, and fail2ban only recommends `nftables`, which `--no-install-recommends` skips).
+- The packaged `defaults-debian.conf` already sets `banaction = nftables` and `backend = systemd` (Debian 13 under `[sshd]`, Ubuntu 24.04 under `[DEFAULT]`). The drop-in sets them again under `[DEFAULT]` (harmless where they match, and needed on Debian 12, whose file sets only `[sshd] enabled = true`), plus `[sshd] enabled = true` with `ignoreip = 127.0.0.1/8 ::1 <admin ip>`. `jail.d/*.local` is read after `jail.d/*.conf`, so it wins.
 - fail2ban's own table (`inet f2b-table`, input hook, priority `filter - 1`, created on the first ban) coexists with ours: a drop in any base chain is final.
-- Validate with `fail2ban-client -t` after writing (exits 0 on a good config on Debian 13 and Ubuntu 24.04); then `systemctl restart fail2ban` (it is not on the SSH path, so restart is fine).
+- Validate with `fail2ban-client -t` after writing (exits 0 on a good config on Debian 13 and Ubuntu 24.04); then `systemctl try-restart fail2ban` (it is not on the SSH path, so restart is fine; `try-` because the rollback replay runs after the `Service` restore, and must not start a fail2ban that restore stopped).
 - New control `SSH-008` (low): "Repeated failed logins are slowed down", a new check kind `ssh_rate_limited`: passes if `sshd -T` shows `persourcepenalties` other than `no`, or `fail2ban-client status sshd` succeeds. `fix = "ssh.bruteforce"`.
 
 ### Resources
@@ -146,7 +146,7 @@ pub struct ModuleSteps { pub resources: Vec<Resource>, pub reloads: Vec<Reload> 
 pub enum Reload {
     SshdReload,       // check `sshd -t`, then `systemctl try-reload-or-restart ssh.service`
     FirewallReload,   // check `nft -c -f /etc/vps-ready/firewall.nft`, then `systemctl try-reload-or-restart vps-ready-firewall.service`
-    Fail2banRestart,  // check `fail2ban-client -t`, then `systemctl restart fail2ban.service`
+    Fail2banRestart,  // check `fail2ban-client -t`, then `systemctl try-restart fail2ban.service`
     DaemonReload,     // `systemctl daemon-reload`, no check
 }
 ```
@@ -470,12 +470,13 @@ Checked on VMs (Debian 13 with OpenSSH 10.0p2, Ubuntu 24.04 with 9.6p1; some als
 | Process titles (`sshd-session:` on 10.0, `sshd:` before); Debian 13 `[priv]` has PPID 1; one extra `sudo` with a terminal | Debian 13, Ubuntu 24.04 |
 | With `UsePAM yes`, locked passwords (`!`, `*`, `!*`) still accept key logins | Debian 13, Ubuntu 24.04 |
 | `fail2ban-client -t` works; `defaults-debian.conf` sets `banaction = nftables` and `backend = systemd`; `inet f2b-table` at `filter - 1`, created on the first ban | Debian 13, Ubuntu 24.04 |
+| With the drop-in, the sshd jail reads failed logins from the journal and bans into `inet f2b-table`; Debian 12's `defaults-debian.conf` sets only `enabled`; nft before 1.1 needs `netbase` for `port = ssh`; installing fail2ban enables it without starting it | Debian 12/13, Ubuntu 22.04/24.04 (containers) |
 | `nft` missing on Debian 13, present on Ubuntu 24.04; `/etc/nftables.conf` starts with `flush ruleset`; `nftables.service` disabled; `iptables` is `iptables-nft` | Debian 13, Ubuntu 24.04 |
 | A drop-policy table with `established` and the SSH port keeps the live session; a pre-conntrack flow without an accept rule can drop | Debian 13, Ubuntu 24.04 |
 | `sshd-session` split and `PerSourcePenalties` on by default since 9.8 | OpenSSH 9.8 release notes |
 
 Not yet checked; each is covered by a test in the PR that depends on it:
-- On Debian 12 and Ubuntu 22.04: the `ssh.socket` and reload behavior (22.04 has no socket activation), the process titles, the fail2ban defaults, whether `nft` is preinstalled, and the conntrack behavior.
+- On Debian 12 and Ubuntu 22.04: the `ssh.socket` and reload behavior (22.04 has no socket activation), the process titles, whether `nft` is preinstalled, and the conntrack behavior.
 - The boot hook ordering (`DefaultDependencies=no`, before `ssh.socket`) on a real boot, and `systemd-analyze verify` of both units: VM cycle 4.
 - That broadcast DHCPv4 replies need the `udp sport 67 dport 68` rule: VM cycle 1.
 

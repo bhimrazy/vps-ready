@@ -186,9 +186,9 @@ impl Resource {
     ///
     /// # Errors
     ///
-    /// For a [`File`], [`ResourceError::NotRegularFile`] or
-    /// [`ResourceError::MissingParent`]; for an [`AuthorizedKeys`], those
-    /// or [`ResourceError::Unsafe`]; [`ResourceError::Command`] if a command
+    /// For a [`File`], [`ResourceError::NotRegularFile`]; for an
+    /// [`AuthorizedKeys`], that, [`ResourceError::MissingParent`] or
+    /// [`ResourceError::Unsafe`]; [`ResourceError::Command`] if a command
     /// fails; [`ResourceError::Unit`], [`ResourceError::InvalidName`] or
     /// [`ResourceError::InvalidKey`]; any [`SysError`] from reading.
     pub fn diff(&self, sys: Sys) -> Result<Option<Change>, ResourceError> {
@@ -220,8 +220,8 @@ impl Resource {
     ///
     /// # Errors
     ///
-    /// As for [`Resource::diff`], plus [`ResourceError::Invalid`] for a
-    /// [`File`] and [`ResourceError::NoSuchUser`] for an [`AuthorizedKeys`].
+    /// As for [`Resource::diff`], plus [`ResourceError::MissingParent`] and
+    /// [`ResourceError::Invalid`] for a [`File`] and [`ResourceError::NoSuchUser`] for an [`AuthorizedKeys`].
     pub fn snapshot(&self, sys: Sys, txn_dir: &Path, n: u32) -> Result<Backup, ResourceError> {
         match self {
             Self::File(f) => f.snapshot(sys, txn_dir, n),

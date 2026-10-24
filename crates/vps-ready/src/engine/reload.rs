@@ -18,7 +18,8 @@ pub enum Reload {
     /// `nft -c -f /etc/vps-ready/firewall.nft`, then
     /// `systemctl try-reload-or-restart vps-ready-firewall.service`.
     FirewallReload,
-    /// `fail2ban-client -t`, then `systemctl restart fail2ban.service`.
+    /// `fail2ban-client -t`, then `systemctl try-restart fail2ban.service`:
+    /// only a running fail2ban, so a rollback that stopped it leaves it off.
     Fail2banRestart,
     /// `systemctl daemon-reload`, with no check.
     DaemonReload,
@@ -59,7 +60,7 @@ impl Reload {
         let args: &[&str] = match self {
             Self::SshdReload => &["try-reload-or-restart", "ssh.service"],
             Self::FirewallReload => &["try-reload-or-restart", "vps-ready-firewall.service"],
-            Self::Fail2banRestart => &["restart", "fail2ban.service"],
+            Self::Fail2banRestart => &["try-restart", "fail2ban.service"],
             Self::DaemonReload => &["daemon-reload"],
         };
         Cmd::new("systemctl")
@@ -137,7 +138,7 @@ mod tests {
                 ),
                 (
                     Some("fail2ban-client -t".into()),
-                    "systemctl restart fail2ban.service".into()
+                    "systemctl try-restart fail2ban.service".into()
                 ),
                 (None, "systemctl daemon-reload".into()),
             ]

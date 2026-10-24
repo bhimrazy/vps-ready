@@ -203,6 +203,7 @@ ssh:
       - "yes"
     xauthlocation:
       - /usr/bin/xauth
+  fail2ban: false
 listeners:
   - proto: tcp
     addr: 0.0.0.0
