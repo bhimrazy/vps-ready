@@ -60,6 +60,7 @@ impl Module for Demo {
         Ok(ModuleSteps {
             resources: self.resources.clone(),
             reloads: self.reloads.clone(),
+            notes: Vec::new(),
         })
     }
     fn verify(&self, _: &PlanCx, _: Sys) -> Result<(), String> {
