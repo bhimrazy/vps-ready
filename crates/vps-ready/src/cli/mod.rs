@@ -4,6 +4,7 @@
 //! `history`. Further commands (`confirm`, ...) are added as their milestones
 //! land; see the GitHub milestones.
 
+use std::cmp::Reverse;
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -16,7 +17,7 @@ use owo_colors::OwoColorize;
 use tracing_subscriber::EnvFilter;
 
 use crate::VERSION_INFO;
-use crate::audit::{self, Check, Outcome, Report};
+use crate::audit::{self, Check, Finding, Outcome, Report, Severity};
 use crate::engine::{StateDir, Target};
 use crate::facts::{self, Env, Facts, Listener};
 use crate::modules;
@@ -88,7 +89,11 @@ pub enum Command {
     ///
     /// Exits 0 when no control fails or is unknown, 1 otherwise, and 2 on
     /// error. Some checks need root, so run it with sudo.
-    Audit,
+    Audit {
+        /// Also list passing and skipped controls.
+        #[arg(long)]
+        all: bool,
+    },
     /// Show what `apply` would change. Does not need root, but then skips
     /// what only root can read.
     Plan {
@@ -227,7 +232,7 @@ pub fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
                 print_facts(&mut out, &facts, cli.color_enabled())?;
             }
         }
-        Command::Audit => {
+        Command::Audit { all } => {
             let controls = audit::catalog()?;
             // The audit does not use the SSH session, so its notice is noise.
             let facts = collect_facts(Path::new("/"), &[facts::session::UNSET_NOTICE])?;
@@ -246,7 +251,14 @@ pub fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
                     &facts.os.pretty_name
                 };
                 let root_hint = !running_as_root() && root_would_help(&report, &facts);
-                print_report(&mut out, &report, host, root_hint, cli.color_enabled())
+                print_report(
+                    &mut out,
+                    &report,
+                    host,
+                    *all,
+                    root_hint,
+                    cli.color_enabled(),
+                )
             };
             match printed.and_then(|()| out.flush()) {
                 // `audit | head` must still report the result, not success.
@@ -386,44 +398,72 @@ fn root_would_help(report: &Report, facts: &Facts) -> bool {
     })
 }
 
-/// A title, a header row, one block per control, then a summary line:
+/// A title, then, unless nothing failed or is unknown, a header row and one
+/// block per control, then a summary:
 ///
 /// ```text
 /// Audit of Ubuntu 24.04.5 LTS: 5 controls
 ///
 /// STATUS   ID       SEVERITY  CONTROL
 /// FAIL     SSH-002  high      Password authentication disabled
-///                             passwordauthentication is yes, expected no
-///                             Passwords can be guessed or reused from leaks; ...
-/// PASS     SSH-003  high      Keyboard-interactive authentication disabled
+///          passwordauthentication is yes, expected no
+///          Passwords can be guessed or reused from leaks; ...
+///          fix: not automated yet
 ///
-/// 3 passed, 2 failed, 0 unknown
+/// 3 passed, 1 failed (1 high), 1 unknown
 /// ```
 ///
-/// A failed control ends with the command to fix it, e.g. `fix: sudo
-/// vps-ready apply --module kernel.sysctl`, or `fix: not automated yet`. When
-/// any failed control has a fix, the last line counts them and points to
-/// `vps-ready plan`.
+/// Without `all`, only failed and unknown controls get a block: failures by
+/// severity (highest first) and ID, then unknowns in catalog order. With
+/// `all`, every control does, in catalog order; a passed or skipped one is a
+/// row without details.
 ///
-/// Skipped controls get a row without details, and each distinct reason is
-/// printed once after the summary.
+/// A failed control ends with the command to fix it, e.g. `fix: sudo
+/// vps-ready apply --module kernel.sysctl`, or `fix: not automated yet`. An
+/// unknown one says why it could not be checked, with the cause from the
+/// notices when they name it.
+///
+/// After the summary come each distinct skip reason, once; the failed
+/// controls that have a fix, with the command that shows the changes; and,
+/// when rows were left out, how to list them.
 fn print_report(
     out: &mut (impl Write + ?Sized),
     report: &Report,
     host: &str,
+    all: bool,
     root_hint: bool,
     color: bool,
 ) -> io::Result<()> {
-    const INDENT: &str = "                            ";
-    const WIDTH: usize = 100;
-    let title = format!("Audit of {host}: {} controls", report.findings.len());
-    let header = format!("{:<7}  {:<7}  {:<8}  CONTROL", "STATUS", "ID", "SEVERITY");
-    if color {
-        writeln!(out, "{}\n\n{}", title.bold(), header.dimmed())?;
-    } else {
-        writeln!(out, "{title}\n\n{header}")?;
+    const INDENT: &str = "         ";
+    const WIDTH: usize = 80;
+    let s = report.summary;
+    let problems = s.failed + s.unknown > 0;
+    let mut shown: Vec<&Finding> = report.findings.iter().collect();
+    if !problems && !all {
+        shown.clear();
+    } else if !all {
+        shown.retain(|f| matches!(f.outcome, Outcome::Fail { .. } | Outcome::Unknown { .. }));
+        // Stable, so unknowns keep catalog order.
+        shown.sort_by_key(|f| match f.outcome {
+            Outcome::Fail { .. } => (0, Reverse(f.control.severity), f.control.id.as_str()),
+            _ => (1, Reverse(Severity::Low), ""),
+        });
     }
-    for finding in &report.findings {
+    let title = format!("Audit of {host}: {} controls", report.findings.len());
+    if color {
+        writeln!(out, "{}", title.bold())?;
+    } else {
+        writeln!(out, "{title}")?;
+    }
+    if !shown.is_empty() {
+        let header = format!("{:<7}  {:<7}  {:<8}  CONTROL", "STATUS", "ID", "SEVERITY");
+        if color {
+            writeln!(out, "\n{}", header.dimmed())?;
+        } else {
+            writeln!(out, "\n{header}")?;
+        }
+    }
+    for finding in &shown {
         let control = &finding.control;
         // Pad before coloring: escape codes would count towards the width.
         let label = match finding.outcome {
@@ -446,9 +486,14 @@ fn print_report(
             control.id, control.title
         )?;
         // Skip reasons repeat across controls, so they are listed once below.
-        if let Some(detail) = finding.detail()
+        if let Some(mut detail) = finding.detail()
             && !matches!(finding.outcome, Outcome::Skip { .. })
         {
+            if matches!(finding.outcome, Outcome::Unknown { .. })
+                && let Some(cause) = unknown_cause(&finding.control.check, &report.notices)
+            {
+                detail = format!("{detail}: {cause}");
+            }
             for line in wrap(&detail, WIDTH - INDENT.len()) {
                 writeln!(out, "{INDENT}{line}")?;
             }
@@ -469,26 +514,26 @@ fn print_report(
             }
         }
     }
-    let s = report.summary;
-    write!(
-        out,
-        "\n{} passed, {} failed, {} unknown",
-        s.passed, s.failed, s.unknown
-    )?;
+    write!(out, "\n{} passed, {} failed", s.passed, s.failed)?;
+    let by_severity: Vec<String> = [Severity::High, Severity::Medium, Severity::Low]
+        .into_iter()
+        .filter_map(|sev| {
+            let n = report
+                .findings
+                .iter()
+                .filter(|f| matches!(f.outcome, Outcome::Fail { .. }) && f.control.severity == sev)
+                .count();
+            (n > 0).then(|| format!("{n} {sev}"))
+        })
+        .collect();
+    if !by_severity.is_empty() {
+        write!(out, " ({})", by_severity.join(", "))?;
+    }
+    write!(out, ", {} unknown", s.unknown)?;
     if s.skipped > 0 {
         write!(out, ", {} skipped", s.skipped)?;
     }
     writeln!(out)?;
-    if s.unknown > 0 {
-        write!(
-            out,
-            "Unknown controls could not be checked; the notices on stderr say why."
-        )?;
-        if root_hint {
-            write!(out, " Run it with sudo: some checks need root.")?;
-        }
-        writeln!(out)?;
-    }
     let mut reasons: Vec<&str> = Vec::new();
     for finding in &report.findings {
         if let Outcome::Skip { reason } = &finding.outcome
@@ -500,24 +545,67 @@ fn print_report(
     for reason in reasons {
         writeln!(out, "Skipped: {reason}.")?;
     }
-    let fixable = report
-        .findings
+    if s.unknown > 0 && root_hint {
+        writeln!(out, "Run it with sudo: some checks need root.")?;
+    }
+    let fixable: Vec<&str> = shown
         .iter()
         .filter(|f| matches!(f.outcome, Outcome::Fail { .. }) && f.control.fix.is_some())
-        .count();
-    if fixable > 0 {
-        let (noun, verb) = if fixable == 1 {
-            ("control", "has")
+        .map(|f| f.control.id.as_str())
+        .collect();
+    if !fixable.is_empty() {
+        let ids = fixable.join(", ");
+        let count = if fixable.len() == s.failed {
+            format!("all {}", s.failed)
         } else {
-            ("controls", "have")
+            format!("{} of the {}", fixable.len(), s.failed)
         };
-        writeln!(
-            out,
-            "{fixable} failed {noun} {verb} an automatic fix. \
-             Run `vps-ready plan` to see what it would change."
-        )?;
+        let line = format!("vps-ready can fix {count} ({ids}): run `sudo vps-ready plan`.");
+        for line in wrap(&line, WIDTH) {
+            writeln!(out, "{line}")?;
+        }
+        match s.failed - fixable.len() {
+            0 => {}
+            1 => writeln!(
+                out,
+                "The other one needs a manual fix for now; it says so above."
+            )?,
+            n => writeln!(
+                out,
+                "The other {n} need a manual fix for now; each says so above."
+            )?,
+        }
+    }
+    // The clean case is one summary line, so it gets no pointer.
+    if problems && !all {
+        let (n, what) = if s.passed > 0 {
+            (s.passed, "passing")
+        } else {
+            (s.skipped, "skipped")
+        };
+        if n > 0 {
+            let noun = if n == 1 { "control" } else { "controls" };
+            writeln!(
+                out,
+                "Run `vps-ready audit --all` to list the {n} {what} {noun} too."
+            )?;
+        }
     }
     Ok(())
+}
+
+/// Why an unknown control could not be checked, from the notice about the
+/// tool it needs: the part before the first `;`, e.g. `nft not found`.
+fn unknown_cause<'a>(check: &Check, notices: &'a [String]) -> Option<&'a str> {
+    let prefixes: [&str; 2] = match check {
+        Check::InboundDefaultDeny | Check::PublishedPorts => ["nft ", "`nft "],
+        Check::SshdEffective { .. } => ["sshd ", "`sshd -T` "],
+        _ => return None,
+    };
+    notices
+        .iter()
+        .find(|n| prefixes.iter().any(|p| n.starts_with(p)) && n.contains(';'))
+        .and_then(|n| n.split(';').next())
 }
 
 fn print_facts(out: &mut impl Write, facts: &Facts, color: bool) -> io::Result<()> {
@@ -657,13 +745,18 @@ mod tests {
         let report = audit::run(audit::catalog().unwrap(), &facts);
         assert!(root_would_help(&report, &facts));
         let mut text = Vec::new();
-        print_report(&mut text, &report, "this host", true, false).unwrap();
+        print_report(&mut text, &report, "this host", false, true, false).unwrap();
         let text = String::from_utf8(text).unwrap();
-        assert!(text.contains("0 passed, 2 failed, 7 unknown"), "{text}");
+        assert!(text.contains("0 passed, 2 failed ("), "{text}");
+        assert!(text.contains(", 7 unknown"), "{text}");
+        assert!(
+            text.contains("effective SSH config is unknown: `sshd -T` failed (Missing"),
+            "{text}"
+        );
         assert!(text.contains("Run it with sudo"), "{text}");
 
         let mut text = Vec::new();
-        print_report(&mut text, &report, "this host", false, false).unwrap();
+        print_report(&mut text, &report, "this host", false, false, false).unwrap();
         let text = String::from_utf8(text).unwrap();
         assert!(!text.contains("Run it with sudo"), "{text}");
     }
@@ -696,7 +789,7 @@ mod tests {
         let text = |ids: &[&str]| {
             let report = audit::run(controls(ids), &facts);
             let mut text = Vec::new();
-            print_report(&mut text, &report, "this host", false, false).unwrap();
+            print_report(&mut text, &report, "this host", false, false, false).unwrap();
             String::from_utf8(text).unwrap()
         };
 
@@ -704,22 +797,25 @@ mod tests {
         assert!(both.contains("fix: not automated yet"), "{both}");
         assert!(
             both.ends_with(
-                "1 failed control has an automatic fix. \
-                 Run `vps-ready plan` to see what it would change.\n"
+                "vps-ready can fix 1 of the 2 (KRN-001): run `sudo vps-ready plan`.\n\
+                 The other one needs a manual fix for now; it says so above.\n"
             ),
             "{both}"
         );
 
         let two = text(&["KRN-001", "KRN-003", "MAC-001"]);
         assert!(
-            two.contains("\n2 failed controls have an automatic fix. "),
+            two.contains("\nvps-ready can fix 2 of the 3 (KRN-003, KRN-001): "),
             "{two}"
         );
+        let all = text(&["KRN-001", "KRN-003"]);
+        assert!(all.contains("\nvps-ready can fix all 2 ("), "{all}");
+        assert!(!all.contains("manual fix"), "{all}");
 
         let unfixable = text(&["MAC-001"]);
         assert!(unfixable.contains("fix: not automated yet"), "{unfixable}");
-        assert!(!unfixable.contains("automatic fix"), "{unfixable}");
-        assert!(!text(&["KRN-002"]).contains("automatic fix"));
+        assert!(!unfixable.contains("can fix"), "{unfixable}");
+        assert!(!text(&["KRN-002"]).contains("can fix"));
     }
 
     /// A kernel setting that only root can read is worth a sudo hint; one
@@ -794,10 +890,40 @@ mod tests {
                 &host(name, &[]).os.pretty_name,
                 false,
                 false,
+                false,
             )
             .unwrap();
             insta::assert_snapshot!(format!("audit-{name}"), String::from_utf8(text).unwrap());
         }
+    }
+
+    /// `--all` keeps the full table, including passed and skipped rows.
+    #[test]
+    fn audit_text_all_snapshot() {
+        let name = "debian-12";
+        let report = audit::run(audit::catalog().unwrap(), &host(name, &[]));
+        let mut text = Vec::new();
+        let os = &host(name, &[]).os.pretty_name;
+        print_report(&mut text, &report, os, true, false, false).unwrap();
+        insta::assert_snapshot!("audit-all-debian-12", String::from_utf8(text).unwrap());
+    }
+
+    /// A host with nothing to report gets the title and the summary.
+    #[test]
+    fn audit_text_clean_is_one_summary() {
+        let facts = host("debian-13", &[]);
+        let controls = audit::catalog()
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.id == "SSH-003")
+            .collect();
+        let report = audit::run(controls, &facts);
+        let mut text = Vec::new();
+        print_report(&mut text, &report, "this host", false, false, false).unwrap();
+        assert_eq!(
+            String::from_utf8(text).unwrap(),
+            "Audit of this host: 1 controls\n\n1 passed, 0 failed, 0 unknown\n"
+        );
     }
 
     /// The kernel and network controls of a Debian 13 VM with the kernel's
@@ -847,7 +973,7 @@ mod tests {
         let report = audit::run(controls, &facts);
 
         let mut text = Vec::new();
-        print_report(&mut text, &report, "a Debian 13 VM", false, false).unwrap();
+        print_report(&mut text, &report, "a Debian 13 VM", false, false, false).unwrap();
         insta::assert_snapshot!(String::from_utf8(text).unwrap());
 
         let json = serde_json::to_value(&report).unwrap();

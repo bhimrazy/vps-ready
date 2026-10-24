@@ -250,7 +250,14 @@ fn audit_fixed(host: &Host, plan: &Plan, out: &mut dyn Write) -> anyhow::Result<
     let facts = (host.facts)(host.sys)?;
     let report = audit::run(fixed_by(&plan.changed_modules())?, &facts);
     writeln!(out)?;
-    print_report(out, &report, "this host after apply", false, host.color)?;
+    print_report(
+        out,
+        &report,
+        "this host after apply",
+        false,
+        false,
+        host.color,
+    )?;
     Ok(())
 }
 
