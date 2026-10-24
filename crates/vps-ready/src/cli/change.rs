@@ -697,7 +697,7 @@ fn print_history(out: &mut dyn Write, txns: &[TxnInfo]) -> io::Result<()> {
         };
         writeln!(
             out,
-            "{:<20}  {state:<26}  {modules:<width$}  {} {}",
+            "{:<20}  {state:<29}  {modules:<width$}  {} {}",
             t.id,
             t.changes,
             plural(t.changes, "change")

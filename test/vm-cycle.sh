@@ -22,6 +22,16 @@
 #     they had at the first boot.
 #   updates.auto: apply -> the plan is empty and UPD-001 passes -> rollback
 #     --last -> the apt.conf.d files match their state before.
+#   The dead-man switch, with the test module `test.deadman` (the binary must
+#   be built with `--features testing`) and `--deadman 1m`:
+#     timeout: apply, do not confirm -> within the deadline + 10 s the file is
+#       gone, the reason is deadman-timeout, the boot hook is disabled and
+#       logins work.
+#     edited: apply, edit the file during the window -> it is still reverted,
+#       and the edit is in files/1.during.
+#     reboot: `systemd-analyze verify` of the boot hook finds no ordering
+#       cycle; apply, reboot during the window -> rolled back with
+#       deadman-reboot, and the hook finished before sshd started.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -248,6 +258,80 @@ rc=0; vr rollback --last || rc=$?
 expect_newest rolled-back
 vm "cd $apt_conf && test ! -e 52vps-ready && sha256sum -c --quiet /tmp/apt-before.sha" ||
   die "apt.conf.d files differ from the state before apply"
+
+deadman_file=/etc/vps-ready-deadman-test.conf
+hook=vps-ready-deadman.service
+
+# Applies test.deadman with a 1-minute window; it exits 4, still pending.
+apply_deadman() {
+  vm test ! -e "$deadman_file" || die "$deadman_file exists before apply"
+  rc=0; vr apply --yes --module test.deadman --deadman 1m || rc=$?
+  [ "$rc" -eq 4 ] || die "apply exited $rc, expected 4 (pending)"
+  expect_newest pending-confirm
+  vm test -e "$deadman_file" || die "$deadman_file is missing after apply"
+  [ "$(vm systemctl is-enabled "$hook")" = enabled ] || die "$hook is not enabled"
+  txn=$(jq -r '.[0].id' "$tmp/history.json")
+}
+
+# expect_reverted <reason>: the newest transaction was rolled back for it,
+# the file is gone and the boot hook disabled.
+expect_reverted() {
+  expect_newest rolled-back
+  jq -e --arg r "$1" '.[0].reason == $r' "$tmp/history.json" >/dev/null ||
+    { vr history; die "rolled back, but not with reason $1"; }
+  vm test ! -e "$deadman_file" || die "$deadman_file still exists"
+  [ "$(vm systemctl is-enabled "$hook" || true)" = disabled ] || die "$hook is still enabled"
+}
+
+# Waits for the timer: the window plus 10 s.
+wait_deadman() {
+  i=0
+  until vr history --json >"$tmp/history.json" && jq -e '.[0].state == "rolled-back"' "$tmp/history.json" >/dev/null; do
+    i=$((i + 5)); [ "$i" -le 70 ] || { vr history; die "not rolled back within 70 s"; }
+    sleep 5
+  done
+  echo "rolled back after about $i s"
+}
+
+echo "== $distro: dead-man switch, timeout"
+apply_deadman
+wait_deadman
+expect_reverted deadman-timeout
+vm true || die "no login after the dead-man rollback"
+
+echo "== $distro: dead-man switch, edited during the window"
+apply_deadman
+vm "echo edited during the window | sudo tee $deadman_file >/dev/null"
+wait_deadman
+expect_reverted deadman-timeout
+during=/var/lib/vps-ready/txn/$txn/files/1.during
+[ "$(vm sudo cat "$during")" = "edited during the window" ] || die "$during does not hold the edit"
+
+echo "== $distro: dead-man switch, reboot during the window"
+# The hook unit exists from the first apply. No ordering cycle may be found:
+# systemd would break it by dropping a unit, perhaps ssh.socket.
+vm sudo systemd-analyze verify "/etc/systemd/system/$hook" >"$tmp/verify.txt" 2>&1 || true
+cat "$tmp/verify.txt"
+if grep -qi 'cycle' "$tmp/verify.txt" || grep -q "$hook" "$tmp/verify.txt"; then
+  die "systemd-analyze verify reports a problem with $hook"
+fi
+apply_deadman
+echo "== $distro: rebooting"
+reboot_vm
+vr history --json >"$tmp/history.json"
+expect_reverted deadman-reboot
+# The hook finished before systemd started anything of sshd's. From the
+# journal: the disabled hook is unloaded after it ran, so `systemctl show`
+# has no timestamps for it.
+vm sudo journalctl -b -o json "UNIT=$hook" JOB_RESULT=done >"$tmp/hook.json"
+done_at=$(jq -r .__MONOTONIC_TIMESTAMP "$tmp/hook.json" | tail -n 1)
+[ -n "$done_at" ] || die "$hook did not finish at boot"
+vm sudo journalctl -b -o json UNIT=ssh.service + UNIT=ssh.socket >"$tmp/ssh.json"
+first=$(jq -r .__MONOTONIC_TIMESTAMP "$tmp/ssh.json" | head -n 1)
+[ -n "$first" ] || die "no ssh.service or ssh.socket in the boot's journal"
+[ "$done_at" -lt "$first" ] || die "sshd started at $first us, before $hook finished at $done_at us"
+echo "$hook finished at $done_at us, sshd's first unit started at $first us"
+vm sudo journalctl -b -u "$hook" --no-pager | tail -n 20
 
 echo "== $distro: vps-ready history"
 vr history
