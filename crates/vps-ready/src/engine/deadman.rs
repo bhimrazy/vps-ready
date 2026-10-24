@@ -141,9 +141,9 @@ pub fn boottime(fs: &dyn Fs) -> Result<u64, EngineError> {
 }
 
 /// Checks that a root timer may run `path`: an absolute path of plain
-/// characters (it goes into a unit file), not under [`UNSAFE_DIRS`], a
-/// regular file, and it and every parent directory owned by root and not
-/// writable by group or others. Otherwise the user who could replace it
+/// characters (it goes into a unit file), not under `/home`, `/tmp`,
+/// `/var/tmp` or `/dev/shm`, a regular file, and it and every parent
+/// directory owned by root and not writable by group or others. Otherwise the user who could replace it
 /// would get a root shell. Returns why not.
 ///
 /// # Errors
@@ -305,7 +305,7 @@ mod tests {
         ];
         for (path, reason) in refused {
             let err = check_binary(&fs, Path::new(path)).unwrap_err();
-            assert!(err.contains(reason), "{path}: {err}");
+            assert!(err.contains(reason), "{path}");
         }
 
         let cases = [
@@ -324,7 +324,7 @@ mod tests {
         ];
         for (fs, reason) in cases {
             let err = check_binary(&fs, Path::new(bin)).unwrap_err();
-            assert!(err.contains(reason), "{err}");
+            assert!(err.contains(reason), "{reason}");
         }
 
         // A parent directory that another user can write to.
@@ -343,7 +343,7 @@ mod tests {
             .with_file("/usr/bin/real", "")
             .with_symlink("/usr/bin/link", "/usr/bin/real");
         let err = check_binary(&fs, Path::new("/usr/bin/link")).unwrap_err();
-        assert!(err.contains("is a Symlink"), "{err}");
+        assert!(err.contains("is a Symlink"));
     }
 
     #[test]

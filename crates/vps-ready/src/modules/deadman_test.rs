@@ -11,7 +11,7 @@ use crate::sys::{FileOwner, Sys};
 /// The one file it writes.
 pub const PATH: &str = "/etc/vps-ready-deadman-test.conf";
 
-/// Writes [`PATH`] and reloads sshd (with an unchanged config), so a
+/// Writes `/etc/vps-ready-deadman-test.conf` and reloads sshd (with an unchanged config), so a
 /// rollback replays a real reload, also at boot before sshd runs.
 #[derive(Debug, Clone, Copy)]
 pub struct DeadmanTest;
