@@ -221,7 +221,8 @@ impl Resource {
     /// # Errors
     ///
     /// As for [`Resource::diff`], plus [`ResourceError::MissingParent`] and
-    /// [`ResourceError::Invalid`] for a [`File`] and [`ResourceError::NoSuchUser`] for an [`AuthorizedKeys`].
+    /// [`ResourceError::Invalid`] for a [`File`] and
+    /// [`ResourceError::NoSuchUser`] for an [`AuthorizedKeys`].
     pub fn snapshot(&self, sys: Sys, txn_dir: &Path, n: u32) -> Result<Backup, ResourceError> {
         match self {
             Self::File(f) => f.snapshot(sys, txn_dir, n),

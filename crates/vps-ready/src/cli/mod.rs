@@ -407,7 +407,6 @@ fn root_would_help(report: &Report, facts: &Facts) -> bool {
         matches!(f.outcome, Outcome::Unknown { .. })
             && match &f.control.check {
                 Check::SshdEffective { .. } => facts.ssh.effective.is_none(),
-                // `fail2ban-client` also needs root.
                 Check::SshRateLimited => {
                     facts.ssh.effective.is_none() || facts.ssh.fail2ban.is_none()
                 }
