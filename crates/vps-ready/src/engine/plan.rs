@@ -151,6 +151,11 @@ impl ModulePlan<'_> {
         self.selected.module.force_restore()
     }
 
+    /// [`Module::verify_timeout`].
+    pub(super) fn verify_timeout(&self) -> std::time::Duration {
+        self.selected.module.verify_timeout()
+    }
+
     /// Runs [`Module::verify`] with the module's params and `facts`.
     pub(super) fn verify(&self, facts: &Facts, sys: Sys) -> Result<(), String> {
         let cx = PlanCx {

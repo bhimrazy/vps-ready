@@ -65,7 +65,7 @@ fn apply_dm(fs: &dyn Fs, runner: &FakeRunner, plan: &Plan) -> Result<ApplyOutcom
 
 fn timer(fs: &dyn Fs, runner: &FakeRunner, txn: &str) -> Result<DeadmanOutcome, EngineError> {
     let state = state(fs);
-    Engine::lock(&state, Sys { fs, runner })?.deadman(txn, Path::new(BIN), &mut |_| {})
+    Engine::lock(&state, Sys { fs, runner })?.deadman(txn, Path::new(BIN), 0, &mut |_| {})
 }
 
 fn boot_hook(fs: &dyn Fs, runner: &FakeRunner) -> Result<Vec<Rollback>, EngineError> {
@@ -146,7 +146,8 @@ fn arms_before_the_first_change_and_waits_for_a_confirm() {
 
     // The window plus the command timeouts: the sshd reload (30 + 120 s),
     // a verify for each of the three modules (30 s each), then stopping the
-    // first timer and starting the second (120 + 30 s).
+    // first timer and starting the second (120 + 30 s). Files and sysctls
+    // run no command.
     let first = 300 + 150 + 3 * 30 + 150;
     let unit = |n| format!("vps-ready-deadman-{txn}-{n}");
     assert_eq!(
@@ -157,8 +158,9 @@ fn arms_before_the_first_change_and_waits_for_a_confirm() {
             systemd_run(&txn, 1, first),
             "sshd -t".to_owned(),
             "systemctl try-reload-or-restart ssh.service".to_owned(),
-            format!("systemctl stop {}.timer {}.service", unit(1), unit(1)),
+            // The next timer first, then the old one goes.
             systemd_run(&txn, 2, 300),
+            format!("systemctl stop {}.timer {}.service", unit(1), unit(1)),
         ]
     );
     assert_eq!(
@@ -322,7 +324,8 @@ fn refuses_an_unsafe_binary_before_anything_changes() {
     assert_eq!(
         err.to_string(),
         "refusing to arm the dead-man switch with /tmp/vps-ready: it is under /tmp. \
-         Install vps-ready to /usr/local/bin first"
+         Install vps-ready to /usr/local/bin first, or, where that is group-writable \
+         (root:staff 2775 on older Debian), to /usr/bin or /opt/vps-ready/bin"
     );
     assert!(state.txns(&fs).unwrap().is_empty());
     assert!(calls(&run).is_empty());
@@ -408,7 +411,7 @@ fn an_edited_forced_file_is_restored_and_its_edit_kept() {
         },
     )
     .unwrap()
-    .deadman(&txn, Path::new(BIN), &mut |p| match p {
+    .deadman(&txn, Path::new(BIN), 0, &mut |p| match p {
         Progress::During { copy, .. } => shown.push(format!("during {}", copy.display())),
         Progress::Skip(step) => shown.push(format!("skip {step}")),
         _ => {}
@@ -605,8 +608,7 @@ fn a_crash_after_armed_is_finished_by_the_timer_and_by_the_boot_hook() {
                 assert!(
                     run.calls()
                         .iter()
-                        .all(|c| c.timeout <= Duration::from_secs(20)
-                            || c.args.first().is_some_and(|a| a == "disable")),
+                        .all(|c| c.timeout <= Duration::from_secs(20)),
                     "{case}"
                 );
             }
@@ -642,7 +644,7 @@ fn a_timer_that_fires_mid_apply_waits_for_the_lock() {
             )
             .unwrap();
             let txn = state.txns(&fs).unwrap().pop().unwrap();
-            engine.deadman(txn.id(), Path::new(BIN), &mut |_| {})
+            engine.deadman(txn.id(), Path::new(BIN), 0, &mut |_| {})
         });
         // Apply under the lock; the timer's rollback cannot start meanwhile.
         let outcome = held.apply(&plan, &deadman_cfg(), &mut |_| {}).unwrap();
@@ -690,10 +692,18 @@ fn a_manual_rollback_of_a_pending_transaction_disarms() {
     // The all-or-nothing check stays for a manual rollback.
     fs.write(Path::new(NEW), b"edited\n").unwrap();
     let run = dm_runner();
-    assert!(matches!(
-        manual(&fs, &run),
-        Err(EngineError::Changed { .. })
-    ));
+    let err = manual(&fs, &run).unwrap_err();
+    assert!(
+        matches!(err, EngineError::Changed { armed: true, .. }),
+        "{err:?}"
+    );
+    assert!(
+        err.to_string().ends_with(&format!(
+            "\nIts dead-man rollback (the timer, or `vps-ready rollback --txn {txn} --deadman`) \
+             still restores the files that can lock you out, changed or not."
+        )),
+        "{err}"
+    );
     assert!(calls(&run).is_empty());
     fs.write(Path::new(NEW), b"created\n").unwrap();
 
@@ -857,4 +867,287 @@ fn rollback_last_picks_pending_then_the_newest_applied_or_confirmed() {
         manual(&fs, &dm_runner()),
         Err(EngineError::NothingToRollBack)
     ));
+}
+
+/// [`dm_runner`], except that the `n`-th `systemd-run` fails; then, with
+/// `fs`, every rename fails too, so a rollback cannot complete.
+struct FailingArm<'a> {
+    inner: FakeRunner,
+    n: usize,
+    seen: std::sync::Mutex<usize>,
+    fs: Option<&'a FakeFs>,
+}
+
+impl<'a> FailingArm<'a> {
+    fn new(n: usize, fs: Option<&'a FakeFs>) -> Self {
+        Self {
+            inner: dm_runner(),
+            n,
+            seen: std::sync::Mutex::new(0),
+            fs,
+        }
+    }
+}
+
+impl crate::sys::Runner for FailingArm<'_> {
+    fn run(&self, cmd: &crate::sys::Cmd) -> Result<Output, crate::sys::SysError> {
+        if cmd.program == "systemd-run" {
+            let mut seen = self.seen.lock().unwrap();
+            *seen += 1;
+            if *seen == self.n {
+                if let Some(fs) = self.fs {
+                    fs.fail_from(Op::Rename, 1);
+                }
+                return Ok(failed("Failed to start transient timer unit"));
+            }
+        }
+        self.inner.run(cmd)
+    }
+}
+
+#[test]
+fn a_failed_re_arm_keeps_the_first_timer_until_the_rollback_finished() {
+    let facts = facts();
+    let [lock, ..] = locking();
+    for incomplete in [false, true] {
+        let fs = armable();
+        let before = host_without_hook(&fs);
+        let plan = plan_of(&fs, &facts, &[&lock]);
+        let run = FailingArm::new(2, incomplete.then_some(&fs));
+        let state = state(&fs);
+        let result = Engine::lock(
+            &state,
+            Sys {
+                fs: &fs,
+                runner: &run,
+            },
+        )
+        .unwrap()
+        .apply(&plan, &deadman_cfg(), &mut |_| {});
+        let txn = state.txns(&fs).unwrap().pop().unwrap();
+        let first = format!("vps-ready-deadman-{}-1", txn.id());
+        let stops: Vec<String> = calls(&run.inner)
+            .into_iter()
+            .filter(|c| c.starts_with("systemctl stop") || c == DISABLE)
+            .collect();
+        if incomplete {
+            // The host is still changed: the first timer must stay to finish it.
+            assert!(
+                matches!(result, Err(EngineError::RollbackIncomplete { .. })),
+                "{result:?}"
+            );
+            assert_eq!(stops, Vec::<String>::new());
+        } else {
+            let outcome = result.unwrap();
+            assert!(
+                matches!(
+                    outcome,
+                    ApplyOutcome::RolledBack {
+                        reason: RollbackReason::ApplyFailed,
+                        ..
+                    }
+                ),
+                "{outcome:?}"
+            );
+            assert_eq!(host_without_hook(&fs), before);
+            assert_eq!(
+                stops,
+                [
+                    format!("systemctl stop {first}.timer {first}.service"),
+                    DISABLE.to_owned(),
+                ]
+            );
+        }
+    }
+}
+
+#[test]
+fn an_incomplete_timer_rollback_is_retried_a_few_times() {
+    let fs = armable();
+    let facts = facts();
+    let [lock, ..] = locking();
+    let plan = plan_of(&fs, &facts, &[&lock]);
+    let (txn, _) = pending(&fs, &plan);
+    set_uptime(&fs, 5000);
+    // Restoring the drop-in fails until the disk has space again.
+    fs.fail_from(Op::Rename, 1);
+    let state = state(&fs);
+    let attempt = |n: u32, run: &FakeRunner| {
+        Engine::lock(
+            &state,
+            Sys {
+                fs: &fs,
+                runner: run,
+            },
+        )
+        .unwrap()
+        .deadman(&txn, Path::new(BIN), n, &mut |_| {})
+    };
+
+    let run = dm_runner();
+    let err = attempt(0, &run).unwrap_err();
+    assert!(
+        matches!(err, EngineError::RollbackIncomplete { .. }),
+        "{err:?}"
+    );
+    let retry = deadman::retry_name(&txn, 1);
+    assert_eq!(
+        calls(&run).last().unwrap(),
+        &format!(
+            "systemd-run --unit={retry} --on-active=60s --timer-property=AccuracySec=1s \
+             --description=vps-ready: retry the rollback of transaction {txn} \
+             {BIN} rollback --txn {txn} --deadman --attempt 1"
+        )
+    );
+    assert_eq!(names(&fs, &txn).last().unwrap(), "retry 1");
+    assert!(!calls(&run).contains(&DISABLE.to_owned()));
+
+    // The last retry gives up and leaves the rest to the boot hook.
+    let run = dm_runner();
+    assert!(attempt(5, &run).is_err());
+    assert!(!calls(&run).iter().any(|c| c.starts_with("systemd-run")));
+
+    fs.heal();
+    let run = dm_runner();
+    let outcome = attempt(1, &run).unwrap();
+    assert!(
+        matches!(outcome, DeadmanOutcome::RolledBack(_)),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        state_of(&fs, &txn),
+        rolled_back(RollbackReason::DeadmanTimeout)
+    );
+    // The timer of the retry is the last unit: only it is stopped, by itself.
+    assert!(calls(&run).contains(&format!("systemctl stop --no-block {retry}.timer")));
+}
+
+#[test]
+fn every_command_of_the_boot_hook_is_bounded() {
+    let fs = armable();
+    let state = state(&fs);
+    let txn = state.create_txn(&fs, 1).unwrap();
+    let rec = |event| Record { at: 1, event };
+    let applied = |resource: &str| {
+        rec(Event::Applied {
+            resource: resource.into(),
+            uid: None,
+        })
+    };
+    let records = [
+        rec(Event::Begin {
+            version: "0.3.0".into(),
+            modules: vec!["user.admin".into(), "ssh.bruteforce".into()],
+        }),
+        rec(Event::Armed {
+            unit: deadman::unit_name(txn.id(), 1),
+            boot_id: "a".into(),
+            deadline: Deadline {
+                boottime: 1100,
+                wall: 1,
+            },
+        }),
+        rec(Event::Backup {
+            resource: "user:admin".into(),
+            backup: Backup::User {
+                name: "admin".into(),
+                created: true,
+                added_groups: Vec::new(),
+            },
+            force_restore: false,
+        }),
+        applied("user:admin"),
+        rec(Event::Backup {
+            resource: "service:fail2ban.service".into(),
+            backup: Backup::Service {
+                unit: "fail2ban.service".into(),
+                was_enabled: false,
+                was_active: false,
+                enabled: true,
+                active: true,
+            },
+            force_restore: false,
+        }),
+        applied("service:fail2ban.service"),
+        rec(Event::Reloaded {
+            reload: Reload::Fail2banRestart,
+        }),
+    ];
+    for r in &records {
+        txn.append(&fs, r).unwrap();
+    }
+    fs.write(Path::new(BOOT_ID), b"b\n").unwrap();
+    // The first matching rule answers, so `show` goes before `systemctl`.
+    let run = FakeRunner::new()
+        .on(
+            "systemctl",
+            ["show"],
+            Output::success("LoadState=loaded\nUnitFileState=enabled\nActiveState=active\n"),
+        )
+        .on("systemctl", Vec::<String>::new(), Output::success(""))
+        .on(
+            "getent",
+            ["passwd", "admin"],
+            Output::success("admin:x:1001:1001::/home/admin:/bin/bash\n"),
+        )
+        .on("fail2ban-client", ["-t"], Output::success(""))
+        .on("userdel", Vec::<String>::new(), Output::success(""));
+    let done = boot_hook(&fs, &run).unwrap();
+    assert_eq!(done.len(), 1);
+    let calls = calls(&run);
+    for expected in [
+        "systemctl stop fail2ban.service",
+        "systemctl disable fail2ban.service",
+        "userdel admin",
+        DISABLE,
+    ] {
+        assert!(calls.iter().any(|c| c == expected), "{expected}: {calls:?}");
+    }
+    let unbounded: Vec<String> = run
+        .calls()
+        .iter()
+        .filter(|c| c.timeout > Duration::from_secs(20))
+        .map(|c| format!("{} {}", c.program, c.args.join(" ")))
+        .collect();
+    assert_eq!(unbounded, Vec::<String>::new());
+}
+
+#[test]
+fn the_first_deadline_covers_package_installs_and_verify_probes() {
+    let fs = armable();
+    let facts = facts();
+    let pkg = Demo {
+        deadman: true,
+        ..module(
+            "test.pkg",
+            vec![Resource::Package(crate::resource::Package {
+                name: "nftables".into(),
+            })],
+        )
+    };
+    let run = dm_runner()
+        .on("dpkg-query", ["-W"], Output::success("not-installed"))
+        .on("apt-get", Vec::<String>::new(), Output::success(""));
+    let sys = Sys {
+        fs: &fs,
+        runner: &run,
+    };
+    let plan = plan(&[Selected::new(&pkg)], &facts, sys).unwrap();
+    let state = state(&fs);
+    // dpkg-query still says not installed, so verify fails; the first timer
+    // is armed by then.
+    Engine::lock(&state, sys)
+        .unwrap()
+        .apply(&plan, &deadman_cfg(), &mut |_| {})
+        .unwrap();
+    let txn = state.txns(&fs).unwrap().pop().unwrap();
+    // The window; dpkg-query and two apt-get runs (30 + 2 * 600 s), and
+    // dpkg-query again in verify (30 s); the module's verify (30 s); the
+    // re-arm (120 + 30 s).
+    let first = 300 + 1230 + 30 + 30 + 150;
+    assert!(
+        calls(&run).contains(&systemd_run(txn.id(), 1, first)),
+        "{:?}",
+        calls(&run)
+    );
 }

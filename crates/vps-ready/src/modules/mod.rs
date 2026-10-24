@@ -1,13 +1,15 @@
 //! Modules: the policy that decides which [`Resource`]s a fix needs. They
 //! only plan and verify; the engine applies and rolls back.
 
+use std::time::Duration;
+
 use serde::de::DeserializeOwned;
 
 use crate::audit::CatalogError;
 use crate::engine::Reload;
 use crate::facts::Facts;
 use crate::resource::{Resource, ResourceError};
-use crate::sys::{Sys, SysError};
+use crate::sys::{Cmd, Sys, SysError};
 
 #[cfg(feature = "testing")]
 mod deadman_test;
@@ -167,6 +169,11 @@ pub trait Module {
     /// What is wrong, for the message.
     fn verify(&self, _cx: &PlanCx, _sys: Sys) -> Result<(), String> {
         Ok(())
+    }
+    /// The longest [`Module::verify`] may run, by the timeouts of its
+    /// commands; the dead-man's first deadline leaves apply this long.
+    fn verify_timeout(&self) -> Duration {
+        Cmd::DEFAULT_TIMEOUT
     }
 }
 

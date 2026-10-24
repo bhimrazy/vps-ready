@@ -272,13 +272,14 @@ pub(super) fn rollback(
 pub(super) fn rollback_deadman(
     host: &Host,
     txn: &str,
+    attempt: u32,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> anyhow::Result<u8> {
     require_root(host, "rollback")?;
     let state = StateDir::create(host.sys.fs, host.state_dir, host.state_uid)?;
     let engine = Engine::lock_wait(&state, host.sys)?;
-    match engine.deadman(txn, &host.binary, &mut |p| print_progress(err, &p))? {
+    match engine.deadman(txn, &host.binary, attempt, &mut |p| print_progress(err, &p))? {
         DeadmanOutcome::Finished(state) => {
             writeln!(out, "Transaction {txn} is {state}; nothing to roll back.")?;
         }

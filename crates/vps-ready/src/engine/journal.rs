@@ -107,6 +107,13 @@ pub enum Event {
         /// The check's exit status and stderr, or why it could not run.
         reason: String,
     },
+    /// A timer rollback did not complete, and `unit` tries it again.
+    Retry {
+        /// The transient unit.
+        unit: String,
+        /// Which retry it is, from 1.
+        attempt: u32,
+    },
     /// The transaction reached a new state.
     State {
         /// The new state.
@@ -134,6 +141,7 @@ impl Event {
             Self::Restored { .. } => "restored",
             Self::Skipped { .. } => "skipped",
             Self::ReloadSkipped { .. } => "reload-skipped",
+            Self::Retry { .. } => "retry",
             Self::State { .. } => "state",
         }
     }
@@ -251,7 +259,8 @@ pub fn transition(state: Option<TxnState>, event: &Event) -> Result<TxnState, En
             | Event::Rollback { .. }
             | Event::Restored { .. }
             | Event::Skipped { .. }
-            | Event::ReloadSkipped { .. },
+            | Event::ReloadSkipped { .. }
+            | Event::Retry { .. },
         ) => Ok(Planned),
         (
             Some(Planned),
@@ -283,7 +292,8 @@ pub fn transition(state: Option<TxnState>, event: &Event) -> Result<TxnState, En
             | Event::Restored { .. }
             | Event::Skipped { .. }
             | Event::Reloaded { .. }
-            | Event::ReloadSkipped { .. },
+            | Event::ReloadSkipped { .. }
+            | Event::Retry { .. },
         ) => Ok(pending),
         (
             Some(PendingConfirm { .. }),

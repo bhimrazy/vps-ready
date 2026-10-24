@@ -8,7 +8,7 @@ use std::time::Duration;
 use super::EngineError;
 use super::journal::{Deadline, Event, Record};
 use super::reload::{self, SYSTEMCTL_TIMEOUT};
-use crate::sys::{Cmd, FileKind, FileOwner, Fs, Sys, SysError};
+use crate::sys::{Cmd, FileKind, FileOwner, Fs, Output, Runner, Sys, SysError};
 
 /// The window a confirm has by default.
 pub const DEFAULT_WINDOW: Duration = Duration::from_secs(5 * 60);
@@ -64,6 +64,7 @@ pub(super) fn last_unit(records: &[Record]) -> Option<(&str, usize)> {
         .filter_map(|r| match &r.event {
             Event::Armed { unit, .. }
             | Event::Extended { unit, .. }
+            | Event::Retry { unit, .. }
             | Event::State {
                 unit: Some(unit), ..
             } => Some(unit.as_str()),
@@ -247,16 +248,41 @@ pub(super) fn arm(
     binary: &Path,
     txn: &str,
 ) -> Result<(), String> {
-    let cmd = Cmd::new("systemd-run")
+    let description = format!("vps-ready: roll back transaction {txn} unless confirmed");
+    reload::run(sys, &timer(unit, after, &description, binary, txn))
+}
+
+/// The unit of the `attempt`-th retry of a timer rollback of `txn`.
+#[must_use]
+pub fn retry_name(txn: &str, attempt: u32) -> String {
+    format!("vps-ready-deadman-{txn}-retry-{attempt}")
+}
+
+/// Starts the timer of the `attempt`-th retry of the timer rollback of
+/// `txn`, in `after`. The attempt goes on its command line, so retries stay
+/// bounded when the journal cannot be written.
+pub(super) fn arm_retry(
+    sys: Sys,
+    attempt: u32,
+    after: Duration,
+    binary: &Path,
+    txn: &str,
+) -> Result<String, String> {
+    let unit = retry_name(txn, attempt);
+    let description = format!("vps-ready: retry the rollback of transaction {txn}");
+    let cmd =
+        timer(&unit, after, &description, binary, txn).args(["--attempt", &attempt.to_string()]);
+    reload::run(sys, &cmd).map(|()| unit)
+}
+
+fn timer(unit: &str, after: Duration, description: &str, binary: &Path, txn: &str) -> Cmd {
+    Cmd::new("systemd-run")
         .arg(format!("--unit={unit}"))
         .arg(format!("--on-active={}s", after.as_secs().max(1)))
         .arg("--timer-property=AccuracySec=1s")
-        .arg(format!(
-            "--description=vps-ready: roll back transaction {txn} unless confirmed"
-        ))
+        .arg(format!("--description={description}"))
         .arg(binary.display().to_string())
-        .args(["rollback", "--txn", txn, "--deadman"]);
-    reload::run(sys, &cmd)
+        .args(["rollback", "--txn", txn, "--deadman"])
 }
 
 /// Stops the timer `unit`, and with `service` the rollback it may have
@@ -270,6 +296,21 @@ pub(super) fn stop(sys: Sys, unit: &str, service: bool) -> Result<(), String> {
         systemctl(["stop", "--no-block", &timer])
     };
     reload::run(sys, &cmd)
+}
+
+/// A [`Runner`] that gives every command at most `max`. The boot hook runs
+/// through one: it has 120 s in all before systemd gives up on it and
+/// starts sshd, so one hung command must not use them up.
+pub(super) struct Capped<'a> {
+    pub inner: &'a dyn Runner,
+    pub max: Duration,
+}
+
+impl Runner for Capped<'_> {
+    fn run(&self, cmd: &Cmd) -> Result<Output, SysError> {
+        let timeout = cmd.timeout.min(self.max);
+        self.inner.run(&cmd.clone().timeout(timeout))
+    }
 }
 
 fn systemctl<'a>(args: impl IntoIterator<Item = &'a str>) -> Cmd {

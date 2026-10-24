@@ -198,6 +198,19 @@ impl Resource {
         }
     }
 
+    /// The longest the commands of [`Resource::diff`] may run, in total, by
+    /// their timeouts.
+    #[must_use]
+    pub fn diff_timeout(&self) -> Duration {
+        match self {
+            Self::File(_) | Self::Sysctl(_) => Duration::ZERO,
+            // `dpkg-query`; `systemctl show`; `getent`.
+            Self::Package(_) | Self::Service(_) | Self::AuthorizedKeys(_) => Cmd::DEFAULT_TIMEOUT,
+            // `getent`, then `id`.
+            Self::User(_) => Cmd::DEFAULT_TIMEOUT * 2,
+        }
+    }
+
     /// The change [`Resource::apply`] would make; `None` if the system is
     /// already in the desired state. Only reads.
     ///

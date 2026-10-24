@@ -842,7 +842,7 @@ fn a_dead_man_apply_is_pending_until_the_timer_reverts_it() {
 
     fs.write(Path::new("/proc/uptime"), b"2000.00 1.00\n")
         .unwrap();
-    let (code, out, _) = run(|out, err| rollback_deadman(&host, &txn, out, err));
+    let (code, out, _) = run(|out, err| rollback_deadman(&host, &txn, 0, out, err));
     assert_eq!(code, 0);
     assert_eq!(
         out,
@@ -850,7 +850,7 @@ fn a_dead_man_apply_is_pending_until_the_timer_reverts_it() {
     );
     assert!(!fs.exists(Path::new(LOCKOUT)));
     assert!(history_text(&host).contains("rolled-back (deadman-timeout)"));
-    let (code, out, _) = run(|out, err| rollback_deadman(&host, &txn, out, err));
+    let (code, out, _) = run(|out, err| rollback_deadman(&host, &txn, 0, out, err));
     assert_eq!(code, 0);
     assert_eq!(
         out,

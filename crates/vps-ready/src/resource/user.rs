@@ -173,6 +173,8 @@ pub(crate) fn unchanged(
         return Ok(true);
     };
     if *created {
+        // No uid (a journal from before 0.3, or a crash between `useradd`
+        // and the `applied` line): the name is all there is to go by.
         return Ok(uid.is_none_or(|uid| uid == entry.uid));
     }
     let current = groups(sys, name)?;

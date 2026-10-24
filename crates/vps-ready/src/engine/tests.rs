@@ -178,7 +178,9 @@ fn names(fs: &dyn Fs, id: &str) -> Vec<String> {
             Event::Reloaded { reload } | Event::ReloadSkipped { reload, .. } => {
                 format!("{} {reload}", e.name())
             }
-            Event::Armed { unit, .. } | Event::Extended { unit, .. } => {
+            Event::Armed { unit, .. }
+            | Event::Extended { unit, .. }
+            | Event::Retry { unit, .. } => {
                 format!("{} {}", e.name(), unit.rsplit('-').next().unwrap())
             }
             Event::State { state, .. } => format!("state {state}"),
@@ -671,7 +673,7 @@ fn rollback_refuses_a_changed_file() {
     let edited = host(&fs);
 
     let err = rollback(&fs, Target::Last).unwrap_err();
-    let EngineError::Changed { txn, changed } = &err else {
+    let EngineError::Changed { txn, changed, .. } = &err else {
         panic!("{err:?}");
     };
     let files = format!("{STATE}/txn/{txn}/files");

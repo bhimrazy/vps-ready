@@ -191,17 +191,19 @@ enum Mode {
     /// `rollback`: if one changed, nothing is restored.
     Manual,
     /// The dead-man paths: forced resources are restored anyway, others
-    /// skipped; restores go first and the journal is best effort. At `boot`,
-    /// every command has [`BOOT_TIMEOUT`] at most.
-    Deadman {
-        /// Whether this is the boot hook.
-        boot: bool,
-    },
+    /// skipped; restores go first and the journal is best effort.
+    Deadman,
 }
 
 /// The longest a command of the boot hook may run, which has 120 s in all
 /// before systemd gives up on it and starts sshd anyway.
 const BOOT_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// How many times a timer rollback that did not complete is tried again.
+const RETRIES: u32 = 5;
+
+/// How long after a timer rollback that did not complete it is tried again.
+const RETRY_AFTER: Duration = Duration::from_secs(60);
 
 /// How often [`Engine::lock_wait`] tries the lock.
 const LOCK_POLL: Duration = Duration::from_millis(250);
@@ -430,15 +432,15 @@ impl<'a> Engine<'a> {
         let txn = open.txn.id().to_owned();
         let n = deadman::last_unit(open.records()?).map_or(0, |(_, n)| n) + 1;
         let unit = unit_name(&txn, n);
-        // The old unit's rollback may be waiting for this lock.
-        if let Some(old) = timer.as_deref()
-            && let Err(e) = deadman::stop(self.sys, old, true)
+        // Arm first: if that fails, the old timer still covers the rollback.
+        deadman::arm(self.sys, &unit, deadman.window, &deadman.binary, &txn)
+            .map_err(EngineError::Deadman)?;
+        // With its service: its rollback may be waiting for this lock.
+        if let Some(old) = timer.replace(unit.clone())
+            && let Err(e) = deadman::stop(self.sys, &old, true)
         {
             tracing::info!("stopping the dead-man timer {old}: {e}");
         }
-        deadman::arm(self.sys, &unit, deadman.window, &deadman.binary, &txn)
-            .map_err(EngineError::Deadman)?;
-        *timer = Some(unit.clone());
         let deadline = Deadline {
             boottime: live_since + deadman.window.as_secs(),
             wall: wall + deadman.window.as_secs(),
@@ -611,7 +613,9 @@ impl<'a> Engine<'a> {
     /// anyway if their module forces it (their bytes kept in
     /// `files/<n>.during` first, best effort), and skipped otherwise. The
     /// journal is best effort: a failed line does not stop a restore. Then
-    /// the boot hook is disabled.
+    /// the boot hook is disabled. A rollback that did not complete is tried
+    /// again by a new timer a minute later, up to 5 times; `attempt` is this
+    /// try's number, 0 for the first.
     ///
     /// # Errors
     ///
@@ -622,6 +626,7 @@ impl<'a> Engine<'a> {
         &self,
         id: &str,
         binary: &Path,
+        attempt: u32,
         progress: &mut dyn FnMut(Progress),
     ) -> Result<DeadmanOutcome, EngineError> {
         let fs = self.sys.fs;
@@ -644,9 +649,44 @@ impl<'a> Engine<'a> {
         }
         let unit = deadman::last_unit(records).map(|(u, _)| u.to_owned());
         let reason = expired.unwrap_or(RollbackReason::DeadmanTimeout);
-        let done = self.roll_back(&mut open, reason, Mode::Deadman { boot: false }, progress)?;
+        let done = match self.roll_back(&mut open, reason, Mode::Deadman, progress) {
+            Ok(done) => done,
+            Err(e @ EngineError::RollbackIncomplete { .. }) => {
+                self.retry(&mut open, attempt, binary);
+                return Err(e);
+            }
+            Err(e) => return Err(e),
+        };
         self.disarm(unit.as_deref(), false);
         Ok(DeadmanOutcome::RolledBack(done))
+    }
+
+    /// After a timer rollback that did not complete, arms the next of at
+    /// most [`RETRIES`] tries, [`RETRY_AFTER`] from now, and journals it
+    /// best effort. The boot hook stays enabled either way.
+    fn retry(&self, open: &mut Open, attempt: u32, binary: &Path) {
+        if attempt >= RETRIES {
+            tracing::error!(
+                "giving up after {RETRIES} retries; the boot hook tries again at the next boot"
+            );
+            return;
+        }
+        let txn = open.txn.id().to_owned();
+        match deadman::arm_retry(self.sys, attempt + 1, RETRY_AFTER, binary, &txn) {
+            Ok(unit) => {
+                tracing::warn!(
+                    "trying the rollback again in {}s ({unit})",
+                    RETRY_AFTER.as_secs()
+                );
+                let line = Event::Retry {
+                    unit,
+                    attempt: attempt + 1,
+                };
+                // Best effort: the error is logged inside.
+                let _ = note(open, line, true);
+            }
+            Err(e) => tracing::error!("arming a retry of the rollback: {e}"),
+        }
     }
 
     /// Arms a new timer for the pending `deadline`, then stops the timer
@@ -683,12 +723,33 @@ impl<'a> Engine<'a> {
     /// this one, as [`Engine::deadman`] does with reason `deadman-reboot`.
     /// A boot ID that cannot be read counts as another boot. A journal that
     /// cannot be read does not stop the others. Disables the hook once none
-    /// is left.
+    /// is left. Every command it runs has 20 s at most.
     ///
     /// # Errors
     ///
     /// The first error, after every transaction was tried.
     pub fn deadman_boot(
+        &self,
+        progress: &mut dyn FnMut(Progress),
+    ) -> Result<Vec<Rollback>, EngineError> {
+        let capped = deadman::Capped {
+            inner: self.sys.runner,
+            max: BOOT_TIMEOUT,
+        };
+        // Under the lock `self` holds for as long as this runs.
+        let engine = Engine {
+            state: self.state,
+            sys: Sys {
+                fs: self.sys.fs,
+                runner: &capped,
+            },
+            _lock: FsLock::new(()),
+        };
+        engine.boot_rollbacks(progress)
+    }
+
+    /// [`Engine::deadman_boot`], with the commands already capped.
+    fn boot_rollbacks(
         &self,
         progress: &mut dyn FnMut(Progress),
     ) -> Result<Vec<Rollback>, EngineError> {
@@ -717,7 +778,7 @@ impl<'a> Engine<'a> {
                 }
                 let mut open = Open::resume_best_effort(fs, txn.clone())?;
                 let reason = RollbackReason::DeadmanReboot;
-                self.roll_back(&mut open, reason, Mode::Deadman { boot: true }, progress)
+                self.roll_back(&mut open, reason, Mode::Deadman, progress)
                     .map(Some)
             })();
             match result {
@@ -800,7 +861,7 @@ impl<'a> Engine<'a> {
     ) -> Result<Rollback, EngineError> {
         let boot = boot_id(self.sys.fs);
         let boot = boot.as_deref();
-        let best_effort = matches!(mode, Mode::Deadman { .. });
+        let best_effort = mode == Mode::Deadman;
         let (id, dir) = (open.txn.id().to_owned(), open.txn.dir().to_path_buf());
         let records = if best_effort {
             open.records_best_effort()
@@ -896,7 +957,16 @@ impl<'a> Engine<'a> {
                 }));
             }
             if !changed.is_empty() {
-                return Err(EngineError::Changed { txn: id, changed });
+                let armed = deadman::switch(&open.records).is_some()
+                    && matches!(
+                        open.state,
+                        Some(TxnState::Planned | TxnState::PendingConfirm { .. })
+                    );
+                return Err(EngineError::Changed {
+                    txn: id,
+                    changed,
+                    armed,
+                });
             }
         }
 
@@ -1044,17 +1114,10 @@ impl<'a> Engine<'a> {
         failed: &mut Vec<(Reload, String)>,
         progress: &mut dyn FnMut(Progress),
     ) -> Result<(), EngineError> {
-        let best_effort = matches!(mode, Mode::Deadman { .. });
-        let bound = |cmd: Cmd| match mode {
-            Mode::Deadman { boot: true } => {
-                let timeout = cmd.timeout.min(BOOT_TIMEOUT);
-                cmd.timeout(timeout)
-            }
-            _ => cmd,
-        };
+        let best_effort = mode == Mode::Deadman;
         progress(Progress::Reload(reload));
         if let Some(check) = reload.check()
-            && let Err(reason) = reload::run(self.sys, &bound(check))
+            && let Err(reason) = reload::run(self.sys, &check)
         {
             tracing::warn!("not running {reload}, so the daemon keeps its config: {reason}");
             progress(Progress::ReloadSkipped {
@@ -1063,7 +1126,7 @@ impl<'a> Engine<'a> {
             });
             return note(open, Event::ReloadSkipped { reload, reason }, best_effort);
         }
-        if let Err(reason) = reload::run(self.sys, &bound(reload.command())) {
+        if let Err(reason) = reload::run(self.sys, &reload.command()) {
             failed.push((reload, reason));
             return Ok(());
         }
@@ -1119,14 +1182,19 @@ fn current_boot(fs: &dyn Fs) -> Result<String, EngineError> {
 }
 
 /// The first deadline after arming: `window` plus every command timeout of
-/// the plan, so the timer cannot fire while apply is within its own limits.
+/// the plan after arming, so the timer cannot fire while apply is within its
+/// own limits: each step's snapshot and apply, and its diff again in verify;
+/// each changed module's reloads and its own verify.
 fn first_window(plan: &Plan, window: Duration) -> Duration {
-    let steps: Duration = plan.steps().map(|s| s.resource.timeout()).sum();
+    let steps: Duration = plan
+        .steps()
+        .map(|s| s.resource.timeout() + s.resource.diff_timeout())
+        .sum();
     let modules: Duration = plan
         .modules
         .iter()
         .filter(|m| !m.changes().is_empty())
-        .map(|m| m.reloads().iter().map(|r| r.timeout()).sum::<Duration>() + Cmd::DEFAULT_TIMEOUT)
+        .map(|m| m.reloads().iter().map(|r| r.timeout()).sum::<Duration>() + m.verify_timeout())
         .sum();
     // Stopping the first timer and starting the next.
     window + steps + modules + SYSTEMCTL_TIMEOUT + Cmd::DEFAULT_TIMEOUT

@@ -158,6 +158,9 @@ pub enum Command {
         /// restores what can lock you out even if it changed.
         #[arg(long, hide = true, requires = "txn")]
         deadman: bool,
+        /// With `--deadman`: which retry of an incomplete rollback this is.
+        #[arg(long, hide = true, requires = "deadman", default_value_t = 0)]
+        attempt: u32,
         /// Run by the boot hook: rolls back what a reboot left unconfirmed.
         #[arg(long, hide = true, group = "target")]
         deadman_boot: bool,
@@ -380,10 +383,17 @@ pub fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
         Command::Rollback {
             txn: Some(id),
             deadman: true,
+            attempt,
             ..
         } => {
             no_json(cli, "rollback")?;
-            let n = change::rollback_deadman(&real_host(cli), id, &mut out, &mut io::stderr())?;
+            let n = change::rollback_deadman(
+                &real_host(cli),
+                id,
+                *attempt,
+                &mut out,
+                &mut io::stderr(),
+            )?;
             code = ExitCode::from(n);
         }
         Command::Rollback { last, txn, .. } => {
