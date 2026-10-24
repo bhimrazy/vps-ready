@@ -5,13 +5,15 @@
 pub mod id;
 pub mod journal;
 mod plan;
+mod reload;
 mod run;
 mod state;
 #[cfg(test)]
 mod tests;
 
 pub use journal::{Event, Record, RollbackReason, TxnState};
-pub use plan::{ModulePlan, ModuleStatus, Plan, Step, plan};
+pub use plan::{ModulePlan, ModuleStatus, Plan, Selected, Step, plan};
+pub use reload::Reload;
 pub use run::{ApplyOutcome, ByHand, Engine, Progress, Rollback, Target, TxnInfo, history};
 pub use state::{StateDir, Txn};
 
@@ -86,7 +88,24 @@ pub enum EngineError {
     /// A change differs from the plan that was shown.
     #[error("the plan changed after it was shown ({0}); nothing was changed")]
     PlanChanged(String),
-    /// Resources still differ from their desired state after apply.
+    /// The check of a reload failed, so the reload was not run.
+    #[error("not running {reload}: {reason}")]
+    ReloadCheck {
+        /// The reload.
+        reload: Reload,
+        /// Exit status and stderr of the check, or why it could not run.
+        reason: String,
+    },
+    /// A reload failed.
+    #[error("{reload} failed: {reason}")]
+    Reload {
+        /// The reload.
+        reload: Reload,
+        /// Exit status and stderr, or why it could not run.
+        reason: String,
+    },
+    /// Resources still differ from their desired state after apply, or a
+    /// module's own verify failed.
     #[error("not in the desired state after apply: {}", .0.join(", "))]
     VerifyFailed(Vec<String>),
     /// No transaction to roll back.

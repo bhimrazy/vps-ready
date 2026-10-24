@@ -1,7 +1,10 @@
 //! Modules: the policy that decides which [`Resource`]s a fix needs. They
-//! only plan; the engine applies and rolls back.
+//! only plan and verify; the engine applies and rolls back.
+
+use serde::de::DeserializeOwned;
 
 use crate::audit::CatalogError;
+use crate::engine::Reload;
 use crate::facts::Facts;
 use crate::resource::{Resource, ResourceError};
 use crate::sys::{Sys, SysError};
@@ -25,6 +28,10 @@ pub enum ModuleError {
     /// The controls catalog did not parse. Boxed: the parse error is large.
     #[error(transparent)]
     Catalog(Box<CatalogError>),
+    /// The module's params did not parse, e.g. an unknown field. Boxed:
+    /// the parse error is large.
+    #[error("invalid params: {0}")]
+    Params(#[source] Box<toml::de::Error>),
 }
 
 impl From<CatalogError> for ModuleError {
@@ -45,6 +52,53 @@ pub enum Applicability {
     },
 }
 
+/// What a module plans and verifies with.
+#[derive(Debug, Clone, Copy)]
+pub struct PlanCx<'a> {
+    /// The host.
+    pub facts: &'a Facts,
+    /// The module's table from the profile; empty when there is none.
+    pub params: &'a toml::Table,
+}
+
+impl PlanCx<'_> {
+    /// Parses [`PlanCx::params`] into the module's params, a
+    /// `#[serde(deny_unknown_fields)]` struct, so that a typo is an error.
+    ///
+    /// # Errors
+    ///
+    /// [`ModuleError::Params`].
+    pub fn params<T: DeserializeOwned>(&self) -> Result<T, ModuleError> {
+        toml::Value::Table(self.params.clone())
+            .try_into()
+            .map_err(|e| ModuleError::Params(Box::new(e)))
+    }
+}
+
+/// The params of a module that takes none: any field is an error.
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NoParams {}
+
+/// What a module plans: its resources and the reloads they need.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ModuleSteps {
+    /// In their desired state, in apply order.
+    pub resources: Vec<Resource>,
+    /// Run in order after the module's resources are applied, if any of
+    /// them changed.
+    pub reloads: Vec<Reload>,
+}
+
+impl From<Vec<Resource>> for ModuleSteps {
+    fn from(resources: Vec<Resource>) -> Self {
+        Self {
+            resources,
+            reloads: Vec::new(),
+        }
+    }
+}
+
 /// A fix that vps-ready can apply.
 pub trait Module {
     /// Stable ID, e.g. `kernel.sysctl`.
@@ -60,13 +114,24 @@ pub trait Module {
     fn notes(&self, _facts: &Facts) -> Vec<String> {
         Vec::new()
     }
-    /// The resources in their desired state, in apply order. May read, never
-    /// writes.
+    /// The resources in their desired state and the reloads they need. May
+    /// read, never writes.
     ///
     /// # Errors
     ///
-    /// [`ModuleError`] if what it needs cannot be read.
-    fn plan(&self, facts: &Facts, sys: Sys) -> Result<Vec<Resource>, ModuleError>;
+    /// [`ModuleError`] if its params are invalid or what it needs cannot be
+    /// read.
+    fn plan(&self, cx: &PlanCx, sys: Sys) -> Result<ModuleSteps, ModuleError>;
+    /// Checks after apply and reloads, beyond every resource being in its
+    /// desired state, e.g. that a daemon runs with the new settings. May
+    /// read, never writes.
+    ///
+    /// # Errors
+    ///
+    /// What is wrong, for the message.
+    fn verify(&self, _cx: &PlanCx, _sys: Sys) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// Every module, in the order the plan lists and applies them.
@@ -86,6 +151,32 @@ mod tests {
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), count, "{ids:?}");
+    }
+
+    #[test]
+    fn every_module_rejects_unknown_params() {
+        let facts = crate::facts::fixtures::host("debian-13", &[]);
+        let params: toml::Table = toml::from_str("typo = 1").unwrap();
+        let cx = PlanCx {
+            facts: &facts,
+            params: &params,
+        };
+        let (fs, runner) = (
+            crate::sys::fake::FakeFs::new(),
+            crate::sys::fake::FakeRunner::new(),
+        );
+        let sys = Sys {
+            fs: &fs,
+            runner: &runner,
+        };
+        for m in all() {
+            let err = m.plan(&cx, sys).unwrap_err();
+            assert!(
+                err.to_string().contains("unknown field `typo`"),
+                "{}: {err}",
+                m.id()
+            );
+        }
     }
 
     #[test]

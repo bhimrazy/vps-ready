@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use super::{Applicability, Module, ModuleError};
+use super::{Applicability, Module, ModuleError, ModuleSteps, NoParams, PlanCx};
 use crate::audit::{self, Check};
 use crate::facts::Facts;
 use crate::resource::{File, Resource, Sysctl};
@@ -90,9 +90,10 @@ impl Module for KernelSysctl {
     /// below the kernel's compiled-in default, which cannot be read, is
     /// persisted at the module's value, which passes its control; rollback
     /// removes the line and the next boot returns to the default.
-    fn plan(&self, facts: &Facts, sys: Sys) -> Result<Vec<Resource>, ModuleError> {
-        let Some(running) = &facts.sysctl else {
-            return Ok(Vec::new());
+    fn plan(&self, cx: &PlanCx, sys: Sys) -> Result<ModuleSteps, ModuleError> {
+        let NoParams {} = cx.params()?;
+        let Some(running) = &cx.facts.sysctl else {
+            return Ok(ModuleSteps::default());
         };
         let listed = listed_keys(sys)?;
         let controls = audit::catalog()?;
@@ -126,7 +127,7 @@ impl Module for KernelSysctl {
             }
         }
         if lines.is_empty() {
-            return Ok(Vec::new());
+            return Ok(ModuleSteps::default());
         }
         let file = Resource::File(File {
             path: DROP_IN.into(),
@@ -138,7 +139,8 @@ impl Module for KernelSysctl {
             },
             validate: None,
         });
-        Ok(std::iter::once(file).chain(runtime).collect())
+        let resources: Vec<Resource> = std::iter::once(file).chain(runtime).collect();
+        Ok(resources.into())
     }
 
     fn notes(&self, facts: &Facts) -> Vec<String> {
