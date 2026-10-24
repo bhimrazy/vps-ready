@@ -1,0 +1,23 @@
+---
+source: crates/vps-ready/src/modules/firewall_inbound/tests.rs
+expression: "String::from_utf8(file(&unit, UNIT_FILE).content.clone()).unwrap()"
+---
+# Written by vps-ready (firewall.inbound). `vps-ready rollback --last`
+# restores the previous state; edits here are replaced by the next apply.
+[Unit]
+Description=vps-ready: inbound firewall (nftables table inet vps_ready)
+DefaultDependencies=no
+Wants=network-pre.target
+After=nftables.service
+Before=network-pre.target shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/vps-ready/firewall.nft
+ExecReload=/usr/sbin/nft -f /etc/vps-ready/firewall.nft
+ExecStop=-/usr/sbin/nft delete table inet vps_ready
+
+[Install]
+WantedBy=sysinit.target

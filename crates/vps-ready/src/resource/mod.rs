@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::sys::{Cmd, FileKind, FileOwner, Output, Sys, SysError};
 
 pub(crate) mod authorized_keys;
+pub(crate) mod directory;
 mod file;
 mod package;
 pub(crate) mod service;
@@ -21,6 +22,7 @@ pub(crate) mod sysctl;
 pub(crate) mod user;
 
 pub use authorized_keys::AuthorizedKeys;
+pub use directory::Directory;
 pub use file::{File, Validate};
 pub use package::Package;
 pub use service::Service;
@@ -141,6 +143,8 @@ pub struct Change {
 pub enum Resource {
     /// A whole file vps-ready owns.
     File(File),
+    /// A directory that must exist.
+    Directory(Directory),
     /// A kernel parameter under `/proc/sys`.
     Sysctl(Sysctl),
     /// An apt package that must be installed.
@@ -155,12 +159,14 @@ pub enum Resource {
 
 impl Resource {
     /// A stable identifier, e.g. `file:/etc/sysctl.d/90-vps-ready.conf`,
+    /// `directory:/etc/vps-ready`,
     /// `sysctl:kernel.kptr_restrict`, `package:unattended-upgrades`,
     /// `service:fail2ban.service`, `user:admin` or `authorized-keys:admin`.
     #[must_use]
     pub fn id(&self) -> String {
         match self {
             Self::File(f) => format!("file:{}", f.path.display()),
+            Self::Directory(d) => format!("directory:{}", d.path.display()),
             Self::Sysctl(s) => format!("sysctl:{}", s.key),
             Self::Package(p) => format!("package:{}", p.name),
             Self::Service(s) => format!("service:{}", s.unit),
@@ -173,9 +179,11 @@ impl Resource {
     #[must_use]
     pub fn reversibility(&self) -> Reversibility {
         match self {
-            Self::File(_) | Self::Sysctl(_) | Self::Service(_) | Self::AuthorizedKeys(_) => {
-                Reversibility::Reversible
-            }
+            Self::File(_)
+            | Self::Directory(_)
+            | Self::Sysctl(_)
+            | Self::Service(_)
+            | Self::AuthorizedKeys(_) => Reversibility::Reversible,
             // Rollback leaves an installed package installed, and a removed
             // user's home directory.
             Self::Package(_) | Self::User(_) => Reversibility::Partial,
@@ -188,7 +196,7 @@ impl Resource {
     pub fn timeout(&self) -> Duration {
         match self {
             Self::File(f) if f.validate.is_some() => Cmd::DEFAULT_TIMEOUT,
-            Self::File(_) | Self::Sysctl(_) => Duration::ZERO,
+            Self::File(_) | Self::Directory(_) | Self::Sysctl(_) => Duration::ZERO,
             Self::Package(_) => package::TIMEOUT,
             Self::Service(_) => service::TIMEOUT,
             // `getent`, `id`, then `useradd` or `usermod`.
@@ -203,7 +211,7 @@ impl Resource {
     #[must_use]
     pub fn diff_timeout(&self) -> Duration {
         match self {
-            Self::File(_) | Self::Sysctl(_) => Duration::ZERO,
+            Self::File(_) | Self::Directory(_) | Self::Sysctl(_) => Duration::ZERO,
             // `dpkg-query`; `systemctl show`; `getent`.
             Self::Package(_) | Self::Service(_) | Self::AuthorizedKeys(_) => Cmd::DEFAULT_TIMEOUT,
             // `getent`, then `id`.
@@ -224,6 +232,7 @@ impl Resource {
     pub fn diff(&self, sys: Sys) -> Result<Option<Change>, ResourceError> {
         let change = match self {
             Self::File(f) => f.diff(sys)?,
+            Self::Directory(d) => d.diff(sys)?,
             Self::Sysctl(s) => s.diff(sys)?,
             Self::Package(p) => p.diff(sys)?,
             Self::Service(s) => s.diff(sys)?,
@@ -256,6 +265,7 @@ impl Resource {
     pub fn snapshot(&self, sys: Sys, txn_dir: &Path, n: u32) -> Result<Backup, ResourceError> {
         match self {
             Self::File(f) => f.snapshot(sys, txn_dir, n),
+            Self::Directory(d) => d.snapshot(sys),
             Self::Sysctl(s) => s.snapshot(sys),
             Self::Package(p) => p.snapshot(sys),
             Self::Service(s) => s.snapshot(sys),
@@ -273,6 +283,7 @@ impl Resource {
     pub fn apply(&self, sys: Sys) -> Result<Applied, ResourceError> {
         match self {
             Self::File(f) => f.apply(sys),
+            Self::Directory(d) => d.apply(sys),
             Self::Sysctl(s) => s.apply(sys),
             Self::Package(p) => p.apply(sys),
             Self::Service(s) => s.apply(sys),
@@ -305,6 +316,13 @@ pub enum Backup {
         n: u32,
         /// Mode and owner; `None` if the file did not exist.
         original: Option<FileCopy>,
+    },
+    /// A directory.
+    Directory {
+        /// Its path.
+        path: PathBuf,
+        /// Whether apply creates it.
+        created: bool,
     },
     /// A kernel parameter.
     Sysctl {
@@ -419,7 +437,7 @@ pub fn during_path(txn_dir: &Path, n: u32) -> PathBuf {
 
 /// Puts back the state recorded in `backup`, with the file copies of the
 /// transaction in `txn_dir`. Restoring a file that did not exist removes
-/// it, if it is there. Restoring a package does nothing: removing it could
+/// it, if it is there; a directory apply created is removed if it is empty. Restoring a package does nothing: removing it could
 /// take other packages with it. A created user is removed with `userdel`,
 /// which keeps its home directory.
 ///
@@ -432,6 +450,7 @@ pub fn during_path(txn_dir: &Path, n: u32) -> PathBuf {
 pub fn restore(sys: Sys, txn_dir: &Path, backup: &Backup) -> Result<(), ResourceError> {
     match backup {
         Backup::File { path, n, original } => file::restore(sys, txn_dir, path, *n, *original),
+        Backup::Directory { path, created } => directory::restore(sys, path, *created),
         Backup::Sysctl { key, value, .. } => sysctl::restore(sys, key, value),
         Backup::Package { .. } => Ok(()),
         Backup::Service { .. } => service::restore(sys, backup),
@@ -521,6 +540,13 @@ mod tests {
                     }),
                 },
                 r#"{"kind":"file","path":"/etc/apt/apt.conf.d/52vps-ready","n":2,"original":{"mode":420,"uid":0,"gid":0}}"#,
+            ),
+            (
+                Backup::Directory {
+                    path: "/etc/vps-ready".into(),
+                    created: true,
+                },
+                r#"{"kind":"directory","path":"/etc/vps-ready","created":true}"#,
             ),
             (
                 Backup::Sysctl {

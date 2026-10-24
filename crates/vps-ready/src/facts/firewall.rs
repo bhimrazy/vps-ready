@@ -29,7 +29,7 @@ use std::time::Duration;
 use serde::Serialize;
 use serde_json::Value;
 
-use super::{Probe, probe};
+use super::{Probe, probe, prop, systemctl_show};
 use crate::sys::{Cmd, Fs, Runner};
 
 /// What `vps-ready` knows about the packet filter.
@@ -49,6 +49,23 @@ pub struct Firewall {
     pub legacy_filter_v4: bool,
     /// The same for IPv6, from `/proc/net/ip6_tables_names`.
     pub legacy_filter_v6: bool,
+}
+
+/// The tools that manage the packet filter.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct FirewallTools {
+    /// Whether `nft` is installed.
+    pub nft: bool,
+    /// Whether ufw is enabled (`ENABLED=yes` in `/etc/ufw/ufw.conf`);
+    /// `None` when ufw is not installed.
+    pub ufw: Option<bool>,
+    /// Whether `firewalld.service` is active; `None` when systemd could not
+    /// be asked.
+    pub firewalld: Option<bool>,
+    /// Whether `nftables.service` is enabled. It loads `/etc/nftables.conf`,
+    /// which starts with `flush ruleset` on Debian and Ubuntu. `None` when
+    /// systemd could not be asked.
+    pub nftables_service: Option<bool>,
 }
 
 /// A port Docker forwards to a container, from a DNAT rule in its `nat`
@@ -156,11 +173,12 @@ fn has_legacy_filter(fs: &dyn Fs, path: &str) -> bool {
     })
 }
 
+/// The ruleset, and whether `nft` is installed.
 pub(super) fn detect(
     fs: &dyn Fs,
     runner: &dyn Runner,
     notices: &mut Vec<String>,
-) -> Option<Firewall> {
+) -> (Option<Firewall>, bool) {
     let cmd = Cmd::new("nft")
         .args(["-j", "list", "ruleset"])
         .timeout(Duration::from_secs(10));
@@ -168,10 +186,19 @@ pub(super) fn detect(
         Probe::Ran(out) => out,
         Probe::Missing => {
             notices.push("nft not found; the firewall is unknown".to_owned());
-            return None;
+            return (None, false);
         }
-        Probe::Failed => return None,
+        Probe::Failed => return (None, true),
     };
+    (ruleset(fs, runner, &out, notices), true)
+}
+
+fn ruleset(
+    fs: &dyn Fs,
+    runner: &dyn Runner,
+    out: &crate::sys::Output,
+    notices: &mut Vec<String>,
+) -> Option<Firewall> {
     if !out.ok() {
         // nft's last line is the error that stopped it, e.g. "netlink:
         // Error: cache initialization failed: Operation not permitted".
@@ -223,6 +250,38 @@ pub(super) fn detect(
     firewall.legacy_filter_v4 = has_legacy_filter(fs, LEGACY_TABLES[0]);
     firewall.legacy_filter_v6 = has_legacy_filter(fs, LEGACY_TABLES[1]);
     Some(firewall)
+}
+
+/// Units queried for [`FirewallTools`].
+const UNITS: [&str; 2] = ["firewalld.service", "nftables.service"];
+
+pub(super) fn tools(
+    fs: &dyn Fs,
+    runner: &dyn Runner,
+    nft: bool,
+    notices: &mut Vec<String>,
+) -> FirewallTools {
+    let ufw = fs.read(Path::new("/etc/ufw/ufw.conf")).ok().map(|bytes| {
+        String::from_utf8_lossy(&bytes)
+            .lines()
+            .any(|l| l.trim() == "ENABLED=yes")
+    });
+    let units = systemctl_show(runner, &UNITS, "firewalld's state is unknown", notices);
+    let unit = |id: &str, f: fn(&super::Unit) -> bool| {
+        units
+            .as_ref()
+            .map(|us| us.iter().any(|u| prop(u, "Id") == id && f(u)))
+    };
+    FirewallTools {
+        nft,
+        ufw,
+        firewalld: unit(UNITS[0], |u| {
+            ["active", "activating", "reloading"].contains(&prop(u, "ActiveState"))
+        }),
+        nftables_service: unit(UNITS[1], |u| {
+            prop(u, "UnitFileState").starts_with("enabled")
+        }),
+    }
 }
 
 /// What iptables-save shows of the `filter` table.
@@ -284,6 +343,12 @@ fn parse_save(text: &str, family: &str, out: &mut Multiport) {
                 .insert((family.to_owned(), chain.to_owned(), position), ports);
         }
     }
+}
+
+/// Parses `nft -j list ruleset` or `nft -j list table`, without the ports
+/// of iptables' `multiport` matches.
+pub(crate) fn parse_json(json: &[u8]) -> Option<Firewall> {
+    parse(json, &Multiport::default())
 }
 
 /// A chain, as `(family, table, name)`.
@@ -1065,7 +1130,7 @@ mod tests {
                 Output::success(file("ufw-multiport.ip6tables")),
             );
         let mut notices = Vec::new();
-        let fw = detect(&FakeFs::new(), &runner, &mut notices).unwrap();
+        let fw = detect(&FakeFs::new(), &runner, &mut notices).0.unwrap();
         assert_eq!(fw.input_chains.len(), 2);
         for c in &fw.input_chains {
             assert!(c.unread_ports.is_empty(), "{}", c.family);
@@ -1114,6 +1179,7 @@ mod tests {
             &FakeRunner::new().on("nft", ["-j"], nft),
             &mut notices,
         )
+        .0
         .unwrap();
         assert_eq!(fw.input_chains[0].blocks("tcp", 443), None);
     }
@@ -1152,7 +1218,7 @@ mod tests {
             let runner = FakeRunner::new()
                 .on("nft", ["-j"], Output::success(file("ufw-multiport.json")))
                 .on("iptables-save", ["-t", "filter"], Output::success(iptables));
-            let fw = detect(&FakeFs::new(), &runner, &mut Vec::new()).unwrap();
+            let fw = detect(&FakeFs::new(), &runner, &mut Vec::new()).0.unwrap();
             let ip = fw.input_chains.iter().find(|c| c.family == "ip").unwrap();
             (ip.blocks("tcp", 8080), ip.blocks("tcp", 443))
         };
@@ -1365,7 +1431,7 @@ mod tests {
             },
         );
         let mut notices = Vec::new();
-        assert_eq!(detect(&FakeFs::new(), &runner, &mut notices), None);
+        assert_eq!(detect(&FakeFs::new(), &runner, &mut notices), (None, true));
         assert!(
             notices[0].ends_with("needs root (CAP_NET_ADMIN)"),
             "{notices:?}"
@@ -1380,7 +1446,7 @@ mod tests {
         let nft = std::fs::read(testdata("nft/ufw-disabled.json")).unwrap();
         let detect_with = |fs: FakeFs| {
             let runner = FakeRunner::new().on("nft", ["-j"], Output::success(nft.clone()));
-            detect(&fs, &runner, &mut Vec::new()).unwrap()
+            detect(&fs, &runner, &mut Vec::new()).0.unwrap()
         };
         let flags = |fw: Firewall| (fw.legacy_filter_v4, fw.legacy_filter_v6);
         assert_eq!(flags(detect_with(FakeFs::new())), (false, false));

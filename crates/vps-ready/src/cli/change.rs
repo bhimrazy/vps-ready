@@ -483,7 +483,7 @@ fn print_plan(
         for step in changes {
             let summary = step.change.summary.as_str();
             let (sign, text) = match &step.resource {
-                Resource::File(_) | Resource::AuthorizedKeys(_) => {
+                Resource::File(_) | Resource::Directory(_) | Resource::AuthorizedKeys(_) => {
                     match summary.strip_prefix("create ") {
                         Some(rest) => ('+', show_owner(rest)),
                         None => (
@@ -600,7 +600,9 @@ fn print_progress(err: &mut dyn Write, progress: &Progress) {
         Progress::Apply { n, total, step } => {
             let summary = &step.change.summary;
             let text = match &step.resource {
-                Resource::File(_) | Resource::AuthorizedKeys(_) => show_owner(summary),
+                Resource::File(_) | Resource::Directory(_) | Resource::AuthorizedKeys(_) => {
+                    show_owner(summary)
+                }
                 Resource::Sysctl(_) => format!("set {summary}"),
                 Resource::Package(_) => {
                     format!("{summary} (apt-get update, then install; can take a few minutes)")
@@ -617,6 +619,11 @@ fn print_progress(err: &mut dyn Write, progress: &Progress) {
                 ..
             } => format!("restore {}", path.display()),
             Backup::File { path, .. } => format!("remove {}", path.display()),
+            Backup::Directory {
+                path,
+                created: true,
+            } => format!("remove directory {} if it is empty", path.display()),
+            Backup::Directory { path, .. } => format!("leave {} as it is", path.display()),
             Backup::Sysctl { key, value, .. } => format!("restore {key} = {value}"),
             Backup::Package { name, .. } => {
                 format!("leave {name} as it is (rollback does not remove packages)")

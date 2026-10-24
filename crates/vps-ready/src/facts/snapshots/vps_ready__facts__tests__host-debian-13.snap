@@ -216,6 +216,8 @@ ssh:
       - "yes"
     xauthlocation:
       - /usr/bin/xauth
+  socket_ports:
+    - 22
   fail2ban: false
 listeners:
   - proto: tcp
@@ -233,6 +235,11 @@ firewall:
   published: []
   legacy_filter_v4: false
   legacy_filter_v6: false
+firewall_tools:
+  nft: true
+  ufw: ~
+  firewalld: false
+  nftables_service: false
 ipv6: false
 session: ~
 sysctl: ~
