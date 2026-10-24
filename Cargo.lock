@@ -936,6 +936,7 @@ dependencies = [
  "owo-colors",
  "predicates",
  "proptest",
+ "rustix",
  "serde",
  "serde_json",
  "similar 3.2.0",

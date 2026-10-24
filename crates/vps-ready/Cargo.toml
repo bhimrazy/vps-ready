@@ -26,6 +26,7 @@ testing = []
 anyhow.workspace = true
 clap.workspace = true
 owo-colors.workspace = true
+rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sshd-config.workspace = true
