@@ -69,18 +69,29 @@ impl Service {
     }
 }
 
-pub(super) fn restore(
-    sys: Sys,
-    unit: &str,
-    was_enabled: bool,
-    was_active: bool,
-) -> Result<(), ResourceError> {
-    converge(sys, unit, was_enabled, was_active)
+/// Brings the unit back to its original state. Does nothing, not even read
+/// its state, if apply changed neither, so a unit masked since cannot fail
+/// the rollback.
+pub(super) fn restore(sys: Sys, backup: &Backup) -> Result<(), ResourceError> {
+    let Backup::Service {
+        unit,
+        was_enabled,
+        was_active,
+        enabled,
+        active,
+    } = backup
+    else {
+        return Ok(());
+    };
+    if was_enabled == enabled && was_active == active {
+        return Ok(());
+    }
+    converge(sys, unit, *was_enabled, *was_active)
 }
 
 /// The safety check: whether enabled and active are each the original or
 /// the applied value. A unit that can no longer be managed (e.g. masked)
-/// counts as changed.
+/// counts as changed, unless apply changed neither.
 pub(crate) fn unchanged(sys: Sys, backup: &Backup) -> Result<bool, ResourceError> {
     let Backup::Service {
         unit,
@@ -92,6 +103,9 @@ pub(crate) fn unchanged(sys: Sys, backup: &Backup) -> Result<bool, ResourceError
     else {
         return Ok(false);
     };
+    if was_enabled == enabled && was_active == active {
+        return Ok(true);
+    }
     let now = match state(sys, unit) {
         Ok(now) => now,
         Err(ResourceError::Unit { .. }) => return Ok(false),
@@ -436,6 +450,27 @@ mod tests {
         };
         restore(sys, Path::new(TXN), &backup).unwrap();
         assert_eq!(runner.calls(), [show_cmd()]);
+    }
+
+    #[test]
+    fn a_backup_with_nothing_to_undo_ignores_a_masked_unit() {
+        let fs = FakeFs::new();
+        let runner = runner(show("masked", "masked", "inactive"));
+        let sys = Sys {
+            fs: &fs,
+            runner: &runner,
+        };
+        let noop = Backup::Service {
+            unit: UNIT.into(),
+            was_enabled: true,
+            was_active: true,
+            enabled: true,
+            active: true,
+        };
+        assert!(unchanged(sys, &noop).unwrap());
+        restore(sys, Path::new(TXN), &noop).unwrap();
+        assert_eq!(by_hand(&noop), None);
+        assert_eq!(runner.calls(), []);
     }
 
     #[test]

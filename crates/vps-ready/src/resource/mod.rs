@@ -386,12 +386,7 @@ pub fn restore(sys: Sys, txn_dir: &Path, backup: &Backup) -> Result<(), Resource
         Backup::File { path, n, original } => file::restore(sys, txn_dir, path, *n, *original),
         Backup::Sysctl { key, value, .. } => sysctl::restore(sys, key, value),
         Backup::Package { .. } => Ok(()),
-        Backup::Service {
-            unit,
-            was_enabled,
-            was_active,
-            ..
-        } => service::restore(sys, unit, *was_enabled, *was_active),
+        Backup::Service { .. } => service::restore(sys, backup),
         Backup::User {
             name,
             created,

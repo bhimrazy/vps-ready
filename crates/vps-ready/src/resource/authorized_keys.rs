@@ -158,13 +158,13 @@ impl AuthorizedKeys {
             Ok(meta) if meta.kind != FileKind::Dir => {
                 return Err(unsafe_dir("it is not a directory".to_owned()));
             }
-            Ok(meta) if meta.uid != entry.uid => {
+            // As sshd's `StrictModes`, which would ignore the keys otherwise.
+            Ok(meta) if meta.uid != entry.uid && meta.uid != 0 => {
                 return Err(unsafe_dir(format!(
-                    "it is owned by uid {}, not {}",
+                    "it is owned by uid {}, not {} or root",
                     meta.uid, entry.uid
                 )));
             }
-            // sshd's `StrictModes` would ignore the keys.
             Ok(meta) if meta.mode & 0o022 != 0 => {
                 return Err(unsafe_dir(format!(
                     "mode {:04o} lets group or others write to it",
@@ -658,8 +658,15 @@ mod tests {
             unsafe_path(keys(&[KEY]).diff(sys).unwrap_err()).1
         };
         let home = || FakeFs::new().with_dir("/home/admin", owner(0o750, 1001));
-        let fs = home().with_dir("/home/admin/.ssh", owner(0o700, 0));
-        assert_eq!(reason(&fs), "it is owned by uid 0, not 1001");
+        let fs = home().with_dir("/home/admin/.ssh", owner(0o700, 1002));
+        assert_eq!(reason(&fs), "it is owned by uid 1002, not 1001 or root");
+        // sshd accepts a `~/.ssh` owned by root.
+        let fs = home().with_dir("/home/admin/.ssh", owner(0o755, 0));
+        let sys = Sys {
+            fs: &fs,
+            runner: &runner,
+        };
+        assert!(keys(&[KEY]).diff(sys).unwrap().is_some());
         let fs = home().with_dir("/home/admin/.ssh", owner(0o777, 1001));
         assert_eq!(reason(&fs), "mode 0777 lets group or others write to it");
         let fs = home().with_file("/home/admin/.ssh", "");

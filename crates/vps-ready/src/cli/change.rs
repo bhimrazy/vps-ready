@@ -467,6 +467,9 @@ fn print_progress(err: &mut dyn Write, progress: &Progress) {
             } => format!("remove user {name} (its home directory stays)"),
             Backup::User {
                 name, added_groups, ..
+            } if added_groups.is_empty() => format!("leave user {name} as it is"),
+            Backup::User {
+                name, added_groups, ..
             } => format!("remove {name} from groups {}", added_groups.join(",")),
             Backup::AuthorizedKeys {
                 path,
