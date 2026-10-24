@@ -11,6 +11,7 @@ use owo_colors::OwoColorize;
 
 use super::{EXIT_ERROR, EXIT_INCOMPLETE, EXIT_PENDING, EXIT_ROLLED_BACK, print_report};
 use crate::audit::{self, Outcome};
+use crate::config::Profile;
 use crate::engine::{
     self, ApplyOutcome, Deadman, DeadmanOutcome, Engine, EngineError, ModuleStatus, Plan, Progress,
     Rollback, Selected, StateDir, Target, TxnInfo, TxnState,
@@ -37,6 +38,89 @@ pub(super) struct Host<'a> {
     pub binary: PathBuf,
 }
 
+/// The modules `plan` and `apply` run without `--profile` and `--module`:
+/// the safe set. Modules that can lock someone out or install packages need
+/// a profile or `--module`.
+const DEFAULT_MODULES: [&str; 2] = ["kernel.sysctl", "updates.auto"];
+
+/// Which modules `plan` and `apply` act on.
+#[derive(Debug, Default, Clone)]
+pub(super) struct Selection {
+    /// `--profile`: a built-in name or a path.
+    pub profile: Option<String>,
+    /// `--module`: only these; with a profile, the profile must enable them.
+    pub modules: Vec<String>,
+}
+
+impl Selection {
+    /// The modules to run, with their params from `profile`.
+    fn select<'a>(
+        &self,
+        all: &[&'a dyn Module],
+        profile: Option<&'a Profile>,
+    ) -> anyhow::Result<Vec<Selected<'a>>> {
+        let ids = &self.modules;
+        if let Some(id) = ids.iter().find(|id| !all.iter().any(|m| m.id() == *id)) {
+            bail!("no module {id}");
+        }
+        let mut selected = Vec::new();
+        for &module in all {
+            let id = module.id();
+            let named = ids.iter().any(|n| n == id);
+            match profile {
+                Some(profile) => match profile.params(id) {
+                    Some(params) if named || ids.is_empty() => {
+                        selected.push(Selected { module, params });
+                    }
+                    Some(_) => {}
+                    None if named => {
+                        bail!("{id} is not enabled by profile {}", self.profile());
+                    }
+                    None => {}
+                },
+                None if named || (ids.is_empty() && DEFAULT_MODULES.contains(&id)) => {
+                    selected.push(Selected::new(module));
+                }
+                None => {}
+            }
+        }
+        Ok(selected)
+    }
+
+    fn profile(&self) -> &str {
+        self.profile.as_deref().unwrap_or_default()
+    }
+
+    /// The command line that repeats this selection, e.g.
+    /// ` --profile web --module ssh.server`.
+    fn args(&self) -> String {
+        let profile = self.profile.iter().map(|p| format!(" --profile {p}"));
+        let modules = self.modules.iter().map(|id| format!(" --module {id}"));
+        profile.chain(modules).collect()
+    }
+
+    /// The profile, read from a built-in name or a file.
+    fn load(&self, host: &Host) -> anyhow::Result<Option<Profile>> {
+        let Some(spec) = &self.profile else {
+            return Ok(None);
+        };
+        if let Some(profile) = Profile::built_in(spec, host.modules)? {
+            return Ok(Some(profile));
+        }
+        let path = std::path::absolute(spec)?;
+        let text = host
+            .sys
+            .fs
+            .read(&path)
+            .map_err(|e| anyhow::anyhow!("{spec} is not a built-in profile ({e})"))?;
+        let text = String::from_utf8(text)
+            .map_err(|_| anyhow::anyhow!("profile {spec} is not valid UTF-8"))?;
+        Profile::parse(&text, host.modules)
+            .map(Some)
+            .map_err(|e| anyhow::anyhow!("profile {spec}: {e}"))
+    }
+}
+
 /// The exit code for an error: [`EXIT_INCOMPLETE`] for a rollback that did
 /// not complete, [`EXIT_ERROR`] otherwise.
 pub(super) fn exit_code(err: &anyhow::Error) -> u8 {
@@ -49,11 +133,12 @@ pub(super) fn exit_code(err: &anyhow::Error) -> u8 {
 /// `plan`: prints what `apply` would change. Takes no lock and needs no root.
 pub(super) fn plan(
     host: &Host,
-    ids: &[String],
+    sel: &Selection,
     json: bool,
     out: &mut dyn Write,
 ) -> anyhow::Result<u8> {
-    let modules = select(host.modules, ids)?;
+    let profile = sel.load(host)?;
+    let modules = sel.select(host.modules, profile.as_ref())?;
     let facts = (host.facts)(host.sys)?;
     log_notices(&facts);
     let plan = engine::plan(&modules, &facts, host.sys)?;
@@ -65,7 +150,7 @@ pub(super) fn plan(
     print_plan(out, &plan, &fixes(&plan, &facts)?, host.color)?;
     let n = plan.steps().count();
     if n > 0 {
-        let args: String = ids.iter().map(|id| format!(" --module {id}")).collect();
+        let args = sel.args();
         let them = if n == 1 { "it" } else { "them" };
         writeln!(out, "Run `sudo vps-ready apply{args}` to make {them}.")?;
     }
@@ -77,7 +162,7 @@ pub(super) fn plan(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn apply(
     host: &Host,
-    ids: &[String],
+    sel: &Selection,
     yes: bool,
     window: Duration,
     input: Option<&mut dyn BufRead>,
@@ -85,14 +170,15 @@ pub(super) fn apply(
     err: &mut dyn Write,
 ) -> anyhow::Result<u8> {
     require_root(host, "apply")?;
-    let modules = select(host.modules, ids)?;
+    let profile = sel.load(host)?;
+    let modules = sel.select(host.modules, profile.as_ref())?;
     let state = StateDir::create(host.sys.fs, host.state_dir, host.state_uid)?;
     let engine = Engine::lock(&state, host.sys)?;
     engine.ensure_finished()?;
     let facts = (host.facts)(host.sys)?;
     log_notices(&facts);
     let plan = engine::plan(&modules, &facts, host.sys)?;
-    if !ids.is_empty() {
+    if !sel.modules.is_empty() {
         for m in &plan.modules {
             if let ModuleStatus::NotApplicable { reason } = &m.status {
                 bail!("{} does not apply to this host: {reason}", m.id);
@@ -307,25 +393,6 @@ fn require_root(host: &Host, command: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The modules named by `ids` in registry order, or all of them but those
-/// that need the dead-man switch, with no params.
-fn select<'a>(all: &[&'a dyn Module], ids: &[String]) -> anyhow::Result<Vec<Selected<'a>>> {
-    if let Some(id) = ids.iter().find(|id| !all.iter().any(|m| m.id() == *id)) {
-        bail!("no module {id}");
-    }
-    Ok(all
-        .iter()
-        .filter(|m| {
-            if ids.is_empty() {
-                !m.needs_deadman()
-            } else {
-                ids.iter().any(|id| id == m.id())
-            }
-        })
-        .map(|m| Selected::new(*m))
-        .collect())
-}
-
 /// For each module with changes, the IDs of the failed controls it fixes.
 fn fixes(plan: &Plan, facts: &Facts) -> anyhow::Result<BTreeMap<String, Vec<String>>> {
     let changed = plan.changed_modules();
@@ -415,15 +482,19 @@ fn print_plan(
         for step in changes {
             let summary = step.change.summary.as_str();
             let (sign, text) = match &step.resource {
-                Resource::File(_) => match summary.strip_prefix("create ") {
-                    Some(rest) => ('+', show_owner(rest)),
-                    None => (
-                        '~',
-                        show_owner(summary.strip_prefix("update ").unwrap_or(summary)),
-                    ),
-                },
-                Resource::Sysctl(_) => ('~', summary.to_owned()),
+                Resource::File(_) | Resource::AuthorizedKeys(_) => {
+                    match summary.strip_prefix("create ") {
+                        Some(rest) => ('+', show_owner(rest)),
+                        None => (
+                            '~',
+                            show_owner(summary.strip_prefix("update ").unwrap_or(summary)),
+                        ),
+                    }
+                }
+                Resource::Sysctl(_) | Resource::Service(_) => ('~', summary.to_owned()),
                 Resource::Package(_) => ('+', summary.to_owned()),
+                Resource::User(_) if summary.starts_with("create ") => ('+', summary.to_owned()),
+                Resource::User(_) => ('~', summary.to_owned()),
             };
             let rev = match step.change.reversibility {
                 Reversibility::Reversible => "reversible",
@@ -481,12 +552,17 @@ fn print_plan(
 fn kinds(plan: &Plan) -> String {
     let count = |f: fn(&Resource) -> bool| plan.steps().filter(|s| f(&s.resource)).count();
     [
-        (count(|r| matches!(r, Resource::File(_))), "file"),
+        (
+            count(|r| matches!(r, Resource::File(_) | Resource::AuthorizedKeys(_))),
+            "file",
+        ),
         (
             count(|r| matches!(r, Resource::Sysctl(_))),
             "kernel setting",
         ),
         (count(|r| matches!(r, Resource::Package(_))), "package"),
+        (count(|r| matches!(r, Resource::Service(_))), "service"),
+        (count(|r| matches!(r, Resource::User(_))), "user"),
     ]
     .into_iter()
     .filter(|(n, _)| *n > 0)
@@ -523,11 +599,12 @@ fn print_progress(err: &mut dyn Write, progress: &Progress) {
         Progress::Apply { n, total, step } => {
             let summary = &step.change.summary;
             let text = match &step.resource {
-                Resource::File(_) => show_owner(summary),
+                Resource::File(_) | Resource::AuthorizedKeys(_) => show_owner(summary),
                 Resource::Sysctl(_) => format!("set {summary}"),
                 Resource::Package(_) => {
                     format!("{summary} (apt-get update, then install; can take a few minutes)")
                 }
+                Resource::Service(_) | Resource::User(_) => summary.clone(),
             };
             format!("[{n}/{total}] {text}")
         }
@@ -543,6 +620,33 @@ fn print_progress(err: &mut dyn Write, progress: &Progress) {
             Backup::Package { name, .. } => {
                 format!("leave {name} as it is (rollback does not remove packages)")
             }
+            Backup::Service {
+                unit,
+                was_enabled,
+                was_active,
+                ..
+            } => format!(
+                "restore {unit} ({}, {})",
+                if *was_enabled { "enabled" } else { "disabled" },
+                if *was_active { "active" } else { "inactive" }
+            ),
+            Backup::User {
+                name,
+                created: true,
+                ..
+            } => format!("remove user {name} (its home directory stays)"),
+            Backup::User {
+                name, added_groups, ..
+            } if added_groups.is_empty() => format!("leave user {name} as it is"),
+            Backup::User {
+                name, added_groups, ..
+            } => format!("remove {name} from groups {}", added_groups.join(",")),
+            Backup::AuthorizedKeys {
+                path,
+                original: Some(_),
+                ..
+            } => format!("restore {}", path.display()),
+            Backup::AuthorizedKeys { path, .. } => format!("remove {}", path.display()),
         },
         Progress::Leave(Backup::Sysctl { key, .. }) => {
             format!("leave {key} as it is (the host rebooted since apply; the next boot sets it)")

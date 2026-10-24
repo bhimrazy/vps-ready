@@ -176,6 +176,15 @@ fn unknown_module_is_a_usage_error() {
 }
 
 #[test]
+fn unknown_profile_is_an_error() {
+    vps_ready()
+        .args(["plan", "--profile", "nope"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("nope is not a built-in profile"));
+}
+
+#[test]
 fn bare_command_prints_help_with_the_first_run() {
     vps_ready()
         .assert()

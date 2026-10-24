@@ -73,10 +73,19 @@ impl PlanCx<'_> {
     ///
     /// [`ModuleError::Params`].
     pub fn params<T: DeserializeOwned>(&self) -> Result<T, ModuleError> {
-        toml::Value::Table(self.params.clone())
-            .try_into()
-            .map_err(|e| ModuleError::Params(Box::new(e)))
+        parse_params(self.params)
     }
+}
+
+/// Parses a module's table into its params `T`.
+///
+/// # Errors
+///
+/// [`ModuleError::Params`].
+pub fn parse_params<T: DeserializeOwned>(params: &toml::Table) -> Result<T, ModuleError> {
+    toml::Value::Table(params.clone())
+        .try_into()
+        .map_err(|e| ModuleError::Params(Box::new(e)))
 }
 
 /// The params of a module that takes none: any field is an error.
@@ -127,6 +136,17 @@ pub trait Module {
     /// module leaves alone. Asked only when it applies.
     fn notes(&self, _facts: &Facts) -> Vec<String> {
         Vec::new()
+    }
+    /// Checks a profile's table for this module without planning, so a typo
+    /// is found even on a host the module does not apply to. The default is
+    /// for a module that takes no params; one that does parses the same
+    /// struct as [`PlanCx::params`].
+    ///
+    /// # Errors
+    ///
+    /// [`ModuleError::Params`].
+    fn check_params(&self, params: &toml::Table) -> Result<(), ModuleError> {
+        parse_params::<NoParams>(params).map(|NoParams {}| ())
     }
     /// The resources in their desired state and the reloads they need. May
     /// read, never writes.
@@ -192,12 +212,16 @@ mod tests {
             runner: &runner,
         };
         for m in all() {
-            let err = m.plan(&cx, sys).unwrap_err();
-            assert!(
-                err.to_string().contains("unknown field `typo`"),
-                "{}: {err}",
-                m.id()
-            );
+            for err in [
+                m.plan(&cx, sys).unwrap_err(),
+                m.check_params(&params).unwrap_err(),
+            ] {
+                assert!(
+                    err.to_string().contains("unknown field `typo`"),
+                    "{}: {err}",
+                    m.id()
+                );
+            }
         }
     }
 

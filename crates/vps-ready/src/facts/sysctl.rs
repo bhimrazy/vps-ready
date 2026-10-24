@@ -244,6 +244,12 @@ mod tests {
         fn create_dir_all(&self, path: &Path, mode: u32) -> Result<(), SysError> {
             self.inner.create_dir_all(path, mode)
         }
+        fn create_dir(&self, path: &Path, owner: crate::sys::FileOwner) -> Result<(), SysError> {
+            self.inner.create_dir(path, owner)
+        }
+        fn remove_dir(&self, path: &Path) -> Result<(), SysError> {
+            self.inner.remove_dir(path)
+        }
         fn sync_dir(&self, path: &Path) -> Result<(), SysError> {
             self.inner.sync_dir(path)
         }

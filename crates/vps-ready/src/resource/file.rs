@@ -196,11 +196,11 @@ pub(super) fn restore(
     }
 }
 
-fn fmt_owner(o: FileOwner) -> String {
+pub(super) fn fmt_owner(o: FileOwner) -> String {
     format!("{:04o} {}:{}", o.mode, o.uid, o.gid)
 }
 
-fn unified(old: &[u8], new: &[u8]) -> String {
+pub(super) fn unified(old: &[u8], new: &[u8]) -> String {
     let old = String::from_utf8_lossy(old);
     let new = String::from_utf8_lossy(new);
     TextDiff::from_lines(old.as_ref(), new.as_ref())

@@ -2,8 +2,8 @@
 
 use std::time::Duration;
 
-use super::{Backup, ResourceError};
-use crate::sys::{Cmd, Output, Sys};
+use super::{Backup, ResourceError, failed, run};
+use crate::sys::{Cmd, Sys};
 
 /// An apt package that must be installed. Debian family only.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,7 +57,8 @@ impl Package {
                 "Dpkg::Options::=--force-confold",
                 &self.name,
             ]),
-        )
+        )?;
+        Ok(())
     }
 
     /// Whether dpkg has the package fully installed. A package dpkg does not
@@ -85,29 +86,13 @@ fn apt_get<'a>(args: impl IntoIterator<Item = &'a str>) -> Cmd {
         .timeout(APT_TIMEOUT)
 }
 
-fn run(sys: Sys, cmd: &Cmd) -> Result<(), ResourceError> {
-    let out = sys.runner.run(cmd)?;
-    if out.ok() {
-        Ok(())
-    } else {
-        Err(failed(&cmd.program, &out))
-    }
-}
-
-fn failed(program: &str, out: &Output) -> ResourceError {
-    ResourceError::Command {
-        program: program.to_owned(),
-        status: out.status,
-        stderr: String::from_utf8_lossy(&out.stderr).trim().to_owned(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::Path;
 
     use super::super::{Change, Resource, Reversibility, restore};
     use super::*;
+    use crate::sys::Output;
     use crate::sys::fake::{FakeFs, FakeRunner};
 
     const NAME: &str = "unattended-upgrades";
