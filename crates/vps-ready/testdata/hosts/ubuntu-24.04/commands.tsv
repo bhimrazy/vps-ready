@@ -3,6 +3,7 @@ virt-vm	0	systemd-detect-virt	--vm
 ssh-version	0	ssh	-V
 sshd-T	0	sshd	-T
 ssh-units	0	systemctl	show	--property=Id,LoadState,ActiveState,UnitFileState	ssh.socket	sshd.socket	ssh.service	sshd.service
+ssh-socket-listen	0	systemctl	show	ssh.socket	-p	Listen
 listeners	0	ss	-tulnpH
 nft	0	nft	-j	list	ruleset
 apt-periodic	0	apt-config	dump	APT::Periodic

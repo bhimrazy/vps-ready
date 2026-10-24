@@ -268,6 +268,7 @@ mod tests {
             &PlanCx {
                 facts: &facts(),
                 params: &toml::Table::new(),
+                planned: &[],
             },
             Sys {
                 fs: &fs,

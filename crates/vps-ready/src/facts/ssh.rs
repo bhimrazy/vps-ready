@@ -3,16 +3,21 @@
 //! The effective config comes from `sshd -T`, which prints every setting after
 //! sshd has applied its own first-match-wins rules across `sshd_config` and its
 //! drop-ins. Reading the files ourselves would get those rules wrong, so
-//! `sshd -T` is the only source of truth for SSH checks.
+//! `sshd -T` is the only source of truth for SSH checks. The files are read
+//! only to decide whether a drop-in is read early enough to win.
 
-use std::fmt;
+use std::path::Path;
 use std::time::Duration;
+use std::{fmt, io};
 
 use serde::Serialize;
-use sshd_config::SshdConfig;
+use sshd_config::{Config, SshdConfig};
 
 use super::{Probe, Unit, probe, prop, systemctl_show};
-use crate::sys::{Cmd, Runner};
+use crate::sys::{Cmd, Fs, Runner, SysError};
+
+/// The main server configuration file.
+pub const SSHD_CONFIG: &str = "/etc/ssh/sshd_config";
 
 /// Units queried to find out how sshd is started. Debian and Ubuntu call them
 /// `ssh.*`; Fedora and RHEL call them `sshd.*`.
@@ -27,6 +32,14 @@ pub struct Ssh {
     pub activation: SshActivation,
     /// Effective configuration from `sshd -T`, if it could be read.
     pub effective: Option<SshdConfig>,
+    /// The ports `ssh.socket` listens on, from `systemctl show ssh.socket -p
+    /// Listen`; empty without that unit. With socket activation these are
+    /// the ports sshd answers on, whatever `sshd -T` shows.
+    pub socket_ports: Vec<u16>,
+    /// [`SSHD_CONFIG`] and the files it includes; `None` if it could not be
+    /// read.
+    #[serde(skip)]
+    pub files: Option<Config>,
     /// Whether fail2ban's `sshd` jail runs, from `fail2ban-client status
     /// sshd`: `false` when fail2ban is not installed, not running or has no
     /// such jail; `None` when it could not be asked, e.g. without root.
@@ -59,13 +72,114 @@ impl fmt::Display for SshActivation {
     }
 }
 
-pub(super) fn detect(runner: &dyn Runner, notices: &mut Vec<String>) -> Ssh {
+impl Ssh {
+    /// Every port sshd accepts connections on now: `port` and
+    /// `listenaddress` from `sshd -T`, and `ssh.socket`'s while it is the
+    /// running unit. Sorted, without duplicates.
+    #[must_use]
+    pub fn ports(&self) -> Vec<u16> {
+        let mut ports = Vec::new();
+        if let Some(config) = &self.effective {
+            ports.extend(
+                config
+                    .get_all("port")
+                    .iter()
+                    .filter_map(|p| p.parse::<u16>().ok()),
+            );
+            ports.extend(
+                config
+                    .get_all("listenaddress")
+                    .iter()
+                    .filter_map(|a| last_port(a)),
+            );
+        }
+        if self.activation == SshActivation::Socket {
+            ports.extend(&self.socket_ports);
+        }
+        ports.sort_unstable();
+        ports.dedup();
+        ports
+    }
+}
+
+pub(super) fn detect(fs: &dyn Fs, runner: &dyn Runner, notices: &mut Vec<String>) -> Ssh {
     Ssh {
         version: version(runner, notices),
         activation: activation(runner, notices),
         effective: effective(runner, notices),
+        socket_ports: socket_ports(runner, notices),
+        files: files(fs, notices),
         fail2ban: fail2ban(runner, notices),
     }
+}
+
+/// [`Fs`] as a source for the `sshd_config` reader.
+pub(crate) struct FsSource<'a>(pub(crate) &'a dyn Fs);
+
+impl sshd_config::Source for FsSource<'_> {
+    fn read(&self, path: &Path) -> io::Result<String> {
+        let bytes = self.0.read(path).map_err(to_io)?;
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    fn list(&self, dir: &Path) -> io::Result<Vec<String>> {
+        Ok(self
+            .0
+            .read_dir(dir)
+            .map_err(to_io)?
+            .iter()
+            .filter_map(|p| Some(p.file_name()?.to_string_lossy().into_owned()))
+            .collect())
+    }
+}
+
+fn to_io(err: SysError) -> io::Error {
+    let kind = match err {
+        SysError::NotFound(_) => io::ErrorKind::NotFound,
+        SysError::Permission(_) => io::ErrorKind::PermissionDenied,
+        _ => io::ErrorKind::Other,
+    };
+    io::Error::new(kind, err.to_string())
+}
+
+/// A missing main file gets no notice: `sshd -T` already reports a host
+/// without sshd.
+fn files(fs: &dyn Fs, notices: &mut Vec<String>) -> Option<Config> {
+    match Config::read(&FsSource(fs), Path::new(SSHD_CONFIG)) {
+        Ok(config) => Some(config),
+        Err(sshd_config::Error::Io { path, source })
+            if source.kind() == io::ErrorKind::NotFound && path == Path::new(SSHD_CONFIG) =>
+        {
+            None
+        }
+        Err(err) => {
+            notices.push(format!("reading {SSHD_CONFIG}: {err}"));
+            None
+        }
+    }
+}
+
+/// `Listen=[::]:22 (Stream)`, one line per socket. Debian and Ubuntu ship
+/// the unit even where it is not used, so a failure is not worth a notice.
+fn socket_ports(runner: &dyn Runner, notices: &mut Vec<String>) -> Vec<u16> {
+    let cmd = Cmd::new("systemctl").args(["show", "ssh.socket", "-p", "Listen"]);
+    match probe(runner, &cmd, notices) {
+        Probe::Ran(out) if out.ok() => parse_listen(&String::from_utf8_lossy(&out.stdout)),
+        Probe::Ran(_) | Probe::Missing | Probe::Failed => Vec::new(),
+    }
+}
+
+fn parse_listen(text: &str) -> Vec<u16> {
+    text.lines()
+        .filter_map(|l| l.strip_prefix("Listen="))
+        .filter_map(|v| v.strip_suffix(" (Stream)"))
+        .filter_map(last_port)
+        .collect()
+}
+
+/// The port after the last `:` of `[::]:22` or `0.0.0.0:22`, or a bare `22`.
+fn last_port(addr: &str) -> Option<u16> {
+    addr.rsplit(':').next()?.parse().ok()
 }
 
 fn fail2ban(runner: &dyn Runner, notices: &mut Vec<String>) -> Option<bool> {

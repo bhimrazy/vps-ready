@@ -26,7 +26,7 @@ pub use firewall::{Firewall, InputChain, Ports, PublishedPort};
 pub use listeners::{Listener, Proto};
 pub use os_release::{OsFamily, OsRelease};
 pub use session::{Env, NoSession, Session, SessionId};
-pub use ssh::{Ssh, SshActivation};
+pub use ssh::{SSHD_CONFIG, Ssh, SshActivation};
 pub use sshd_config::SshdConfig;
 pub use sysctl::Sysctl;
 pub use updates::AptUpdates;
@@ -127,7 +127,7 @@ pub fn collect(fs: &dyn Fs, runner: &dyn Runner, env: &Env) -> Result<Facts, Fac
     let os = detect_os(fs, &mut notices)?;
     let init = detect_init(fs, &mut notices)?;
     let virtualization = virt::detect(fs, runner, &mut notices);
-    let ssh = ssh::detect(runner, &mut notices);
+    let ssh = ssh::detect(fs, runner, &mut notices);
     let listeners = listeners::detect(runner, &mut notices);
     let firewall = firewall::detect(fs, runner, &mut notices);
     let ipv6 = firewall::has_ipv6(fs);
@@ -334,7 +334,7 @@ mod tests {
     /// here, where review sees it. `iptables-save -t filter` and
     /// `ip6tables-save -t filter` run only when nft shows a multiport rule,
     /// so they are pinned in `firewall`'s tests.
-    const READ_ONLY_COMMANDS: [&[&str]; 10] = [
+    const READ_ONLY_COMMANDS: [&[&str]; 11] = [
         &["systemd-detect-virt", "--container"],
         &["systemd-detect-virt", "--vm"],
         &["ssh", "-V"],
@@ -349,6 +349,7 @@ mod tests {
             "ssh.service",
             "sshd.service",
         ],
+        &["systemctl", "show", "ssh.socket", "-p", "Listen"],
         &["ss", "-tulnpH"],
         &["nft", "-j", "list", "ruleset"],
         &["apt-config", "dump", "APT::Periodic"],

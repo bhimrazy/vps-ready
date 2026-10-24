@@ -57,6 +57,9 @@ pub struct ModulePlan<'a> {
     pub notes: Vec<String>,
     #[serde(skip)]
     pub(super) selected: Selected<'a>,
+    /// [`PlanCx::planned`] when it was planned, for verify.
+    #[serde(skip)]
+    pub(super) planned: Vec<Resource>,
 }
 
 impl fmt::Debug for ModulePlan<'_> {
@@ -161,6 +164,7 @@ impl ModulePlan<'_> {
         let cx = PlanCx {
             facts,
             params: self.selected.params,
+            planned: &self.planned,
         };
         self.selected.module.verify(&cx, sys)
     }
@@ -179,9 +183,11 @@ pub fn plan<'a>(
     sys: Sys,
 ) -> Result<Plan<'a>, EngineError> {
     let mut plans = Vec::new();
+    let mut planned = Vec::new();
     for &selected in modules {
         let module = selected.module;
         let mut notes = Vec::new();
+        let before = planned.clone();
         let status = match module.applicable(facts) {
             Applicability::NotApplicable { reason } => ModuleStatus::NotApplicable { reason },
             Applicability::Applicable => {
@@ -189,6 +195,7 @@ pub fn plan<'a>(
                 let cx = PlanCx {
                     facts,
                     params: selected.params,
+                    planned: &before,
                 };
                 let ModuleSteps {
                     resources,
@@ -199,6 +206,7 @@ pub fn plan<'a>(
                         module: module.id(),
                         source,
                     })?;
+                planned.extend(resources.iter().cloned());
                 let mut changes = Vec::new();
                 for resource in resources {
                     let change = resource.diff(sys).map_err(|source| EngineError::Resource {
@@ -221,6 +229,7 @@ pub fn plan<'a>(
             status,
             notes,
             selected,
+            planned: before,
         });
     }
     Ok(Plan {

@@ -15,12 +15,14 @@ use crate::sys::{Cmd, Sys, SysError};
 mod deadman_test;
 pub mod kernel_sysctl;
 pub mod ssh_bruteforce;
+pub mod ssh_server;
 mod updates_auto;
 
 #[cfg(feature = "testing")]
 pub use deadman_test::DeadmanTest;
 pub use kernel_sysctl::KernelSysctl;
 pub use ssh_bruteforce::SshBruteforce;
+pub use ssh_server::SshServer;
 pub use updates_auto::UpdatesAuto;
 
 /// Errors from planning a module.
@@ -40,6 +42,9 @@ pub enum ModuleError {
     /// the parse error is large.
     #[error("invalid params: {0}")]
     Params(#[source] Box<toml::de::Error>),
+    /// Applying the plan could lock the admin out; the message says why.
+    #[error("{0}")]
+    Refused(String),
 }
 
 impl From<CatalogError> for ModuleError {
@@ -67,6 +72,9 @@ pub struct PlanCx<'a> {
     pub facts: &'a Facts,
     /// The module's table from the profile; empty when there is none.
     pub params: &'a toml::Table,
+    /// The resources of the modules planned before this one in the same
+    /// plan, in their desired state, e.g. the admin `user.admin` creates.
+    pub planned: &'a [Resource],
 }
 
 impl PlanCx<'_> {
@@ -181,6 +189,7 @@ pub trait Module {
 #[must_use]
 pub fn all() -> &'static [&'static dyn Module] {
     &[
+        &SshServer::ROOT,
         &SshBruteforce::ROOT,
         &KernelSysctl::ROOT,
         &UpdatesAuto::ROOT,
@@ -193,6 +202,7 @@ pub fn all() -> &'static [&'static dyn Module] {
 #[must_use]
 pub fn with_test() -> &'static [&'static dyn Module] {
     &[
+        &SshServer::ROOT,
         &SshBruteforce::ROOT,
         &KernelSysctl::ROOT,
         &UpdatesAuto::ROOT,
@@ -220,6 +230,7 @@ mod tests {
         let cx = PlanCx {
             facts: &facts,
             params: &params,
+            planned: &[],
         };
         let (fs, runner) = (
             crate::sys::fake::FakeFs::new(),

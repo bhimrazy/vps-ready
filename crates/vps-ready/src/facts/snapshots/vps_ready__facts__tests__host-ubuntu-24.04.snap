@@ -203,6 +203,9 @@ ssh:
       - "yes"
     xauthlocation:
       - /usr/bin/xauth
+  socket_ports:
+    - 22
+    - 22
   fail2ban: false
 listeners:
   - proto: tcp
