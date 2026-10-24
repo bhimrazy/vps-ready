@@ -5,11 +5,11 @@ use std::path::{Path, PathBuf};
 
 use super::*;
 use crate::facts::Facts;
-use crate::modules::{Applicability, Module, ModuleError};
+use crate::modules::{Applicability, Module, ModuleError, ModuleSteps, PlanCx};
 use crate::resource::sysctl::BOOT_ID;
 use crate::resource::{Backup, File, Resource, Sysctl};
 use crate::sys::fake::{FakeFs, FakeRunner, Op};
-use crate::sys::{FileKind, FileOwner, Fs, Sys};
+use crate::sys::{FileKind, FileOwner, Fs, Output, Sys};
 
 const STATE: &str = "/state";
 const CONF: &str = "/etc/demo.conf";
@@ -19,7 +19,10 @@ const KPTR: &str = "/proc/sys/kernel/kptr_restrict";
 struct Demo {
     id: &'static str,
     resources: Vec<Resource>,
+    reloads: Vec<Reload>,
     applicable: bool,
+    /// What its verify fails with.
+    unverified: Option<&'static str>,
 }
 
 impl Module for Demo {
@@ -41,8 +44,18 @@ impl Module for Demo {
             }
         }
     }
-    fn plan(&self, _: &Facts, _: Sys) -> Result<Vec<Resource>, ModuleError> {
-        Ok(self.resources.clone())
+    fn plan(&self, cx: &PlanCx, _: Sys) -> Result<ModuleSteps, ModuleError> {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Params {}
+        let Params {} = cx.params()?;
+        Ok(ModuleSteps {
+            resources: self.resources.clone(),
+            reloads: self.reloads.clone(),
+        })
+    }
+    fn verify(&self, _: &PlanCx, _: Sys) -> Result<(), String> {
+        self.unverified.map_or(Ok(()), |e| Err(e.to_owned()))
     }
 }
 
@@ -74,7 +87,9 @@ fn module(id: &'static str, resources: Vec<Resource>) -> Demo {
     Demo {
         id,
         resources,
+        reloads: Vec::new(),
         applicable: true,
+        unverified: None,
     }
 }
 
@@ -116,8 +131,9 @@ fn state(fs: &dyn Fs) -> StateDir {
     StateDir::create(fs, STATE, 0).unwrap()
 }
 
-fn plan_of(fs: &dyn Fs, facts: &Facts, modules: &[&dyn Module]) -> Plan {
-    plan(modules, facts, sys(fs)).unwrap()
+fn plan_of<'a>(fs: &dyn Fs, facts: &'a Facts, modules: &[&'a dyn Module]) -> Plan<'a> {
+    let selected: Vec<Selected> = modules.iter().map(|m| Selected::new(*m)).collect();
+    plan(&selected, facts, sys(fs)).unwrap()
 }
 
 fn apply(fs: &dyn Fs, plan: &Plan) -> Result<ApplyOutcome, EngineError> {
@@ -138,6 +154,22 @@ fn events(fs: &dyn Fs, id: &str) -> Vec<Event> {
         .find(|t| t.id() == id)
         .unwrap();
     txn.read(fs).unwrap().into_iter().map(|r| r.event).collect()
+}
+
+/// Each event of the journal of `id` as a line, e.g. `applied file:/etc/x`.
+fn names(fs: &dyn Fs, id: &str) -> Vec<String> {
+    events(fs, id)
+        .iter()
+        .map(|e| match e {
+            Event::Backup { resource, .. }
+            | Event::Applied { resource }
+            | Event::Restored { resource } => format!("{} {resource}", e.name()),
+            Event::Reloaded { reload } => format!("reloaded {reload}"),
+            Event::State { state } => format!("state {state}"),
+            Event::Begin { .. } => "begin".into(),
+            Event::Rollback { .. } => "rollback".into(),
+        })
+        .collect()
 }
 
 /// Every file with its bytes, mode and owner.
@@ -178,7 +210,7 @@ fn load(tree: &Tree) -> FakeFs {
     fs
 }
 
-fn ids(plan: &Plan) -> Vec<&str> {
+fn ids<'a>(plan: &'a Plan) -> Vec<&'a str> {
     plan.steps().map(|s| s.change.id.as_str()).collect()
 }
 
@@ -190,7 +222,8 @@ fn plans_changes_and_lists_modules_that_do_not_apply() {
         applicable: false,
         ..module("test.other", vec![file("/etc/other", "x", 0o644)])
     };
-    let plan = plan_of(&fs, &facts, &[&demo(), &other]);
+    let demo = demo();
+    let plan = plan_of(&fs, &facts, &[&demo, &other]);
     assert_eq!(
         ids(&plan),
         [
@@ -217,7 +250,8 @@ fn applies_then_rolls_back_to_the_original_tree() {
     let fs = fixture();
     let facts = facts();
     let before = host(&fs);
-    let plan = plan_of(&fs, &facts, &[&demo()]);
+    let demo = demo();
+    let plan = plan_of(&fs, &facts, &[&demo]);
 
     let ApplyOutcome::Applied { txn } = apply(&fs, &plan).unwrap() else {
         panic!("not applied");
@@ -226,7 +260,7 @@ fn applies_then_rolls_back_to_the_original_tree() {
     assert_eq!(fs.metadata(Path::new(CONF)).unwrap().mode, 0o600);
     assert_eq!(fs.read(Path::new(NEW)).unwrap(), b"created\n");
     assert_eq!(fs.read(Path::new(KPTR)).unwrap(), b"1");
-    assert!(ids(&plan_of(&fs, &facts, &[&demo()])).is_empty());
+    assert!(ids(&plan_of(&fs, &facts, &[&demo])).is_empty());
 
     let done = rollback(&fs, Target::Last).unwrap();
     assert_eq!(
@@ -239,19 +273,8 @@ fn applies_then_rolls_back_to_the_original_tree() {
     );
     assert_eq!(host(&fs), before);
 
-    let names: Vec<String> = events(&fs, &txn)
-        .iter()
-        .map(|e| match e {
-            Event::Backup { resource, .. }
-            | Event::Applied { resource }
-            | Event::Restored { resource } => format!("{} {resource}", e.name()),
-            Event::State { state } => format!("state {state}"),
-            Event::Begin { .. } => "begin".into(),
-            Event::Rollback { .. } => "rollback".into(),
-        })
-        .collect();
     assert_eq!(
-        names,
+        names(&fs, &txn),
         [
             "begin",
             "backup file:/etc/demo.conf",
@@ -297,7 +320,8 @@ fn an_empty_plan_creates_no_transaction() {
 fn a_plan_that_changed_after_it_was_shown_aborts() {
     let fs = fixture();
     let facts = facts();
-    let plan = plan_of(&fs, &facts, &[&demo()]);
+    let demo = demo();
+    let plan = plan_of(&fs, &facts, &[&demo]);
     fs.write(Path::new(CONF), b"edited\n").unwrap();
     let edited = host(&fs);
     let err = apply(&fs, &plan).unwrap_err();
@@ -351,7 +375,8 @@ fn all_restored(fs: &dyn Fs, id: &str) -> bool {
 #[test]
 fn a_failure_at_any_write_rename_remove_or_append_is_rolled_back() {
     let facts = facts();
-    let plan = plan_of(&fixture(), &facts, &[&demo()]);
+    let demo = demo();
+    let plan = plan_of(&fixture(), &facts, &[&demo]);
     let original = host(&fixture());
 
     // Calls of each op that fail apply, then rollback, for `demo()`.
@@ -419,7 +444,8 @@ fn a_failure_at_any_write_rename_remove_or_append_is_rolled_back() {
 #[test]
 fn a_failed_first_restored_line_leaves_the_transaction_unfinished() {
     let facts = facts();
-    let plan = plan_of(&fixture(), &facts, &[&demo()]);
+    let demo = demo();
+    let plan = plan_of(&fixture(), &facts, &[&demo]);
     let original = host(&fixture());
     // Apply appends 9 lines (the empty journal counts); then `rollback`, then
     // the first `restored`.
@@ -460,7 +486,8 @@ fn a_plan_that_changes_a_resource_twice_is_refused() {
 #[test]
 fn a_failed_rollback_after_a_failed_apply_finishes_on_a_rerun() {
     let facts = facts();
-    let plan = plan_of(&fixture(), &facts, &[&demo()]);
+    let demo = demo();
+    let plan = plan_of(&fixture(), &facts, &[&demo]);
     let original = host(&fixture());
     let mut incomplete = 0;
     for n in 1..100 {
@@ -494,13 +521,27 @@ fn a_failed_rollback_after_a_failed_apply_finishes_on_a_rerun() {
 
 #[test]
 fn a_crash_at_any_point_is_refused_by_apply_and_undone_by_rollback() {
+    crash_at_any_point(&[&demo()]);
+}
+
+#[test]
+fn a_crash_at_any_point_with_reloads_replays_the_journaled_ones() {
+    let [ssh, plain, fw] = reloading();
+    crash_at_any_point(&[&ssh, &plain, &fw]);
+}
+
+/// Applies `modules`, then for each journal prefix (whole, or with a torn
+/// next line) rebuilds the tree a crash there could leave and rolls it back.
+/// The rollback replays exactly the reloads in the prefix, newest first.
+fn crash_at_any_point(modules: &[&dyn Module]) {
     let facts = facts();
     let original_fs = fixture();
-    let plan = plan_of(&original_fs, &facts, &[&demo()]);
+    let plan = plan_of(&original_fs, &facts, modules);
     let original = tree(&original_fs);
 
     let fs = fixture();
-    let ApplyOutcome::Applied { txn } = apply(&fs, &plan).unwrap() else {
+    let ok = runner(Output::success(""));
+    let ApplyOutcome::Applied { txn } = apply_with(&fs, &ok, &plan).unwrap() else {
         panic!("not applied");
     };
     let applied = tree(&fs);
@@ -533,6 +574,21 @@ fn a_crash_at_any_point_is_refused_by_apply_and_undone_by_rollback() {
                 _ => false,
             })
         };
+        let replayed: Vec<String> = records
+            .iter()
+            .rev()
+            .filter_map(|e| match e {
+                Event::Reloaded { reload } => Some(reload),
+                _ => None,
+            })
+            .flat_map(|r| {
+                r.check()
+                    .iter()
+                    .chain([&r.command()])
+                    .map(reload::line)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
         // A resource with a `backup` line but no `applied` line may or may
         // not have been changed when the crash came.
         for changed_unjournaled in [false, true] {
@@ -576,7 +632,9 @@ fn a_crash_at_any_point_is_refused_by_apply_and_undone_by_rollback() {
                             "{case}"
                         );
                     }
-                    rollback(&fs, Target::Last).unwrap_or_else(|e| panic!("{case}: {e}"));
+                    let run = runner(Output::success(""));
+                    rollback_with(&fs, &run).unwrap_or_else(|e| panic!("{case}: {e}"));
+                    assert_eq!(calls(&run), replayed, "{case}");
                 }
                 assert_eq!(host(&fs), host(&original_fs), "{case}");
                 assert!(st.unfinished(&fs).unwrap().is_empty(), "{case}");
@@ -739,7 +797,8 @@ fn an_older_transaction_cannot_undo_a_newer_one() {
 fn history_lists_transactions_newest_first() {
     let fs = fixture();
     let facts = facts();
-    let plan = plan_of(&fs, &facts, &[&demo()]);
+    let demo = demo();
+    let plan = plan_of(&fs, &facts, &[&demo]);
     let ApplyOutcome::Applied { txn: first } = apply(&fs, &plan).unwrap() else {
         panic!("not applied");
     };
@@ -793,10 +852,336 @@ fn a_second_engine_is_busy() {
     ));
 }
 
+/// Answers every check with `check` and every `systemctl` with success.
+fn runner(check: Output) -> FakeRunner {
+    FakeRunner::new()
+        .on("sshd", ["-t"], check.clone())
+        .on("nft", ["-c"], check)
+        .on("systemctl", Vec::<String>::new(), Output::success(""))
+}
+
+fn failed(stderr: &str) -> Output {
+    Output {
+        status: 255,
+        stderr: stderr.into(),
+        ..Output::default()
+    }
+}
+
+/// Each command `runner` ran, as a line.
+fn calls(runner: &FakeRunner) -> Vec<String> {
+    runner
+        .calls()
+        .iter()
+        .map(|c| format!("{} {}", c.program, c.args.join(" ")))
+        .collect()
+}
+
+fn apply_with(fs: &dyn Fs, runner: &FakeRunner, plan: &Plan) -> Result<ApplyOutcome, EngineError> {
+    let state = state(fs);
+    Engine::lock(&state, Sys { fs, runner })?.apply(plan, &mut |_| {})
+}
+
+fn rollback_with(fs: &dyn Fs, runner: &FakeRunner) -> Result<Rollback, EngineError> {
+    let state = state(fs);
+    Engine::lock(&state, Sys { fs, runner })?.rollback(Target::Last, &mut |_| {})
+}
+
+/// `test.ssh` changes a file and reloads sshd; `test.plain` sets a sysctl;
+/// `test.fw` creates a file and reloads the firewall.
+fn reloading() -> [Demo; 3] {
+    [
+        Demo {
+            reloads: vec![Reload::SshdReload],
+            ..module("test.ssh", vec![file(CONF, "new\n", 0o600)])
+        },
+        module("test.plain", vec![sysctl("kernel.kptr_restrict", "1")]),
+        Demo {
+            reloads: vec![Reload::FirewallReload],
+            ..module("test.fw", vec![file(NEW, "created\n", 0o644)])
+        },
+    ]
+}
+
+const SSHD_RELOAD: [&str; 2] = ["sshd -t", "systemctl try-reload-or-restart ssh.service"];
+const FIREWALL_RELOAD: [&str; 2] = [
+    "nft -c -f /etc/vps-ready/firewall.nft",
+    "systemctl try-reload-or-restart vps-ready-firewall.service",
+];
+
+#[test]
+fn reloads_run_after_their_module_and_again_after_its_restores() {
+    let fs = fixture();
+    let facts = facts();
+    let before = host(&fs);
+    let [ssh, plain, fw] = reloading();
+    let plan = plan_of(&fs, &facts, &[&ssh, &plain, &fw]);
+    let json = serde_json::to_value(&plan).unwrap();
+    assert_eq!(
+        json["modules"][0]["reloads"],
+        serde_json::json!(["sshd-reload"])
+    );
+    assert!(json["modules"][1].get("reloads").is_none(), "{json}");
+
+    let run = runner(Output::success(""));
+    let ApplyOutcome::Applied { txn } = apply_with(&fs, &run, &plan).unwrap() else {
+        panic!("not applied");
+    };
+    assert_eq!(calls(&run), [SSHD_RELOAD, FIREWALL_RELOAD].concat());
+
+    let run = runner(Output::success(""));
+    rollback_with(&fs, &run).unwrap();
+    assert_eq!(host(&fs), before);
+    // The firewall reload waits for the restores journaled after the sshd
+    // reload, including the sysctl of the module without reloads.
+    assert_eq!(calls(&run), [FIREWALL_RELOAD, SSHD_RELOAD].concat());
+    assert_eq!(
+        names(&fs, &txn),
+        [
+            "begin",
+            "backup file:/etc/demo.conf",
+            "applied file:/etc/demo.conf",
+            "reloaded sshd-reload",
+            "backup sysctl:kernel.kptr_restrict",
+            "applied sysctl:kernel.kptr_restrict",
+            "backup file:/etc/demo.d/new.conf",
+            "applied file:/etc/demo.d/new.conf",
+            "reloaded firewall-reload",
+            "state applied",
+            "rollback",
+            "restored file:/etc/demo.d/new.conf",
+            "restored sysctl:kernel.kptr_restrict",
+            "reloaded firewall-reload",
+            "restored file:/etc/demo.conf",
+            "reloaded sshd-reload",
+            "state rolled-back (manual)",
+        ]
+    );
+}
+
+#[test]
+fn a_module_without_changes_plans_no_reloads() {
+    let fs = fixture();
+    let facts = facts();
+    let done = Demo {
+        reloads: vec![Reload::SshdReload],
+        ..module("test.done", vec![sysctl("kernel.dmesg_restrict", "1")])
+    };
+    let plan = plan_of(&fs, &facts, &[&done]);
+    assert!(plan.modules[0].reloads().is_empty());
+    let run = runner(Output::success(""));
+    assert!(matches!(
+        apply_with(&fs, &run, &plan),
+        Ok(ApplyOutcome::NothingToDo)
+    ));
+    assert!(calls(&run).is_empty());
+}
+
+#[test]
+fn a_failed_reload_check_rolls_back_without_reloading() {
+    let fs = fixture();
+    let facts = facts();
+    let before = host(&fs);
+    let [ssh, ..] = reloading();
+    let plan = plan_of(&fs, &facts, &[&ssh]);
+    let run = runner(failed("line 3: Bad configuration option"));
+    let outcome = apply_with(&fs, &run, &plan).unwrap();
+    let ApplyOutcome::RolledBack { txn, reason, cause } = outcome else {
+        panic!("{outcome:?}");
+    };
+    assert_eq!(reason, RollbackReason::ApplyFailed);
+    assert_eq!(
+        cause.to_string(),
+        "not running sshd-reload: `sshd -t` exited with status 255: line 3: Bad configuration option"
+    );
+    assert_eq!(calls(&run), ["sshd -t"]);
+    assert!(!names(&fs, &txn).iter().any(|n| n.starts_with("reloaded")));
+    assert_eq!(host(&fs), before);
+}
+
+#[test]
+fn rollback_skips_a_reload_whose_check_fails() {
+    let fs = fixture();
+    let facts = facts();
+    let before = host(&fs);
+    let [ssh, ..] = reloading();
+    let plan = plan_of(&fs, &facts, &[&ssh]);
+    let ok = runner(Output::success(""));
+    let ApplyOutcome::Applied { txn } = apply_with(&fs, &ok, &plan).unwrap() else {
+        panic!("not applied");
+    };
+    // E.g. the admin broke `sshd_config` since apply: the running sshd keeps
+    // its config instead of reloading a broken one.
+    let run = runner(failed("line 9: Bad configuration option"));
+    rollback_with(&fs, &run).unwrap();
+    assert_eq!(calls(&run), ["sshd -t"]);
+    assert_eq!(host(&fs), before);
+    let names = names(&fs, &txn);
+    assert_eq!(
+        names[names.len() - 3..],
+        [
+            "rollback",
+            "restored file:/etc/demo.conf",
+            "state rolled-back (manual)"
+        ]
+    );
+}
+
+#[test]
+fn a_failed_reload_in_rollback_is_finished_by_a_rerun() {
+    let fs = fixture();
+    let facts = facts();
+    let before = host(&fs);
+    let [ssh, ..] = reloading();
+    let plan = plan_of(&fs, &facts, &[&ssh]);
+    let ok = runner(Output::success(""));
+    let ApplyOutcome::Applied { txn } = apply_with(&fs, &ok, &plan).unwrap() else {
+        panic!("not applied");
+    };
+    let broken = FakeRunner::new()
+        .on("sshd", ["-t"], Output::success(""))
+        .on("systemctl", Vec::<String>::new(), failed("Job failed"));
+    let err = rollback_with(&fs, &broken).unwrap_err();
+    let EngineError::RollbackIncomplete {
+        left: Some(left), ..
+    } = &err
+    else {
+        panic!("{err:?}");
+    };
+    assert_eq!(
+        left,
+        &[ByHand {
+            resource: "sshd-reload".into(),
+            step: SSHD_RELOAD[1].into(),
+        }]
+    );
+    assert_eq!(host(&fs), before);
+    assert!(matches!(
+        apply_with(&fs, &broken, &plan),
+        Err(EngineError::Unfinished(id)) if id == txn
+    ));
+
+    let run = runner(Output::success(""));
+    assert_eq!(rollback_with(&fs, &run).unwrap().restored, 0);
+    assert_eq!(calls(&run), SSHD_RELOAD);
+    assert_eq!(host(&fs), before);
+    let names = names(&fs, &txn);
+    assert_eq!(
+        names[names.len() - 2..],
+        ["reloaded sshd-reload", "state rolled-back (manual)"]
+    );
+}
+
+#[test]
+fn a_failed_reload_in_rollback_does_not_stop_earlier_modules() {
+    let fs = fixture();
+    let facts = facts();
+    let before = host(&fs);
+    let [ssh, plain, fw] = reloading();
+    let plan = plan_of(&fs, &facts, &[&ssh, &plain, &fw]);
+    let ok = runner(Output::success(""));
+    let ApplyOutcome::Applied { txn } = apply_with(&fs, &ok, &plan).unwrap() else {
+        panic!("not applied");
+    };
+    let broken = FakeRunner::new()
+        .on("nft", ["-c"], Output::success(""))
+        .on(
+            "systemctl",
+            ["try-reload-or-restart", "vps-ready-firewall.service"],
+            failed("Job failed"),
+        )
+        .on("sshd", ["-t"], Output::success(""))
+        .on("systemctl", Vec::<String>::new(), Output::success(""));
+    let err = rollback_with(&fs, &broken).unwrap_err();
+    let EngineError::RollbackIncomplete {
+        left: Some(left), ..
+    } = &err
+    else {
+        panic!("{err:?}");
+    };
+    assert_eq!(
+        left,
+        &[ByHand {
+            resource: "firewall-reload".into(),
+            step: FIREWALL_RELOAD[1].into(),
+        }]
+    );
+    // The sshd module was still restored and reloaded.
+    assert_eq!(host(&fs), before);
+    assert_eq!(calls(&broken), [FIREWALL_RELOAD, SSHD_RELOAD].concat());
+    let names = names(&fs, &txn);
+    assert_eq!(
+        names[names.len() - 5..],
+        [
+            "rollback",
+            "restored file:/etc/demo.d/new.conf",
+            "restored sysctl:kernel.kptr_restrict",
+            "restored file:/etc/demo.conf",
+            "reloaded sshd-reload",
+        ]
+    );
+
+    let run = runner(Output::success(""));
+    rollback_with(&fs, &run).unwrap();
+    assert_eq!(calls(&run), [FIREWALL_RELOAD, SSHD_RELOAD].concat());
+}
+
+#[test]
+fn a_failed_module_verify_rolls_back_and_replays_its_reloads() {
+    let fs = fixture();
+    let facts = facts();
+    let before = host(&fs);
+    let [ssh, ..] = reloading();
+    let ssh = Demo {
+        unverified: Some("sshd -T shows passwordauthentication yes"),
+        ..ssh
+    };
+    let plan = plan_of(&fs, &facts, &[&ssh]);
+    let run = runner(Output::success(""));
+    let outcome = apply_with(&fs, &run, &plan).unwrap();
+    let ApplyOutcome::RolledBack { reason, cause, .. } = outcome else {
+        panic!("{outcome:?}");
+    };
+    assert_eq!(reason, RollbackReason::VerifyFailed);
+    assert_eq!(
+        cause.to_string(),
+        "not in the desired state after apply: test.ssh: sshd -T shows passwordauthentication yes"
+    );
+    assert_eq!(calls(&run), [SSHD_RELOAD, SSHD_RELOAD].concat());
+    assert_eq!(host(&fs), before);
+}
+
+#[test]
+fn unknown_params_name_the_module() {
+    let fs = fixture();
+    let facts = facts();
+    let demo = demo();
+    let params: toml::Table = toml::from_str("passwrd = false").unwrap();
+    let selected = [Selected {
+        module: &demo,
+        params: &params,
+    }];
+    let err = plan(&selected, &facts, sys(&fs)).unwrap_err();
+    assert!(
+        matches!(
+            &err,
+            EngineError::Module {
+                module: "test.demo",
+                source: ModuleError::Params(_)
+            }
+        ),
+        "{err:?}"
+    );
+    assert!(
+        err.to_string()
+            .starts_with("planning test.demo: invalid params: "),
+        "{err}"
+    );
+}
+
 #[test]
 fn rollback_checks_and_restores_authorized_keys() {
     use crate::resource::AuthorizedKeys;
-    use crate::sys::Output;
 
     const KEYS: &str = "/home/admin/.ssh/authorized_keys";
     let fs = FakeFs::new().with_dir(
@@ -825,7 +1210,8 @@ fn rollback_checks_and_restores_authorized_keys() {
     );
     let state = state(&fs);
     let before = host(&fs);
-    let plan = plan(&[&keys], &facts(), sys).unwrap();
+    let facts = facts();
+    let plan = plan(&[Selected::new(&keys)], &facts, sys).unwrap();
     let engine = Engine::lock(&state, sys).unwrap();
     engine.apply(&plan, &mut |_| {}).unwrap();
     let meta = fs.metadata(Path::new("/home/admin/.ssh")).unwrap();

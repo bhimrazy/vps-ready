@@ -8,6 +8,7 @@ use serde::Serialize;
 
 use super::journal::{self, Event, Record, RollbackReason, TxnState};
 use super::plan::{Plan, Step};
+use super::reload::{self, Reload};
 use super::{EngineError, StateDir, Txn, id};
 use crate::resource::sysctl::boot_id;
 use crate::resource::{
@@ -153,7 +154,9 @@ impl<'a> Engine<'a> {
     /// first, and nothing happens if one differs. Resources that had no
     /// change are not re-diffed: if they drifted since, the next plan shows
     /// it. Then, for each resource: snapshot, `backup` line, apply, `applied`
-    /// line; then every resource is verified. On a failure the changes are
+    /// line; after a module's resources, each of its reloads: check,
+    /// `reloaded` line, reload. Then every resource is verified, and each
+    /// module with a change runs its own verify. On a failure the changes are
     /// rolled back without the safety check of [`Engine::rollback`], since
     /// they were made under this lock a moment ago. Each step and restore is
     /// reported to `progress` before it runs, and a passed verify after it.
@@ -195,9 +198,9 @@ impl<'a> Engine<'a> {
             modules: plan.changed_modules(),
         })?;
 
-        let failure = match self.run(&mut open, &steps, progress) {
+        let failure = match self.run(&mut open, plan, steps.len(), progress) {
             Err(e) => (RollbackReason::ApplyFailed, e),
-            Ok(()) => match self.verify(&steps) {
+            Ok(()) => match self.verify(plan) {
                 Err(failure) => failure,
                 Ok(()) => {
                     progress(Progress::Verified);
@@ -220,53 +223,80 @@ impl<'a> Engine<'a> {
         })
     }
 
+    /// Applies each module's steps, then runs its reloads.
     fn run(
         &self,
         open: &mut Open,
-        steps: &[&Step],
+        plan: &Plan,
+        total: usize,
         progress: &mut dyn FnMut(Progress),
     ) -> Result<(), EngineError> {
         let mut n = 0;
-        for (i, step) in steps.iter().enumerate() {
-            n += 1;
-            progress(Progress::Apply {
-                n: i + 1,
-                total: steps.len(),
-                step,
-            });
-            let id = &step.change.id;
-            let backup = step
-                .resource
-                .snapshot(self.sys, open.txn.dir(), n)
-                .map_err(|source| EngineError::Resource {
-                    id: id.clone(),
-                    source,
-                })?;
-            open.append(Event::Backup {
-                resource: id.clone(),
-                backup,
-            })?;
-            step.resource
-                .apply(self.sys)
-                .map_err(|source| EngineError::Resource {
-                    id: id.clone(),
-                    source,
-                })?;
-            open.append(Event::Applied {
-                resource: id.clone(),
-            })?;
+        for module in &plan.modules {
+            for step in module.changes() {
+                n += 1;
+                progress(Progress::Apply {
+                    n: n as usize,
+                    total,
+                    step,
+                });
+                self.apply_step(open, n, step)?;
+            }
+            for &reload in module.reloads() {
+                if let Some(check) = reload.check() {
+                    reload::run(self.sys, &check)
+                        .map_err(|reason| EngineError::ReloadCheck { reload, reason })?;
+                }
+                open.append(Event::Reloaded { reload })?;
+                reload::run(self.sys, &reload.command())
+                    .map_err(|reason| EngineError::Reload { reload, reason })?;
+            }
         }
         Ok(())
     }
 
-    /// Every resource must now be in its desired state.
-    fn verify(&self, steps: &[&Step]) -> Result<(), (RollbackReason, EngineError)> {
+    /// Snapshot, `backup` line, apply, `applied` line.
+    fn apply_step(&self, open: &mut Open, n: u32, step: &Step) -> Result<(), EngineError> {
+        let id = &step.change.id;
+        let backup = step
+            .resource
+            .snapshot(self.sys, open.txn.dir(), n)
+            .map_err(|source| EngineError::Resource {
+                id: id.clone(),
+                source,
+            })?;
+        open.append(Event::Backup {
+            resource: id.clone(),
+            backup,
+        })?;
+        step.resource
+            .apply(self.sys)
+            .map_err(|source| EngineError::Resource {
+                id: id.clone(),
+                source,
+            })?;
+        open.append(Event::Applied {
+            resource: id.clone(),
+        })
+    }
+
+    /// Every resource must now be in its desired state, and every module
+    /// with a change must pass its own verify.
+    fn verify(&self, plan: &Plan) -> Result<(), (RollbackReason, EngineError)> {
         let mut differ = Vec::new();
-        for step in steps {
+        for step in plan.steps() {
             match diff(self.sys, &step.resource) {
                 Ok(None) => {}
                 Ok(Some(_)) => differ.push(step.change.id.clone()),
                 Err(e) => return Err((RollbackReason::ApplyFailed, e)),
+            }
+        }
+        for module in &plan.modules {
+            if module.changes().is_empty() {
+                continue;
+            }
+            if let Err(e) = module.verify(plan.facts, self.sys) {
+                differ.push(format!("{}: {e}", module.id));
             }
         }
         if differ.is_empty() {
@@ -282,8 +312,9 @@ impl<'a> Engine<'a> {
     /// Rolls back `target`, resuming it if it is unfinished. First checks
     /// that no backed-up resource changed since apply; if one did, nothing is
     /// restored. A sysctl backed up in an earlier boot is neither checked nor
-    /// restored: the boot configuration set its running value. Each restore
-    /// is reported to `progress` before it runs.
+    /// restored: the boot configuration set its running value. The reloads
+    /// apply journaled run again, check first, after the restores of their
+    /// module. Each restore is reported to `progress` before it runs.
     ///
     /// # Errors
     ///
@@ -341,9 +372,10 @@ impl<'a> Engine<'a> {
         Ok(None)
     }
 
-    /// Restores every backup without a `restored` line, newest first, then
-    /// writes the final state. A `rollback` record goes first, unless an
-    /// earlier run wrote one; its reason then wins over `reason`. A sysctl
+    /// Restores every backup without a `restored` line, newest first, with
+    /// the reloads apply journaled in between, then writes the final state.
+    /// A `rollback` record goes first, unless an earlier run wrote one; its
+    /// reason then wins over `reason`. A sysctl
     /// backed up in an earlier boot gets a `restored` line without a restore.
     /// Returns how many it restored and the keys of those sysctls.
     fn roll_back(
@@ -368,28 +400,45 @@ impl<'a> Engine<'a> {
                 _ => None,
             })
             .collect();
-        let pending: Vec<(String, Backup)> = records
+        // Reloads journaled by apply, not by an earlier run of this rollback.
+        // A rollback's lines start with `rollback`, or with `restored` where
+        // that line is best effort (the dead-man paths, which also add
+        // `skipped`).
+        let applying = records
+            .iter()
+            .position(|r| matches!(r.event, Event::Rollback { .. } | Event::Restored { .. }))
+            .map_or(records, |i| &records[..i]);
+        let undo: Vec<Undo> = applying
             .iter()
             .filter_map(|r| match &r.event {
                 Event::Backup { resource, backup } if !restored.contains(resource.as_str()) => {
-                    Some((resource.clone(), backup.clone()))
+                    Some(Undo::Restore(resource.clone(), backup.clone()))
                 }
+                Event::Reloaded { reload } => Some(Undo::Reload(*reload)),
                 _ => None,
             })
             .collect();
+        let pending = || {
+            undo.iter().filter_map(|u| match u {
+                Undo::Restore(resource, backup) => Some((resource, backup)),
+                Undo::Reload(_) => None,
+            })
+        };
         let left = |upto: usize| {
             Some(
-                pending[..upto]
+                undo[..upto]
                     .iter()
-                    .filter(|(_, b)| !earlier_boot(b, boot))
-                    .filter_map(|(r, b)| by_hand(&dir, r, b))
+                    .filter_map(|u| match u {
+                        Undo::Restore(r, b) if !earlier_boot(b, boot) => by_hand(&dir, r, b),
+                        _ => None,
+                    })
                     .collect(),
             )
         };
 
         if check {
             let mut changed = Vec::new();
-            for (resource, backup) in &pending {
+            for (resource, backup) in pending() {
                 if earlier_boot(backup, boot) || unchanged(self.sys, &dir, resource, backup)? {
                     continue;
                 }
@@ -420,12 +469,30 @@ impl<'a> Engine<'a> {
                     reason
                 };
                 open.append(Event::Rollback { reason })
-                    .map_err(|e| incomplete(&id, &dir, left(pending.len()), e))?;
+                    .map_err(|e| incomplete(&id, &dir, left(undo.len()), e))?;
                 reason
             }
         };
         let mut at_next_boot = Vec::new();
-        for (i, (resource, backup)) in pending.iter().enumerate().rev() {
+        // A reload runs once the restores journaled before it, back to the
+        // previous reload, are done: those of its module, perhaps with
+        // those of a module without reloads. A failed reload does not stop
+        // the restores of earlier modules, which may be the ones that matter
+        // (e.g. an sshd drop-in before a firewall); the rollback then ends
+        // incomplete, without a final state.
+        let mut due = None;
+        let mut failed = Vec::new();
+        for (i, item) in undo.iter().enumerate().rev() {
+            let (resource, backup) = match item {
+                Undo::Reload(reload) => {
+                    if let Some(due) = due.replace(*reload) {
+                        self.replay(open, due, &mut failed)
+                            .map_err(|e| incomplete(&id, &dir, left(i), e))?;
+                    }
+                    continue;
+                }
+                Undo::Restore(resource, backup) => (resource, backup),
+            };
             let result = match backup {
                 Backup::Sysctl { key, .. } if earlier_boot(backup, boot) => {
                     progress(Progress::Leave(backup));
@@ -449,12 +516,60 @@ impl<'a> Engine<'a> {
                 return Err(incomplete(&id, &dir, left(i + 1), e));
             }
         }
+        if let Some(due) = due {
+            self.replay(open, due, &mut failed)
+                .map_err(|e| incomplete(&id, &dir, left(0), e))?;
+        }
+        if !failed.is_empty() {
+            let left = failed
+                .iter()
+                .map(|(reload, _)| ByHand {
+                    resource: reload.name().to_owned(),
+                    step: reload::line(&reload.command()),
+                })
+                .collect();
+            let (reload, reason) = failed.swap_remove(0);
+            let source = EngineError::Reload { reload, reason };
+            return Err(incomplete(&id, &dir, Some(left), source));
+        }
         open.append(Event::State {
             state: TxnState::RolledBack { reason },
         })
         .map_err(|e| incomplete(&id, &dir, left(0), e))?;
-        Ok((pending.len() - at_next_boot.len(), at_next_boot))
+        Ok((pending().count() - at_next_boot.len(), at_next_boot))
     }
+
+    /// Runs a reload that apply journaled, check first. A failed check skips
+    /// it, so a running daemon keeps its config instead of loading a broken
+    /// one (e.g. an `sshd_config` edited since apply). A resumed rollback
+    /// runs every such reload again; that is harmless. A failed reload is
+    /// added to `failed`; only a failed journal line is an error.
+    fn replay(
+        &self,
+        open: &mut Open,
+        reload: Reload,
+        failed: &mut Vec<(Reload, String)>,
+    ) -> Result<(), EngineError> {
+        if let Some(check) = reload.check()
+            && let Err(reason) = reload::run(self.sys, &check)
+        {
+            tracing::warn!("not running {reload}, so the daemon keeps its config: {reason}");
+            return Ok(());
+        }
+        if let Err(reason) = reload::run(self.sys, &reload.command()) {
+            failed.push((reload, reason));
+            return Ok(());
+        }
+        open.append(Event::Reloaded { reload })
+    }
+}
+
+/// What a rollback undoes, in journal order.
+enum Undo {
+    /// A backup without a `restored` line: resource ID and backup.
+    Restore(String, Backup),
+    /// A reload that apply journaled.
+    Reload(Reload),
 }
 
 /// Every transaction with a `begin` record, newest first. Reads only; takes

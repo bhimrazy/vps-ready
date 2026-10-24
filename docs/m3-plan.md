@@ -418,11 +418,11 @@ Each PR leaves `main` releasable. Dangerous modules are registered only once the
 
 5. **`feat(engine): reloads, module verify and params`**: the new `Module` signature, `ModuleSteps`, `Reload`, `reloaded` events, rollback reloads; existing modules move over unchanged in behavior. *Parallel.*
 
-6. **`feat(engine): dead-man states, arming and rollback entry points`** (needs 5): `PendingConfirm`, `Confirmed`, the new reasons and events, the transition and `newest_applied`/`ensure_finished` changes; arming with `systemd-run`, re-arming, the binary-path check; the boot hook; `--deadman` and `--deadman-boot` with the per-resource rule and best-effort journal; `apply --deadman`. A test-only dead-man module (behind the `testing` feature, so not in release binaries) exercises it; the VM cycles here only need the paths that do not confirm. Tests: the engine and dead-man rollback tests above; VM cycles 2 to 4 with the test module.
+6. **`feat(engine): dead-man states, arming and rollback entry points`** (needs 5): `PendingConfirm`, `Confirmed`, the new reasons and events, the transition and `newest_applied`/`ensure_finished` changes; arming with `systemd-run`, re-arming, the binary-path check; the boot hook; `--deadman` and `--deadman-boot` with the per-resource rule and best-effort journal; `apply --deadman`. A test-only dead-man module (behind the `testing` feature, so not in release binaries) exercises it; the VM cycles here only need the paths that do not confirm. Tests: the engine and dead-man rollback tests above; VM cycles 2 to 4 with the test module. A rollback reload skipped because its check failed gets a journal line and a `Progress` event (PR 5 only logs it).
 
 7. **`feat(cli): confirm and the pending countdown`** (needs 3, 6): `confirm` with the session rule, `--extend` and its caps, the printed `ssh` line, refusals, the countdown, exit 4, `history` remaining time, manual rollback of a pending transaction; the VM harness gains a second SSH session and a root key. Tests: session tests; VM cycle 5.
 
-8. **`feat(config): minimal and web profiles`** (needs 5): profile parsing, `extends`, `--profile`, the default selection without dead-man modules. *Parallel with 6 and 7.*
+8. **`feat(config): minimal and web profiles`** (needs 5): profile parsing, `extends`, `--profile`, the default selection without dead-man modules. Every module section's params are checked when the profile is parsed, through a `Module::check_params(&toml::Table)` default that does the same `deny_unknown_fields` parse, since a module that does not apply is never planned. *Parallel with 6 and 7.*
 
 9. **`feat(modules): user.admin`** (needs 4, 7, 8). Layer 2 cycle.
 
@@ -432,7 +432,7 @@ Each PR leaves `main` releasable. Dangerous modules are registered only once the
 
 12. **`feat(modules): ssh.bruteforce`** (needs 4, 8): `SSH-008` and its check kind; layer 2 cycle. *Can start as soon as 4 and 8 are in.*
 
-13. **`chore: release v0.3.0`**: README, `architecture.md` (arm before change, no confirm code, `TxnState`), `decisions.md` (open question 2 decided), `testing.md`, `security-baseline.md` (5-minute window), milestone description, version bump.
+13. **`chore: release v0.3.0`**: README, `architecture.md` (arm before change, no confirm code, `TxnState`), `decisions.md` (open question 2 decided), `testing.md`, `security-baseline.md` (5-minute window), milestone description, version bump. The release notes say that a v0.2 binary cannot read a journal with `reloaded` (or the other new events), so a downgrade must not be used to roll back a v0.3 transaction.
 
 Waves: {2, 3, 4, 5} → {6, 8} → {7, 12} → {9, 10, 11} → 13.
 

@@ -11,8 +11,8 @@ use owo_colors::OwoColorize;
 use super::{EXIT_ERROR, EXIT_INCOMPLETE, EXIT_ROLLED_BACK, print_report};
 use crate::audit::{self, Outcome};
 use crate::engine::{
-    self, ApplyOutcome, Engine, EngineError, ModuleStatus, Plan, Progress, StateDir, Target,
-    TxnInfo, TxnState,
+    self, ApplyOutcome, Engine, EngineError, ModuleStatus, Plan, Progress, Selected, StateDir,
+    Target, TxnInfo, TxnState,
 };
 use crate::facts::Facts;
 use crate::modules::Module;
@@ -197,10 +197,10 @@ pub(super) fn history(host: &Host, json: bool, out: &mut dyn Write) -> anyhow::R
     Ok(0)
 }
 
-/// Logs the notices of `facts`, except the SSH session one: these commands
+/// Logs the notices of `facts`, except the SSH session ones: these commands
 /// do not use the session.
 fn log_notices(facts: &Facts) {
-    super::log_notices(facts, &[crate::facts::session::UNSET_NOTICE]);
+    super::log_notices(facts, &[crate::facts::session::NOTICE]);
 }
 
 fn require_root(host: &Host, command: &str) -> anyhow::Result<()> {
@@ -210,15 +210,16 @@ fn require_root(host: &Host, command: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The modules named by `ids` in registry order, or all of them.
-fn select<'a>(all: &[&'a dyn Module], ids: &[String]) -> anyhow::Result<Vec<&'a dyn Module>> {
+/// The modules named by `ids` in registry order, or all of them, with no
+/// params.
+fn select<'a>(all: &[&'a dyn Module], ids: &[String]) -> anyhow::Result<Vec<Selected<'a>>> {
     if let Some(id) = ids.iter().find(|id| !all.iter().any(|m| m.id() == *id)) {
         bail!("no module {id}");
     }
     Ok(all
         .iter()
         .filter(|m| ids.is_empty() || ids.iter().any(|id| id == m.id()))
-        .copied()
+        .map(|m| Selected::new(*m))
         .collect())
 }
 
@@ -249,7 +250,14 @@ fn audit_fixed(host: &Host, plan: &Plan, out: &mut dyn Write) -> anyhow::Result<
     let facts = (host.facts)(host.sys)?;
     let report = audit::run(fixed_by(&plan.changed_modules())?, &facts);
     writeln!(out)?;
-    print_report(out, &report, "this host after apply", false, host.color)?;
+    print_report(
+        out,
+        &report,
+        "this host after apply",
+        false,
+        false,
+        host.color,
+    )?;
     Ok(())
 }
 
@@ -278,7 +286,7 @@ fn print_plan(
             ModuleStatus::NotApplicable { reason } => {
                 format!("{}: not applicable ({reason})", m.id)
             }
-            ModuleStatus::Applicable { changes } if changes.is_empty() => {
+            ModuleStatus::Applicable { changes, .. } if changes.is_empty() => {
                 format!("{}: {}: no changes", m.id, m.title)
             }
             ModuleStatus::Applicable { .. } => match fixes.get(m.id) {
@@ -298,7 +306,7 @@ fn print_plan(
                 writeln!(out, "  note: {note}")?;
             }
         }
-        let ModuleStatus::Applicable { changes } = &m.status else {
+        let ModuleStatus::Applicable { changes, .. } = &m.status else {
             continue;
         };
         for step in changes {

@@ -699,8 +699,12 @@ impl Module for NoApt {
             reason: "apt not found".into(),
         }
     }
-    fn plan(&self, _: &Facts, _: Sys) -> Result<Vec<Resource>, crate::modules::ModuleError> {
-        Ok(Vec::new())
+    fn plan(
+        &self,
+        _: &crate::modules::PlanCx,
+        _: Sys,
+    ) -> Result<crate::modules::ModuleSteps, crate::modules::ModuleError> {
+        Ok(crate::modules::ModuleSteps::default())
     }
 }
 
