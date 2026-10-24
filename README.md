@@ -43,7 +43,7 @@ On the server, as root. Installation is three steps on purpose: download, read, 
 # less install.sh
 # sh install.sh        # checks the SHA-256, verifies the signature if gh or cosign is installed
 # vps-ready detect
-# vps-ready audit
+# vps-ready audit                 # failures and unknowns; --all also lists the passing controls
 # vps-ready plan                  # what would change, and why; nothing is written
 # vps-ready apply                 # shows the plan, asks, then applies
 # vps-ready rollback --last       # restores the previous state
@@ -61,7 +61,7 @@ The command is also installed as `vpsready`, without the hyphen. With Rust insta
 | Command | What happens | Status |
 |---|---|---|
 | `vps-ready detect` | Read-only facts: distro, init system, virtualization, effective SSH config, listening ports, whether Docker is present | available |
-| `vps-ready audit` | Checks the host against controls with stable IDs (for example `SSH-002`), each with the reason it matters. Text or JSON; exits 0 only when no control fails or is unknown | available |
+| `vps-ready audit` | Checks the host against controls with stable IDs (for example `SSH-002`), each with the reason it matters. Lists only failed and unknown controls, and `--all` adds the rest. Text or JSON (`--json`, always complete); exits 0 only when no control fails or is unknown | available |
 | `vps-ready plan` | A diff of every file and setting that would change, with a one-line reason for each | available |
 | `vps-ready apply` | Snapshots originals, validates, writes atomically and rolls back if anything fails. Available for `kernel.sysctl` and `updates.auto`; the dead-man timer for anything that could lock you out is M3 | available, M3 |
 | `vps-ready confirm` | Run from a **new** SSH session to prove the new configuration works. Without it, the change reverts automatically | M3 |

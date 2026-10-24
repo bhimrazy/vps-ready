@@ -5,60 +5,39 @@ expression: "String::from_utf8(text).unwrap()"
 Audit of Debian GNU/Linux 12 (bookworm): 28 controls
 
 STATUS   ID       SEVERITY  CONTROL
-FAIL     SSH-001  medium    Root login disabled
-                            permitrootlogin is without-password, expected no
-                            Root is the one account name every scanner tries, and its actions are
-                            not tied to a person. Log in as a named user and use sudo.
-                            fix: not automated yet
 FAIL     SSH-002  high      Password authentication disabled
-                            passwordauthentication is yes, expected no
-                            Passwords can be guessed or reused from leaks; SSH keys cannot be
-                            brute-forced.
-                            fix: not automated yet
-PASS     SSH-003  high      Keyboard-interactive authentication disabled
-PASS     SSH-004  high      Empty passwords rejected
-FAIL     SSH-005  low       X11 forwarding disabled
-                            x11forwarding is yes, expected no
-                            A server has no use for graphical apps, and a forwarded display lets the
-                            server reach into your desktop session.
-                            fix: not automated yet
-PASS     SSH-006  low       Host-based authentication disabled
-PASS     SSH-007  low       User environment files ignored
-SKIP     KRN-001  low       Kernel pointers hidden
-SKIP     KRN-002  low       Kernel log restricted to root
-SKIP     KRN-003  medium    Unprivileged BPF disabled
-SKIP     KRN-004  medium    ptrace scope restricted
-SKIP     KRN-005  medium    Symlink protection enabled
-SKIP     KRN-006  medium    Hardlink protection enabled
-SKIP     KRN-007  low       FIFO protection enabled
-SKIP     KRN-008  low       Regular file protection enabled
-SKIP     KRN-009  low       Setuid core dumps restricted
-SKIP     KRN-010  medium    Address space randomization fully enabled
-SKIP     KRN-011  low       Kernel profiling restricted
-SKIP     NET-001  low       TCP SYN cookies enabled
-SKIP     NET-002  low       Source-routed packets rejected
-SKIP     NET-003  low       Broadcast pings ignored
-SKIP     NET-004  low       IPv4 reverse path filtering enabled
-SKIP     NET-005  medium    IPv4 ICMP redirects not accepted
-SKIP     NET-006  low       IPv4 ICMP redirects not sent
-FAIL     UPD-001  medium    Security updates installed automatically
-                            unattended-upgrades is not installed;
-                            APT::Periodic::Update-Package-Lists is not set;
-                            APT::Periodic::Unattended-Upgrade is not set
-                            Attackers scan for a flaw soon after its fix is published. Unattended
-                            upgrades install security fixes on their own, so a server nobody logs
-                            into still gets them.
-                            fix: sudo vps-ready apply --module updates.auto
+         passwordauthentication is yes, expected no
+         Passwords can be guessed or reused from leaks; SSH keys cannot be
+         brute-forced.
+         fix: not automated yet
 FAIL     FW-001   medium    Incoming traffic denied by default
-                            no firewall rules filter incoming traffic
-                            Without it, any service listening on all addresses, such as a database
-                            left at its defaults, is reachable from the internet. A firewall at your
-                            provider also protects the server, but this check cannot see it.
-                            fix: not automated yet
-SKIP     FW-002   medium    Container ports do not bypass the firewall
-SKIP     MAC-001  medium    AppArmor enabled
+         no firewall rules filter incoming traffic
+         Without it, any service listening on all addresses, such as a database
+         left at its defaults, is reachable from the internet. A firewall at
+         your provider also protects the server, but this check cannot see it.
+         fix: not automated yet
+FAIL     SSH-001  medium    Root login disabled
+         permitrootlogin is without-password, expected no
+         Root is the one account name every scanner tries, and its actions are
+         not tied to a person. Log in as a named user and use sudo.
+         fix: not automated yet
+FAIL     UPD-001  medium    Security updates installed automatically
+         unattended-upgrades is not installed;
+         APT::Periodic::Update-Package-Lists is not set;
+         APT::Periodic::Unattended-Upgrade is not set
+         Attackers scan for a flaw soon after its fix is published. Unattended
+         upgrades install security fixes on their own, so a server nobody logs
+         into still gets them.
+         fix: sudo vps-ready apply --module updates.auto
+FAIL     SSH-005  low       X11 forwarding disabled
+         x11forwarding is yes, expected no
+         A server has no use for graphical apps, and a forwarded display lets
+         the server reach into your desktop session.
+         fix: not automated yet
 
-4 passed, 5 failed, 0 unknown, 19 skipped
+4 passed, 5 failed (1 high, 3 medium, 1 low), 0 unknown, 19 skipped
 Skipped: kernel settings are not checked inside a container.
 Skipped: Docker is not installed.
-1 failed control has an automatic fix. Run `vps-ready plan` to see what it would change.
+vps-ready can fix 1 of the 5 (UPD-001): run `sudo vps-ready plan`.
+The other 4 need a manual fix for now; each says so above.
+Run `vps-ready audit --all` to list the 4 passing controls too.

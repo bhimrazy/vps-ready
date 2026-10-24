@@ -264,7 +264,8 @@ Commands are `clap` derive structs in `src/cli`. Today `version`, `detect` and `
 ```
 vps-ready                      interactive wizard (default when a TTY)
 vps-ready detect               print facts (also --json)
-vps-ready audit                run controls → text | json | sarif | junit; non-zero exit on fail
+vps-ready audit [--all]         run controls → text | json | sarif | junit; non-zero exit on fail
+                               text lists failed and unknown controls; --all adds passed and skipped
 vps-ready plan  [--profile X] [--out plan.json]
 vps-ready apply [plan.json | --profile X] [--yes] [--deadman=180s|off|selftest]
 vps-ready confirm <code>
