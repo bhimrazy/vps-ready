@@ -748,6 +748,68 @@ fn a_resumed_rollback_of_an_armed_transaction_keeps_the_dead_man_reason() {
 }
 
 #[test]
+fn a_created_account_whose_name_was_taken_since_is_not_removed() {
+    let fs = armable();
+    let state = state(&fs);
+    let txn = state.create_txn(&fs, 1).unwrap();
+    let rec = |event| Record { at: 1, event };
+    let resource = "user:admin".to_owned();
+    let records = [
+        rec(Event::Begin {
+            version: "0.3.0".into(),
+            modules: vec!["user.admin".into()],
+        }),
+        rec(Event::Armed {
+            unit: deadman::unit_name(txn.id(), 1),
+            boot_id: "a".into(),
+            deadline: Deadline {
+                boottime: 1100,
+                wall: 1,
+            },
+        }),
+        rec(Event::Backup {
+            resource: resource.clone(),
+            backup: Backup::User {
+                name: "admin".into(),
+                created: true,
+                added_groups: Vec::new(),
+            },
+            force_restore: false,
+        }),
+        rec(Event::Applied {
+            resource: resource.clone(),
+            uid: Some(1001),
+        }),
+    ];
+    for r in &records {
+        txn.append(&fs, r).unwrap();
+    }
+    // The account apply created is gone; another one has its name.
+    let run = dm_runner()
+        .on(
+            "getent",
+            ["passwd", "admin"],
+            Output::success("admin:x:1002:1002::/home/admin:/bin/bash\n"),
+        )
+        .on("userdel", Vec::<String>::new(), Output::success(""));
+    let err = manual(&fs, &run).unwrap_err();
+    assert!(matches!(err, EngineError::Changed { .. }), "{err:?}");
+
+    set_uptime(&fs, 5000);
+    let DeadmanOutcome::RolledBack(done) = timer(&fs, &run, txn.id()).unwrap() else {
+        panic!("not rolled back");
+    };
+    assert_eq!(
+        done.skipped,
+        [ByHand {
+            resource,
+            step: "pkill -u admin; userdel admin".into(),
+        }]
+    );
+    assert!(!calls(&run).iter().any(|c| c.starts_with("userdel")));
+}
+
+#[test]
 fn rollback_last_picks_pending_then_the_newest_applied_or_confirmed() {
     let fs = armable();
     let state = state(&fs);

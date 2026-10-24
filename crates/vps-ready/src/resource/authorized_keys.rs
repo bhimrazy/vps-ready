@@ -580,7 +580,7 @@ mod tests {
         for result in [
             keys(&[KEY]).diff(sys).map(|_| ()),
             keys(&[KEY]).snapshot(sys, txn, 1).map(|_| ()),
-            keys(&[KEY]).apply(sys),
+            keys(&[KEY]).apply(sys).map(|_| ()),
         ] {
             let (path, reason) = unsafe_path(result.unwrap_err());
             assert_eq!(path, Path::new("/home/admin/.ssh"));

@@ -416,6 +416,7 @@ mod tests {
                 at: 1,
                 event: Event::Applied {
                     resource: "sysctl:kernel.kptr_restrict".into(),
+                    uid: None,
                 },
             },
             Record {
@@ -470,6 +471,7 @@ mod tests {
             at: 3,
             event: Event::Applied {
                 resource: "r".into(),
+                uid: None,
             },
         };
         txn.append(&fs, &applied).unwrap();
@@ -512,6 +514,7 @@ mod tests {
             at: 0,
             event: Event::Applied {
                 resource: "r".into(),
+                uid: None,
             },
         };
         let err = txn.append(&fs, &record).unwrap_err();

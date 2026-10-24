@@ -55,6 +55,9 @@ pub enum Event {
     Applied {
         /// Resource ID.
         resource: String,
+        /// The uid of the account a `user` resource created.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        uid: Option<u32>,
     },
     /// A reload is about to run: in apply after its check passed, so a
     /// rollback replays any reload that may have run; in a rollback after
@@ -396,6 +399,7 @@ mod tests {
     fn applied() -> Event {
         Event::Applied {
             resource: "sysctl:kernel.kptr_restrict".into(),
+            uid: None,
         }
     }
 
@@ -627,7 +631,8 @@ mod tests {
                 Record {
                     at: 1,
                     event: Event::Applied {
-                        resource: "r".into()
+                        resource: "r".into(),
+                        uid: None,
                     }
                 },
                 Record {

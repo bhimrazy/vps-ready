@@ -172,7 +172,7 @@ fn names(fs: &dyn Fs, id: &str) -> Vec<String> {
         .iter()
         .map(|e| match e {
             Event::Backup { resource, .. }
-            | Event::Applied { resource }
+            | Event::Applied { resource, .. }
             | Event::Restored { resource }
             | Event::Skipped { resource, .. } => format!("{} {resource}", e.name()),
             Event::Reloaded { reload } | Event::ReloadSkipped { reload, .. } => {
@@ -586,7 +586,7 @@ fn crash_at_any_point(modules: &[&dyn Module]) {
             .collect();
         let has = |name: &str, id: &str| {
             records.iter().any(|e| match e {
-                Event::Backup { resource, .. } | Event::Applied { resource } => {
+                Event::Backup { resource, .. } | Event::Applied { resource, .. } => {
                     e.name() == name && resource == id
                 }
                 _ => false,

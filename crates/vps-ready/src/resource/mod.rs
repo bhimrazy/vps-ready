@@ -256,16 +256,26 @@ impl Resource {
     ///
     /// [`ResourceError::Command`] if a command fails; as for
     /// [`Resource::snapshot`]; any [`SysError`].
-    pub fn apply(&self, sys: Sys) -> Result<(), ResourceError> {
+    pub fn apply(&self, sys: Sys) -> Result<Applied, ResourceError> {
         match self {
             Self::File(f) => f.apply(sys),
             Self::Sysctl(s) => s.apply(sys),
             Self::Package(p) => p.apply(sys),
             Self::Service(s) => s.apply(sys),
-            Self::User(u) => u.apply(sys),
+            Self::User(u) => return u.apply(sys).map(|uid| Applied { uid }),
             Self::AuthorizedKeys(k) => k.apply(sys),
-        }
+        }?;
+        Ok(Applied::default())
     }
+}
+
+/// What [`Resource::apply`] learned that the safety check of a rollback
+/// needs, journaled with the `applied` line.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Applied {
+    /// The uid of the account a [`User`] created, so a rollback does not
+    /// remove another account that took its name since.
+    pub uid: Option<u32>,
 }
 
 /// The state of a resource before apply, as written to the journal.

@@ -508,7 +508,8 @@ impl<'a> Engine<'a> {
             backup,
             force_restore,
         })?;
-        step.resource
+        let applied = step
+            .resource
             .apply(self.sys)
             .map_err(|source| EngineError::Resource {
                 id: id.clone(),
@@ -516,6 +517,7 @@ impl<'a> Engine<'a> {
             })?;
         open.append(Event::Applied {
             resource: id.clone(),
+            uid: applied.uid,
         })
     }
 
@@ -839,6 +841,10 @@ impl<'a> Engine<'a> {
                     backup,
                     force_restore,
                 } if !restored.contains(resource.as_str()) => Some(Undo::Restore {
+                    uid: applying.iter().find_map(|r| match &r.event {
+                        Event::Applied { resource: id, uid } if id == resource => *uid,
+                        _ => None,
+                    }),
                     resource: resource.clone(),
                     backup: backup.clone(),
                     force: *force_restore,
@@ -850,8 +856,11 @@ impl<'a> Engine<'a> {
         let pending = || {
             undo.iter().filter_map(|u| match u {
                 Undo::Restore {
-                    resource, backup, ..
-                } => Some((resource, backup)),
+                    resource,
+                    backup,
+                    uid,
+                    ..
+                } => Some((resource, backup, *uid)),
                 Undo::Reload(_) => None,
             })
         };
@@ -871,8 +880,8 @@ impl<'a> Engine<'a> {
 
         if mode == Mode::Manual {
             let mut changed = Vec::new();
-            for (resource, backup) in pending() {
-                if earlier_boot(backup, boot) || unchanged(self.sys, &dir, resource, backup)? {
+            for (resource, backup, uid) in pending() {
+                if earlier_boot(backup, boot) || unchanged(self.sys, &dir, resource, backup, uid)? {
                     continue;
                 }
                 changed.extend(by_hand(&dir, resource, backup).map(|mut step| {
@@ -923,7 +932,7 @@ impl<'a> Engine<'a> {
         let mut failed = Vec::new();
         let mut unrestored: Vec<(ByHand, EngineError)> = Vec::new();
         for (i, item) in undo.iter().enumerate().rev() {
-            let (resource, backup, force) = match item {
+            let (resource, backup, force, uid) = match item {
                 Undo::Reload(reload) => {
                     if let Some(due) = due.replace(*reload) {
                         self.replay(open, due, mode, &mut failed, progress)
@@ -935,7 +944,8 @@ impl<'a> Engine<'a> {
                     resource,
                     backup,
                     force,
-                } => (resource, backup, *force),
+                    uid,
+                } => (resource, backup, *force, *uid),
             };
             if let Backup::Sysctl { key, .. } = backup
                 && earlier_boot(backup, boot)
@@ -949,7 +959,7 @@ impl<'a> Engine<'a> {
                 continue;
             }
             if best_effort {
-                let same = unchanged(self.sys, &dir, resource, backup).unwrap_or_else(|e| {
+                let same = unchanged(self.sys, &dir, resource, backup, uid).unwrap_or_else(|e| {
                     tracing::warn!("{resource}: {e}; treating it as changed");
                     false
                 });
@@ -1130,6 +1140,8 @@ enum Undo {
         backup: Backup,
         /// The `force_restore` of its record.
         force: bool,
+        /// The uid of its `applied` record.
+        uid: Option<u32>,
     },
     /// A reload that apply journaled.
     Reload(Reload),
@@ -1205,8 +1217,15 @@ fn earlier_boot(backup: &Backup, boot: Option<&str>) -> bool {
 
 /// The safety check: whether the resource is as apply left it or as it was
 /// before. Both are allowed because a crash may have come just before or
-/// after apply. Mode and owner are not compared; restore sets them.
-fn unchanged(sys: Sys, dir: &Path, resource: &str, backup: &Backup) -> Result<bool, EngineError> {
+/// after apply. Mode and owner are not compared; restore sets them. `uid`
+/// is that of the resource's `applied` record.
+fn unchanged(
+    sys: Sys,
+    dir: &Path,
+    resource: &str,
+    backup: &Backup,
+    uid: Option<u32>,
+) -> Result<bool, EngineError> {
     match backup {
         Backup::File { path, n, original } => {
             let current = match sys.fs.metadata(path) {
@@ -1244,7 +1263,7 @@ fn unchanged(sys: Sys, dir: &Path, resource: &str, backup: &Backup) -> Result<bo
         // Restoring a package does nothing.
         Backup::Package { .. } => Ok(true),
         Backup::Service { .. } => service::unchanged(sys, backup).map_err(at(resource)),
-        Backup::User { .. } => user::unchanged(sys, backup).map_err(at(resource)),
+        Backup::User { .. } => user::unchanged(sys, backup, uid).map_err(at(resource)),
         Backup::AuthorizedKeys { .. } => {
             authorized_keys::unchanged(sys, dir, backup).map_err(at(resource))
         }
