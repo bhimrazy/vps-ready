@@ -1,0 +1,34 @@
+---
+source: crates/vps-ready/src/modules/ssh_bruteforce/tests.rs
+expression: plan
+---
+modules:
+  - id: ssh.bruteforce
+    title: Ban addresses that keep failing to log in over SSH
+    status: applicable
+    changes:
+      - id: "package:nftables"
+        summary: install nftables
+        diff: ~
+        reversibility: partial
+      - id: "package:python3-systemd"
+        summary: install python3-systemd
+        diff: ~
+        reversibility: partial
+      - id: "package:fail2ban"
+        summary: install fail2ban
+        diff: ~
+        reversibility: partial
+      - id: "file:/etc/fail2ban/jail.d/90-vps-ready.local"
+        summary: "create /etc/fail2ban/jail.d/90-vps-ready.local (0644 0:0)"
+        diff: "@@ -0,0 +1,9 @@\n+# Written by vps-ready (ssh.bruteforce). `vps-ready rollback --last`\n+# restores the previous state; edits here are replaced by the next apply.\n+[DEFAULT]\n+banaction = nftables\n+backend = systemd\n+\n+[sshd]\n+enabled = true\n+ignoreip = 127.0.0.1/8 ::1 192.0.2.10\n"
+        reversibility: reversible
+      - id: "service:fail2ban.service"
+        summary: enable and start fail2ban.service
+        diff: ~
+        reversibility: reversible
+    reloads:
+      - fail2ban-restart
+    notes:
+      - "the jail never bans 192.0.2.10, the address of this SSH session"
+      - "if this installs fail2ban, rollback leaves it installed and enabled, as the package sets it up, so it runs the distro's own jails after a reboot; `systemctl disable --now fail2ban` turns it off"

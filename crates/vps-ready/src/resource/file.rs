@@ -9,7 +9,9 @@ use crate::sys::{Cmd, FileKind, FileOwner, Sys, SysError};
 
 /// A whole file whose content, mode and owner vps-ready owns, such as a
 /// drop-in it created. Only regular files are managed: a symlink or special
-/// file at `path` is refused, and so is a missing parent directory.
+/// file at `path` is refused, and so is a missing parent directory. The
+/// parent is checked at apply time, not in the plan, so the file can go into
+/// a directory that a package earlier in the same apply installs.
 ///
 /// Snapshots keep bytes, mode and owner only (no xattrs, ACLs or SELinux
 /// labels), which is all a file vps-ready created has.
@@ -87,7 +89,6 @@ impl File {
     /// The summary and unified diff of the change, or `None`.
     pub(super) fn diff(&self, sys: Sys) -> Result<Option<(String, Option<String>)>, ResourceError> {
         let Some(owner) = self.current(sys)? else {
-            self.require_parent(sys)?;
             let summary = format!("create {} ({})", self.path.display(), fmt_owner(self.owner));
             let diff = (!self.content.is_empty()).then(|| unified(b"", &self.content));
             return Ok(Some((summary, diff)));
@@ -115,6 +116,9 @@ impl File {
         n: u32,
     ) -> Result<Backup, ResourceError> {
         let original = self.current(sys)?;
+        if original.is_none() {
+            self.require_parent(sys)?;
+        }
         let before = original.map(|_| sys.fs.read(&self.path)).transpose()?;
         sys.fs.create_dir_all(&txn_dir.join("files"), 0o700)?;
         sys.fs.sync_dir(txn_dir)?;
@@ -396,12 +400,15 @@ mod tests {
         );
     }
 
+    /// A package earlier in the apply may create the directory, so only
+    /// snapshot, at apply time, refuses a missing one.
     #[test]
-    fn diff_refuses_a_missing_parent() {
+    fn snapshot_refuses_a_missing_parent() {
         let fs = FakeFs::new().with_file("/etc/hostname", "box\n");
-        let err = resource("a = 1\n", root_owner())
-            .diff(sys(&fs))
-            .unwrap_err();
+        let file = resource("a = 1\n", root_owner());
+        let change = file.diff(sys(&fs)).unwrap().unwrap();
+        assert_eq!(change.summary, format!("create {PATH} (0644 0:0)"));
+        let err = file.snapshot(sys(&fs), Path::new(TXN), 1).unwrap_err();
         assert!(
             matches!(err, ResourceError::MissingParent(ref p) if p == Path::new(PATH)),
             "{err:?}"

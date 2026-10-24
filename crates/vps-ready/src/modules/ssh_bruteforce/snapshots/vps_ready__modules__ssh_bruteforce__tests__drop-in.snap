@@ -1,0 +1,13 @@
+---
+source: crates/vps-ready/src/modules/ssh_bruteforce/tests.rs
+expression: drop_in
+---
+# Written by vps-ready (ssh.bruteforce). `vps-ready rollback --last`
+# restores the previous state; edits here are replaced by the next apply.
+[DEFAULT]
+banaction = nftables
+backend = systemd
+
+[sshd]
+enabled = true
+ignoreip = 127.0.0.1/8 ::1 192.0.2.10

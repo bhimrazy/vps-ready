@@ -75,6 +75,10 @@ pub enum Check {
         /// Expected value.
         equals: String,
     },
+    /// Repeated failed SSH logins are slowed down: the effective sshd config
+    /// has `persourcepenalties` other than `no` (on by default since
+    /// OpenSSH 9.8), or fail2ban's `sshd` jail runs.
+    SshRateLimited,
     /// A kernel setting under `/proc/sys` has one of these values. Skipped
     /// in a container, where the kernel belongs to the host.
     Sysctl {
@@ -170,7 +174,8 @@ impl Finding {
             }
             (
                 Outcome::Fail { found },
-                Check::AutoUpdates
+                Check::SshRateLimited
+                | Check::AutoUpdates
                 | Check::InboundDefaultDeny
                 | Check::PublishedPorts
                 | Check::Apparmor
@@ -292,6 +297,7 @@ fn evaluate(check: &Check, facts: &Facts) -> Outcome {
                 },
             }
         }
+        Check::SshRateLimited => ssh_rate_limited(facts),
         Check::Sysctl { key, one_of } => {
             if facts.virtualization.in_container() {
                 return Outcome::Skip {
@@ -703,6 +709,35 @@ fn inbound_default_deny(firewall: &Firewall, ipv6: bool) -> Outcome {
     }
 }
 
+fn ssh_rate_limited(facts: &Facts) -> Outcome {
+    let penalties = facts
+        .ssh
+        .effective
+        .as_ref()
+        .and_then(|c| c.get("persourcepenalties"));
+    if penalties.is_some_and(|v| v != "no") || facts.ssh.fail2ban == Some(true) {
+        return Outcome::Pass;
+    }
+    if facts.ssh.effective.is_none() {
+        return Outcome::Unknown {
+            reason: "effective SSH config is unknown".to_owned(),
+        };
+    }
+    if facts.ssh.fail2ban.is_none() {
+        return Outcome::Unknown {
+            reason: "fail2ban's sshd jail could not be checked".to_owned(),
+        };
+    }
+    let sshd = if penalties.is_some() {
+        "persourcepenalties is no"
+    } else {
+        "sshd has no PerSourcePenalties (OpenSSH before 9.8)"
+    };
+    Outcome::Fail {
+        found: format!("{sshd} and fail2ban's sshd jail is not running"),
+    }
+}
+
 /// What keeps apt from installing updates on its own, e.g.
 /// `unattended-upgrades is not installed`. Empty when nothing does.
 fn apt_update_problems(apt: &AptUpdates) -> Vec<String> {
@@ -784,6 +819,7 @@ mod tests {
                     assert!(sysctl::KEYS.contains(&key.as_str()), "{}: {key}", c.id);
                     assert!(!one_of.is_empty(), "{}", c.id);
                 }
+                Check::SshRateLimited => assert!(facts.ssh.fail2ban.is_some(), "{}", c.id),
                 Check::AutoUpdates => assert!(facts.updates.is_some(), "{}", c.id),
                 Check::InboundDefaultDeny | Check::PublishedPorts => {
                     assert!(facts.firewall.is_some(), "{}", c.id);
@@ -859,7 +895,12 @@ mod tests {
         let ssh_controls = report
             .findings
             .iter()
-            .filter(|f| matches!(f.control.check, Check::SshdEffective { .. }))
+            .filter(|f| {
+                matches!(
+                    f.control.check,
+                    Check::SshdEffective { .. } | Check::SshRateLimited
+                )
+            })
             .count();
         assert_eq!(report.summary.unknown, ssh_controls);
         assert!(!report.all_passed());
@@ -888,6 +929,45 @@ mod tests {
             evaluate(&check("x11forwarding", "no"), &facts),
             Outcome::Unknown { .. }
         ));
+    }
+
+    #[test]
+    fn evaluates_ssh_rate_limited() {
+        let eval = |facts: &Facts| evaluate(&Check::SshRateLimited, facts);
+        // OpenSSH 10.0 has PerSourcePenalties on; 9.2 and 9.6 lack it.
+        assert_eq!(eval(&host("debian-13", &[])), Outcome::Pass);
+        for name in ["debian-12", "ubuntu-24.04"] {
+            let mut facts = host(name, &[]);
+            assert_eq!(
+                eval(&facts),
+                Outcome::Fail {
+                    found: "sshd has no PerSourcePenalties (OpenSSH before 9.8) and \
+                            fail2ban's sshd jail is not running"
+                        .to_owned()
+                },
+                "{name}"
+            );
+            facts.ssh.fail2ban = Some(true);
+            assert_eq!(eval(&facts), Outcome::Pass, "{name}");
+            facts.ssh.fail2ban = None;
+            assert!(matches!(eval(&facts), Outcome::Unknown { .. }), "{name}");
+        }
+
+        let mut facts = host("debian-13", &[]);
+        facts.ssh.effective = Some(SshdConfig::parse("persourcepenalties no\n"));
+        assert_eq!(
+            eval(&facts),
+            Outcome::Fail {
+                found: "persourcepenalties is no and fail2ban's sshd jail is not running"
+                    .to_owned()
+            }
+        );
+        facts.ssh.fail2ban = Some(true);
+        assert_eq!(eval(&facts), Outcome::Pass);
+        facts.ssh.effective = None;
+        assert_eq!(eval(&facts), Outcome::Pass);
+        facts.ssh.fail2ban = Some(false);
+        assert!(matches!(eval(&facts), Outcome::Unknown { .. }));
     }
 
     /// Facts of a VM whose `/proc/sys` holds `files`.
@@ -1211,7 +1291,7 @@ mod tests {
         facts.ssh.effective = Some(SshdConfig::parse(
             "permitrootlogin no\npasswordauthentication no\nkbdinteractiveauthentication no\n\
              permitemptypasswords no\nx11forwarding no\nhostbasedauthentication no\n\
-             permituserenvironment no\n",
+             permituserenvironment no\npersourcepenalties authfail:5\n",
         ));
         facts.updates = Some(updating());
         facts.firewall = Some(Firewall {
