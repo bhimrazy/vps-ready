@@ -9,7 +9,7 @@ use proptest::prelude::*;
 
 use super::*;
 use crate::audit::Outcome;
-use crate::engine::{self, ApplyOutcome, Engine, Plan, StateDir, Target};
+use crate::engine::{self, ApplyOutcome, Engine, Plan, Selected, StateDir, Target};
 use crate::facts::{Virt, sysctl};
 use crate::resource::sysctl::BOOT_ID;
 use crate::sys::fake::FakeRunner;
@@ -76,8 +76,8 @@ impl Host {
         facts_with(sysctl::detect(&self.fs, &mut notices))
     }
 
-    fn plan(&self, facts: &Facts) -> Plan {
-        engine::plan(&[&self.module], facts, self.sys()).unwrap()
+    fn plan<'a>(&'a self, facts: &'a Facts) -> Plan<'a> {
+        engine::plan(&[Selected::new(&self.module)], facts, self.sys()).unwrap()
     }
 
     fn state(&self) -> StateDir {
@@ -145,7 +145,17 @@ fn facts_with(sysctl: crate::facts::Sysctl) -> Facts {
 }
 
 fn resources(host: &Host, facts: &Facts) -> Vec<Resource> {
-    host.module.plan(facts, host.sys()).unwrap()
+    let params = toml::Table::new();
+    host.module
+        .plan(
+            &PlanCx {
+                facts,
+                params: &params,
+            },
+            host.sys(),
+        )
+        .unwrap()
+        .resources
 }
 
 fn sysctl_keys(resources: &[Resource]) -> Vec<&str> {
@@ -250,7 +260,8 @@ fn render(plan: &Plan) -> String {
 fn first_plan_snapshot() {
     let host = Host::new(&START, None);
     // The registry's instance: root:root, which a plan only reads.
-    let plan = engine::plan(&[&KernelSysctl::ROOT], &host.facts(), host.sys()).unwrap();
+    let facts = host.facts();
+    let plan = engine::plan(&[Selected::new(&KernelSysctl::ROOT)], &facts, host.sys()).unwrap();
     insta::assert_snapshot!(render(&plan));
 }
 

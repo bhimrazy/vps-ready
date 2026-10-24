@@ -1,7 +1,7 @@
 //! The `updates.auto` module: security updates through `unattended-upgrades`.
 
 use crate::facts::{Facts, OsFamily};
-use crate::modules::{Applicability, Module, ModuleError};
+use crate::modules::{Applicability, Module, ModuleError, ModuleSteps, NoParams, PlanCx};
 use crate::resource::{File, Package, Resource, Validate};
 use crate::sys::{FileOwner, Sys};
 
@@ -82,8 +82,9 @@ impl Module for UpdatesAuto {
         )]
     }
 
-    fn plan(&self, _: &Facts, _: Sys) -> Result<Vec<Resource>, ModuleError> {
-        Ok(vec![
+    fn plan(&self, cx: &PlanCx, _: Sys) -> Result<ModuleSteps, ModuleError> {
+        let NoParams {} = cx.params()?;
+        Ok(ModuleSteps::from(vec![
             Resource::Package(Package {
                 name: "unattended-upgrades".to_owned(),
             }),
@@ -97,7 +98,7 @@ impl Module for UpdatesAuto {
                 },
                 validate: Some(Validate::new("apt-config", ["-c", Validate::PATH, "dump"])),
             }),
-        ])
+        ]))
     }
 }
 
@@ -109,7 +110,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use super::*;
-    use crate::engine::{self, ApplyOutcome, Engine, Plan, StateDir, Target};
+    use crate::engine::{self, ApplyOutcome, Engine, Plan, Selected, StateDir, Target};
     use crate::facts::AptUpdates;
     use crate::facts::fixtures::host;
     use crate::sys::fake::FakeRunner;
@@ -177,8 +178,13 @@ mod tests {
         }
     }
 
-    fn plan(module: UpdatesAuto, fs: &dyn Fs, runner: &dyn Runner, facts: &Facts) -> Plan {
-        engine::plan(&[&module], facts, Sys { fs, runner }).unwrap()
+    fn plan<'a>(
+        module: &'a UpdatesAuto,
+        fs: &dyn Fs,
+        runner: &dyn Runner,
+        facts: &'a Facts,
+    ) -> Plan<'a> {
+        engine::plan(&[Selected::new(module)], facts, Sys { fs, runner }).unwrap()
     }
 
     fn change_ids(plan: &Plan) -> Vec<String> {
@@ -230,11 +236,12 @@ mod tests {
     #[test]
     fn plans_the_package_then_the_drop_in() {
         let dir = root(None);
+        let facts = facts();
         let plan = plan(
-            UpdatesAuto::ROOT,
+            &UpdatesAuto::ROOT,
             &RealFs::new(dir.path()),
             &dpkg_query("not-installed"),
-            &facts(),
+            &facts,
         );
         insta::assert_yaml_snapshot!(plan);
     }
@@ -242,11 +249,12 @@ mod tests {
     #[test]
     fn plans_only_the_drop_in_when_the_package_is_installed() {
         let dir = root(None);
+        let facts = facts();
         let plan = plan(
-            UpdatesAuto::ROOT,
+            &UpdatesAuto::ROOT,
             &RealFs::new(dir.path()),
             &dpkg_query("installed"),
-            &facts(),
+            &facts,
         );
         assert_eq!(change_ids(&plan), [format!("file:{DROP_IN}")]);
     }
@@ -256,14 +264,17 @@ mod tests {
         let dir = root(None);
         let fs = RealFs::new(dir.path());
         let runner = FakeRunner::new();
-        let resources = UpdatesAuto::ROOT.plan(
-            &facts(),
+        let steps = UpdatesAuto::ROOT.plan(
+            &PlanCx {
+                facts: &facts(),
+                params: &toml::Table::new(),
+            },
             Sys {
                 fs: &fs,
                 runner: &runner,
             },
         );
-        let Some(Resource::File(file)) = resources.unwrap().pop() else {
+        let Some(Resource::File(file)) = steps.unwrap().resources.pop() else {
             panic!("the drop-in comes last");
         };
         assert_eq!(
@@ -291,7 +302,7 @@ mod tests {
         facts.updates.as_mut().unwrap().units = Some(units("masked"));
         let dir = root(None);
         let plan = plan(
-            UpdatesAuto::ROOT,
+            &UpdatesAuto::ROOT,
             &RealFs::new(dir.path()),
             &dpkg_query("installed"),
             &facts,
@@ -323,7 +334,7 @@ mod tests {
             let facts = facts();
             let before = etc_tree(dir.path());
 
-            let first = plan(module, &fs, &apt, &facts);
+            let first = plan(&module, &fs, &apt, &facts);
             assert_eq!(
                 change_ids(&first),
                 [
@@ -348,7 +359,7 @@ mod tests {
                 apt.runner.calls()
             );
 
-            let next = plan(module, &fs, &apt, &facts);
+            let next = plan(&module, &fs, &apt, &facts);
             assert!(change_ids(&next).is_empty(), "{existing:?}");
 
             engine.rollback(Target::Last, &mut |_| {}).unwrap();

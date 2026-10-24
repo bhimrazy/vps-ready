@@ -5,7 +5,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use super::EngineError;
+use super::{EngineError, Reload};
 use crate::resource::Backup;
 
 /// One journal line: when it was written and what happened.
@@ -41,6 +41,13 @@ pub enum Event {
         /// Resource ID.
         resource: String,
     },
+    /// A reload is about to run: in apply after its check passed, so a
+    /// rollback replays any reload that may have run; in a rollback after
+    /// it ran.
+    Reloaded {
+        /// Which one.
+        reload: Reload,
+    },
     /// A rollback started; written before its first restore.
     Rollback {
         /// Why. A resumed rollback ends with this reason.
@@ -67,6 +74,7 @@ impl Event {
             Self::Begin { .. } => "begin",
             Self::Backup { .. } => "backup",
             Self::Applied { .. } => "applied",
+            Self::Reloaded { .. } => "reloaded",
             Self::Rollback { .. } => "rollback",
             Self::Restored { .. } => "restored",
             Self::State { .. } => "state",
@@ -132,11 +140,18 @@ pub fn transition(state: Option<TxnState>, event: &Event) -> Result<TxnState, En
 
     match (state, event) {
         (None, Event::Begin { .. }) => Ok(Planned),
-        (Some(Planned), Event::Backup { .. } | Event::Applied { .. } | Event::Restored { .. }) => {
-            Ok(Planned)
-        }
+        (
+            Some(Planned),
+            Event::Backup { .. }
+            | Event::Applied { .. }
+            | Event::Reloaded { .. }
+            | Event::Restored { .. },
+        ) => Ok(Planned),
         (Some(Planned), Event::Rollback { .. }) => Ok(Planned),
-        (Some(Applied), Event::Restored { .. } | Event::Rollback { reason: Manual }) => Ok(Applied),
+        (
+            Some(Applied),
+            Event::Restored { .. } | Event::Reloaded { .. } | Event::Rollback { reason: Manual },
+        ) => Ok(Applied),
         (Some(Planned), Event::State { state: Applied }) => Ok(Applied),
         (
             Some(Planned),
@@ -242,6 +257,12 @@ mod tests {
         }
     }
 
+    fn reloaded() -> Event {
+        Event::Reloaded {
+            reload: Reload::SshdReload,
+        }
+    }
+
     fn state(state: TxnState) -> Event {
         Event::State { state }
     }
@@ -279,6 +300,10 @@ mod tests {
                 },
             }),
             r#"{"at":7,"event":"backup","resource":"file:/etc/sysctl.d/90-vps-ready.conf","backup":{"kind":"file","path":"/etc/sysctl.d/90-vps-ready.conf","n":1,"original":null}}"#
+        );
+        assert_eq!(
+            line(reloaded()),
+            r#"{"at":7,"event":"reloaded","reload":"sshd-reload"}"#
         );
         assert_eq!(
             line(state(TxnState::Applied)),
@@ -401,7 +426,12 @@ mod tests {
 
     #[test]
     fn replays_legal_sequences() {
-        let applied_txn = [rec(begin()), rec(applied()), rec(state(TxnState::Applied))];
+        let applied_txn = [
+            rec(begin()),
+            rec(applied()),
+            rec(reloaded()),
+            rec(state(TxnState::Applied)),
+        ];
         assert_eq!(replay(&applied_txn).unwrap(), TxnState::Applied);
 
         let manual = [
@@ -411,6 +441,7 @@ mod tests {
                     reason: RollbackReason::Manual,
                 }),
                 rec(restored()),
+                rec(reloaded()),
                 rec(state(rolled_back(RollbackReason::Manual))),
             ],
         ]
@@ -465,6 +496,8 @@ mod tests {
                 Event::Rollback { reason: Manual },
             ),
             (None, Event::Rollback { reason: Manual }),
+            (None, reloaded()),
+            (Some(rolled_back(Manual)), reloaded()),
             (Some(rolled_back(Manual)), restored()),
             (Some(rolled_back(Manual)), state(rolled_back(Manual))),
             (Some(rolled_back(ApplyFailed)), state(Applied)),
