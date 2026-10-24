@@ -3,7 +3,7 @@ source: crates/vps-ready/src/cli/change/tests.rs
 expression: "redact(&fs, &err, false)"
 ---
 If this is interrupted, run `sudo vps-ready rollback --last` to undo it.
-[1/9] create /etc/sysctl.d/90-vps-ready.conf (0644 0:0)
+[1/9] create /etc/sysctl.d/90-vps-ready.conf (mode 0644, root:root)
 [2/9] set kernel.kptr_restrict 0 -> 1
 [3/9] set kernel.dmesg_restrict 0 -> 1
 [4/9] set kernel.unprivileged_bpf_disabled 0 -> 2

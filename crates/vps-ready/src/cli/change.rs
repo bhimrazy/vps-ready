@@ -412,7 +412,7 @@ fn print_progress(err: &mut dyn Write, progress: &Progress) {
         Progress::Apply { n, total, step } => {
             let summary = &step.change.summary;
             let text = match &step.resource {
-                Resource::File(_) => summary.clone(),
+                Resource::File(_) => show_owner(summary),
                 Resource::Sysctl(_) => format!("set {summary}"),
                 Resource::Package(_) => {
                     format!("{summary} (apt-get update, then install; can take a few minutes)")

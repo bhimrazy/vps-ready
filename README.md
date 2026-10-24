@@ -50,8 +50,8 @@ On the server, as root. Installation is three steps on purpose: download, read, 
 ```
 
 <p align="center">
-  <img src="assets/demo.png" alt="An SSH session on an Ubuntu 24.04 VPS: vps-ready detect shows the OS, init system, KVM, SSH settings, open ports and the admin's connection; vps-ready audit then checks 25 SSH, kernel, network, update, firewall and AppArmor controls, 21 passed, 3 failed and 1 skipped (no Docker), each failure showing the value found and why it matters" width="88%">
-  <br><sub>Example session on an Ubuntu 24.04 VPS.</sub>
+  <img src="assets/demo.png" alt="A real session in a Debian 13 VM, in three terminal windows. The end of sudo vps-ready audit: 21 passed, 5 failed, 1 unknown and 1 skipped of 28 controls, with 2 failures that have an automatic fix. sudo vps-ready plan: a kernel.sysctl drop-in that sets kernel.kptr_restrict and kernel.yama.ptrace_scope from 0 to 1 (fixes KRN-001 and KRN-004) and an updates.auto drop-in for apt, each labeled reversible. sudo vps-ready apply, answered y: four progress lines, verify ok, the transaction ID with the rollback command, and an audit of 15 controls after apply, all passing" width="88%">
+  <br><sub>A real session in a Debian 13 VM: the end of <code>audit</code>, all of <code>plan</code>, and <code>apply</code> from its prompt on (it prints the same plan first).</sub>
 </p>
 
 The command is also installed as `vpsready`, without the hyphen. With Rust installed you can build from source instead: `cargo install vps-ready --locked`. Signed packages for apt, dnf and apk are planned for v0.5. The trust model of each install channel is in [the release doc](docs/release.md).
@@ -75,7 +75,7 @@ Hardening will be grouped into modules you can toggle: base system, admin user, 
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/how-it-works.png">
-    <img src="assets/how-it-works-light.png" alt="Three phases. 1, detect and audit (available now): reads live state, reports controls, read-only. 2, plan and apply (planned, M2): a readable diff, then snapshot, validate, atomic write and reload, rolled back on any failure. 3, confirm or revert (planned, M3): SSH and firewall changes arm a dead-man timer and are reverted unless confirmed from a new SSH login." width="100%">
+    <img src="assets/how-it-works-light.png" alt="Three phases. 1, detect and audit (available now): reads live state, reports controls, read-only. 2, plan and apply (available now): a readable diff of every change, then snapshot, validate and atomic write, rolled back on any failure; rollback --last undoes a transaction and history lists them. 3, confirm or revert (planned, M3): SSH and firewall changes arm a dead-man timer and are reverted unless confirmed from a new SSH login." width="100%">
   </picture>
 </p>
 
