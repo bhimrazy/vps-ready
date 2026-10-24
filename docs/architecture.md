@@ -330,7 +330,7 @@ crates/
     src/report/            text | json | sarif | junit (planned)
     src/tui/               (planned, M4) inquire forms, ratatui plan/diff view
   vpsready/                alias crate: the same command under the name `vpsready`
-  sshd-config/             (planned, M3) parser + linter for sshd_config and `sshd -T`; publishable to crates.io
+  sshd-config/             reader for sshd_config and its Includes, parser for `sshd -T`; to be published to crates.io
 profiles/                  (planned) minimal.toml  web.toml  paranoid.toml
 test/                      images/Containerfile (one file, `BASE` build arg)  capture-host-fixtures.sh
                            (planned: integration/  vm/)
