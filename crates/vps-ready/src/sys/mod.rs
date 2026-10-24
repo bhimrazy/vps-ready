@@ -9,16 +9,18 @@
 //! Paths passed to [`Fs`] are always absolute paths *on the inspected system*
 //! (for example `/etc/os-release`); [`RealFs`] maps them under its root.
 
+use std::ffi::{OsStr, OsString};
 use std::fmt;
-use std::fs::{DirBuilder, File, OpenOptions, Permissions, TryLockError};
+use std::fs::{DirBuilder, File, OpenOptions, TryLockError};
 use std::io::{self, Read, Write as _};
-use std::os::unix::fs::{
-    DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
-};
-use std::path::{Path, PathBuf};
+use std::os::fd::{AsFd, OwnedFd};
+use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
+
+use rustix::fs::{self as rfs, AtFlags, FileType, Mode, OFlags};
 
 #[cfg(any(test, feature = "testing"))]
 pub mod fake;
@@ -296,9 +298,9 @@ pub trait Fs {
     ///
     /// # Errors
     ///
-    /// [`SysError::Symlink`] if `path` is a symlink; [`SysError::NotFound`]
-    /// if the parent directory does not exist; [`SysError::Permission`] or
-    /// [`SysError::Io`].
+    /// [`SysError::Symlink`] if `path` is a symlink, or on [`RealFs`] if a
+    /// parent below its root is one; [`SysError::NotFound`] if the parent
+    /// directory does not exist; [`SysError::Permission`] or [`SysError::Io`].
     fn write_atomic(&self, path: &Path, bytes: &[u8], owner: FileOwner) -> Result<(), SysError>;
 
     /// Truncates the existing file at `path` and writes `bytes` in place,
@@ -325,7 +327,9 @@ pub trait Fs {
     ///
     /// # Errors
     ///
-    /// [`SysError::NotFound`], [`SysError::Permission`] or [`SysError::Io`].
+    /// [`SysError::Symlink`] on [`RealFs`] if a parent below its root is a
+    /// symlink; [`SysError::NotFound`], [`SysError::Permission`] or
+    /// [`SysError::Io`].
     fn remove(&self, path: &Path) -> Result<(), SysError>;
 
     /// Creates `path` and any missing parents with `mode` (minus the umask,
@@ -342,9 +346,9 @@ pub trait Fs {
     /// # Errors
     ///
     /// [`SysError::NotFound`] if the parent does not exist;
-    /// [`SysError::Symlink`] if the new entry was replaced by something else
-    /// before its owner was set; [`SysError::Io`] if `path` already exists;
-    /// [`SysError::Permission`].
+    /// [`SysError::Symlink`] if the new entry was replaced by a symlink before
+    /// its owner was set, or on [`RealFs`] if a parent below its root is one;
+    /// [`SysError::Io`] if `path` already exists; [`SysError::Permission`].
     fn create_dir(&self, path: &Path, owner: FileOwner) -> Result<(), SysError>;
 
     /// Removes the empty directory `path`. The removal is durable only after
@@ -354,7 +358,8 @@ pub trait Fs {
     ///
     /// [`SysError::NotFound`]; [`SysError::Io`] with
     /// [`io::ErrorKind::DirectoryNotEmpty`] if it has entries, or another kind
-    /// if it is not a directory; [`SysError::Permission`].
+    /// if it is not a directory; [`SysError::Symlink`] on [`RealFs`] if a
+    /// parent below its root is a symlink; [`SysError::Permission`].
     fn remove_dir(&self, path: &Path) -> Result<(), SysError>;
 
     /// Flushes the directory `path` to disk, which makes the creation,
@@ -471,12 +476,18 @@ fn join(handle: Drain, program: &str) -> Result<Vec<u8>, SysError> {
     }
 }
 
-/// [`Fs`] backed by [`std::fs`], rooted at a base directory.
+/// [`Fs`] backed by [`std::fs`] and `rustix`, rooted at a base directory.
 ///
 /// `RealFs::new("/")` reads the live system. Any other root (a chroot, a
 /// mounted image, a test fixture tree) is read as if it were `/`. The root is
 /// a convenience, not a security boundary: absolute symlinks inside it still
-/// resolve against the host.
+/// resolve against the host when read.
+///
+/// [`Fs::write_atomic`], [`Fs::remove`], [`Fs::create_dir`] and
+/// [`Fs::remove_dir`] open the parent directory one component at a time
+/// without following symlinks, then work on that fd with `*at` calls. A
+/// directory on the path that its owner swaps for a symlink, even after the
+/// caller checked it, makes them fail rather than act elsewhere.
 #[derive(Debug, Clone)]
 pub struct RealFs {
     root: PathBuf,
@@ -500,30 +511,101 @@ impl RealFs {
         self.root.join(path.strip_prefix("/").unwrap_or(path))
     }
 
-    /// Writes `bytes` to a new file at `tmp` with `owner`, and syncs it.
-    fn write_temp(tmp: &Path, bytes: &[u8], owner: FileOwner) -> io::Result<()> {
-        // `create_new` (O_EXCL) never follows a symlink planted at `tmp`, and
-        // 0600 keeps the content private until the final mode is set.
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(tmp)?;
-        file.write_all(bytes)?;
-        // Owner before mode: chown can clear the setuid and setgid bits.
-        std::os::unix::fs::fchown(&file, Some(owner.uid), Some(owner.gid))?;
-        file.set_permissions(Permissions::from_mode(owner.mode))?;
-        file.sync_all()
+    /// The parent directory of `path`, opened without following a symlink
+    /// in any component below the root, and the final name.
+    fn open_parent<'p>(&self, path: &'p Path) -> Result<(OwnedFd, &'p OsStr), SysError> {
+        let subject = || path.display().to_string();
+        let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+            return Err(SysError::Io {
+                context: subject(),
+                source: io::Error::new(io::ErrorKind::InvalidInput, "path has no file name"),
+            });
+        };
+        let dir_flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC;
+        // The root itself may be a symlink (a tempdir on macOS).
+        let mut dir =
+            rfs::open(&self.root, dir_flags, Mode::empty()).map_err(|e| errno(subject(), e))?;
+        for part in parent.components() {
+            match part {
+                Component::RootDir | Component::CurDir => {}
+                Component::Normal(part) => {
+                    dir = rfs::openat(&dir, part, dir_flags | OFlags::NOFOLLOW, Mode::empty())
+                        .map_err(|e| link_errno(&dir, part, subject(), e))?;
+                }
+                Component::ParentDir | Component::Prefix(_) => {
+                    return Err(SysError::Io {
+                        context: subject(),
+                        source: io::Error::new(io::ErrorKind::InvalidInput, "path has `..`"),
+                    });
+                }
+            }
+        }
+        Ok((dir, name))
     }
 }
 
-/// The temp file `write_atomic` uses for `path`: `.<name>.vps-ready-tmp` in
+/// `errno` as a [`SysError`] about `subject`; `ELOOP` from `O_NOFOLLOW` is a symlink.
+fn errno(subject: String, e: rustix::io::Errno) -> SysError {
+    if e == rustix::io::Errno::LOOP {
+        SysError::Symlink(subject)
+    } else {
+        SysError::from_io(subject, e.into())
+    }
+}
+
+/// [`errno`] for a failed `openat(dir, name, O_NOFOLLOW | O_DIRECTORY)`, which
+/// some systems answer with `ENOTDIR` for a symlink.
+fn link_errno(dir: &OwnedFd, name: &OsStr, subject: String, e: rustix::io::Errno) -> SysError {
+    let is_link = e == rustix::io::Errno::NOTDIR
+        && rfs::statat(dir, name, AtFlags::SYMLINK_NOFOLLOW)
+            .is_ok_and(|st| FileType::from_raw_mode(st.st_mode) == FileType::Symlink);
+    if is_link {
+        SysError::Symlink(subject)
+    } else {
+        errno(subject, e)
+    }
+}
+
+/// Writes `bytes` to a new file `tmp` in `dir` with `owner`, and syncs it.
+fn write_temp(
+    dir: &OwnedFd,
+    tmp: &OsStr,
+    bytes: &[u8],
+    owner: FileOwner,
+) -> Result<(), rustix::io::Errno> {
+    // O_EXCL never follows a symlink planted at `tmp`, and 0600 keeps the
+    // content private until the final mode is set.
+    let flags = OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let fd = rfs::openat(dir, tmp, flags, perm(0o600))?;
+    let mut file = File::from(fd);
+    file.write_all(bytes)
+        .map_err(|e| rustix::io::Errno::from_io_error(&e).unwrap_or(rustix::io::Errno::IO))?;
+    set_owner(&file, owner)?;
+    rfs::fsync(&file)
+}
+
+/// Owner before mode: chown can clear the setuid and setgid bits.
+fn set_owner(fd: impl AsFd, owner: FileOwner) -> Result<(), rustix::io::Errno> {
+    rfs::fchown(
+        &fd,
+        Some(rfs::Uid::from_raw(owner.uid)),
+        Some(rfs::Gid::from_raw(owner.gid)),
+    )?;
+    rfs::fchmod(&fd, perm(owner.mode))
+}
+
+/// Permission bits as rustix takes them.
+fn perm(bits: u32) -> Mode {
+    Mode::from_bits_truncate(bits as rfs::RawMode)
+}
+
+/// The temp file `write_atomic` uses for `name`: `.<name>.vps-ready-tmp` in
 /// the same directory, because `rename` cannot cross filesystems.
-fn temp_path(path: &Path) -> Option<PathBuf> {
-    let mut name = std::ffi::OsString::from(".");
-    name.push(path.file_name()?);
-    name.push(".vps-ready-tmp");
-    Some(path.with_file_name(name))
+fn temp_name(name: &OsStr) -> OsString {
+    let mut tmp = OsString::from(".");
+    tmp.push(name);
+    tmp.push(".vps-ready-tmp");
+    tmp
 }
 
 impl Fs for RealFs {
@@ -573,36 +655,29 @@ impl Fs for RealFs {
 
     fn write_atomic(&self, path: &Path, bytes: &[u8], owner: FileOwner) -> Result<(), SysError> {
         let subject = || path.display().to_string();
-        let host = self.host_path(path);
-        match std::fs::symlink_metadata(&host) {
-            Ok(meta) if meta.file_type().is_symlink() => return Err(SysError::Symlink(subject())),
-            Ok(_) => {}
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            Err(e) => return Err(SysError::from_io(subject(), e)),
+        let (dir, name) = self.open_parent(path)?;
+        match rfs::statat(&dir, name, AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(st) if FileType::from_raw_mode(st.st_mode) == FileType::Symlink => {
+                return Err(SysError::Symlink(subject()));
+            }
+            Ok(_) | Err(rustix::io::Errno::NOENT) => {}
+            Err(e) => return Err(errno(subject(), e)),
         }
-        let (Some(tmp), Some(dir)) = (temp_path(&host), host.parent()) else {
-            return Err(SysError::Io {
-                context: subject(),
-                source: io::Error::new(io::ErrorKind::InvalidInput, "path has no file name"),
-            });
-        };
+        let tmp = temp_name(name);
         // A crash during an earlier call can leave the temp file behind.
-        match std::fs::remove_file(&tmp) {
-            Ok(()) => {}
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            Err(e) => return Err(SysError::from_io(subject(), e)),
+        match rfs::unlinkat(&dir, &tmp, AtFlags::empty()) {
+            Ok(()) | Err(rustix::io::Errno::NOENT) => {}
+            Err(e) => return Err(errno(subject(), e)),
         }
-        let written =
-            Self::write_temp(&tmp, bytes, owner).and_then(|()| std::fs::rename(&tmp, &host));
+        let written = write_temp(&dir, &tmp, bytes, owner)
+            .and_then(|()| rfs::renameat(&dir, &tmp, &dir, name));
         if let Err(e) = written {
             // Best effort: the original is untouched either way.
-            let _ = std::fs::remove_file(&tmp);
-            return Err(SysError::from_io(subject(), e));
+            let _ = rfs::unlinkat(&dir, &tmp, AtFlags::empty());
+            return Err(errno(subject(), e));
         }
         // The rename is not durable until the directory itself is synced.
-        File::open(dir)
-            .and_then(|d| d.sync_all())
-            .map_err(|e| SysError::from_io(subject(), e))
+        rfs::fsync(&dir).map_err(|e| errno(subject(), e))
     }
 
     fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), SysError> {
@@ -628,8 +703,9 @@ impl Fs for RealFs {
     }
 
     fn remove(&self, path: &Path) -> Result<(), SysError> {
-        std::fs::remove_file(self.host_path(path))
-            .map_err(|e| SysError::from_io(path.display().to_string(), e))
+        let (dir, name) = self.open_parent(path)?;
+        rfs::unlinkat(&dir, name, AtFlags::empty())
+            .map_err(|e| errno(path.display().to_string(), e))
     }
 
     fn create_dir_all(&self, path: &Path, mode: u32) -> Result<(), SysError> {
@@ -641,30 +717,22 @@ impl Fs for RealFs {
     }
 
     fn create_dir(&self, path: &Path, owner: FileOwner) -> Result<(), SysError> {
-        let subject = || path.display().to_string();
-        let err = |e| SysError::from_io(subject(), e);
-        let host = self.host_path(path);
-        // Mode 0700 until the owner is set. From then on only the fd is used,
-        // once it is known to be the directory just made: the parent's owner
-        // may have swapped the entry.
-        DirBuilder::new().mode(0o700).create(&host).map_err(err)?;
-        let made = std::fs::symlink_metadata(&host).map_err(err)?;
-        let dir = File::open(&host).map_err(err)?;
-        let opened = dir.metadata().map_err(err)?;
-        if !made.is_dir() || (made.dev(), made.ino()) != (opened.dev(), opened.ino()) {
-            return Err(SysError::Symlink(subject()));
-        }
-        // Owner before mode, as in `write_temp`.
-        std::os::unix::fs::fchown(&dir, Some(owner.uid), Some(owner.gid)).map_err(err)?;
-        dir.set_permissions(Permissions::from_mode(owner.mode))
-            .map_err(err)?;
-        let parent = host.parent().unwrap_or(&self.root);
-        File::open(parent).and_then(|d| d.sync_all()).map_err(err)
+        let err = |e| errno(path.display().to_string(), e);
+        let (parent, name) = self.open_parent(path)?;
+        // Mode 0700 until the owner is set; then only the fd is used, opened
+        // without following a symlink the parent's owner may have swapped in.
+        rfs::mkdirat(&parent, name, perm(0o700)).map_err(err)?;
+        let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        let dir = rfs::openat(&parent, name, flags, Mode::empty())
+            .map_err(|e| link_errno(&parent, name, path.display().to_string(), e))?;
+        set_owner(&dir, owner).map_err(err)?;
+        rfs::fsync(&parent).map_err(err)
     }
 
     fn remove_dir(&self, path: &Path) -> Result<(), SysError> {
-        std::fs::remove_dir(self.host_path(path))
-            .map_err(|e| SysError::from_io(path.display().to_string(), e))
+        let (dir, name) = self.open_parent(path)?;
+        rfs::unlinkat(&dir, name, AtFlags::REMOVEDIR)
+            .map_err(|e| errno(path.display().to_string(), e))
     }
 
     fn sync_dir(&self, path: &Path) -> Result<(), SysError> {
@@ -942,6 +1010,59 @@ mod tests {
     #[test]
     fn fake_fs_locks() {
         lock_contract(&fake::FakeFs::new().with_file("/etc/real", "real\n"));
+    }
+
+    #[test]
+    fn real_fs_changes_nothing_through_a_symlinked_parent() {
+        let (dir, owner) = real_root();
+        let host = dir.path();
+        std::fs::create_dir_all(host.join("home/admin/.ssh")).unwrap();
+        std::fs::write(host.join("etc/only/keys"), "kept\n").unwrap();
+        let fs = RealFs::new(host);
+        // As a user who owns their home would, after a caller checked `.ssh`.
+        std::fs::rename(host.join("home/admin/.ssh"), host.join("home/admin/old")).unwrap();
+        std::os::unix::fs::symlink(host.join("etc/only"), host.join("home/admin/.ssh")).unwrap();
+
+        let symlink = |r: Result<(), SysError>| matches!(r, Err(SysError::Symlink(_)));
+        let keys = Path::new("/home/admin/.ssh/keys");
+        assert!(symlink(fs.write_atomic(keys, b"x\n", owner)));
+        assert!(symlink(fs.remove(keys)));
+        assert!(symlink(
+            fs.create_dir(Path::new("/home/admin/.ssh/d"), owner)
+        ));
+        std::fs::create_dir(host.join("etc/only/d")).unwrap();
+        assert!(symlink(fs.remove_dir(Path::new("/home/admin/.ssh/d"))));
+        // A symlink further up is refused the same way.
+        std::fs::rename(host.join("home"), host.join("srv")).unwrap();
+        std::os::unix::fs::symlink(host.join("srv"), host.join("home")).unwrap();
+        assert!(symlink(fs.write_atomic(
+            Path::new("/home/admin/old/keys"),
+            b"x\n",
+            owner
+        )));
+
+        assert_eq!(
+            std::fs::read(host.join("etc/only/keys")).unwrap(),
+            b"kept\n"
+        );
+        assert!(host.join("etc/only/d").is_dir());
+        assert!(!host.join("srv/admin/old/keys").exists());
+        let names: Vec<_> = std::fs::read_dir(host.join("etc/only"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names.len(), 3, "{names:?}");
+    }
+
+    #[test]
+    fn real_fs_refuses_a_parent_component() {
+        let (dir, owner) = real_root();
+        let fs = RealFs::new(dir.path());
+        let err = fs
+            .write_atomic(Path::new("/etc/only/../new"), b"x\n", owner)
+            .unwrap_err();
+        assert!(matches!(err, SysError::Io { .. }), "{err:?}");
+        assert!(!dir.path().join("etc/new").exists());
     }
 
     #[test]
