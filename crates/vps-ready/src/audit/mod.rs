@@ -42,7 +42,7 @@ pub struct Control {
 }
 
 /// How much a failed control matters.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
     /// Worth fixing; rarely exploitable on its own.

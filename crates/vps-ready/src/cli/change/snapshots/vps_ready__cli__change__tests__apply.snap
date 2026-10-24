@@ -32,22 +32,8 @@ Applied 8 changes (transaction <txn-1>, journal /var/lib/vps-ready/txn/<txn-1>).
 Audit of this host after apply: 15 controls
 
 STATUS   ID       SEVERITY  CONTROL
-PASS     KRN-001  low       Kernel pointers hidden
-PASS     KRN-002  low       Kernel log restricted to root
-PASS     KRN-003  medium    Unprivileged BPF disabled
 UNKNOWN  KRN-004  medium    ptrace scope restricted
-                            kernel.yama.ptrace_scope not found under /proc/sys
-PASS     KRN-005  medium    Symlink protection enabled
-PASS     KRN-006  medium    Hardlink protection enabled
-PASS     KRN-007  low       FIFO protection enabled
-PASS     KRN-008  low       Regular file protection enabled
-PASS     KRN-009  low       Setuid core dumps restricted
-PASS     KRN-010  medium    Address space randomization fully enabled
-PASS     KRN-011  low       Kernel profiling restricted
-PASS     NET-001  low       TCP SYN cookies enabled
-PASS     NET-002  low       Source-routed packets rejected
-PASS     NET-003  low       Broadcast pings ignored
-PASS     UPD-001  medium    Security updates installed automatically
+         kernel.yama.ptrace_scope not found under /proc/sys
 
 14 passed, 0 failed, 1 unknown
-Unknown controls could not be checked; the notices on stderr say why.
+Run `vps-ready audit --all` to list the 14 passing controls too.
