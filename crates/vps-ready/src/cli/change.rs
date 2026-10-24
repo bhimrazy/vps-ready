@@ -1,22 +1,24 @@
-//! `plan`, `apply`, `rollback` and `history`, run against a [`Host`]: the
-//! real system, or a fake one in tests.
+//! `plan`, `apply`, `rollback`, `confirm` and `history`, run against a
+//! [`Host`]: the real system, or a fake one in tests.
 
 use std::collections::BTreeMap;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use anyhow::bail;
 use owo_colors::OwoColorize;
 
-use super::{EXIT_ERROR, EXIT_INCOMPLETE, EXIT_PENDING, EXIT_ROLLED_BACK, print_report};
+use super::{EXIT_ERROR, EXIT_INCOMPLETE, EXIT_ROLLED_BACK, print_report};
 use crate::audit::{self, Outcome};
 use crate::config::Profile;
 use crate::engine::{
     self, ApplyOutcome, Deadman, DeadmanOutcome, Engine, EngineError, ModuleStatus, Plan, Progress,
     Rollback, Selected, StateDir, Target, TxnInfo, TxnState,
 };
-use crate::facts::Facts;
+use crate::facts::{Facts, NoSession, Session};
 use crate::modules::Module;
 use crate::resource::{Backup, Resource, Reversibility};
 use crate::sys::Sys;
@@ -36,6 +38,19 @@ pub(super) struct Host<'a> {
     pub color: bool,
     /// This binary, which the dead-man timer and boot hook run.
     pub binary: PathBuf,
+    /// Finds the SSH login this process runs in, for `confirm`.
+    pub session: fn(Sys) -> Result<Session, NoSession>,
+    /// `SUDO_USER`, the user the printed `ssh` line logs in as.
+    pub sudo_user: Option<String>,
+    /// Set to stop waiting for a confirm: by Ctrl-C, or by a test.
+    pub stop: Arc<AtomicBool>,
+    /// Whether Ctrl-C sets `stop` while `apply` waits, instead of ending
+    /// the process.
+    pub catch_sigint: bool,
+    /// Whether stderr is a terminal, for a countdown on one line.
+    pub tty: bool,
+    /// How often the wait for a confirm reads the journal.
+    pub poll: Duration,
 }
 
 /// The modules `plan` and `apply` run without `--profile` and `--module`:
@@ -216,14 +231,21 @@ pub(super) fn apply(
     match engine.apply(&plan, &deadman, &mut |p| print_progress(err, &p))? {
         ApplyOutcome::NothingToDo => writeln!(out, "Nothing to do.")?,
         ApplyOutcome::Pending { txn, deadline } => {
+            // A confirm and the timer's rollback need the lock.
+            drop(engine);
             writeln!(
                 out,
-                "Applied {n} {} (transaction {txn}). The changes are live and are rolled \
-                 back at {} unless confirmed. Undo them now with `sudo vps-ready rollback --last`.",
+                "Applied {n} {} (transaction {txn}). Undo them now with `sudo vps-ready \
+                 rollback --last`.",
                 plural(n, "change"),
-                clock(deadline.wall)
             )?;
-            return Ok(EXIT_PENDING);
+            let left = match engine::watch(&state, host.sys.fs, &txn)? {
+                engine::Watch::Pending { left, .. } => left,
+                _ => Duration::ZERO,
+            };
+            confirm::print_pending(host, &facts, deadline, left, out)?;
+            out.flush()?;
+            return confirm::wait(host, &state, &txn, deadline, &plan, out, err);
         }
         ApplyOutcome::Applied { txn } => {
             let journal = host.state_dir.join("txn").join(&txn);
@@ -302,7 +324,7 @@ pub(super) fn rollback_deadman_boot(
     require_root(host, "rollback")?;
     let state = StateDir::create(host.sys.fs, host.state_dir, host.state_uid)?;
     let engine = Engine::lock_wait(&state, host.sys)?;
-    let done = engine.deadman_boot(&mut |p| print_progress(err, &p))?;
+    let done = engine.deadman_boot(&host.binary, &mut |p| print_progress(err, &p))?;
     if done.is_empty() {
         writeln!(out, "Nothing was left unconfirmed by the reboot.")?;
     }
@@ -311,6 +333,8 @@ pub(super) fn rollback_deadman_boot(
     }
     Ok(0)
 }
+
+pub(super) use confirm::confirm;
 
 /// What a rollback did, including what it left and the edits it kept.
 fn print_rollback(out: &mut dyn Write, done: &Rollback) -> io::Result<()> {
@@ -659,7 +683,9 @@ fn print_progress(err: &mut dyn Write, progress: &Progress) {
             clock(deadline.wall)
         ),
         Progress::Reload(reload) => format!("reload: {reload}"),
-        Progress::Waiting { left } => format!("waiting for a confirm: {}s left", left.as_secs()),
+        Progress::Waiting { left } => {
+            format!("waiting for a confirm: {} left", confirm::countdown(*left))
+        }
         Progress::During { path, copy } => format!(
             "{} changed since apply; keeping it as {}, then restoring it",
             path.display(),
@@ -690,15 +716,20 @@ fn print_history(out: &mut dyn Write, txns: &[TxnInfo]) -> io::Result<()> {
         })
         .collect();
     let width = modules.iter().map(String::len).max().unwrap_or(0);
-    for (t, modules) in txns.iter().zip(&modules) {
-        let state = if t.unfinished {
-            format!("unfinished ({})", t.state)
-        } else {
-            t.state.to_string()
-        };
+    let states: Vec<String> = txns
+        .iter()
+        .map(|t| match (t.unfinished, t.reverts_in) {
+            (true, _) => format!("unfinished ({})", t.state),
+            (false, Some(0)) => format!("{} (deadline passed)", t.state),
+            (false, Some(secs)) => format!("{} (reverts in {})", t.state, short(secs)),
+            (false, None) => t.state.to_string(),
+        })
+        .collect();
+    let state_width = states.iter().map(String::len).max().unwrap_or(0).max(29);
+    for ((t, modules), state) in txns.iter().zip(&modules).zip(&states) {
         writeln!(
             out,
-            "{:<20}  {state:<29}  {modules:<width$}  {} {}",
+            "{:<20}  {state:<state_width$}  {modules:<width$}  {} {}",
             t.id,
             t.changes,
             plural(t.changes, "change")
@@ -710,6 +741,14 @@ fn print_history(out: &mut dyn Write, txns: &[TxnInfo]) -> io::Result<()> {
     Ok(())
 }
 
+/// Seconds as `3m12s`, or `45s` under a minute.
+fn short(secs: u64) -> String {
+    match secs / 60 {
+        0 => format!("{secs}s"),
+        m => format!("{m}m{:02}s", secs % 60),
+    }
+}
+
 fn plural(n: usize, word: &str) -> String {
     if n == 1 {
         word.to_owned()
@@ -718,5 +757,6 @@ fn plural(n: usize, word: &str) -> String {
     }
 }
 
+mod confirm;
 #[cfg(test)]
 mod tests;
