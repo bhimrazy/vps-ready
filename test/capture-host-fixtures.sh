@@ -12,7 +12,6 @@
 #                   Several entries can share an argv (scenarios); the first wins
 #                   by default, so the plain capture comes before the scenarios.
 #   cmd/<name>.stdout, cmd/<name>.stderr
-#   env             SSH_CONNECTION as seen by a real SSH login
 # The container is capped at 512 MB and 1 CPU and is removed afterwards.
 set -eu
 cd "$(dirname "$0")/.."
@@ -62,7 +61,7 @@ scenario() { record "$tmp/scenarios.tsv" "$@"; }
 scenario sshd-T-before-login    sshd -T
 scenario listeners-before-login ss -tulnpH
 
-# Log in over SSH once, as on a VPS, and keep the SSH_CONNECTION it sees.
+# Log in over SSH once, as on a VPS.
 docker exec "$name" sh -c '
   useradd -m -s /bin/bash -G sudo admin
   install -d -m 700 /root/.ssh
@@ -70,9 +69,8 @@ docker exec "$name" sh -c '
   install -d -m 700 -o admin -g admin /home/admin/.ssh
   install -m 600 -o admin -g admin /root/.ssh/id_ed25519.pub /home/admin/.ssh/authorized_keys
 '
-conn=$(docker exec "$name" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-  -o LogLevel=ERROR -i /root/.ssh/id_ed25519 admin@127.0.0.1 'echo "$SSH_CONNECTION"')
-printf 'SSH_CONNECTION=%s\n' "$conn" >"$out/env"
+docker exec "$name" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+  -o LogLevel=ERROR -i /root/.ssh/id_ed25519 admin@127.0.0.1 true
 
 docker exec "$name" cat /etc/os-release >"$out/root/etc/os-release"
 docker exec "$name" cat /proc/1/comm >"$out/root/proc/1/comm"

@@ -222,9 +222,7 @@ firewall:
   legacy_filter_v4: false
   legacy_filter_v6: false
 ipv6: false
-session:
-  client: "127.0.0.1:41320"
-  server: "127.0.0.1:22"
+session: ~
 sysctl: ~
 updates:
   unattended_upgrades: false
