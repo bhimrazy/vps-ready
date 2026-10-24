@@ -81,8 +81,10 @@ capture virt-vm        systemd-detect-virt --vm
 capture ssh-version    ssh -V
 capture sshd-T         sshd -T
 capture ssh-units      systemctl show --property=Id,LoadState,ActiveState,UnitFileState ssh.socket sshd.socket ssh.service sshd.service
+capture ssh-socket-listen systemctl show --property=Listen ssh.socket
 capture listeners      ss -tulnpH
 capture nft            nft -j list ruleset
+capture firewall-units systemctl show --property=Id,LoadState,ActiveState,UnitFileState firewalld.service nftables.service
 capture apt-periodic   apt-config dump APT::Periodic
 capture apt-units      systemctl show --property=Id,LoadState,ActiveState,UnitFileState apt-daily.timer apt-daily-upgrade.timer apt-daily.service apt-daily-upgrade.service
 

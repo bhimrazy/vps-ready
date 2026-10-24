@@ -901,8 +901,11 @@ fn default_selection_is_the_safe_modules() {
     };
     let default = body(&only(&[]));
     assert!(default.contains("updates.auto"), "{default}");
-    assert_eq!(default, body(&with_profile("minimal", &[])));
     assert!(!default.contains("ssh.bruteforce"), "{default}");
+    assert!(!default.contains("firewall.inbound"), "{default}");
+    let minimal = body(&with_profile("minimal", &[]));
+    assert!(minimal.contains("firewall.inbound:"), "{minimal}");
+    assert!(!minimal.contains("ssh.bruteforce"), "{minimal}");
     let web = body(&with_profile("web", &[]));
     assert!(web.contains("ssh.bruteforce:"), "{web}");
     assert!(web.contains("updates.auto"), "{web}");
@@ -916,7 +919,8 @@ fn a_profile_file_is_read_and_checked() {
     );
     let (code, out, _) = plan_with(&host(&fs), &with_profile("/srv/mine.toml", &[]));
     assert_eq!(code, 0);
-    assert!(out.starts_with("ssh.bruteforce:"), "{out}");
+    assert!(out.starts_with("firewall.inbound:"), "{out}");
+    assert!(out.contains("ssh.bruteforce:"), "{out}");
     assert!(out.contains("kernel.sysctl:"), "{out}");
     assert!(!out.contains("updates.auto"), "{out}");
     assert!(

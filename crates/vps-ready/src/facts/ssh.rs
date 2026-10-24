@@ -27,6 +27,10 @@ pub struct Ssh {
     pub activation: SshActivation,
     /// Effective configuration from `sshd -T`, if it could be read.
     pub effective: Option<SshdConfig>,
+    /// Ports `ssh.socket` listens on, from `systemctl show --property=Listen
+    /// ssh.socket`, whether or not it is active. Under socket activation
+    /// they, not `sshd -T`, are where sshd accepts connections.
+    pub socket_ports: Vec<u16>,
     /// Whether fail2ban's `sshd` jail runs, from `fail2ban-client status
     /// sshd`: `false` when fail2ban is not installed, not running or has no
     /// such jail; `None` when it could not be asked, e.g. without root.
@@ -64,6 +68,7 @@ pub(super) fn detect(runner: &dyn Runner, notices: &mut Vec<String>) -> Ssh {
         version: version(runner, notices),
         activation: activation(runner, notices),
         effective: effective(runner, notices),
+        socket_ports: socket_ports(runner, notices),
         fail2ban: fail2ban(runner, notices),
     }
 }
@@ -155,6 +160,30 @@ fn sshd_t_failure(stderr: &str) -> String {
         notice.push_str(". `sshd -T` needs root");
     }
     notice
+}
+
+/// No notice when this fails: [`activation`] has one for that.
+fn socket_ports(runner: &dyn Runner, notices: &mut Vec<String>) -> Vec<u16> {
+    let cmd = Cmd::new("systemctl").args(["show", "--property=Listen", "ssh.socket"]);
+    match probe(runner, &cmd, notices) {
+        Probe::Ran(out) if out.ok() => parse_listen(&String::from_utf8_lossy(&out.stdout)),
+        _ => Vec::new(),
+    }
+}
+
+/// `Listen=[::]:22 (Stream)`, one line per socket; other kinds, such as a
+/// `(Datagram)` or a path, are skipped.
+fn parse_listen(text: &str) -> Vec<u16> {
+    let mut ports: Vec<u16> = text
+        .lines()
+        .filter_map(|line| {
+            let addr = line.strip_prefix("Listen=")?.strip_suffix(" (Stream)")?;
+            addr.rsplit_once(':')?.1.parse().ok()
+        })
+        .collect();
+    ports.sort_unstable();
+    ports.dedup();
+    ports
 }
 
 fn activation(runner: &dyn Runner, notices: &mut Vec<String>) -> SshActivation {
@@ -372,9 +401,19 @@ mod tests {
         assert_eq!(ask(FakeRunner::new()), (Some(false), 0));
     }
 
+    #[test]
+    fn reads_the_socket_ports() {
+        let text = "Listen=0.0.0.0:22 (Stream)\nListen=[::]:22 (Stream)\n\
+                    Listen=[::]:2222 (Stream)\nListen=/run/x.sock (Stream)\n\
+                    Listen=[::]:53 (Datagram)\n";
+        assert_eq!(parse_listen(text), [22, 2222]);
+        assert!(parse_listen("").is_empty());
+    }
+
     proptest::proptest! {
         #[test]
         fn parsers_never_panic(s in "\\PC*") {
+            let _ = parse_listen(&s);
             let _ = parse_version(&s);
             let _ = activation_from_units(&parse_units(&s), &mut Vec::new());
             let _ = sshd_t_failure(&s);
