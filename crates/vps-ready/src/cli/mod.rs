@@ -334,7 +334,13 @@ fn host_facts(sys: Sys) -> anyhow::Result<Facts> {
 
 /// Collects facts, printing each notice except those starting with one in `quiet` on stderr. All notices stay in the facts, and so in `--json` output.
 fn collect_facts(root: &Path, quiet: &[&str]) -> anyhow::Result<Facts> {
-    let facts = facts::collect(&RealFs::new(root), &RealRunner, &Env::from_process())
+    // A mounted tree has no live process table to find a session in.
+    let env = if root == Path::new("/") {
+        Env::from_process()
+    } else {
+        Env::default()
+    };
+    let facts = facts::collect(&RealFs::new(root), &RealRunner, &env)
         .with_context(|| format!("detecting facts under {}", root.display()))?;
     log_notices(&facts, quiet);
     Ok(facts)

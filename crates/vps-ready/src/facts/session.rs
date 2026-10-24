@@ -10,6 +10,10 @@
 //! 9.8). Its child in the chain still has `SSH_CONNECTION` in its `environ`.
 //! Nothing above that process is read: on Debian 13 the `[priv]` process
 //! above it has PPID 1, not the listener.
+//!
+//! The process's executable and owner are not checked: `confirm` runs as
+//! root, so a spoofed title only lets an admin lock themselves out, and an
+//! unprivileged user could run a genuine sshd anyway.
 
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
@@ -43,8 +47,8 @@ pub const NOTICE: &str = "no SSH session: ";
 /// Parents walked at most before giving up.
 const MAX_DEPTH: usize = 64;
 
-/// `USER_HZ`, the unit of start times in `/proc/<pid>/stat`: 100 on x86 and
-/// Arm.
+/// `USER_HZ`, the unit of start times in `/proc/<pid>/stat`: a fixed ABI
+/// value, 100 on x86 and Arm.
 const CLK_TCK: u64 = 100;
 
 /// One sshd session process. PID reuse cannot fake a match, since a new
@@ -59,11 +63,12 @@ pub struct SessionId {
 }
 
 impl SessionId {
-    /// Whether the process started after `boottime`, in whole seconds since
-    /// boot. A start within that same second does not count.
+    /// Whether the process started after `live_since`, in whole seconds
+    /// since boot from `/proc/uptime` or `CLOCK_BOOTTIME`, the clock of
+    /// `start`. A start within that same second does not count.
     #[must_use]
-    pub fn started_after(self, boottime: u64) -> bool {
-        self.start / CLK_TCK > boottime
+    pub fn started_after(self, live_since: u64) -> bool {
+        self.start / CLK_TCK > live_since
     }
 }
 
