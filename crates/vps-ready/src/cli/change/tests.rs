@@ -835,3 +835,26 @@ fn a_module_the_profile_does_not_enable_is_an_error() {
         "error: kernel.sysctl is not enabled by profile /srv/p.toml\n"
     );
 }
+
+#[test]
+fn restore_progress_of_users() {
+    let line = |created, groups: &[&str]| {
+        let backup = Backup::User {
+            name: "admin".into(),
+            created,
+            added_groups: groups.iter().map(|&g| g.to_owned()).collect(),
+        };
+        let mut err = Vec::new();
+        print_progress(&mut err, &Progress::Restore(&backup));
+        String::from_utf8(err).unwrap()
+    };
+    assert_eq!(
+        line(true, &["sudo"]),
+        "remove user admin (its home directory stays)\n"
+    );
+    assert_eq!(
+        line(false, &["sudo", "adm"]),
+        "remove admin from groups sudo,adm\n"
+    );
+    assert_eq!(line(false, &[]), "leave user admin as it is\n");
+}

@@ -197,9 +197,9 @@ fn probe(runner: &dyn Runner, cmd: &Cmd, notices: &mut Vec<String>) -> Probe {
 
 /// One unit from `systemctl show`: `Property=value` lines, units separated by
 /// a blank line.
-type Unit = BTreeMap<String, String>;
+pub(crate) type Unit = BTreeMap<String, String>;
 
-fn parse_units(text: &str) -> Vec<Unit> {
+pub(crate) fn parse_units(text: &str) -> Vec<Unit> {
     text.split("\n\n")
         .map(|block| {
             block
@@ -212,7 +212,7 @@ fn parse_units(text: &str) -> Vec<Unit> {
         .collect()
 }
 
-fn prop<'a>(unit: &'a Unit, key: &str) -> &'a str {
+pub(crate) fn prop<'a>(unit: &'a Unit, key: &str) -> &'a str {
     unit.get(key).map_or("", String::as_str)
 }
 

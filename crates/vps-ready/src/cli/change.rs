@@ -385,15 +385,19 @@ fn print_plan(
         for step in changes {
             let summary = step.change.summary.as_str();
             let (sign, text) = match &step.resource {
-                Resource::File(_) => match summary.strip_prefix("create ") {
-                    Some(rest) => ('+', show_owner(rest)),
-                    None => (
-                        '~',
-                        show_owner(summary.strip_prefix("update ").unwrap_or(summary)),
-                    ),
-                },
-                Resource::Sysctl(_) => ('~', summary.to_owned()),
+                Resource::File(_) | Resource::AuthorizedKeys(_) => {
+                    match summary.strip_prefix("create ") {
+                        Some(rest) => ('+', show_owner(rest)),
+                        None => (
+                            '~',
+                            show_owner(summary.strip_prefix("update ").unwrap_or(summary)),
+                        ),
+                    }
+                }
+                Resource::Sysctl(_) | Resource::Service(_) => ('~', summary.to_owned()),
                 Resource::Package(_) => ('+', summary.to_owned()),
+                Resource::User(_) if summary.starts_with("create ") => ('+', summary.to_owned()),
+                Resource::User(_) => ('~', summary.to_owned()),
             };
             let rev = match step.change.reversibility {
                 Reversibility::Reversible => "reversible",
@@ -451,12 +455,17 @@ fn print_plan(
 fn kinds(plan: &Plan) -> String {
     let count = |f: fn(&Resource) -> bool| plan.steps().filter(|s| f(&s.resource)).count();
     [
-        (count(|r| matches!(r, Resource::File(_))), "file"),
+        (
+            count(|r| matches!(r, Resource::File(_) | Resource::AuthorizedKeys(_))),
+            "file",
+        ),
         (
             count(|r| matches!(r, Resource::Sysctl(_))),
             "kernel setting",
         ),
         (count(|r| matches!(r, Resource::Package(_))), "package"),
+        (count(|r| matches!(r, Resource::Service(_))), "service"),
+        (count(|r| matches!(r, Resource::User(_))), "user"),
     ]
     .into_iter()
     .filter(|(n, _)| *n > 0)
@@ -493,11 +502,12 @@ fn print_progress(err: &mut dyn Write, progress: &Progress) {
         Progress::Apply { n, total, step } => {
             let summary = &step.change.summary;
             let text = match &step.resource {
-                Resource::File(_) => show_owner(summary),
+                Resource::File(_) | Resource::AuthorizedKeys(_) => show_owner(summary),
                 Resource::Sysctl(_) => format!("set {summary}"),
                 Resource::Package(_) => {
                     format!("{summary} (apt-get update, then install; can take a few minutes)")
                 }
+                Resource::Service(_) | Resource::User(_) => summary.clone(),
             };
             format!("[{n}/{total}] {text}")
         }
@@ -513,6 +523,33 @@ fn print_progress(err: &mut dyn Write, progress: &Progress) {
             Backup::Package { name, .. } => {
                 format!("leave {name} as it is (rollback does not remove packages)")
             }
+            Backup::Service {
+                unit,
+                was_enabled,
+                was_active,
+                ..
+            } => format!(
+                "restore {unit} ({}, {})",
+                if *was_enabled { "enabled" } else { "disabled" },
+                if *was_active { "active" } else { "inactive" }
+            ),
+            Backup::User {
+                name,
+                created: true,
+                ..
+            } => format!("remove user {name} (its home directory stays)"),
+            Backup::User {
+                name, added_groups, ..
+            } if added_groups.is_empty() => format!("leave user {name} as it is"),
+            Backup::User {
+                name, added_groups, ..
+            } => format!("remove {name} from groups {}", added_groups.join(",")),
+            Backup::AuthorizedKeys {
+                path,
+                original: Some(_),
+                ..
+            } => format!("restore {}", path.display()),
+            Backup::AuthorizedKeys { path, .. } => format!("remove {}", path.display()),
         },
         Progress::Leave(Backup::Sysctl { key, .. }) => {
             format!("leave {key} as it is (the host rebooted since apply; the next boot sets it)")

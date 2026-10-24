@@ -1178,3 +1178,62 @@ fn unknown_params_name_the_module() {
         "{err}"
     );
 }
+
+#[test]
+fn rollback_checks_and_restores_authorized_keys() {
+    use crate::resource::AuthorizedKeys;
+
+    const KEYS: &str = "/home/admin/.ssh/authorized_keys";
+    let fs = FakeFs::new().with_dir(
+        "/home/admin",
+        FileOwner {
+            mode: 0o750,
+            uid: 1001,
+            gid: 1001,
+        },
+    );
+    let runner = FakeRunner::new().on(
+        "getent",
+        ["passwd", "admin"],
+        Output::success("admin:x:1001:1001::/home/admin:/bin/bash\n"),
+    );
+    let sys = Sys {
+        fs: &fs,
+        runner: &runner,
+    };
+    let keys = module(
+        "test.keys",
+        vec![Resource::AuthorizedKeys(AuthorizedKeys {
+            user: "admin".into(),
+            keys: vec!["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGtest me@laptop".into()],
+        })],
+    );
+    let state = state(&fs);
+    let before = host(&fs);
+    let facts = facts();
+    let plan = plan(&[Selected::new(&keys)], &facts, sys).unwrap();
+    let engine = Engine::lock(&state, sys).unwrap();
+    engine.apply(&plan, &mut |_| {}).unwrap();
+    let meta = fs.metadata(Path::new("/home/admin/.ssh")).unwrap();
+    assert_eq!((meta.mode, meta.uid), (0o700, 1001));
+
+    let applied = fs.read(Path::new(KEYS)).unwrap();
+    fs.write(Path::new(KEYS), b"ssh-ed25519 AAAAadded\n")
+        .unwrap();
+    let err = engine.rollback(Target::Last, &mut |_| {}).unwrap_err();
+    let EngineError::Changed { changed, .. } = &err else {
+        panic!("{err:?}");
+    };
+    assert_eq!(
+        changed,
+        &[ByHand {
+            resource: "authorized-keys:admin".into(),
+            step: format!("remove {KEYS}, then rmdir /home/admin/.ssh"),
+        }]
+    );
+
+    fs.write(Path::new(KEYS), &applied).unwrap();
+    engine.rollback(Target::Last, &mut |_| {}).unwrap();
+    assert_eq!(host(&fs), before);
+    assert!(fs.metadata(Path::new("/home/admin/.ssh")).is_err());
+}
