@@ -1,0 +1,5 @@
+schema = 1
+
+[modules."kernel.sysctl"]
+
+[modules."updates.auto"]

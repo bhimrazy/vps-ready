@@ -1,5 +1,6 @@
 # Profiles
 
-Profiles are TOML files that select and configure modules (for example
-`minimal.toml` and `web.toml`). They arrive in M3 together with the SSH and
-firewall modules.
+Profiles are TOML files that select modules and set their params. The
+built-in `minimal` and `web` are embedded from
+`crates/vps-ready/src/config/profiles/`; `--profile <name|path>` selects one,
+and a file may `extends` a built-in one.

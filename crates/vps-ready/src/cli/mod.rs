@@ -97,7 +97,11 @@ pub enum Command {
     /// Show what `apply` would change. Does not need root, but then skips
     /// what only root can read.
     Plan {
-        /// Plan only this module (repeatable). Default: every module.
+        /// The profile to plan: minimal, web or the path of a profile file.
+        #[arg(long, value_name = "NAME|PATH")]
+        profile: Option<String>,
+        /// Plan only this module (repeatable). Default: the modules of the
+        /// profile, or without one the kernel and update modules.
         #[arg(long = "module", value_name = "ID", value_parser = module_ids())]
         modules: Vec<String>,
     },
@@ -107,7 +111,11 @@ pub enum Command {
     /// change was rolled back, 2 on error, and 3 when the rollback after a
     /// failure did not complete.
     Apply {
-        /// Apply only this module (repeatable). Default: every applicable module.
+        /// The profile to apply: minimal, web or the path of a profile file.
+        #[arg(long, value_name = "NAME|PATH")]
+        profile: Option<String>,
+        /// Apply only this module (repeatable). Default: the modules of the
+        /// profile, or without one the kernel and update modules.
         #[arg(long = "module", value_name = "ID", value_parser = module_ids())]
         modules: Vec<String>,
         /// Do not ask; required when stdin is not a terminal.
@@ -266,26 +274,35 @@ pub fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
                 other => other?,
             }
         }
-        Command::Plan { modules } => {
-            let n = change::plan(&real_host(cli), modules, cli.json, &mut out)?;
+        Command::Plan { profile, modules } => {
+            let sel = selection(profile, modules);
+            let n = change::plan(&real_host(cli), &sel, cli.json, &mut out)?;
             code = ExitCode::from(n);
         }
         Command::Apply {
+            profile,
             modules,
             dry_run: true,
             ..
         } => {
-            let n = change::plan(&real_host(cli), modules, cli.json, &mut out)?;
+            let sel = selection(profile, modules);
+            let n = change::plan(&real_host(cli), &sel, cli.json, &mut out)?;
             code = ExitCode::from(n);
         }
-        Command::Apply { modules, yes, .. } => {
+        Command::Apply {
+            profile,
+            modules,
+            yes,
+            ..
+        } => {
+            let sel = selection(profile, modules);
             no_json(cli, "apply")?;
             let stdin = io::stdin();
             let mut stdin = stdin.is_terminal().then(|| stdin.lock());
             let input = stdin.as_mut().map(|s| s as &mut dyn BufRead);
             let n = change::apply(
                 &real_host(cli),
-                modules,
+                &sel,
                 *yes,
                 input,
                 &mut out,
@@ -313,6 +330,13 @@ pub fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
     }
     out.flush()?;
     Ok(code)
+}
+
+fn selection(profile: &Option<String>, modules: &[String]) -> change::Selection {
+    change::Selection {
+        profile: profile.clone(),
+        modules: modules.to_vec(),
+    }
 }
 
 fn no_json(cli: &Cli, command: &str) -> anyhow::Result<()> {
