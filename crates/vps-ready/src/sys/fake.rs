@@ -273,6 +273,19 @@ impl FakeFs {
         self
     }
 
+    /// Adds (or replaces) a directory with `owner`.
+    #[must_use]
+    pub fn with_dir(self, path: impl Into<PathBuf>, owner: FileOwner) -> Self {
+        let entry = Entry {
+            node: Node::Dir,
+            mode: owner.mode,
+            uid: owner.uid,
+            gid: owner.gid,
+        };
+        self.lock().entries.insert(path.into(), entry);
+        self
+    }
+
     /// Adds (or replaces) a symlink to the absolute path `target`.
     #[must_use]
     pub fn with_symlink(self, path: impl Into<PathBuf>, target: impl Into<PathBuf>) -> Self {
@@ -440,6 +453,45 @@ impl Fs for FakeFs {
                     state.entries.insert(dir.to_path_buf(), entry);
                 }
             }
+        }
+        Ok(())
+    }
+
+    fn create_dir(&self, path: &Path, owner: FileOwner) -> Result<(), SysError> {
+        let mut state = self.lock();
+        if state.entries.contains_key(path) || state.is_dir(path) {
+            return Err(io_error(path, io::ErrorKind::AlreadyExists));
+        }
+        state.require_parent(path)?;
+        let entry = Entry {
+            node: Node::Dir,
+            mode: owner.mode,
+            uid: owner.uid,
+            gid: owner.gid,
+        };
+        state.entries.insert(path.to_path_buf(), entry);
+        Ok(())
+    }
+
+    fn remove_dir(&self, path: &Path) -> Result<(), SysError> {
+        let mut state = self.lock();
+        match state.entries.get(path).map(|e| &e.node) {
+            Some(Node::Dir) => {}
+            Some(_) => return Err(io_error(path, io::ErrorKind::NotADirectory)),
+            None if state.is_dir(path) => {}
+            None => return Err(not_found(path)),
+        }
+        if state
+            .entries
+            .keys()
+            .any(|p| p != path && p.starts_with(path))
+        {
+            return Err(io_error(path, io::ErrorKind::DirectoryNotEmpty));
+        }
+        state.entries.remove(path);
+        if let Some(parent) = path.parent().filter(|p| !state.is_dir(p)) {
+            let entry = Entry::new(Node::Dir, 0o755);
+            state.entries.insert(parent.to_path_buf(), entry);
         }
         Ok(())
     }

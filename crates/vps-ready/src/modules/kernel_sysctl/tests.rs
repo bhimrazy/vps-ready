@@ -173,7 +173,7 @@ fn emitted(resources: &[Resource]) -> Vec<(String, String)> {
                     }
                 }
             }
-            Resource::Package(_) => panic!("kernel.sysctl planned a package"),
+            other => panic!("kernel.sysctl planned {}", other.id()),
         }
     }
     out

@@ -336,6 +336,27 @@ pub trait Fs {
     /// [`SysError::Permission`] or [`SysError::Io`].
     fn create_dir_all(&self, path: &Path, mode: u32) -> Result<(), SysError>;
 
+    /// Creates the directory `path` (not its parents) with `owner.mode`,
+    /// `owner.uid` and `owner.gid`, and syncs its parent.
+    ///
+    /// # Errors
+    ///
+    /// [`SysError::NotFound`] if the parent does not exist;
+    /// [`SysError::Symlink`] if the new entry was replaced by something else
+    /// before its owner was set; [`SysError::Io`] if `path` already exists;
+    /// [`SysError::Permission`].
+    fn create_dir(&self, path: &Path, owner: FileOwner) -> Result<(), SysError>;
+
+    /// Removes the empty directory `path`. The removal is durable only after
+    /// [`Fs::sync_dir`] on the parent.
+    ///
+    /// # Errors
+    ///
+    /// [`SysError::NotFound`]; [`SysError::Io`] with
+    /// [`io::ErrorKind::DirectoryNotEmpty`] if it has entries, or another kind
+    /// if it is not a directory; [`SysError::Permission`].
+    fn remove_dir(&self, path: &Path) -> Result<(), SysError>;
+
     /// Flushes the directory `path` to disk, which makes the creation,
     /// rename or removal of its entries durable.
     ///
@@ -619,6 +640,33 @@ impl Fs for RealFs {
             .map_err(|e| SysError::from_io(path.display().to_string(), e))
     }
 
+    fn create_dir(&self, path: &Path, owner: FileOwner) -> Result<(), SysError> {
+        let subject = || path.display().to_string();
+        let err = |e| SysError::from_io(subject(), e);
+        let host = self.host_path(path);
+        // Mode 0700 until the owner is set. From then on only the fd is used,
+        // once it is known to be the directory just made: the parent's owner
+        // may have swapped the entry.
+        DirBuilder::new().mode(0o700).create(&host).map_err(err)?;
+        let made = std::fs::symlink_metadata(&host).map_err(err)?;
+        let dir = File::open(&host).map_err(err)?;
+        let opened = dir.metadata().map_err(err)?;
+        if !made.is_dir() || (made.dev(), made.ino()) != (opened.dev(), opened.ino()) {
+            return Err(SysError::Symlink(subject()));
+        }
+        // Owner before mode, as in `write_temp`.
+        std::os::unix::fs::fchown(&dir, Some(owner.uid), Some(owner.gid)).map_err(err)?;
+        dir.set_permissions(Permissions::from_mode(owner.mode))
+            .map_err(err)?;
+        let parent = host.parent().unwrap_or(&self.root);
+        File::open(parent).and_then(|d| d.sync_all()).map_err(err)
+    }
+
+    fn remove_dir(&self, path: &Path) -> Result<(), SysError> {
+        std::fs::remove_dir(self.host_path(path))
+            .map_err(|e| SysError::from_io(path.display().to_string(), e))
+    }
+
     fn sync_dir(&self, path: &Path) -> Result<(), SysError> {
         File::open(self.host_path(path))
             .and_then(|d| d.sync_all())
@@ -795,6 +843,39 @@ mod tests {
             fs.sync_dir(Path::new("/nope")),
             Err(SysError::NotFound(_))
         ));
+
+        let ssh = Path::new("/etc/only/.ssh");
+        fs.create_dir(
+            ssh,
+            FileOwner {
+                mode: 0o750,
+                ..owner
+            },
+        )
+        .unwrap();
+        let meta = fs.metadata(ssh).unwrap();
+        assert_eq!(
+            (meta.kind, meta.mode, meta.uid, meta.gid),
+            (FileKind::Dir, 0o750, owner.uid, owner.gid)
+        );
+        assert!(fs.create_dir(ssh, owner).is_err());
+        assert!(fs.create_dir(Path::new("/etc/real"), owner).is_err());
+        assert!(matches!(
+            fs.create_dir(Path::new("/nope/.ssh"), owner),
+            Err(SysError::NotFound(_))
+        ));
+        fs.write_atomic(&ssh.join("keys"), b"k\n", owner).unwrap();
+        let err = fs.remove_dir(ssh).unwrap_err();
+        assert!(
+            matches!(&err, SysError::Io { source, .. } if source.kind() == io::ErrorKind::DirectoryNotEmpty),
+            "{err:?}"
+        );
+        fs.remove(&ssh.join("keys")).unwrap();
+        fs.remove_dir(ssh).unwrap();
+        assert!(matches!(fs.metadata(ssh), Err(SysError::NotFound(_))));
+        assert!(matches!(fs.remove_dir(ssh), Err(SysError::NotFound(_))));
+        assert!(fs.remove_dir(Path::new("/etc/real")).is_err());
+        assert!(fs.metadata(Path::new("/etc/only")).is_ok());
     }
 
     /// A tempdir root with `/etc/real`, `/etc/link` and `/etc/only/x`, and an owner that a

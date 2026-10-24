@@ -10,7 +10,10 @@ use super::journal::{self, Event, Record, RollbackReason, TxnState};
 use super::plan::{Plan, Step};
 use super::{EngineError, StateDir, Txn, id};
 use crate::resource::sysctl::boot_id;
-use crate::resource::{Backup, Resource, Sysctl, after_path, before_path, restore};
+use crate::resource::{
+    Backup, Resource, ResourceError, Sysctl, after_path, authorized_keys, before_path, restore,
+    service, user,
+};
 use crate::sys::{FileKind, Fs, FsLock, Sys, SysError};
 
 /// The engine with the lock held: apply and rollback run through it.
@@ -387,7 +390,7 @@ impl<'a> Engine<'a> {
         if check {
             let mut changed = Vec::new();
             for (resource, backup) in &pending {
-                if earlier_boot(backup, boot) || unchanged(self.sys, &dir, backup)? {
+                if earlier_boot(backup, boot) || unchanged(self.sys, &dir, resource, backup)? {
                     continue;
                 }
                 changed.extend(by_hand(&dir, resource, backup).map(|mut step| {
@@ -515,7 +518,7 @@ fn earlier_boot(backup: &Backup, boot: Option<&str>) -> bool {
 /// The safety check: whether the resource is as apply left it or as it was
 /// before. Both are allowed because a crash may have come just before or
 /// after apply. Mode and owner are not compared; restore sets them.
-fn unchanged(sys: Sys, dir: &Path, backup: &Backup) -> Result<bool, EngineError> {
+fn unchanged(sys: Sys, dir: &Path, resource: &str, backup: &Backup) -> Result<bool, EngineError> {
     match backup {
         Backup::File { path, n, original } => {
             let current = match sys.fs.metadata(path) {
@@ -552,11 +555,21 @@ fn unchanged(sys: Sys, dir: &Path, backup: &Backup) -> Result<bool, EngineError>
         }
         // Restoring a package does nothing.
         Backup::Package { .. } => Ok(true),
+        Backup::Service { .. } => service::unchanged(sys, backup).map_err(at(resource)),
+        Backup::User { .. } => user::unchanged(sys, backup).map_err(at(resource)),
+        Backup::AuthorizedKeys { .. } => {
+            authorized_keys::unchanged(sys, dir, backup).map_err(at(resource))
+        }
     }
 }
 
+fn at(resource: &str) -> impl FnOnce(ResourceError) -> EngineError {
+    let id = resource.to_owned();
+    |source| EngineError::Resource { id, source }
+}
+
 /// How to restore `backup` by hand; `None` for a package, which rollback
-/// leaves as it is.
+/// leaves as it is, and for a service or user that apply left as it was.
 fn by_hand(dir: &Path, resource: &str, backup: &Backup) -> Option<ByHand> {
     let step = match backup {
         Backup::File {
@@ -578,6 +591,9 @@ fn by_hand(dir: &Path, resource: &str, backup: &Backup) -> Option<ByHand> {
         } => format!("remove {}", path.display()),
         Backup::Sysctl { key, value, .. } => format!("sysctl -w '{key}={value}'"),
         Backup::Package { .. } => return None,
+        Backup::Service { .. } => service::by_hand(backup)?,
+        Backup::User { .. } => user::by_hand(backup)?,
+        Backup::AuthorizedKeys { .. } => authorized_keys::by_hand(dir, backup)?,
     };
     Some(ByHand {
         resource: resource.to_owned(),
