@@ -1,0 +1,4 @@
+UsePAM yes
+Match Address 192.0.2.0/24
+    PasswordAuthentication yes
+Include /etc/ssh/sshd_config.d/*.conf

@@ -264,7 +264,8 @@ Commands are `clap` derive structs in `src/cli`. Today `version`, `detect` and `
 ```
 vps-ready                      interactive wizard (default when a TTY)
 vps-ready detect               print facts (also --json)
-vps-ready audit                run controls → text | json | sarif | junit; non-zero exit on fail
+vps-ready audit [--all]         run controls → text | json | sarif | junit; non-zero exit on fail
+                               text lists failed and unknown controls; --all adds passed and skipped
 vps-ready plan  [--profile X] [--out plan.json]
 vps-ready apply [plan.json | --profile X] [--yes] [--deadman=180s|off|selftest]
 vps-ready confirm <code>
@@ -330,7 +331,7 @@ crates/
     src/report/            text | json | sarif | junit (planned)
     src/tui/               (planned, M4) inquire forms, ratatui plan/diff view
   vpsready/                alias crate: the same command under the name `vpsready`
-  sshd-config/             (planned, M3) parser + linter for sshd_config and `sshd -T`; publishable to crates.io
+  sshd-config/             reader for sshd_config and its Includes, parser for `sshd -T`; to be published to crates.io
 profiles/                  (planned) minimal.toml  web.toml  paranoid.toml
 test/                      images/Containerfile (one file, `BASE` build arg)  capture-host-fixtures.sh
                            (planned: integration/  vm/)
