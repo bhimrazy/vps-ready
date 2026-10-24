@@ -36,10 +36,10 @@ pub enum Password {
 
 /// An entry of the user database.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct Entry {
-    pub(super) uid: u32,
-    pub(super) gid: u32,
-    pub(super) home: PathBuf,
+pub(crate) struct Entry {
+    pub(crate) uid: u32,
+    pub(crate) gid: u32,
+    pub(crate) home: PathBuf,
 }
 
 impl User {
@@ -203,7 +203,7 @@ pub(crate) fn by_hand(backup: &Backup) -> Option<String> {
 }
 
 /// The account's entry from `getent passwd`; `None` if there is none.
-pub(super) fn lookup(sys: Sys, name: &str) -> Result<Option<Entry>, ResourceError> {
+pub(crate) fn lookup(sys: Sys, name: &str) -> Result<Option<Entry>, ResourceError> {
     check_name("user", name)?;
     let out = sys.runner.run(&Cmd::new("getent").args(["passwd", name]))?;
     match out.status {

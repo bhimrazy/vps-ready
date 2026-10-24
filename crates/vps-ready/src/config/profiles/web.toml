@@ -1,5 +1,7 @@
 schema = 1
 
+[modules."user.admin"]
+
 [modules."ssh.bruteforce"]
 
 [modules."kernel.sysctl"]

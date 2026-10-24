@@ -1,0 +1,24 @@
+---
+source: crates/vps-ready/src/modules/user_admin/tests.rs
+expression: plan
+---
+modules:
+  - id: user.admin
+    title: Set up an admin account that logs in with an SSH key and uses sudo
+    status: applicable
+    changes:
+      - id: "user:admin"
+        summary: create user admin
+        diff: ~
+        reversibility: partial
+      - id: "authorized-keys:admin"
+        summary: "create ~admin/.ssh/authorized_keys (0600 admin:admin)"
+        diff: "@@ -0,0 +1 @@\n+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGroot root@laptop\n"
+        reversibility: reversible
+      - id: "file:/etc/sudoers.d/90-vps-ready-admin"
+        summary: "create /etc/sudoers.d/90-vps-ready-admin (0440 0:0)"
+        diff: "@@ -0,0 +1,3 @@\n+# Written by vps-ready (user.admin). `vps-ready rollback --last`\n+# restores the previous state; edits here are replaced by the next apply.\n+admin ALL=(ALL:ALL) NOPASSWD: ALL\n"
+        reversibility: reversible
+    notes:
+      - "no `authorized_keys` given: copies 1 key from /root/.ssh/authorized_keys"
+      - "skipped 1 line of /root/.ssh/authorized_keys with options (command=, no-pty, ...), which would restrict the admin too"
