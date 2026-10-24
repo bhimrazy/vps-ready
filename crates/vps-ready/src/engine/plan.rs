@@ -116,6 +116,14 @@ impl Plan<'_> {
             .map(|m| m.id.to_owned())
             .collect()
     }
+
+    /// Whether a module with a change needs the dead-man switch.
+    #[must_use]
+    pub fn needs_deadman(&self) -> bool {
+        self.modules
+            .iter()
+            .any(|m| !m.changes().is_empty() && m.selected.module.needs_deadman())
+    }
 }
 
 impl ModulePlan<'_> {
@@ -135,6 +143,12 @@ impl ModulePlan<'_> {
             ModuleStatus::Applicable { reloads, .. } => reloads,
             ModuleStatus::NotApplicable { .. } => &[],
         }
+    }
+
+    /// [`Module::force_restore`].
+    #[must_use]
+    pub fn force_restore(&self) -> bool {
+        self.selected.module.force_restore()
     }
 
     /// Runs [`Module::verify`] with the module's params and `facts`.

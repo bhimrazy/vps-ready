@@ -9,6 +9,7 @@ use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use anyhow::Context;
 use clap::builder::PossibleValuesParser;
@@ -18,7 +19,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::VERSION_INFO;
 use crate::audit::{self, Check, Finding, Outcome, Report, Severity};
-use crate::engine::{StateDir, Target};
+use crate::engine::{self, StateDir, Target};
 use crate::facts::{self, Env, Facts, Listener};
 use crate::modules;
 use crate::sys::{RealFs, RealRunner, Sys};
@@ -36,6 +37,9 @@ pub const EXIT_ROLLED_BACK: u8 = 1;
 
 /// Exit code of `apply` and `rollback` when a rollback did not complete.
 pub const EXIT_INCOMPLETE: u8 = 3;
+
+/// Exit code of `apply` when its changes are live and wait for a confirm.
+pub const EXIT_PENDING: u8 = 4;
 
 /// Shown at the end of the help, which a bare `vps-ready` prints.
 const FIRST_RUN: &str = "\
@@ -104,12 +108,18 @@ pub enum Command {
     /// Make the changes of the plan, after asking. Needs root.
     ///
     /// Exits 0 when applied or nothing to do, 1 when it failed and every
-    /// change was rolled back, 2 on error, and 3 when the rollback after a
-    /// failure did not complete.
+    /// change was rolled back, 2 on error, 3 when the rollback after a
+    /// failure did not complete, and 4 when the changes are live and revert
+    /// at a deadline unless confirmed.
     Apply {
-        /// Apply only this module (repeatable). Default: every applicable module.
+        /// Apply only this module (repeatable). Default: every applicable
+        /// module that cannot lock you out.
         #[arg(long = "module", value_name = "ID", value_parser = module_ids())]
         modules: Vec<String>,
+        /// How long a confirm has, from 1m to 30m, for changes that can lock
+        /// you out (e.g. `90s`, `5m`, `2m30s`).
+        #[arg(long, value_name = "DUR", default_value = "5m", value_parser = window)]
+        deadman: Duration,
         /// Do not ask; required when stdin is not a terminal.
         #[arg(long, short)]
         yes: bool,
@@ -124,14 +134,26 @@ pub enum Command {
     ///
     /// Exits 0 when rolled back, 2 on error (including a refusal because
     /// something changed since apply), and 3 when it did not complete.
-    #[command(group(ArgGroup::new("target").required(true)))]
+    // The usage would list the hidden `--deadman-boot` of the group.
+    #[command(
+        group(ArgGroup::new("target").required(true)),
+        override_usage = "vps-ready rollback [OPTIONS] <--last|--txn <ID>>"
+    )]
     Rollback {
-        /// The unfinished transaction if there is one, otherwise the newest applied one.
+        /// The unfinished transaction if there is one, then the one waiting
+        /// for a confirm, otherwise the newest applied one.
         #[arg(long, group = "target")]
         last: bool,
         /// The transaction with this ID (see `history`).
         #[arg(long, value_name = "ID", group = "target")]
         txn: Option<String>,
+        /// Run by the dead-man timer of `--txn`: waits for the lock and
+        /// restores what can lock you out even if it changed.
+        #[arg(long, hide = true, requires = "txn")]
+        deadman: bool,
+        /// Run by the boot hook: rolls back what a reboot left unconfirmed.
+        #[arg(long, hide = true, group = "target")]
+        deadman_boot: bool,
     },
     /// List the transactions, newest first. Needs root.
     History,
@@ -139,7 +161,44 @@ pub enum Command {
 
 /// `--module` accepts the IDs of the registry.
 fn module_ids() -> PossibleValuesParser {
-    PossibleValuesParser::new(modules::all().iter().map(|m| m.id()))
+    PossibleValuesParser::new(registry().iter().map(|m| m.id()))
+}
+
+/// The modules of this binary: the registry, and the test module in a
+/// build with the `testing` feature.
+fn registry() -> &'static [&'static dyn modules::Module] {
+    #[cfg(feature = "testing")]
+    return modules::with_test();
+    #[cfg(not(feature = "testing"))]
+    modules::all()
+}
+
+/// A dead-man window: minutes and seconds such as `90s`, `5m` or `2m30s`,
+/// from 1m to 30m.
+fn window(text: &str) -> Result<Duration, String> {
+    let bad = || format!("`{text}` is not a duration such as 90s, 5m or 2m30s");
+    let mut secs = 0u64;
+    let mut rest = text;
+    while !rest.is_empty() {
+        let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+        let n: u64 = rest[..digits].parse().map_err(|_| bad())?;
+        let unit = match rest[digits..].chars().next() {
+            Some('m') => 60,
+            Some('s') => 1,
+            _ => return Err(bad()),
+        };
+        secs = n
+            .checked_mul(unit)
+            .and_then(|s| secs.checked_add(s))
+            .ok_or_else(bad)?;
+        rest = &rest[digits + 1..];
+    }
+    let window = Duration::from_secs(secs);
+    let (min, max) = (engine::deadman::MIN_WINDOW, engine::deadman::MAX_WINDOW);
+    if text.is_empty() || window < min || window > max {
+        return Err(format!("`{text}` is outside 1m to 30m"));
+    }
+    Ok(window)
 }
 
 impl Cli {
@@ -278,7 +337,12 @@ pub fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
             let n = change::plan(&real_host(cli), modules, cli.json, &mut out)?;
             code = ExitCode::from(n);
         }
-        Command::Apply { modules, yes, .. } => {
+        Command::Apply {
+            modules,
+            yes,
+            deadman,
+            ..
+        } => {
             no_json(cli, "apply")?;
             let stdin = io::stdin();
             let mut stdin = stdin.is_terminal().then(|| stdin.lock());
@@ -287,13 +351,30 @@ pub fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
                 &real_host(cli),
                 modules,
                 *yes,
+                *deadman,
                 input,
                 &mut out,
                 &mut io::stderr(),
             )?;
             code = ExitCode::from(n);
         }
-        Command::Rollback { last, txn } => {
+        Command::Rollback {
+            deadman_boot: true, ..
+        } => {
+            no_json(cli, "rollback")?;
+            let n = change::rollback_deadman_boot(&real_host(cli), &mut out, &mut io::stderr())?;
+            code = ExitCode::from(n);
+        }
+        Command::Rollback {
+            txn: Some(id),
+            deadman: true,
+            ..
+        } => {
+            no_json(cli, "rollback")?;
+            let n = change::rollback_deadman(&real_host(cli), id, &mut out, &mut io::stderr())?;
+            code = ExitCode::from(n);
+        }
+        Command::Rollback { last, txn, .. } => {
             no_json(cli, "rollback")?;
             let target = match txn {
                 Some(id) => Target::Txn(id),
@@ -330,12 +411,14 @@ fn real_host(cli: &Cli) -> change::Host<'static> {
             fs: &*FS,
             runner: &RealRunner,
         },
-        modules: modules::all(),
+        modules: registry(),
         state_dir: Path::new(StateDir::DEFAULT),
         state_uid: 0,
         root: running_as_root(),
         facts: host_facts,
         color: cli.color_enabled(),
+        // An empty path fails the binary check, with the reason.
+        binary: std::env::current_exe().unwrap_or_default(),
     }
 }
 
@@ -750,6 +833,32 @@ fn ports_line(listeners: &[Listener]) -> String {
 mod tests {
     use super::*;
     use crate::facts::fixtures::{HOSTS, host};
+
+    #[test]
+    fn parses_dead_man_windows() {
+        for (text, secs) in [
+            ("1m", 60),
+            ("90s", 90),
+            ("5m", 300),
+            ("2m30s", 150),
+            ("30m", 1800),
+        ] {
+            assert_eq!(window(text), Ok(Duration::from_secs(secs)), "{text}");
+        }
+        for text in [
+            "59s",
+            "30m1s",
+            "",
+            "m",
+            "5",
+            "1h",
+            "-5m",
+            "5m 1s",
+            "99999999999999999999m",
+        ] {
+            assert!(window(text).is_err(), "{text}");
+        }
+    }
 
     #[test]
     fn audit_text_explains_unknown() {

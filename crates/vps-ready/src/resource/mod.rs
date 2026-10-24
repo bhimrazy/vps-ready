@@ -7,10 +7,11 @@
 //! planning again.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::sys::{FileKind, FileOwner, Sys, SysError};
+use crate::sys::{Cmd, FileKind, FileOwner, Sys, SysError};
 
 mod file;
 mod package;
@@ -114,6 +115,17 @@ impl Resource {
             Self::File(_) | Self::Sysctl(_) => Reversibility::Reversible,
             // Rollback leaves an installed package installed.
             Self::Package(_) => Reversibility::Partial,
+        }
+    }
+
+    /// The longest the commands of [`Resource::snapshot`] and
+    /// [`Resource::apply`] may run, in total, by their timeouts.
+    #[must_use]
+    pub fn timeout(&self) -> Duration {
+        match self {
+            Self::File(f) if f.validate.is_some() => Cmd::DEFAULT_TIMEOUT,
+            Self::File(_) | Self::Sysctl(_) => Duration::ZERO,
+            Self::Package(_) => package::TIMEOUT,
         }
     }
 
@@ -252,6 +264,13 @@ pub fn before_path(txn_dir: &Path, n: u32) -> PathBuf {
 #[must_use]
 pub fn after_path(txn_dir: &Path, n: u32) -> PathBuf {
     txn_dir.join("files").join(format!("{n}.after"))
+}
+
+/// Where a dead-man rollback keeps the bytes file `n` had when it was
+/// restored anyway: `files/<n>.during`.
+#[must_use]
+pub fn during_path(txn_dir: &Path, n: u32) -> PathBuf {
+    txn_dir.join("files").join(format!("{n}.during"))
 }
 
 /// Puts back the state recorded in `backup`, with the file copies of the

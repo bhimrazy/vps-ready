@@ -9,9 +9,13 @@ use crate::facts::Facts;
 use crate::resource::{Resource, ResourceError};
 use crate::sys::{Sys, SysError};
 
+#[cfg(feature = "testing")]
+mod deadman_test;
 pub mod kernel_sysctl;
 mod updates_auto;
 
+#[cfg(feature = "testing")]
+pub use deadman_test::DeadmanTest;
 pub use kernel_sysctl::KernelSysctl;
 pub use updates_auto::UpdatesAuto;
 
@@ -107,6 +111,16 @@ pub trait Module {
     fn title(&self) -> &'static str;
     /// Why the change matters.
     fn why(&self) -> &'static str;
+    /// Whether its changes can lock the admin out, so apply arms the
+    /// dead-man switch and waits for a confirm.
+    fn needs_deadman(&self) -> bool {
+        false
+    }
+    /// Whether a dead-man rollback restores its resources even if they
+    /// changed since apply, since leaving them is the lockout.
+    fn force_restore(&self) -> bool {
+        false
+    }
     /// Whether it can run on this host.
     fn applicable(&self, facts: &Facts) -> Applicability;
     /// What the plan should say besides its changes, e.g. something the
@@ -138,6 +152,14 @@ pub trait Module {
 #[must_use]
 pub fn all() -> &'static [&'static dyn Module] {
     &[&KernelSysctl::ROOT, &UpdatesAuto::ROOT]
+}
+
+/// [`all`] and the test module [`DeadmanTest`]; only in a build with the
+/// `testing` feature.
+#[cfg(feature = "testing")]
+#[must_use]
+pub fn with_test() -> &'static [&'static dyn Module] {
+    &[&KernelSysctl::ROOT, &UpdatesAuto::ROOT, &DeadmanTest]
 }
 
 #[cfg(test)]

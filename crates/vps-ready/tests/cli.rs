@@ -131,6 +131,39 @@ fn rollback_needs_last_or_txn() {
         .assert()
         .code(2)
         .stderr(predicate::str::contains("cannot be used with"));
+    vps_ready()
+        .args(["rollback", "--deadman"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("--txn <ID>"));
+    vps_ready()
+        .args(["rollback", "--deadman-boot", "--last"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("cannot be used with"));
+    // The dead-man entry points are for systemd, not for the help.
+    vps_ready()
+        .args(["rollback", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("deadman").not());
+}
+
+#[test]
+fn apply_takes_a_dead_man_window_of_1m_to_30m() {
+    for (window, error) in [
+        ("30s", "`30s` is outside 1m to 30m"),
+        ("31m", "`31m` is outside 1m to 30m"),
+        ("5", "`5` is not a duration such as 90s, 5m or 2m30s"),
+        ("5h", "`5h` is not a duration such as 90s, 5m or 2m30s"),
+        ("", "`` is outside 1m to 30m"),
+    ] {
+        vps_ready()
+            .args(["apply", "--deadman", window])
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains(error));
+    }
 }
 
 #[test]

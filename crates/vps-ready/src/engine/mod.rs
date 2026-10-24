@@ -1,7 +1,8 @@
-//! The transaction engine: planning, apply with automatic rollback, manual
-//! rollback and history, over the state directory, its lock and the journal
-//! that records each transaction.
+//! The transaction engine: planning, apply with automatic rollback, the
+//! dead-man switch, manual rollback and history, over the state directory,
+//! its lock and the journal that records each transaction.
 
+pub mod deadman;
 pub mod id;
 pub mod journal;
 mod plan;
@@ -11,10 +12,13 @@ mod state;
 #[cfg(test)]
 mod tests;
 
-pub use journal::{Event, Record, RollbackReason, TxnState};
+pub use deadman::Deadman;
+pub use journal::{Deadline, Event, Record, RollbackReason, TxnState};
 pub use plan::{ModulePlan, ModuleStatus, Plan, Selected, Step, plan};
 pub use reload::Reload;
-pub use run::{ApplyOutcome, ByHand, Engine, Progress, Rollback, Target, TxnInfo, history};
+pub use run::{
+    ApplyOutcome, ByHand, DeadmanOutcome, Engine, Progress, Rollback, Target, TxnInfo, history,
+};
 pub use state::{StateDir, Txn};
 
 use crate::modules::ModuleError;
@@ -85,6 +89,26 @@ pub enum EngineError {
     /// A transaction stopped during an apply or a rollback.
     #[error("transaction {0} did not finish; run `vps-ready rollback --txn {0}`")]
     Unfinished(String),
+    /// A transaction waits for a confirm, so no other may start.
+    #[error(
+        "transaction {0} is waiting for a confirm; it reverts at its deadline, \
+         or now with `vps-ready rollback --txn {0}`"
+    )]
+    Pending(String),
+    /// The binary cannot be trusted to run as root from a timer.
+    #[error(
+        "refusing to arm the dead-man switch with {path}: {reason}. Install vps-ready to \
+         /usr/local/bin first"
+    )]
+    UnsafeBinary {
+        /// The binary.
+        path: String,
+        /// What is wrong with it.
+        reason: String,
+    },
+    /// The dead-man switch could not be armed, re-armed or read.
+    #[error("dead-man switch: {0}")]
+    Deadman(String),
     /// A change differs from the plan that was shown.
     #[error("the plan changed after it was shown ({0}); nothing was changed")]
     PlanChanged(String),

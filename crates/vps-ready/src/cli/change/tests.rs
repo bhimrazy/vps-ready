@@ -91,8 +91,12 @@ fn host(fs: &FakeFs) -> Host<'_> {
         root: true,
         facts: vm,
         color: false,
+        binary: BINARY.into(),
     }
 }
+
+const BINARY: &str = "/usr/local/bin/vps-ready";
+const WINDOW: std::time::Duration = crate::engine::deadman::DEFAULT_WINDOW;
 
 /// Exit code, stdout and stderr, with an error printed as `main` does.
 fn run(
@@ -119,11 +123,11 @@ fn plan_cmd(host: &Host, ids: &[&str]) -> (u8, String, String) {
 }
 
 fn apply_yes(host: &Host) -> (u8, String, String) {
-    run(|out, err| apply(host, &[], true, None, out, err))
+    run(|out, err| apply(host, &[], true, WINDOW, None, out, err))
 }
 
 fn apply_answer(host: &Host, input: &mut dyn BufRead) -> (u8, String, String) {
-    run(|out, err| apply(host, &[], false, Some(input), out, err))
+    run(|out, err| apply(host, &[], false, WINDOW, Some(input), out, err))
 }
 
 fn rollback_last(host: &Host) -> (u8, String, String) {
@@ -308,7 +312,7 @@ fn apply_asks_first() {
     assert_eq!(tree(&fs), original);
     assert!(txn_ids(&fs).is_empty());
 
-    let (code, _, err) = run(|out, err| apply(&host, &[], false, None, out, err));
+    let (code, _, err) = run(|out, err| apply(&host, &[], false, WINDOW, None, out, err));
     assert_eq!(code, 2);
     assert_eq!(
         err,
@@ -458,7 +462,7 @@ fn apply_errors_exit_2() {
         ..host(&fs)
     };
     let ids = ["kernel.sysctl".to_owned()];
-    let (code, _, err) = run(|out, err| apply(&host, &ids, true, None, out, err));
+    let (code, _, err) = run(|out, err| apply(&host, &ids, true, WINDOW, None, out, err));
     assert_eq!(code, 2);
     assert_eq!(
         err,
@@ -729,7 +733,7 @@ fn several_modules() {
     assert!(!out.contains("kernel.sysctl"), "{out}");
 
     let ids = ["test.noapt".to_owned(), "kernel.sysctl".to_owned()];
-    let (code, _, err) = run(|out, err| apply(&host, &ids, true, None, out, err));
+    let (code, _, err) = run(|out, err| apply(&host, &ids, true, WINDOW, None, out, err));
     assert_eq!(code, 2);
     assert_eq!(
         err,
@@ -738,4 +742,113 @@ fn several_modules() {
     let (code, out, _) = apply_yes(&host);
     assert_eq!(code, 0);
     assert!(out.contains("Applied 7 changes"), "{out}");
+}
+
+/// A module that can lock the admin out: it needs the dead-man switch.
+struct Lockout;
+
+const LOCKOUT: &str = "/etc/lockout.conf";
+
+impl Module for Lockout {
+    fn id(&self) -> &'static str {
+        "test.lockout"
+    }
+    fn title(&self) -> &'static str {
+        "Can lock you out"
+    }
+    fn why(&self) -> &'static str {
+        "For tests."
+    }
+    fn needs_deadman(&self) -> bool {
+        true
+    }
+    fn force_restore(&self) -> bool {
+        true
+    }
+    fn applicable(&self, _: &Facts) -> crate::modules::Applicability {
+        crate::modules::Applicability::Applicable
+    }
+    fn plan(
+        &self,
+        _: &crate::modules::PlanCx,
+        _: Sys,
+    ) -> Result<crate::modules::ModuleSteps, crate::modules::ModuleError> {
+        Ok(vec![crate::resource::Resource::File(crate::resource::File {
+            path: LOCKOUT.into(),
+            content: b"locked = maybe\n".to_vec(),
+            owner: crate::sys::FileOwner {
+                mode: 0o644,
+                uid: 0,
+                gid: 0,
+            },
+            validate: None,
+        })]
+        .into())
+    }
+}
+
+/// Without `--module` a dead-man module is left out; with it, apply arms
+/// the switch and exits 4, and the timer's rollback reverts it.
+#[test]
+fn a_dead_man_apply_is_pending_until_the_timer_reverts_it() {
+    let fs = fixture()
+        .with_file("/proc/sys/kernel/random/boot_id", "a\n")
+        .with_file("/proc/uptime", "1000.00 1.00\n")
+        .with_file(BINARY, "\x7fELF");
+    fs.create_dir_all(Path::new("/etc/systemd/system"), 0o755)
+        .unwrap();
+    let runner = FakeRunner::new()
+        .on("dpkg-query", ["-W"], Output::success("installed"))
+        .on("apt-config", ["-c"], Output::success(""))
+        .on("systemd-run", Vec::<String>::new(), Output::success(""))
+        .on("systemctl", Vec::<String>::new(), Output::success(""));
+    let modules: &[&dyn Module] = &[&Lockout];
+    let host = Host {
+        modules,
+        sys: Sys {
+            fs: &fs,
+            runner: &runner,
+        },
+        ..host(&fs)
+    };
+    let (code, out, _) = apply_yes(&host);
+    assert_eq!(code, 0);
+    assert!(out.ends_with("Nothing to do.\n"), "{out}");
+
+    let ids = ["test.lockout".to_owned()];
+    let (code, out, err) = run(|out, err| apply(&host, &ids, true, WINDOW, None, out, err));
+    assert_eq!(code, EXIT_PENDING, "{err}");
+    let txn = txn_ids(&fs).pop().unwrap();
+    assert!(
+        out.contains(&format!(
+            "Applied 1 change (transaction {txn}). The changes are live and are rolled back at "
+        )),
+        "{out}"
+    );
+    assert!(
+        err.contains("Armed the dead-man switch: changes revert by "),
+        "{err}"
+    );
+    assert!(fs.exists(Path::new(LOCKOUT)));
+    assert!(history_text(&host).contains("pending-confirm"));
+
+    fs.write(Path::new("/proc/uptime"), b"2000.00 1.00\n")
+        .unwrap();
+    let (code, out, _) = run(|out, err| rollback_deadman(&host, &txn, out, err));
+    assert_eq!(code, 0);
+    assert_eq!(
+        out,
+        format!("Rolled back transaction {txn}: restored 1 change.\n")
+    );
+    assert!(!fs.exists(Path::new(LOCKOUT)));
+    assert!(history_text(&host).contains("rolled-back (deadman-timeout)"));
+    let (code, out, _) = run(|out, err| rollback_deadman(&host, &txn, out, err));
+    assert_eq!(code, 0);
+    assert_eq!(
+        out,
+        format!("Transaction {txn} is rolled-back (deadman-timeout); nothing to roll back.\n")
+    );
+    let (code, out, _) = run(|out, err| rollback_deadman_boot(&host, out, err));
+    assert_eq!(code, 0);
+    assert_eq!(out, "Nothing was left unconfirmed by the reboot.\n");
 }

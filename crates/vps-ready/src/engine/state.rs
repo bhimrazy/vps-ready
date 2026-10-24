@@ -421,6 +421,7 @@ mod tests {
             Record {
                 at: 2,
                 event: Event::State {
+                    unit: None,
                     state: TxnState::Applied,
                 },
             },

@@ -21,6 +21,11 @@ const LOCK_TIMEOUT: &str = "DPkg::Lock::Timeout=300";
 /// does not run.
 const APT_TIMEOUT: Duration = Duration::from_secs(600);
 
+/// The longest snapshot and apply may run: `dpkg-query`, then `apt-get
+/// update` and `install`.
+pub(super) const TIMEOUT: Duration =
+    Duration::from_secs(Cmd::DEFAULT_TIMEOUT.as_secs() + 2 * APT_TIMEOUT.as_secs());
+
 impl Package {
     /// The summary of the change, or `None`.
     pub(super) fn diff(&self, sys: Sys) -> Result<Option<(String, Option<String>)>, ResourceError> {

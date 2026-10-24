@@ -345,7 +345,9 @@ mod tests {
             );
             let state = StateDir::create(&fs, STATE, meta.uid()).unwrap();
             let engine = Engine::lock(&state, sys).unwrap();
-            let outcome = engine.apply(&first, &mut |_| {}).unwrap();
+            let outcome = engine
+                .apply(&first, &crate::engine::Deadman::default(), &mut |_| {})
+                .unwrap();
             let ApplyOutcome::Applied { txn } = outcome else {
                 panic!("{existing:?}: {outcome:?}");
             };

@@ -1,18 +1,20 @@
-//! Apply, rollback and history.
+//! Apply, rollback, the dead-man rollbacks and history.
 
 use std::collections::BTreeSet;
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde::Serialize;
 
-use super::journal::{self, Event, Record, RollbackReason, TxnState};
+use super::deadman::{self, Deadman, unit_name};
+use super::journal::{self, Deadline, Event, Record, RollbackReason, TxnState};
 use super::plan::{Plan, Step};
-use super::reload::{self, Reload};
+use super::reload::{self, Reload, SYSTEMCTL_TIMEOUT};
 use super::{EngineError, StateDir, Txn, id};
 use crate::resource::sysctl::boot_id;
-use crate::resource::{Backup, Resource, Sysctl, after_path, before_path, restore};
-use crate::sys::{FileKind, Fs, FsLock, Sys, SysError};
+use crate::resource::{Backup, Resource, Sysctl, after_path, before_path, during_path, restore};
+use crate::sys::{Cmd, FileKind, FileOwner, Fs, FsLock, Sys, SysError};
 
 /// The engine with the lock held: apply and rollback run through it.
 pub struct Engine<'a> {
@@ -31,6 +33,14 @@ pub enum ApplyOutcome {
         /// Transaction ID.
         txn: String,
     },
+    /// Every change was applied and verified, and the dead-man timer rolls
+    /// them back at `deadline` unless they are confirmed.
+    Pending {
+        /// Transaction ID.
+        txn: String,
+        /// When the timer fires.
+        deadline: Deadline,
+    },
     /// A step failed or a change did not verify, and every change was
     /// restored.
     RolledBack {
@@ -46,14 +56,15 @@ pub enum ApplyOutcome {
 /// Which transaction [`Engine::rollback`] undoes.
 #[derive(Debug, Clone, Copy)]
 pub enum Target<'a> {
-    /// The unfinished one if there is one, otherwise the newest applied one.
+    /// The unfinished one if there is one, then the pending one, otherwise
+    /// the newest applied or confirmed one.
     Last,
     /// The one with this ID.
     Txn(&'a str),
 }
 
-/// What [`Engine::apply`] or [`Engine::rollback`] is about to do or has
-/// done, for the caller to show.
+/// What [`Engine::apply`] or a rollback is about to do or has done, for the
+/// caller to show.
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub enum Progress<'a> {
@@ -66,15 +77,45 @@ pub enum Progress<'a> {
         /// The step.
         step: &'a Step,
     },
+    /// The dead-man timer is armed: it rolls back at `deadline` if apply
+    /// does not finish.
+    Armed {
+        /// When it fires.
+        deadline: Deadline,
+    },
+    /// A reload is about to run, check first.
+    Reload(Reload),
     /// Every change was applied and verified.
     Verified,
+    /// Waiting for a confirm; `left` until the timer fires.
+    Waiting {
+        /// Time left.
+        left: Duration,
+    },
     /// A backup is about to be restored.
     Restore(&'a Backup),
     /// A sysctl backed up in an earlier boot is left as it is.
     Leave(&'a Backup),
+    /// A dead-man rollback kept the bytes a changed file had before it
+    /// restores it anyway.
+    During {
+        /// The file.
+        path: &'a Path,
+        /// Where its bytes are kept.
+        copy: &'a Path,
+    },
+    /// A dead-man rollback left a resource that changed since apply.
+    Skip(&'a ByHand),
+    /// A rollback did not run a reload because its check failed.
+    ReloadSkipped {
+        /// The reload.
+        reload: Reload,
+        /// The check's failure.
+        reason: &'a str,
+    },
 }
 
-/// A finished [`Engine::rollback`].
+/// A finished rollback.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rollback {
     /// Transaction ID.
@@ -84,10 +125,27 @@ pub struct Rollback {
     /// Keys of the sysctls this run left as they are, because they were
     /// backed up in an earlier boot.
     pub at_next_boot: Vec<String>,
+    /// What a dead-man rollback left because it changed since apply.
+    pub skipped: Vec<ByHand>,
+    /// Where a dead-man rollback kept the bytes of changed files it
+    /// restored anyway.
+    pub during: Vec<PathBuf>,
+}
+
+/// How [`Engine::deadman`] ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeadmanOutcome {
+    /// The transaction was not pending or unfinished; nothing was done.
+    Finished(TxnState),
+    /// The deadline was moved since this timer was armed; a new timer fires
+    /// at it.
+    Rearmed(Deadline),
+    /// The transaction was rolled back.
+    RolledBack(Rollback),
 }
 
 /// A resource to put back by hand, and how.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ByHand {
     /// Resource ID.
     pub resource: String,
@@ -117,7 +175,33 @@ pub struct TxnInfo {
     pub modules: Vec<String>,
     /// How many resources it backed up.
     pub changes: usize,
+    /// What a dead-man rollback left, with the steps to restore it by hand.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub skipped: Vec<ByHand>,
 }
+
+/// How a rollback treats resources that changed since apply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// After a failed apply, under the same lock: no check.
+    Apply,
+    /// `rollback`: if one changed, nothing is restored.
+    Manual,
+    /// The dead-man paths: forced resources are restored anyway, others
+    /// skipped; restores go first and the journal is best effort. At `boot`,
+    /// every command has [`BOOT_TIMEOUT`] at most.
+    Deadman {
+        /// Whether this is the boot hook.
+        boot: bool,
+    },
+}
+
+/// The longest a command of the boot hook may run, which has 120 s in all
+/// before systemd gives up on it and starts sshd anyway.
+const BOOT_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// How often [`Engine::lock_wait`] tries the lock.
+const LOCK_POLL: Duration = Duration::from_millis(250);
 
 impl<'a> Engine<'a> {
     /// Takes the lock of `state`, without waiting.
@@ -134,15 +218,44 @@ impl<'a> Engine<'a> {
         })
     }
 
-    /// Fails if any transaction is unfinished. [`Engine::apply`] checks this
-    /// too; call it before planning to fail early.
+    /// Takes the lock of `state`, waiting as long as it takes: for the
+    /// dead-man rollbacks, where giving up would leave a lockout in place.
+    /// Whoever holds it releases it within its own command timeouts or by
+    /// dying.
     ///
     /// # Errors
     ///
-    /// [`EngineError::Unfinished`], or an error reading the journals.
+    /// [`EngineError::Sys`].
+    pub fn lock_wait(state: &'a StateDir, sys: Sys<'a>) -> Result<Self, EngineError> {
+        let mut logged = false;
+        loop {
+            match Self::lock(state, sys) {
+                Err(EngineError::Busy) => {
+                    if !logged {
+                        tracing::warn!("waiting for another vps-ready to finish");
+                        logged = true;
+                    }
+                    std::thread::sleep(LOCK_POLL);
+                }
+                other => return other,
+            }
+        }
+    }
+
+    /// Fails if any transaction is unfinished or pending a confirm.
+    /// [`Engine::apply`] checks this too; call it before planning to fail
+    /// early.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::Unfinished`], [`EngineError::Pending`], or an error
+    /// reading the journals.
     pub fn ensure_finished(&self) -> Result<(), EngineError> {
-        match self.state.unfinished(self.sys.fs)?.pop() {
-            Some(txn) => Err(EngineError::Unfinished(txn.id().to_owned())),
+        if let Some(txn) = self.state.unfinished(self.sys.fs)?.pop() {
+            return Err(EngineError::Unfinished(txn.id().to_owned()));
+        }
+        match self.pending()? {
+            Some(txn) => Err(EngineError::Pending(txn.id().to_owned())),
             None => Ok(()),
         }
     }
@@ -150,24 +263,32 @@ impl<'a> Engine<'a> {
     /// Applies `plan`, the plan shown to the user. Each change is re-diffed
     /// first, and nothing happens if one differs. Resources that had no
     /// change are not re-diffed: if they drifted since, the next plan shows
-    /// it. Then, for each resource: snapshot, `backup` line, apply, `applied`
-    /// line; after a module's resources, each of its reloads: check,
-    /// `reloaded` line, reload. Then every resource is verified, and each
-    /// module with a change runs its own verify. On a failure the changes are
-    /// rolled back without the safety check of [`Engine::rollback`], since
-    /// they were made under this lock a moment ago. Each step and restore is
-    /// reported to `progress` before it runs, and a passed verify after it.
+    /// it. If a module needs the dead-man switch, the binary is checked
+    /// before anything else, and the boot hook and a timer that rolls the
+    /// transaction back are set up before the first `backup` line. Then, for
+    /// each resource: snapshot, `backup` line, apply, `applied` line; after
+    /// a module's resources, each of its reloads: check, `reloaded` line,
+    /// reload. Then every resource is verified, and each module with a
+    /// change runs its own verify. With the dead-man switch, the timer is
+    /// then re-armed to `deadman.window` from now and the transaction is
+    /// pending a confirm. On a failure the changes are rolled back without
+    /// the safety check of [`Engine::rollback`], since they were made under
+    /// this lock a moment ago, and the timer is stopped once that rollback
+    /// finished. Each step and restore is reported to `progress` before it
+    /// runs, and a passed verify after it.
     ///
     /// # Errors
     ///
     /// [`EngineError::RollbackIncomplete`] if a failure was not fully rolled
-    /// back. Any other error means nothing was changed: an unfinished
-    /// transaction, [`EngineError::DuplicateResource`],
-    /// [`EngineError::PlanChanged`], or a failure before the first `backup`
+    /// back; the timer is then left to finish it. Any other error means
+    /// nothing was changed: an unfinished or pending transaction,
+    /// [`EngineError::DuplicateResource`], [`EngineError::PlanChanged`],
+    /// [`EngineError::UnsafeBinary`], or a failure before the first `backup`
     /// line.
     pub fn apply(
         &self,
         plan: &Plan,
+        deadman: &Deadman,
         progress: &mut dyn FnMut(Progress),
     ) -> Result<ApplyOutcome, EngineError> {
         self.ensure_finished()?;
@@ -186,6 +307,18 @@ impl<'a> Engine<'a> {
                 return Err(EngineError::PlanChanged(step.change.id.clone()));
             }
         }
+        let armed = plan.needs_deadman();
+        if armed {
+            deadman::check_binary(self.sys.fs, &deadman.binary).map_err(|reason| {
+                EngineError::UnsafeBinary {
+                    path: deadman.binary.display().to_string(),
+                    reason,
+                }
+            })?;
+            // The deadlines need both.
+            deadman::boottime(self.sys.fs)?;
+            current_boot(self.sys.fs)?;
+        }
 
         let txn = self.state.create_txn(self.sys.fs, id::now())?;
         let id = txn.id().to_owned();
@@ -195,29 +328,127 @@ impl<'a> Engine<'a> {
             modules: plan.changed_modules(),
         })?;
 
-        let failure = match self.run(&mut open, plan, steps.len(), progress) {
-            Err(e) => (RollbackReason::ApplyFailed, e),
-            Ok(()) => match self.verify(plan) {
-                Err(failure) => failure,
-                Ok(()) => {
-                    progress(Progress::Verified);
-                    match open.append(Event::State {
-                        state: TxnState::Applied,
-                    }) {
-                        Ok(()) => return Ok(ApplyOutcome::Applied { txn: id }),
-                        Err(e) => (RollbackReason::ApplyFailed, e),
-                    }
-                }
-            },
+        let mut timer = None;
+        let (reason, cause) = match self.apply_txn(
+            &mut open,
+            plan,
+            steps.len(),
+            armed,
+            deadman,
+            &mut timer,
+            progress,
+        ) {
+            Ok(outcome) => return Ok(outcome),
+            Err(failure) => failure,
         };
-        let (reason, cause) = failure;
         tracing::error!(txn = %id, "{cause}; rolling back");
-        self.roll_back(&mut open, reason, false, progress)?;
+        self.roll_back(&mut open, reason, Mode::Apply, progress)?;
+        if armed {
+            self.disarm(timer.as_deref(), true);
+        }
         Ok(ApplyOutcome::RolledBack {
             txn: id,
             reason,
             cause,
         })
+    }
+
+    /// Arms, applies, verifies and finishes the transaction; `timer` is the
+    /// unit armed last.
+    #[allow(clippy::too_many_arguments)]
+    fn apply_txn(
+        &self,
+        open: &mut Open,
+        plan: &Plan,
+        total: usize,
+        armed: bool,
+        deadman: &Deadman,
+        timer: &mut Option<String>,
+        progress: &mut dyn FnMut(Progress),
+    ) -> Result<ApplyOutcome, (RollbackReason, EngineError)> {
+        let failed = |e| (RollbackReason::ApplyFailed, e);
+        let txn = open.txn.id().to_owned();
+        if armed {
+            let deadline = self.arm_first(open, plan, deadman, timer).map_err(failed)?;
+            progress(Progress::Armed { deadline });
+        }
+        self.run(open, plan, total, progress).map_err(failed)?;
+        self.verify(plan)?;
+        progress(Progress::Verified);
+        if !armed {
+            open.append(Event::state(TxnState::Applied))
+                .map_err(failed)?;
+            return Ok(ApplyOutcome::Applied { txn });
+        }
+        let deadline = self.go_live(open, plan, deadman, timer).map_err(failed)?;
+        Ok(ApplyOutcome::Pending { txn, deadline })
+    }
+
+    /// Installs and enables the boot hook, then starts the first timer, with
+    /// a deadline that leaves apply all of its command timeouts.
+    fn arm_first(
+        &self,
+        open: &mut Open,
+        plan: &Plan,
+        deadman: &Deadman,
+        timer: &mut Option<String>,
+    ) -> Result<Deadline, EngineError> {
+        let boot_id = current_boot(self.sys.fs)?;
+        deadman::install_hook(self.sys, &deadman.binary).map_err(EngineError::Deadman)?;
+        let after = first_window(plan, deadman.window);
+        let (now, wall) = (deadman::boottime(self.sys.fs)?, id::now());
+        let txn = open.txn.id().to_owned();
+        let unit = unit_name(&txn, 1);
+        deadman::arm(self.sys, &unit, after, &deadman.binary, &txn)
+            .map_err(EngineError::Deadman)?;
+        *timer = Some(unit.clone());
+        let deadline = Deadline {
+            boottime: now + after.as_secs(),
+            wall: wall + after.as_secs(),
+        };
+        open.append(Event::Armed {
+            unit,
+            boot_id,
+            deadline,
+        })?;
+        Ok(deadline)
+    }
+
+    /// Re-arms the timer to the window from now and journals the pending
+    /// state, with the moment the changes went live and the session.
+    fn go_live(
+        &self,
+        open: &mut Open,
+        plan: &Plan,
+        deadman: &Deadman,
+        timer: &mut Option<String>,
+    ) -> Result<Deadline, EngineError> {
+        let (live_since, wall) = (deadman::boottime(self.sys.fs)?, id::now());
+        let txn = open.txn.id().to_owned();
+        let n = deadman::last_unit(open.records()?).map_or(0, |(_, n)| n) + 1;
+        let unit = unit_name(&txn, n);
+        // The old unit's rollback may be waiting for this lock.
+        if let Some(old) = timer.as_deref()
+            && let Err(e) = deadman::stop(self.sys, old, true)
+        {
+            tracing::info!("stopping the dead-man timer {old}: {e}");
+        }
+        deadman::arm(self.sys, &unit, deadman.window, &deadman.binary, &txn)
+            .map_err(EngineError::Deadman)?;
+        *timer = Some(unit.clone());
+        let deadline = Deadline {
+            boottime: live_since + deadman.window.as_secs(),
+            wall: wall + deadman.window.as_secs(),
+        };
+        open.append(Event::State {
+            state: TxnState::PendingConfirm {
+                deadline,
+                live_since,
+                session: plan.facts.session.as_ref().map(|s| s.id),
+            },
+            unit: Some(unit),
+        })?;
+        Ok(deadline)
     }
 
     /// Applies each module's steps, then runs its reloads.
@@ -237,9 +468,10 @@ impl<'a> Engine<'a> {
                     total,
                     step,
                 });
-                self.apply_step(open, n, step)?;
+                self.apply_step(open, n, step, module.force_restore())?;
             }
             for &reload in module.reloads() {
+                progress(Progress::Reload(reload));
                 if let Some(check) = reload.check() {
                     reload::run(self.sys, &check)
                         .map_err(|reason| EngineError::ReloadCheck { reload, reason })?;
@@ -253,7 +485,13 @@ impl<'a> Engine<'a> {
     }
 
     /// Snapshot, `backup` line, apply, `applied` line.
-    fn apply_step(&self, open: &mut Open, n: u32, step: &Step) -> Result<(), EngineError> {
+    fn apply_step(
+        &self,
+        open: &mut Open,
+        n: u32,
+        step: &Step,
+        force_restore: bool,
+    ) -> Result<(), EngineError> {
         let id = &step.change.id;
         let backup = step
             .resource
@@ -265,6 +503,7 @@ impl<'a> Engine<'a> {
         open.append(Event::Backup {
             resource: id.clone(),
             backup,
+            force_restore,
         })?;
         step.resource
             .apply(self.sys)
@@ -311,7 +550,10 @@ impl<'a> Engine<'a> {
     /// restored. A sysctl backed up in an earlier boot is neither checked nor
     /// restored: the boot configuration set its running value. The reloads
     /// apply journaled run again, check first, after the restores of their
-    /// module. Each restore is reported to `progress` before it runs.
+    /// module. Each restore is reported to `progress` before it runs. For an
+    /// armed transaction, the timer is stopped and the boot hook disabled
+    /// once the rollback finished; one whose deadline or boot passed keeps
+    /// that as its reason.
     ///
     /// # Errors
     ///
@@ -328,16 +570,9 @@ impl<'a> Engine<'a> {
         let txn = match target {
             Target::Last => match self.state.unfinished(fs)?.pop() {
                 Some(txn) => txn,
-                None => self
-                    .newest_applied()?
-                    .ok_or(EngineError::NothingToRollBack)?,
+                None => self.newest_done()?.ok_or(EngineError::NothingToRollBack)?,
             },
-            Target::Txn(id) => self
-                .state
-                .txns(fs)?
-                .into_iter()
-                .find(|t| t.id() == id)
-                .ok_or_else(|| EngineError::UnknownTxn(id.to_owned()))?,
+            Target::Txn(id) => self.find(id)?,
         };
         let mut records = txn.read(fs)?;
         if journal::is_unfinished(&records) {
@@ -349,43 +584,224 @@ impl<'a> Engine<'a> {
         if let TxnState::RolledBack { .. } = journal::replay(&records)? {
             return Err(EngineError::AlreadyRolledBack(txn.id().to_owned()));
         }
-        let id = txn.id().to_owned();
+        let switch = deadman::switch(&records);
+        let unit = deadman::last_unit(&records).map(|(u, _)| u.to_owned());
+        let reason = switch
+            .as_ref()
+            .and_then(|s| s.expired(fs))
+            .unwrap_or(RollbackReason::Manual);
         let mut open = Open::new(fs, txn, records)?;
-        let (restored, at_next_boot) =
-            self.roll_back(&mut open, RollbackReason::Manual, true, progress)?;
-        Ok(Rollback {
-            txn: id,
-            restored,
-            at_next_boot,
-        })
+        let done = self.roll_back(&mut open, reason, Mode::Manual, progress)?;
+        if switch.is_some() {
+            self.disarm(unit.as_deref(), true);
+        }
+        Ok(done)
     }
 
-    fn newest_applied(&self) -> Result<Option<Txn>, EngineError> {
+    /// The dead-man rollback the timer of transaction `id` runs. Under the
+    /// lock, the journal is read again: a transaction that is no longer
+    /// pending or unfinished is left alone; one whose deadline moved gets a
+    /// timer for it, armed with `binary`. Otherwise it is rolled back
+    /// resource by resource: those that changed since apply are restored
+    /// anyway if their module forces it (their bytes kept in
+    /// `files/<n>.during` first, best effort), and skipped otherwise. The
+    /// journal is best effort: a failed line does not stop a restore. Then
+    /// the boot hook is disabled.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::RollbackIncomplete`] if a restore, a reload or the
+    /// final journal line failed; [`EngineError::UnknownTxn`]; an error
+    /// reading the journal or re-arming.
+    pub fn deadman(
+        &self,
+        id: &str,
+        binary: &Path,
+        progress: &mut dyn FnMut(Progress),
+    ) -> Result<DeadmanOutcome, EngineError> {
+        let fs = self.sys.fs;
+        let mut open = Open::resume_best_effort(fs, self.find(id)?)?;
+        let records = &open.records;
+        if records.is_empty() {
+            return Ok(DeadmanOutcome::Finished(TxnState::Planned));
+        }
+        let unfinished = journal::is_unfinished(records);
+        let state = journal::replay(records)?;
+        let expired = deadman::switch(records).and_then(|s| s.expired(fs));
+        match state {
+            TxnState::Applied | TxnState::Confirmed | TxnState::RolledBack { .. } => {
+                return Ok(DeadmanOutcome::Finished(state));
+            }
+            TxnState::PendingConfirm { deadline, .. } if !unfinished && expired.is_none() => {
+                return self.rearm(open, deadline, binary);
+            }
+            TxnState::PendingConfirm { .. } | TxnState::Planned => {}
+        }
+        let unit = deadman::last_unit(records).map(|(u, _)| u.to_owned());
+        let reason = expired.unwrap_or(RollbackReason::DeadmanTimeout);
+        let done = self.roll_back(&mut open, reason, Mode::Deadman { boot: false }, progress)?;
+        self.disarm(unit.as_deref(), false);
+        Ok(DeadmanOutcome::RolledBack(done))
+    }
+
+    /// Arms a new timer for the pending `deadline`, then stops the timer
+    /// the journal named.
+    fn rearm(
+        &self,
+        mut open: Open,
+        deadline: Deadline,
+        binary: &Path,
+    ) -> Result<DeadmanOutcome, EngineError> {
+        let fs = self.sys.fs;
+        deadman::check_binary(fs, binary).map_err(|reason| EngineError::UnsafeBinary {
+            path: binary.display().to_string(),
+            reason,
+        })?;
+        let left = deadline.boottime.saturating_sub(deadman::boottime(fs)?);
+        let (old, n) =
+            deadman::last_unit(&open.records).map_or((None, 0), |(u, n)| (Some(u.to_owned()), n));
+        let txn = open.txn.id().to_owned();
+        let unit = unit_name(&txn, n + 1);
+        deadman::arm(self.sys, &unit, Duration::from_secs(left), binary, &txn)
+            .map_err(EngineError::Deadman)?;
+        open.append(Event::Extended { unit, deadline })?;
+        if let Some(old) = old
+            && let Err(e) = deadman::stop(self.sys, &old, false)
+        {
+            tracing::info!("stopping the dead-man timer {old}: {e}");
+        }
+        Ok(DeadmanOutcome::Rearmed(deadline))
+    }
+
+    /// The dead-man rollback the boot hook runs: every transaction that is
+    /// pending, or unfinished with an `armed` record, from a boot other than
+    /// this one, as [`Engine::deadman`] does with reason `deadman-reboot`.
+    /// A boot ID that cannot be read counts as another boot. A journal that
+    /// cannot be read does not stop the others. Disables the hook once none
+    /// is left.
+    ///
+    /// # Errors
+    ///
+    /// The first error, after every transaction was tried.
+    pub fn deadman_boot(
+        &self,
+        progress: &mut dyn FnMut(Progress),
+    ) -> Result<Vec<Rollback>, EngineError> {
+        let fs = self.sys.fs;
+        let boot = boot_id(fs);
+        let mut done = Vec::new();
+        let mut first_err = None;
+        let mut left = false;
+        for txn in self.state.txns(fs)? {
+            let result = (|| {
+                let records = txn.read(fs)?;
+                let unfinished = journal::is_unfinished(&records);
+                let state = journal::replay(&records)?;
+                let Some(switch) = deadman::switch(&records) else {
+                    return Ok(None);
+                };
+                let due = matches!(state, TxnState::PendingConfirm { .. })
+                    || (state == TxnState::Planned && unfinished);
+                if !due {
+                    return Ok(None);
+                }
+                if boot.as_deref() == Some(switch.boot_id.as_str()) {
+                    // This boot's timer covers it.
+                    left = true;
+                    return Ok(None);
+                }
+                let mut open = Open::resume_best_effort(fs, txn.clone())?;
+                let reason = RollbackReason::DeadmanReboot;
+                self.roll_back(&mut open, reason, Mode::Deadman { boot: true }, progress)
+                    .map(Some)
+            })();
+            match result {
+                Ok(Some(rollback)) => done.push(rollback),
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::error!(txn = %txn.id(), "{e}");
+                    left = true;
+                    first_err.get_or_insert(e);
+                }
+            }
+        }
+        if !left {
+            self.disarm(None, false);
+        }
+        first_err.map_or(Ok(done), Err)
+    }
+
+    /// The transaction with ID `id`.
+    fn find(&self, id: &str) -> Result<Txn, EngineError> {
+        self.state
+            .txns(self.sys.fs)?
+            .into_iter()
+            .find(|t| t.id() == id)
+            .ok_or_else(|| EngineError::UnknownTxn(id.to_owned()))
+    }
+
+    /// The transaction pending a confirm, if any.
+    fn pending(&self) -> Result<Option<Txn>, EngineError> {
         for txn in self.state.txns(self.sys.fs)?.into_iter().rev() {
-            if journal::replay(&txn.read(self.sys.fs)?)? == TxnState::Applied {
+            if let TxnState::PendingConfirm { .. } = journal::replay(&txn.read(self.sys.fs)?)? {
                 return Ok(Some(txn));
             }
         }
         Ok(None)
     }
 
+    /// The pending transaction, else the newest applied or confirmed one.
+    fn newest_done(&self) -> Result<Option<Txn>, EngineError> {
+        if let Some(txn) = self.pending()? {
+            return Ok(Some(txn));
+        }
+        for txn in self.state.txns(self.sys.fs)?.into_iter().rev() {
+            if let TxnState::Applied | TxnState::Confirmed =
+                journal::replay(&txn.read(self.sys.fs)?)?
+            {
+                return Ok(Some(txn));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Stops the timer `unit`, with its service if `service`, and disables
+    /// the boot hook, best effort: a timer that fires anyway finds the
+    /// transaction finished, and so does the hook.
+    fn disarm(&self, unit: Option<&str>, service: bool) {
+        if let Some(unit) = unit
+            && let Err(e) = deadman::stop(self.sys, unit, service)
+        {
+            tracing::info!("stopping the dead-man timer {unit}: {e}");
+        }
+        if let Err(e) = deadman::disable_hook(self.sys) {
+            tracing::warn!("disabling the dead-man boot hook: {e}");
+        }
+    }
+
     /// Restores every backup without a `restored` line, newest first, with
     /// the reloads apply journaled in between, then writes the final state.
     /// A `rollback` record goes first, unless an earlier run wrote one; its
-    /// reason then wins over `reason`. A sysctl
-    /// backed up in an earlier boot gets a `restored` line without a restore.
-    /// Returns how many it restored and the keys of those sysctls.
+    /// reason then wins over `reason`, and so does `manual` where `reason`
+    /// cannot follow the state. A sysctl backed up in an earlier boot gets a
+    /// `restored` line without a restore. `mode` decides what happens to
+    /// resources that changed since apply.
     fn roll_back(
         &self,
         open: &mut Open,
         reason: RollbackReason,
-        check: bool,
+        mode: Mode,
         progress: &mut dyn FnMut(Progress),
-    ) -> Result<(usize, Vec<String>), EngineError> {
+    ) -> Result<Rollback, EngineError> {
         let boot = boot_id(self.sys.fs);
         let boot = boot.as_deref();
+        let best_effort = matches!(mode, Mode::Deadman { .. });
         let (id, dir) = (open.txn.id().to_owned(), open.txn.dir().to_path_buf());
-        let records = open.records().map_err(|e| incomplete(&id, &dir, None, e))?;
+        let records = if best_effort {
+            open.records_best_effort()
+        } else {
+            open.records().map_err(|e| incomplete(&id, &dir, None, e))?
+        };
         let started = records.iter().rev().find_map(|r| match r.event {
             Event::Rollback { reason } => Some(reason),
             _ => None,
@@ -398,26 +814,41 @@ impl<'a> Engine<'a> {
             })
             .collect();
         // Reloads journaled by apply, not by an earlier run of this rollback.
-        // A rollback's lines start with `rollback`, or with `restored` where
-        // that line is best effort (the dead-man paths, which also add
-        // `skipped`).
+        // A rollback's lines start with `rollback`, or, where that line is
+        // best effort (the dead-man paths), with `restored` or `skipped`.
         let applying = records
             .iter()
-            .position(|r| matches!(r.event, Event::Rollback { .. } | Event::Restored { .. }))
+            .position(|r| {
+                matches!(
+                    r.event,
+                    Event::Rollback { .. }
+                        | Event::Restored { .. }
+                        | Event::Skipped { .. }
+                        | Event::ReloadSkipped { .. }
+                )
+            })
             .map_or(records, |i| &records[..i]);
         let undo: Vec<Undo> = applying
             .iter()
             .filter_map(|r| match &r.event {
-                Event::Backup { resource, backup } if !restored.contains(resource.as_str()) => {
-                    Some(Undo::Restore(resource.clone(), backup.clone()))
-                }
+                Event::Backup {
+                    resource,
+                    backup,
+                    force_restore,
+                } if !restored.contains(resource.as_str()) => Some(Undo::Restore {
+                    resource: resource.clone(),
+                    backup: backup.clone(),
+                    force: *force_restore,
+                }),
                 Event::Reloaded { reload } => Some(Undo::Reload(*reload)),
                 _ => None,
             })
             .collect();
         let pending = || {
             undo.iter().filter_map(|u| match u {
-                Undo::Restore(resource, backup) => Some((resource, backup)),
+                Undo::Restore {
+                    resource, backup, ..
+                } => Some((resource, backup)),
                 Undo::Reload(_) => None,
             })
         };
@@ -426,14 +857,16 @@ impl<'a> Engine<'a> {
                 undo[..upto]
                     .iter()
                     .filter_map(|u| match u {
-                        Undo::Restore(r, b) if !earlier_boot(b, boot) => by_hand(&dir, r, b),
+                        Undo::Restore {
+                            resource, backup, ..
+                        } if !earlier_boot(backup, boot) => by_hand(&dir, resource, backup),
                         _ => None,
                     })
                     .collect(),
             )
         };
 
-        if check {
+        if mode == Mode::Manual {
             let mut changed = Vec::new();
             for (resource, backup) in pending() {
                 if earlier_boot(backup, boot) || unchanged(self.sys, &dir, backup)? {
@@ -458,113 +891,243 @@ impl<'a> Engine<'a> {
         let reason = match started {
             Some(reason) => reason,
             None => {
-                // A failed `state applied` append may have landed; from
-                // `applied` only a manual rollback is legal.
-                let reason = if open.state == Some(TxnState::Applied) {
-                    RollbackReason::Manual
-                } else {
+                // E.g. a failed `state applied` append may have landed.
+                let reason = if journal::can_roll_back(open.state, reason) {
                     reason
+                } else {
+                    RollbackReason::Manual
                 };
-                open.append(Event::Rollback { reason })
+                note(open, Event::Rollback { reason }, best_effort)
                     .map_err(|e| incomplete(&id, &dir, left(undo.len()), e))?;
                 reason
             }
         };
-        let mut at_next_boot = Vec::new();
+        let mut done = Rollback {
+            txn: id.clone(),
+            restored: 0,
+            at_next_boot: Vec::new(),
+            skipped: Vec::new(),
+            during: Vec::new(),
+        };
         // A reload runs once the restores journaled before it, back to the
         // previous reload, are done: those of its module, perhaps with
         // those of a module without reloads. A failed reload does not stop
         // the restores of earlier modules, which may be the ones that matter
         // (e.g. an sshd drop-in before a firewall); the rollback then ends
-        // incomplete, without a final state.
+        // incomplete, without a final state. In the dead-man paths a failed
+        // restore does not stop the others either.
         let mut due = None;
         let mut failed = Vec::new();
+        let mut unrestored: Vec<(ByHand, EngineError)> = Vec::new();
         for (i, item) in undo.iter().enumerate().rev() {
-            let (resource, backup) = match item {
+            let (resource, backup, force) = match item {
                 Undo::Reload(reload) => {
                     if let Some(due) = due.replace(*reload) {
-                        self.replay(open, due, &mut failed)
+                        self.replay(open, due, mode, &mut failed, progress)
                             .map_err(|e| incomplete(&id, &dir, left(i), e))?;
                     }
                     continue;
                 }
-                Undo::Restore(resource, backup) => (resource, backup),
+                Undo::Restore {
+                    resource,
+                    backup,
+                    force,
+                } => (resource, backup, *force),
             };
-            let result = match backup {
-                Backup::Sysctl { key, .. } if earlier_boot(backup, boot) => {
-                    progress(Progress::Leave(backup));
-                    at_next_boot.push(key.clone());
-                    Ok(())
-                }
-                _ => {
-                    progress(Progress::Restore(backup));
-                    restore(self.sys, &dir, backup).map_err(|source| EngineError::Resource {
-                        id: resource.clone(),
-                        source,
-                    })
-                }
-            };
-            let result = result.and_then(|()| {
-                open.append(Event::Restored {
+            if let Backup::Sysctl { key, .. } = backup
+                && earlier_boot(backup, boot)
+            {
+                progress(Progress::Leave(backup));
+                done.at_next_boot.push(key.clone());
+                let line = Event::Restored {
                     resource: resource.clone(),
-                })
-            });
-            if let Err(e) = result {
-                return Err(incomplete(&id, &dir, left(i + 1), e));
+                };
+                note(open, line, best_effort).map_err(|e| incomplete(&id, &dir, left(i + 1), e))?;
+                continue;
             }
+            if best_effort {
+                let same = unchanged(self.sys, &dir, backup).unwrap_or_else(|e| {
+                    tracing::warn!("{resource}: {e}; treating it as changed");
+                    false
+                });
+                if !same && !force {
+                    if let Some(step) = by_hand(&dir, resource, backup) {
+                        progress(Progress::Skip(&step));
+                        let line = Event::Skipped {
+                            resource: resource.clone(),
+                            by_hand: step.step.clone(),
+                        };
+                        note(open, line, true)?;
+                        done.skipped.push(step);
+                    }
+                    continue;
+                }
+                if !same
+                    && let Backup::File { path, n, .. } = backup
+                    && let Some(copy) = keep_during(self.sys, &dir, path, *n)
+                {
+                    progress(Progress::During { path, copy: &copy });
+                    done.during.push(copy);
+                }
+            }
+            progress(Progress::Restore(backup));
+            let result = restore(self.sys, &dir, backup).map_err(|source| EngineError::Resource {
+                id: resource.clone(),
+                source,
+            });
+            match result {
+                Ok(()) => done.restored += 1,
+                Err(e) if best_effort => {
+                    tracing::error!("{e}; restoring the others");
+                    let step = by_hand(&dir, resource, backup).unwrap_or_else(|| ByHand {
+                        resource: resource.clone(),
+                        step: "see the journal".into(),
+                    });
+                    unrestored.push((step, e));
+                    continue;
+                }
+                Err(e) => return Err(incomplete(&id, &dir, left(i + 1), e)),
+            }
+            let line = Event::Restored {
+                resource: resource.clone(),
+            };
+            note(open, line, best_effort).map_err(|e| incomplete(&id, &dir, left(i + 1), e))?;
         }
         if let Some(due) = due {
-            self.replay(open, due, &mut failed)
+            self.replay(open, due, mode, &mut failed, progress)
                 .map_err(|e| incomplete(&id, &dir, left(0), e))?;
         }
-        if !failed.is_empty() {
-            let left = failed
-                .iter()
-                .map(|(reload, _)| ByHand {
-                    resource: reload.name().to_owned(),
-                    step: reload::line(&reload.command()),
-                })
-                .collect();
-            let (reload, reason) = failed.swap_remove(0);
-            let source = EngineError::Reload { reload, reason };
+        if !unrestored.is_empty() || !failed.is_empty() {
+            let mut left: Vec<ByHand> = unrestored.iter().map(|(step, _)| step.clone()).collect();
+            left.extend(failed.iter().map(|(reload, _)| ByHand {
+                resource: reload.name().to_owned(),
+                step: reload::line(&reload.command()),
+            }));
+            let source = match unrestored.into_iter().next() {
+                Some((_, e)) => e,
+                None => {
+                    let (reload, reason) = failed.swap_remove(0);
+                    EngineError::Reload { reload, reason }
+                }
+            };
             return Err(incomplete(&id, &dir, Some(left), source));
         }
-        open.append(Event::State {
-            state: TxnState::RolledBack { reason },
-        })
-        .map_err(|e| incomplete(&id, &dir, left(0), e))?;
-        Ok((pending().count() - at_next_boot.len(), at_next_boot))
+        open.append(Event::state(TxnState::RolledBack { reason }))
+            .map_err(|e| incomplete(&id, &dir, left(0), e))?;
+        Ok(done)
     }
 
     /// Runs a reload that apply journaled, check first. A failed check skips
     /// it, so a running daemon keeps its config instead of loading a broken
-    /// one (e.g. an `sshd_config` edited since apply). A resumed rollback
-    /// runs every such reload again; that is harmless. A failed reload is
-    /// added to `failed`; only a failed journal line is an error.
+    /// one (e.g. an `sshd_config` edited since apply); that gets a
+    /// `reload-skipped` line. A resumed rollback runs every such reload
+    /// again; that is harmless. A failed reload is added to `failed`; only a
+    /// failed journal line outside the dead-man paths is an error.
     fn replay(
         &self,
         open: &mut Open,
         reload: Reload,
+        mode: Mode,
         failed: &mut Vec<(Reload, String)>,
+        progress: &mut dyn FnMut(Progress),
     ) -> Result<(), EngineError> {
+        let best_effort = matches!(mode, Mode::Deadman { .. });
+        let bound = |cmd: Cmd| match mode {
+            Mode::Deadman { boot: true } => {
+                let timeout = cmd.timeout.min(BOOT_TIMEOUT);
+                cmd.timeout(timeout)
+            }
+            _ => cmd,
+        };
+        progress(Progress::Reload(reload));
         if let Some(check) = reload.check()
-            && let Err(reason) = reload::run(self.sys, &check)
+            && let Err(reason) = reload::run(self.sys, &bound(check))
         {
             tracing::warn!("not running {reload}, so the daemon keeps its config: {reason}");
-            return Ok(());
+            progress(Progress::ReloadSkipped {
+                reload,
+                reason: &reason,
+            });
+            return note(open, Event::ReloadSkipped { reload, reason }, best_effort);
         }
-        if let Err(reason) = reload::run(self.sys, &reload.command()) {
+        if let Err(reason) = reload::run(self.sys, &bound(reload.command())) {
             failed.push((reload, reason));
             return Ok(());
         }
-        open.append(Event::Reloaded { reload })
+        note(open, Event::Reloaded { reload }, best_effort)
     }
+}
+
+/// Appends `event`; with `best_effort`, a failure is only logged (to
+/// stderr, the unit's log), so the restores go on.
+fn note(open: &mut Open, event: Event, best_effort: bool) -> Result<(), EngineError> {
+    match open.append(event) {
+        Err(e) if best_effort => {
+            tracing::error!("journal: {e}; going on");
+            Ok(())
+        }
+        other => other,
+    }
+}
+
+/// Copies the current bytes of file `n` at `path` to `files/<n>.during`,
+/// best effort: a failure (a full disk) is logged and the restore goes on.
+fn keep_during(sys: Sys, dir: &Path, path: &Path, n: u32) -> Option<PathBuf> {
+    let meta = match sys.fs.metadata(path) {
+        Ok(meta) if meta.kind == FileKind::File => meta,
+        // Nothing to keep: gone, or not a file.
+        _ => return None,
+    };
+    let copy = during_path(dir, n);
+    let owner = FileOwner {
+        mode: 0o600,
+        ..meta.owner()
+    };
+    match sys
+        .fs
+        .read(path)
+        .and_then(|bytes| sys.fs.write_atomic(&copy, &bytes, owner))
+    {
+        Ok(()) => Some(copy),
+        Err(e) => {
+            tracing::error!(
+                "keeping {} as {}: {e}; restoring it anyway",
+                path.display(),
+                copy.display()
+            );
+            None
+        }
+    }
+}
+
+/// The current boot ID, which arming needs.
+fn current_boot(fs: &dyn Fs) -> Result<String, EngineError> {
+    boot_id(fs).ok_or_else(|| EngineError::Deadman("the boot ID cannot be read".into()))
+}
+
+/// The first deadline after arming: `window` plus every command timeout of
+/// the plan, so the timer cannot fire while apply is within its own limits.
+fn first_window(plan: &Plan, window: Duration) -> Duration {
+    let steps: Duration = plan.steps().map(|s| s.resource.timeout()).sum();
+    let modules: Duration = plan
+        .modules
+        .iter()
+        .filter(|m| !m.changes().is_empty())
+        .map(|m| m.reloads().iter().map(|r| r.timeout()).sum::<Duration>() + Cmd::DEFAULT_TIMEOUT)
+        .sum();
+    // Stopping the first timer and starting the next.
+    window + steps + modules + SYSTEMCTL_TIMEOUT + Cmd::DEFAULT_TIMEOUT
 }
 
 /// What a rollback undoes, in journal order.
 enum Undo {
-    /// A backup without a `restored` line: resource ID and backup.
-    Restore(String, Backup),
+    /// A backup without a `restored` line.
+    Restore {
+        resource: String,
+        backup: Backup,
+        /// The `force_restore` of its record.
+        force: bool,
+    },
     /// A reload that apply journaled.
     Reload(Reload),
 }
@@ -597,6 +1160,16 @@ pub fn history(state: &StateDir, fs: &dyn Fs) -> Result<Vec<TxnInfo>, EngineErro
                 .iter()
                 .filter(|r| matches!(r.event, Event::Backup { .. }))
                 .count(),
+            skipped: records
+                .iter()
+                .filter_map(|r| match &r.event {
+                    Event::Skipped { resource, by_hand } => Some(ByHand {
+                        resource: resource.clone(),
+                        step: by_hand.clone(),
+                    }),
+                    _ => None,
+                })
+                .collect(),
         });
     }
     Ok(infos)
@@ -726,6 +1299,35 @@ impl<'a> Open<'a> {
             state,
             dirty: false,
         })
+    }
+
+    /// For a dead-man rollback of `txn`: its records, with a torn final line
+    /// removed, or, if that rewrite fails (a full disk), as read, with the
+    /// next append trying it again.
+    fn resume_best_effort(fs: &'a dyn Fs, txn: Txn) -> Result<Self, EngineError> {
+        let records = txn.read(fs)?;
+        if !journal::is_unfinished(&records) {
+            return Self::new(fs, txn, records);
+        }
+        match txn.resume(fs) {
+            Ok(records) => Self::new(fs, txn, records),
+            Err(e) => {
+                tracing::error!("journal: {e}; going on");
+                let mut open = Self::new(fs, txn, records)?;
+                open.dirty = true;
+                Ok(open)
+            }
+        }
+    }
+
+    /// [`Open::records`], or the records in memory if the re-read fails.
+    fn records_best_effort(&mut self) -> &[Record] {
+        if self.dirty
+            && let Err(e) = self.records()
+        {
+            tracing::error!("journal: {e}; going on");
+        }
+        &self.records
     }
 
     /// The records on disk, re-read after a failed append.

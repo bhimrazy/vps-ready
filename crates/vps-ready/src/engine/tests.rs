@@ -23,6 +23,8 @@ struct Demo {
     applicable: bool,
     /// What its verify fails with.
     unverified: Option<&'static str>,
+    deadman: bool,
+    force: bool,
 }
 
 impl Module for Demo {
@@ -34,6 +36,12 @@ impl Module for Demo {
     }
     fn why(&self) -> &'static str {
         "For tests."
+    }
+    fn needs_deadman(&self) -> bool {
+        self.deadman
+    }
+    fn force_restore(&self) -> bool {
+        self.force
     }
     fn applicable(&self, _: &Facts) -> Applicability {
         if self.applicable {
@@ -90,6 +98,8 @@ fn module(id: &'static str, resources: Vec<Resource>) -> Demo {
         reloads: Vec::new(),
         applicable: true,
         unverified: None,
+        deadman: false,
+        force: false,
     }
 }
 
@@ -138,7 +148,7 @@ fn plan_of<'a>(fs: &dyn Fs, facts: &'a Facts, modules: &[&'a dyn Module]) -> Pla
 
 fn apply(fs: &dyn Fs, plan: &Plan) -> Result<ApplyOutcome, EngineError> {
     let state = state(fs);
-    Engine::lock(&state, sys(fs))?.apply(plan, &mut |_| {})
+    Engine::lock(&state, sys(fs))?.apply(plan, &Deadman::default(), &mut |_| {})
 }
 
 fn rollback(fs: &dyn Fs, target: Target) -> Result<Rollback, EngineError> {
@@ -163,11 +173,17 @@ fn names(fs: &dyn Fs, id: &str) -> Vec<String> {
         .map(|e| match e {
             Event::Backup { resource, .. }
             | Event::Applied { resource }
-            | Event::Restored { resource } => format!("{} {resource}", e.name()),
-            Event::Reloaded { reload } => format!("reloaded {reload}"),
-            Event::State { state } => format!("state {state}"),
-            Event::Begin { .. } => "begin".into(),
+            | Event::Restored { resource }
+            | Event::Skipped { resource, .. } => format!("{} {resource}", e.name()),
+            Event::Reloaded { reload } | Event::ReloadSkipped { reload, .. } => {
+                format!("{} {reload}", e.name())
+            }
+            Event::Armed { unit, .. } | Event::Extended { unit, .. } => {
+                format!("{} {}", e.name(), unit.rsplit('-').next().unwrap())
+            }
+            Event::State { state, .. } => format!("state {state}"),
             Event::Rollback { .. } => "rollback".into(),
+            Event::Begin { .. } | Event::Confirmed { .. } => e.name().into(),
         })
         .collect()
 }
@@ -269,6 +285,8 @@ fn applies_then_rolls_back_to_the_original_tree() {
             txn: txn.clone(),
             restored: 3,
             at_next_boot: Vec::new(),
+            skipped: Vec::new(),
+            during: Vec::new(),
         }
     );
     assert_eq!(host(&fs), before);
@@ -735,6 +753,8 @@ fn rollback_after_a_reboot_leaves_sysctls_to_the_boot_config() {
             txn: txn.clone(),
             restored: 2,
             at_next_boot: vec!["kernel.kptr_restrict".into()],
+            skipped: Vec::new(),
+            during: Vec::new(),
         }
     );
     assert_eq!(fs.read(Path::new(CONF)).unwrap(), b"old\n");
@@ -879,7 +899,7 @@ fn calls(runner: &FakeRunner) -> Vec<String> {
 
 fn apply_with(fs: &dyn Fs, runner: &FakeRunner, plan: &Plan) -> Result<ApplyOutcome, EngineError> {
     let state = state(fs);
-    Engine::lock(&state, Sys { fs, runner })?.apply(plan, &mut |_| {})
+    Engine::lock(&state, Sys { fs, runner })?.apply(plan, &Deadman::default(), &mut |_| {})
 }
 
 fn rollback_with(fs: &dyn Fs, runner: &FakeRunner) -> Result<Rollback, EngineError> {
@@ -1013,15 +1033,35 @@ fn rollback_skips_a_reload_whose_check_fails() {
     // E.g. the admin broke `sshd_config` since apply: the running sshd keeps
     // its config instead of reloading a broken one.
     let run = runner(failed("line 9: Bad configuration option"));
-    rollback_with(&fs, &run).unwrap();
+    let state = state(&fs);
+    let mut skipped = Vec::new();
+    Engine::lock(
+        &state,
+        Sys {
+            fs: &fs,
+            runner: &run,
+        },
+    )
+    .unwrap()
+    .rollback(Target::Last, &mut |p| {
+        if let Progress::ReloadSkipped { reload, reason } = p {
+            skipped.push(format!("{reload}: {reason}"));
+        }
+    })
+    .unwrap();
     assert_eq!(calls(&run), ["sshd -t"]);
     assert_eq!(host(&fs), before);
+    assert_eq!(
+        skipped,
+        ["sshd-reload: `sshd -t` exited with status 255: line 9: Bad configuration option"]
+    );
     let names = names(&fs, &txn);
     assert_eq!(
-        names[names.len() - 3..],
+        names[names.len() - 4..],
         [
             "rollback",
             "restored file:/etc/demo.conf",
+            "reload-skipped sshd-reload",
             "state rolled-back (manual)"
         ]
     );
@@ -1178,3 +1218,5 @@ fn unknown_params_name_the_module() {
         "{err}"
     );
 }
+
+mod dead_man;
