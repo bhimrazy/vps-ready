@@ -77,7 +77,7 @@ table inet vps_ready {
 
 - **Never cut the current SSH port.** The accepted TCP ports always include the port of the applying session, every port sshd listens on (facts, including `ssh.socket`'s `Listen`) and `port` from `sshd -T`, whatever the profile says. A unit test renders the ruleset for hosts with different SSH ports and checks this on the rendered model. Verify reads back `nft -j list table inet vps_ready` and checks the ports again.
 - Why the port rule and not only `ct state established`: in a VM test, loading this table kept the live session, but a flow that predates conntrack and has no accept rule for its port can be dropped (checked on Debian 13 and Ubuntu 24.04). Always accepting the current SSH ports is what protects the open session; `established` covers everything else.
-- **Docker:** the table filters only the `input` hook. Traffic to a published port is DNATed and goes through `forward`, so this module neither breaks Docker nor fixes `FW-002`; the plan prints the published ports from facts with the `FW-002` advice. When Docker is present, input from `docker0` and `br-*` is accepted, so containers that reach host services keep working (ufw's default breaks this). `FW-002` waits for `deploy.docker` (M5).
+- **Docker:** the table filters only the `input` hook. Traffic to a published port is DNATed and goes through `forward`, so this module neither breaks Docker nor fixes `FW-002`; the plan prints the published ports from facts with the `FW-002` advice. When Docker is present, input from `docker0` and `br-*` is accepted, so containers that reach host services keep working (ufw's default breaks this). The cost: a compromised container can reach every host service, the same as with no firewall; the plan says so when it adds the rule. `FW-002` waits for `deploy.docker` (M5).
 - Other base chains on the input hook (ufw inactive leftovers, an admin's own table) still apply: in nftables a packet must be accepted by every base chain on a hook. The plan lists them.
 - Outbound is not filtered, so cloud metadata (169.254.169.254) stays reachable.
 
@@ -479,7 +479,7 @@ Not yet checked; each is covered by a test in the PR that depends on it:
 - The boot hook ordering (`DefaultDependencies=no`, before `ssh.socket`) on a real boot, and `systemd-analyze verify` of both units: VM cycle 4.
 - That broadcast DHCPv4 replies need the `udp sport 67 dport 68` rule: VM cycle 1.
 
-## Open for the owner
+## Decided by the owner (2026-10-24)
 
 1. One transaction and one confirm for `user.admin` + `ssh.server` + `firewall.inbound`, rather than three challenges.
 2. Plain `apply` (no `--profile`, no `--module`) leaves the dead-man modules out.
