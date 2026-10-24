@@ -22,7 +22,7 @@ The registry order is `user.admin`, `ssh.server`, `firewall.inbound`, `ssh.brute
 **`user.admin` details:**
 - Params: `name` (default `admin`), `authorized_keys` (a list of public key lines), `sudo = "nopasswd" | "password"` (default `nopasswd`, used only for a user this module creates; see below).
 - If `authorized_keys` is empty, it copies the keys of the user who ran `sudo` (`SUDO_USER`, else root): they just logged in with one of them. Lines with options (`command=`, `no-pty`, ...) are skipped with a note. Ubuntu and AWS images put `command="echo 'Please login as the user ...'"` on root's keys, which would make the new account unusable.
-- A missing user is created with `useradd --create-home --user-group --shell /bin/bash`, which leaves the password field locked (`!`): no password login and no `su`. With `UsePAM yes` (the Debian and Ubuntu default) a locked password does not stop key logins (checked on Debian 13 and Ubuntu 24.04), so the module never touches the password field. The flip side: locking an account does not keep it out of SSH; only its `authorized_keys` (or `AllowUsers`/`DenyUsers`) does. Rollback therefore relies on `userdel` and the `AuthorizedKeys` restore, never on locking.
+- A missing user is created with `useradd --create-home --user-group --shell /bin/bash`, which leaves the password field locked (`!`): no password login and no `su`. With `UsePAM yes` (the Debian and Ubuntu default) a locked password does not stop key logins (checked on Debian 13 and Ubuntu 24.04). With `UsePAM no`, sshd refuses key logins to a `!` account, so the module reads `usepam` from `sshd -T`: when it is `no`, the user is created with `--password '*'` (no password, not locked) and the plan says so ("UsePAM is off: password set to `*` so key logins work"). An existing user's password field is never touched. The flip side: locking an account does not keep it out of SSH; only its `authorized_keys` (or `AllowUsers`/`DenyUsers`) does. Rollback therefore relies on `userdel` and the `AuthorizedKeys` restore, never on locking.
 - **An existing user keeps its sudo.** If `sudo -l -U <name>` lists rules, the module writes no sudoers file and adds no group, whatever `sudo` says; the plan notes it. Only an existing user without sudo, or a created one, gets the `sudo` param applied.
 - **Gotcha 5 (passwordless admin, password sudo, root disabled).** Decided: there is no special sudo rule for `confirm`; the confirm itself is `sudo vps-ready confirm`, so it proves login, key and sudo in one step, which is what Challenge 1 is for.
   - `sudo = "nopasswd"` writes `<name> ALL=(ALL:ALL) NOPASSWD: ALL` to `/etc/sudoers.d/90-vps-ready-admin` (mode `0440`, validated with `visudo -cf` on `files/<n>.after`). This is what cloud images already do for their default user. The file name has no `.`, because sudo skips files in an include directory whose name contains a `.` or ends in `~`.
@@ -55,7 +55,7 @@ The registry order is `user.admin`, `ssh.server`, `firewall.inbound`, `ssh.brute
 - Not `nftables.service`: `/etc/nftables.conf` starts with `flush ruleset` on Debian 13 and Ubuntu 24.04, so `systemctl restart nftables` would wipe Docker's rules and ours. The service ships disabled on both, but an admin may enable it, so:
   - our unit is ordered `After=nftables.service`, so a boot that loads `/etc/nftables.conf` loads ours after its flush;
   - the plan notes when `nftables.service` is enabled ("restarting it removes the vps-ready table until `systemctl restart vps-ready-firewall`").
-- Our own unit `vps-ready-firewall.service` is `Type=oneshot`, `RemainAfterExit=yes`, `ExecStart`/`ExecReload=nft -f /etc/vps-ready/firewall.nft`, `ExecStop=-nft delete table inet vps_ready` (the `-` ignores a table someone already flushed), ordered `Before=network-pre.target`. The file replaces only our table (`table inet vps_ready {}` then `delete table inet vps_ready` then the definition, in one atomic load).
+- Our own unit `vps-ready-firewall.service` is `Type=oneshot`, `RemainAfterExit=yes`, `ExecStart`/`ExecReload=nft -f /etc/vps-ready/firewall.nft`, `ExecStop=-nft delete table inet vps_ready` (the `-` ignores a table someone already flushed), with `DefaultDependencies=no`, ordered `Before=network-pre.target shutdown.target` with `Conflicts=shutdown.target`. The file replaces only our table (`table inet vps_ready {}` then `delete table inet vps_ready` then the definition, in one atomic load).
 - The ruleset (askama template, pinned by `insta`):
 
 ```
@@ -132,6 +132,7 @@ pub trait Module {
     fn title(&self) -> &'static str;
     fn why(&self) -> &'static str;
     fn needs_deadman(&self) -> bool { false }            // new
+    fn force_restore(&self) -> bool { false }            // new: the dead-man restores its resources even if changed
     fn applicable(&self, facts: &Facts) -> Applicability;
     fn notes(&self, facts: &Facts) -> Vec<String>;
     fn plan(&self, cx: &PlanCx, sys: Sys) -> Result<ModuleSteps, ModuleError>;  // was (facts, sys) -> Vec<Resource>
@@ -201,8 +202,9 @@ if a module needs the dead-man:
         --timer-property=AccuracySec=1s \
         <binary> rollback --txn <txn> --deadman
     journal "armed" {unit, boot_id, deadline}
-    a failed systemd-run ends the transaction here (state rolled-back, apply-failed), before any backup
-backup / apply each resource (as M2)
+    a failed systemd-run disables the boot hook again and ends the transaction here
+    (state rolled-back, apply-failed), before any backup
+backup / apply each resource (as M2; each "backup" record also carries force_restore, below)
 reload each module (check, then run); journal "reloaded"
 verify; on failure roll back (stopping the timer) as M2
 dead-man: re-arm to <window> from now; journal "state pending-confirm" {deadline, unit, live_since, session}
@@ -224,18 +226,21 @@ no dead-man: journal "state applied"
 [Unit]
 Description=vps-ready: roll back an unconfirmed change after a reboot
 DefaultDependencies=no
-After=local-fs.target network-pre.target vps-ready-firewall.service
-Before=ssh.service ssh.socket sockets.target shutdown.target
+After=local-fs.target vps-ready-firewall.service
+Before=ssh.service ssh.socket shutdown.target
 Conflicts=shutdown.target
 [Service]
 Type=oneshot
+TimeoutStartSec=120
 ExecStart=<binary> rollback --deadman-boot
 [Install]
 WantedBy=multi-user.target
 ```
 
 - It is engine infrastructure, not a resource: written outside any transaction (atomic write, before the first arm), never rolled back, and left in place afterwards. Arming enables it; confirm and every rollback of the transaction disable it, so it only runs at a boot that follows an unconfirmed apply.
-- `DefaultDependencies=no` is required: the default `After=basic.target` comes after `sockets.target`, so with `Before=ssh.socket` it would be an ordering cycle that systemd breaks by dropping a unit. `vps-ready-firewall.service` uses `DefaultDependencies=no` too, as `nftables.service` does.
+- `DefaultDependencies=no` is required: the default `After=basic.target` comes after `sockets.target`, so with `Before=ssh.socket` it would be an ordering cycle that systemd breaks by dropping a unit. `vps-ready-firewall.service` uses `DefaultDependencies=no` too, as `nftables.service` does, with `Before=shutdown.target` and `Conflicts=shutdown.target`.
+- Only the edges it needs, because every extra edge is a chance for a cycle, and a cycle is a lockout: systemd breaks it by dropping a unit, which may be `ssh.socket` or the hook. `After=network-pre.target` and `Before=sockets.target` were in an earlier draft and form a cycle on a host with firewalld (`Before=network-pre.target`, `After=dbus.service`, which comes after `basic.target` and so after `sockets.target`). Both edges are redundant: `vps-ready-firewall.service` already orders the hook after the firewall, and `Before=ssh.socket` already orders it before sshd. VM cycle 4 runs `systemd-analyze verify` on both units.
+- `TimeoutStartSec=120`: a oneshot defaults to no start timeout, and the hook is ordered before sshd, so a hung rollback would keep sshd from ever starting. `--deadman-boot` also bounds every subprocess it runs with a timeout, as the engine already does. If the hook times out, sshd starts anyway, and the transaction stays pending for a manual `rollback --last` from the console or the old config.
 - Ordering: after our firewall loads and before sshd starts, so the boot rolls back the firewall table and the drop-in before the first login, and sshd starts with the restored config (no reload needed).
 - It rolls back any transaction that is pending-confirm, or unfinished with an `armed` record, whose `boot_id` is not the current boot, with reason `deadman-reboot`. A reboot is treated as "not confirmed": the user may have rebooted because they were locked out.
 
@@ -243,7 +248,8 @@ WantedBy=multi-user.target
 - **Lock:** it waits for the lock with no timeout instead of failing at once, since giving up would leave the lockout in place. Whoever holds the lock (an apply still running, a `confirm`) releases it within its own command timeouts or by dying.
 - **Re-read under the lock:** if the transaction is already confirmed or rolled back, it exits 0; if the deadline was extended, it re-arms and exits 0.
 - **Per resource, not all or nothing.** M2's safety check refuses the whole rollback if any resource changed since apply. For a manual rollback that is right; for the dead-man it means "the admin edited `00-vps-ready.conf` during the window, the deadline passed, nothing reverted, locked out". So in the dead-man paths:
-  - resources of `ssh.server` and `firewall.inbound` are always restored, changed or not. They are unconfirmed by definition, and leaving them is the lockout. The current bytes of a changed file are first copied to `files/<n>.during`, so the edit is not lost, and the output names that file;
+  - resources of `ssh.server` and `firewall.inbound` are always restored, changed or not. They are unconfirmed by definition, and leaving them is the lockout. The current bytes of a changed file are first copied to `files/<n>.during`, so the edit is not lost, and the output names that file. That copy is best effort: if it fails (a full disk), the failure is logged and the restore goes ahead;
+  - which resources these are comes from the journal, not from paths in the code: the `backup` record gains `force_restore: bool` (default `false` when absent, so M2 journals still read), set at apply time from a new `Module::force_restore()` (default `false`; `true` for `ssh.server` and `firewall.inbound`). It is not simply `needs_deadman()`: `user.admin` needs the dead-man too, but leaving an added key or account in place is not a lockout;
   - any other resource that fails the check (`user.admin`'s keys with a key the admin added, a service someone stopped) is skipped and journaled as `skipped {resource, by_hand}`; every resource that passes is restored;
   - `history` and the unit's log list what was skipped and the by-hand steps.
 - **Restore first, journal best effort** (a full disk is one way the window can go wrong). The `rollback` record is attempted; if it cannot be written, the restores still run, each `restored` append is attempted, and the failure goes to stderr (the unit's log). Restoring a resource that is already at its `.before` state does nothing harmful, so the boot hook or a rerun converges once there is space.
@@ -269,7 +275,7 @@ Do not edit files vps-ready manages until you confirm: an unconfirmed change rev
 - `-o ControlPath=none` stops an `ssh` with `ControlMaster` in its config from reusing the old connection (a multiplexed session is a channel of the old sshd session, so `confirm` would refuse it). `-t` gives sudo a terminal if it asks for a password.
 - `apply` then waits with a countdown (one line on a TTY, one line per minute otherwise) until the transaction leaves pending-confirm: confirmed exits 0, rolled back by the dead-man exits 1. Ctrl-C while waiting stops waiting, not the timer, and exits 4 (new: "pending; the changes revert at <time> unless confirmed").
 - Ctrl-C (or a dropped session) **before** pending kills apply part way. The transaction is then unfinished with an `armed` record, and the first-arm timer rolls it back at its deadline; `sudo vps-ready rollback --last` does it sooner.
-- `Progress` gains `Armed { deadline }`, `Reload(Reload)` and `Waiting { left }` for the CLI to show.
+- `Progress` gains `Armed { deadline }`, `Reload(Reload)` and `Waiting { left }` for the CLI to show. The `Armed` line shows the first deadline ("Armed the dead-man switch: changes revert by 14:21:30 UTC if apply does not finish"), so a user whose apply dies knows when the host comes back.
 - `history` shows a pending transaction as `pending-confirm (reverts in 3m12s)`. There is no separate `status` command.
 - A manual `rollback` of a pending transaction stops its timer and disables the boot hook, like `confirm`.
 
@@ -380,7 +386,7 @@ A dead-man rollback that had to skip something:
 - Per module: `insta` snapshots of the plan and of every rendered file (drop-in, ruleset, unit, jail, sudoers); apply → next plan empty; apply → rollback → the tempdir tree equals the original.
 - `ssh.server`: never `Port`, `ListenAddress`, `AllowGroups`; refuses without a keyed sudo user; the `Include` check on fixtures (missing, after a `Match`, after a conflicting line).
 - `firewall.inbound`: the SSH ports are always accepted, for random port sets (proptest); not applicable with ufw active, firewalld active or legacy tables. Audit and fix agree: `FW-001` passes on the `nft -j` output of the loaded table (a fixture captured in the VM test).
-- `user.admin`: option-prefixed keys skipped; `password` refused without a hash; sudoers file name has no `.`.
+- `user.admin`: option-prefixed keys skipped; `password` refused without a hash; sudoers file name has no `.`; `useradd` gets `--password '*'` only when `sshd -T` shows `usepam no`; `force_restore` is `false` on its backups and `true` on those of `ssh.server` and `firewall.inbound`.
 - Engine: the new transitions; arm before the first change; a failed `systemd-run` ends the transaction before any backup; a crash after `armed` at every journal line (the dead-man entry point and the boot hook both finish the rollback); confirm racing the timer under the lock; extend re-arms under a new unit name and respects both caps; `rollback --last` picks pending, then the newest of applied and confirmed.
 - Dead-man rollback on `FakeFs`: an edited `ssh.server` file is restored and its edit kept as `.during`; an edited `AuthorizedKeys` is skipped and journaled, the rest restored; every journal append failing (full disk) still restores everything; a resume with no `rollback` record keeps the dead-man reason; a rollback reload whose check fails is skipped.
 - The binary-path check refuses a binary or a parent that is not root-owned, is group- or world-writable, or sits under `/home` or `/tmp`.
@@ -393,7 +399,7 @@ A dead-man rollback that had to skip something:
 1. `minimal` profile → confirm from a second SSH session as the admin → `SSH-001` to `SSH-007` and `FW-001` pass; root and password logins are refused; port 80 (forwarded to the host) times out; a forced DHCP lease renewal succeeds under the firewall.
 2. Apply and do not confirm → within deadline + 10 s, the drop-in, the table and the user are gone and the old login works.
 3. Apply, edit `00-vps-ready.conf` during the window, do not confirm → the drop-in is still reverted and the edit is in `files/<n>.during`.
-4. Apply, reboot during the window → after boot, rolled back with `deadman-reboot` before sshd accepts the first login.
+4. `systemd-analyze verify` of `vps-ready-deadman.service` and `vps-ready-firewall.service` reports no ordering cycle; apply, reboot during the window → after boot, rolled back with `deadman-reboot` before sshd accepts the first login.
 5. `confirm` from the applying session, from a session opened before apply, and through a `ControlMaster` connection are refused.
 6. Ubuntu 24.04 (`ssh.socket`): the reload applies the drop-in to new connections.
 The seed adds a key for root so test 1 can try a root login. QEMU's user network makes every connection come from 10.0.2.2, which is fine: sessions differ by sshd process, not by address. Session detection is tested over real `ssh` connections: Lima's Debian 13 shell uses vsock (`SSH_CONNECTION` is `UNKNOWN 65535 ...`), so a Lima shell is not a stand-in for an SSH login.
@@ -470,7 +476,7 @@ Checked on VMs (Debian 13 with OpenSSH 10.0p2, Ubuntu 24.04 with 9.6p1; some als
 
 Not yet checked; each is covered by a test in the PR that depends on it:
 - On Debian 12 and Ubuntu 22.04: the `ssh.socket` and reload behavior (22.04 has no socket activation), the process titles, the fail2ban defaults, whether `nft` is preinstalled, and the conntrack behavior.
-- The boot hook ordering (`DefaultDependencies=no`, before `ssh.socket`) on a real boot: VM cycle 4.
+- The boot hook ordering (`DefaultDependencies=no`, before `ssh.socket`) on a real boot, and `systemd-analyze verify` of both units: VM cycle 4.
 - That broadcast DHCPv4 replies need the `udp sport 67 dport 68` rule: VM cycle 1.
 
 ## Open for the owner
@@ -478,7 +484,8 @@ Not yet checked; each is covered by a test in the PR that depends on it:
 1. One transaction and one confirm for `user.admin` + `ssh.server` + `firewall.inbound`, rather than three challenges.
 2. Plain `apply` (no `--profile`, no `--module`) leaves the dead-man modules out.
 3. No confirm code.
-4. `sudo = "nopasswd"` as the default for a user `user.admin` creates; an existing user with sudo keeps it; `password` only for accounts that already have one.5. nftables in our own table and unit on Ubuntu too, and not applicable when ufw is active.
+4. `sudo = "nopasswd"` as the default for a user `user.admin` creates; an existing user with sudo keeps it; `password` only for accounts that already have one.
+5. nftables in our own table and unit on Ubuntu too, and not applicable when ufw is active.
 6. A 5-minute default window, `1m` to `30m`, and exit code 4 for "still pending".
 7. Accept input from `docker0` and `br-*` when Docker is present.
 8. Drop "Incus" from the milestone in favor of the existing QEMU harness.
