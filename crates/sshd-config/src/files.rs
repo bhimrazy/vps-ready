@@ -6,7 +6,9 @@
 //! wins.
 //!
 //! Choices where `sshd_config(5)` leaves room:
-//! - A `Match` block in an included file ends at the end of that file.
+//! - A `Match` block in an included file ends at the end of that file, so
+//!   the lines after the `Include` apply to every connection again. This is
+//!   what `sshd -T -C` shows on OpenSSH 8.9, 9.2, 9.6 and 10.0.
 //! - An `Include` that matches nothing is skipped, as in sshd.
 //! - Tokens in paths (`%h` and the like) and `~` are not expanded; sshd does
 //!   not expand them in `Include` either.
@@ -120,16 +122,20 @@ pub struct Directive {
     /// Whether the line is inside a `Match` block, so it applies only to some
     /// connections. For a `Match` line itself, whether the previous block was.
     pub in_match: bool,
+    /// How many `Include`s deep the file is; 0 for the main file.
+    depth: usize,
 }
 
 /// The answer to "is this drop-in read early enough".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IncludeCheck {
-    /// An `Include` covers the file before any `Match` and before any of the keywords.
+    /// An `Include` covers the file outside any `Match` block and before any
+    /// of the keywords.
     Covered,
     /// No `Include` covers the file.
     Missing,
-    /// A `Match` comes first, so the `Include` (if any) is too late.
+    /// The first `Include` that covers the file is inside a `Match` block,
+    /// so the file would apply only to some connections.
     AfterMatch {
         /// The file with the `Match`.
         file: PathBuf,
@@ -182,33 +188,64 @@ impl Config {
     }
 
     /// Whether `target`, a file that is or will be in an included directory,
-    /// is read before any `Match` and before any line that sets one of
-    /// `keywords`. Only an `Include` outside a `Match` block counts.
+    /// is read outside any `Match` block and before any line that sets one
+    /// of `keywords` for every connection. Lines read before `target`
+    /// include those of the files the same `Include` reads first, e.g.
+    /// `00-a.conf` before `00-vps-ready.conf`.
     #[must_use]
     pub fn include_check(&self, target: &Path, keywords: &[&str]) -> IncludeCheck {
-        for d in &self.directives {
-            if d.keyword == "match" {
-                return IncludeCheck::AfterMatch {
-                    file: d.file.clone(),
-                    line: d.line,
-                };
-            }
-            if d.in_match {
-                continue;
-            }
-            if d.keyword == "include" {
-                if d.args.iter().any(|p| pattern_covers(p, target)) {
-                    return IncludeCheck::Covered;
-                }
-            } else if keywords.iter().any(|k| d.keyword.eq_ignore_ascii_case(k)) {
-                return IncludeCheck::AfterKeyword {
+        let sets_keyword = |d: &Directive| {
+            (!d.in_match && keywords.iter().any(|k| d.keyword.eq_ignore_ascii_case(k))).then(|| {
+                IncludeCheck::AfterKeyword {
                     keyword: d.keyword.clone(),
                     file: d.file.clone(),
                     line: d.line,
-                };
+                }
+            })
+        };
+        for (i, d) in self.directives.iter().enumerate() {
+            if d.keyword != "include" {
+                if let Some(found) = sets_keyword(d) {
+                    return found;
+                }
+                continue;
             }
+            let Some(pattern) = d.args.iter().find(|p| pattern_covers(p, target)) else {
+                continue;
+            };
+            if d.in_match {
+                return self.enclosing_match(i);
+            }
+            // The files this Include reads before `target`, and what they include.
+            let before = self.directives[i + 1..]
+                .iter()
+                .take_while(|e| e.depth > d.depth)
+                .take_while(|e| !(pattern_covers(pattern, &e.file) && e.file.as_path() >= target));
+            return before
+                .filter_map(sets_keyword)
+                .next()
+                .unwrap_or(IncludeCheck::Covered);
         }
         IncludeCheck::Missing
+    }
+
+    /// The `Match` line whose block holds directive `i`: the nearest one
+    /// before it in the same file, else in the files that included it.
+    fn enclosing_match(&self, i: usize) -> IncludeCheck {
+        let before = &self.directives[..i];
+        let file = &self.directives[i].file;
+        let found = before
+            .iter()
+            .rev()
+            .find(|m| m.keyword == "match" && m.file == *file)
+            .or_else(|| before.iter().rev().find(|m| m.keyword == "match"));
+        match found {
+            Some(m) => IncludeCheck::AfterMatch {
+                file: m.file.clone(),
+                line: m.line,
+            },
+            None => IncludeCheck::Missing,
+        }
     }
 }
 
@@ -240,6 +277,7 @@ fn load(
             keyword,
             args,
             in_match,
+            depth,
         };
         match directive.keyword.as_str() {
             "match" => in_match = true,

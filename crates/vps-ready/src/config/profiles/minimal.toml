@@ -1,5 +1,7 @@
 schema = 1
 
+[modules."ssh.server"]
+
 [modules."kernel.sysctl"]
 
 [modules."updates.auto"]

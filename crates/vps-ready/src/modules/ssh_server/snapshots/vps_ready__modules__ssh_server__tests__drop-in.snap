@@ -1,0 +1,11 @@
+---
+source: crates/vps-ready/src/modules/ssh_server/tests.rs
+expression: drop_in
+---
+# Written by vps-ready (ssh.server). `vps-ready rollback --last`
+# restores the previous state; edits here are replaced by the next apply.
+# sshd uses the first value it reads for each keyword, and reads this file
+# before 50-cloud-init.conf and the rest of sshd_config.
+PermitRootLogin no
+PasswordAuthentication no
+X11Forwarding no
