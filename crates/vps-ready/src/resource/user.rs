@@ -36,7 +36,7 @@ pub enum Password {
 
 /// An entry of the user database.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct Passwd {
+pub(super) struct Account {
     pub(super) uid: u32,
     pub(super) gid: u32,
     pub(super) home: PathBuf,
@@ -46,7 +46,7 @@ impl User {
     /// The summary of the change, or `None`.
     pub(super) fn diff(&self, sys: Sys) -> Result<Option<(String, Option<String>)>, ResourceError> {
         self.check_names()?;
-        if passwd(sys, &self.name)?.is_none() {
+        if account(sys, &self.name)?.is_none() {
             let mut extra = Vec::new();
             if !self.groups.is_empty() {
                 extra.push(format!("groups {}", self.groups.join(",")));
@@ -72,7 +72,7 @@ impl User {
 
     pub(super) fn snapshot(&self, sys: Sys) -> Result<Backup, ResourceError> {
         self.check_names()?;
-        let created = passwd(sys, &self.name)?.is_none();
+        let created = account(sys, &self.name)?.is_none();
         let added_groups = if created {
             self.groups.clone()
         } else {
@@ -87,7 +87,7 @@ impl User {
 
     pub(super) fn apply(&self, sys: Sys) -> Result<(), ResourceError> {
         self.check_names()?;
-        if passwd(sys, &self.name)?.is_none() {
+        if account(sys, &self.name)?.is_none() {
             let mut cmd =
                 Cmd::new("useradd").args(["--create-home", "--user-group", "--shell", "/bin/bash"]);
             if !self.groups.is_empty() {
@@ -134,7 +134,7 @@ pub(super) fn restore(
     added_groups: &[String],
 ) -> Result<(), ResourceError> {
     check_name("user", name)?;
-    if passwd(sys, name)?.is_none() {
+    if account(sys, name)?.is_none() {
         return Ok(());
     }
     if created {
@@ -163,7 +163,7 @@ pub(crate) fn unchanged(sys: Sys, backup: &Backup) -> Result<bool, ResourceError
         return Ok(false);
     };
     check_name("user", name)?;
-    if *created || passwd(sys, name)?.is_none() {
+    if *created || account(sys, name)?.is_none() {
         return Ok(true);
     }
     let current = groups(sys, name)?;
@@ -192,7 +192,7 @@ pub(crate) fn by_hand(backup: &Backup) -> Option<String> {
 }
 
 /// The account's entry from `getent passwd`; `None` if there is none.
-pub(super) fn passwd(sys: Sys, name: &str) -> Result<Option<Passwd>, ResourceError> {
+pub(super) fn account(sys: Sys, name: &str) -> Result<Option<Account>, ResourceError> {
     check_name("user", name)?;
     let out = sys.runner.run(&Cmd::new("getent").args(["passwd", name]))?;
     match out.status {
@@ -208,7 +208,7 @@ pub(super) fn passwd(sys: Sys, name: &str) -> Result<Option<Passwd>, ResourceErr
             .parse()
             .ok()
             .zip(gid.parse().ok())
-            .map(|(uid, gid)| Passwd {
+            .map(|(uid, gid)| Account {
                 uid,
                 gid,
                 home: PathBuf::from(home),
@@ -544,18 +544,18 @@ mod tests {
     }
 
     #[test]
-    fn passwd_parses_an_entry() {
+    fn account_parses_a_passwd_entry() {
         let fs = FakeFs::new();
         let runner = existing("admin");
         assert_eq!(
-            passwd(sys(&fs, &runner), "admin").unwrap(),
-            Some(Passwd {
+            account(sys(&fs, &runner), "admin").unwrap(),
+            Some(Account {
                 uid: 1001,
                 gid: 1001,
                 home: "/home/admin".into(),
             })
         );
         let runner = FakeRunner::new().on("getent", ["passwd"], Output::success("admin:x:1001\n"));
-        assert!(passwd(sys(&fs, &runner), "admin").is_err());
+        assert!(account(sys(&fs, &runner), "admin").is_err());
     }
 }
