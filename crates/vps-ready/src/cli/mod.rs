@@ -229,8 +229,8 @@ pub fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
         }
         Command::Audit => {
             let controls = audit::catalog()?;
-            // The audit does not use the SSH session, so its notice is noise.
-            let facts = collect_facts(Path::new("/"), &[facts::session::UNSET_NOTICE])?;
+            // The audit does not use the SSH session, so its notices are noise.
+            let facts = collect_facts(Path::new("/"), &[facts::session::NOTICE])?;
             let report = audit::run(controls, &facts);
             if !report.all_passed() {
                 code = ExitCode::from(EXIT_AUDIT_FAILED);
@@ -332,7 +332,7 @@ fn host_facts(sys: Sys) -> anyhow::Result<Facts> {
     facts::collect(sys.fs, sys.runner, &Env::from_process()).context("detecting facts")
 }
 
-/// Collects facts, printing each notice except those in `quiet` on stderr. All notices stay in the facts, and so in `--json` output.
+/// Collects facts, printing each notice except those starting with one in `quiet` on stderr. All notices stay in the facts, and so in `--json` output.
 fn collect_facts(root: &Path, quiet: &[&str]) -> anyhow::Result<Facts> {
     let facts = facts::collect(&RealFs::new(root), &RealRunner, &Env::from_process())
         .with_context(|| format!("detecting facts under {}", root.display()))?;
@@ -340,13 +340,14 @@ fn collect_facts(root: &Path, quiet: &[&str]) -> anyhow::Result<Facts> {
     Ok(facts)
 }
 
-/// Prints each notice except those in `quiet` on stderr: as
-/// `vps-ready: <notice>`, or as a warning log line with `-v` or `RUST_LOG`.
+/// Prints each notice except those starting with one in `quiet` on stderr:
+/// as `vps-ready: <notice>`, or as a warning log line with `-v` or
+/// `RUST_LOG`.
 fn log_notices(facts: &Facts, quiet: &[&str]) {
     for notice in facts
         .notices
         .iter()
-        .filter(|n| !quiet.contains(&n.as_str()))
+        .filter(|n| !quiet.iter().any(|q| n.starts_with(q)))
     {
         if PLAIN_NOTICES.load(Ordering::Relaxed) {
             eprintln!("vps-ready: {notice}");
@@ -538,16 +539,10 @@ fn print_facts(out: &mut impl Write, facts: &Facts, color: bool) -> io::Result<(
         ("Ports", ports_line(&facts.listeners)),
         (
             "You",
-            facts.session.map_or_else(
-                || "not connected over SSH".to_owned(),
-                |s| {
-                    format!(
-                        "connected from {} to port {}",
-                        s.client.ip(),
-                        s.server.port()
-                    )
-                },
-            ),
+            facts
+                .session
+                .as_ref()
+                .map_or_else(|| "not connected over SSH".to_owned(), session_line),
         ),
         (
             "Docker",
@@ -567,6 +562,17 @@ fn print_facts(out: &mut impl Write, facts: &Facts, color: bool) -> io::Result<(
         }
     }
     Ok(())
+}
+
+/// e.g. `admin, connected from 198.51.100.7 to port 22 (sshd PID 812)`.
+fn session_line(s: &facts::Session) -> String {
+    let user = s.user.clone().unwrap_or_else(|| format!("uid {}", s.uid));
+    format!(
+        "{user}, connected from {} to port {} (sshd PID {})",
+        s.client.ip(),
+        s.server.port(),
+        s.id.pid
+    )
 }
 
 /// e.g. `OpenSSH 9.6p1, socket activation, port 22, passwords yes, root login without-password`.

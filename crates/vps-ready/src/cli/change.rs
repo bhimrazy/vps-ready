@@ -197,10 +197,10 @@ pub(super) fn history(host: &Host, json: bool, out: &mut dyn Write) -> anyhow::R
     Ok(0)
 }
 
-/// Logs the notices of `facts`, except the SSH session one: these commands
+/// Logs the notices of `facts`, except the SSH session ones: these commands
 /// do not use the session.
 fn log_notices(facts: &Facts) {
-    super::log_notices(facts, &[crate::facts::session::UNSET_NOTICE]);
+    super::log_notices(facts, &[crate::facts::session::NOTICE]);
 }
 
 fn require_root(host: &Host, command: &str) -> anyhow::Result<()> {

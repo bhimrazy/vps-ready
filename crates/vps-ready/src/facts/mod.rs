@@ -25,7 +25,7 @@ pub mod virt;
 pub use firewall::{Firewall, InputChain, Ports, PublishedPort};
 pub use listeners::{Listener, Proto};
 pub use os_release::{OsFamily, OsRelease};
-pub use session::{Env, SshSession};
+pub use session::{Env, NoSession, Session, SessionId};
 pub use ssh::{Ssh, SshActivation, SshdConfig};
 pub use sysctl::Sysctl;
 pub use updates::AptUpdates;
@@ -58,7 +58,7 @@ pub struct Facts {
     /// link-local).
     pub ipv6: bool,
     /// The SSH session `vps-ready` runs in, if any.
-    pub session: Option<SshSession>,
+    pub session: Option<Session>,
     /// Kernel settings from `/proc/sys`. `None` inside a container, where
     /// they belong to the host. A container that cannot be detected (no
     /// `systemd-detect-virt` and no Docker or Podman marker) is read as if it
@@ -115,8 +115,8 @@ pub enum FactsError {
     },
 }
 
-/// Collects facts about the system behind `fs` and `runner`, plus the
-/// session described by `env`.
+/// Collects facts about the system behind `fs` and `runner`, plus the SSH
+/// session of the process in `env`.
 ///
 /// # Errors
 ///
@@ -130,7 +130,7 @@ pub fn collect(fs: &dyn Fs, runner: &dyn Runner, env: &Env) -> Result<Facts, Fac
     let listeners = listeners::detect(runner, &mut notices);
     let firewall = firewall::detect(fs, runner, &mut notices);
     let ipv6 = firewall::has_ipv6(fs);
-    let session = session::detect(env, &mut notices);
+    let session = session::collect(env, fs, &mut notices);
     let sysctl = (!virtualization.in_container()).then(|| sysctl::detect(fs, &mut notices));
     let updates = if os.family == OsFamily::Debian {
         updates::detect(fs, runner, &init, &mut notices)
@@ -303,18 +303,12 @@ pub(crate) mod fixtures {
     }
 
     /// Facts for a captured host, answering commands from its fixture.
-    /// `prefer` selects a scenario, e.g. `["sshd-T-before-login"]`.
+    /// `prefer` selects a scenario, e.g. `["sshd-T-before-login"]`. There is
+    /// no process tree, so no session.
     pub(crate) fn host(name: &str, prefer: &[&str]) -> Facts {
         let dir = testdata(&format!("hosts/{name}"));
         let runner = FakeRunner::from_fixture(&dir, prefer).unwrap();
-        let env_file = std::fs::read_to_string(dir.join("env")).unwrap();
-        let env = Env {
-            ssh_connection: env_file
-                .trim()
-                .strip_prefix("SSH_CONNECTION=")
-                .map(str::to_owned),
-        };
-        collect(&RealFs::new(dir.join("root")), &runner, &env).unwrap()
+        collect(&RealFs::new(dir.join("root")), &runner, &Env::default()).unwrap()
     }
 }
 
@@ -429,7 +423,6 @@ mod tests {
                     .any(|l| l.port == 22 && l.proto == Proto::Tcp),
                 "{name}"
             );
-            assert_eq!(facts.session.map(|s| s.server.port()), Some(22), "{name}");
             assert!(facts.notices.is_empty(), "{name}: {:?}", facts.notices);
         }
     }
@@ -513,8 +506,15 @@ mod tests {
         assert!(facts.listeners.is_empty());
         assert!(!facts.docker);
         // os-release, init, virtualization, ssh version, sshd activation,
-        // sshd config, ss, nft, SSH_CONNECTION, /proc/sys.
+        // sshd config, ss, nft, /proc/sys.
+        assert_eq!(facts.notices.len(), 9, "{:?}", facts.notices);
+        assert_eq!(facts.session, None);
+
+        // No /proc for the session walk either.
+        let env = Env { pid: Some(902) };
+        let facts = collect(&FakeFs::new(), &FakeRunner::new(), &env).unwrap();
         assert_eq!(facts.notices.len(), 10, "{:?}", facts.notices);
+        assert!(facts.notices.iter().any(|n| n.starts_with(session::NOTICE)));
     }
 
     #[test]
