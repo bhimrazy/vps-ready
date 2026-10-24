@@ -79,6 +79,11 @@ fn host(fs: &FakeFs) -> Host<'_> {
         FakeRunner::new()
             .on("dpkg-query", ["-W"], Output::success("installed"))
             .on("apt-config", ["-c"], Output::success(""))
+            .on(
+                "systemctl",
+                ["show"],
+                Output::success("LoadState=loaded\nActiveState=inactive\nUnitFileState=disabled\n"),
+            )
     });
     Host {
         sys: Sys {
@@ -723,7 +728,7 @@ impl Module for NoApt {
 #[test]
 fn several_modules() {
     let fs = fixture();
-    let modules: &[&dyn Module] = &[crate::modules::all()[0], &NoApt];
+    let modules: &[&dyn Module] = &[&crate::modules::KernelSysctl::ROOT, &NoApt];
     let host = Host {
         modules,
         ..host(&fs)
@@ -875,8 +880,16 @@ fn plan_profile_minimal_snapshot() {
     insta::assert_snapshot!(out);
 }
 
-/// Today the default selection and the built-in profiles are the same
-/// modules.
+#[test]
+fn plan_profile_web_snapshot() {
+    let fs = fixture();
+    let (code, out, err) = plan_with(&host(&fs), &with_profile("web", &[]));
+    assert_eq!((code, err.as_str()), (0, ""));
+    insta::assert_snapshot!(out);
+}
+
+/// Today the default selection is the modules of `minimal`; `web` adds
+/// `ssh.bruteforce`, which installs packages.
 #[test]
 fn default_selection_is_the_safe_modules() {
     let fs = fixture();
@@ -889,7 +902,10 @@ fn default_selection_is_the_safe_modules() {
     let default = body(&only(&[]));
     assert!(default.contains("updates.auto"), "{default}");
     assert_eq!(default, body(&with_profile("minimal", &[])));
-    assert_eq!(default, body(&with_profile("web", &[])));
+    assert!(!default.contains("ssh.bruteforce"), "{default}");
+    let web = body(&with_profile("web", &[]));
+    assert!(web.contains("ssh.bruteforce:"), "{web}");
+    assert!(web.contains("updates.auto"), "{web}");
 }
 
 #[test]
@@ -900,7 +916,8 @@ fn a_profile_file_is_read_and_checked() {
     );
     let (code, out, _) = plan_with(&host(&fs), &with_profile("/srv/mine.toml", &[]));
     assert_eq!(code, 0);
-    assert!(out.starts_with("kernel.sysctl:"), "{out}");
+    assert!(out.starts_with("ssh.bruteforce:"), "{out}");
+    assert!(out.contains("kernel.sysctl:"), "{out}");
     assert!(!out.contains("updates.auto"), "{out}");
     assert!(
         out.ends_with("`sudo vps-ready apply --profile /srv/mine.toml` to make them.\n"),

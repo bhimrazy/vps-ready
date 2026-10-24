@@ -41,7 +41,7 @@ pub(super) struct Host<'a> {
 /// The modules `plan` and `apply` run without `--profile` and `--module`:
 /// the safe set. Modules that can lock someone out or install packages need
 /// a profile or `--module`.
-const DEFAULT_MODULES: [&str; 2] = ["kernel.sysctl", "updates.auto"];
+pub(super) const DEFAULT_MODULES: [&str; 2] = ["kernel.sysctl", "updates.auto"];
 
 /// Which modules `plan` and `apply` act on.
 #[derive(Debug, Default, Clone)]

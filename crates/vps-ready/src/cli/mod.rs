@@ -478,13 +478,16 @@ fn log_notices(facts: &Facts, quiet: &[&str]) {
 }
 
 /// Whether running as root would let an unknown control be checked: when
-/// `sshd -T` or `nft list ruleset` could not run (both need root), or a
-/// `/proc/sys` file is root-only on this kernel.
+/// `sshd -T`, `fail2ban-client` or `nft list ruleset` could not run (all
+/// need root), or a `/proc/sys` file is root-only on this kernel.
 fn root_would_help(report: &Report, facts: &Facts) -> bool {
     report.findings.iter().any(|f| {
         matches!(f.outcome, Outcome::Unknown { .. })
             && match &f.control.check {
                 Check::SshdEffective { .. } => facts.ssh.effective.is_none(),
+                Check::SshRateLimited => {
+                    facts.ssh.effective.is_none() || facts.ssh.fail2ban.is_none()
+                }
                 Check::Sysctl { key, .. } => {
                     facts.sysctl.as_ref().is_some_and(|s| s.is_unreadable(key))
                 }
@@ -657,19 +660,37 @@ fn print_report(
     if s.unknown > 0 && root_hint {
         writeln!(out, "Run it with sudo: some checks need root.")?;
     }
-    let fixable: Vec<&str> = shown
+    let fixable: Vec<&Finding> = shown
         .iter()
         .filter(|f| matches!(f.outcome, Outcome::Fail { .. }) && f.control.fix.is_some())
-        .map(|f| f.control.id.as_str())
+        .copied()
         .collect();
     if !fixable.is_empty() {
-        let ids = fixable.join(", ");
+        let ids = fixable
+            .iter()
+            .map(|f| f.control.id.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        // Plain `plan` runs only the default modules; name them all if a
+        // fix is in another.
+        let mut modules: Vec<&str> = Vec::new();
+        for module in fixable.iter().filter_map(|f| f.control.fix.as_deref()) {
+            if !modules.contains(&module) {
+                modules.push(module);
+            }
+        }
+        let mut plan = "sudo vps-ready plan".to_owned();
+        if modules.iter().any(|m| !change::DEFAULT_MODULES.contains(m)) {
+            for module in modules {
+                plan.push_str(&format!(" --module {module}"));
+            }
+        }
         let count = if fixable.len() == s.failed {
             format!("all {}", s.failed)
         } else {
             format!("{} of the {}", fixable.len(), s.failed)
         };
-        let line = format!("vps-ready can fix {count} ({ids}): run `sudo vps-ready plan`.");
+        let line = format!("vps-ready can fix {count} ({ids}): run `{plan}`.");
         for line in wrap(&line, WIDTH) {
             writeln!(out, "{line}")?;
         }
@@ -888,7 +909,7 @@ mod tests {
         print_report(&mut text, &report, "this host", false, true, false).unwrap();
         let text = String::from_utf8(text).unwrap();
         assert!(text.contains("0 passed, 2 failed ("), "{text}");
-        assert!(text.contains(", 7 unknown"), "{text}");
+        assert!(text.contains(", 8 unknown"), "{text}");
         assert!(
             text.contains("effective SSH config is unknown: `sshd -T` failed (Missing"),
             "{text}"

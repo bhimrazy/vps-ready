@@ -60,6 +60,12 @@ fn built_in_profiles_are_valid() {
         assert!(profile.params("kernel.sysctl").is_some(), "{name}");
         assert!(profile.params("updates.auto").is_some(), "{name}");
     }
+    let enables = |name: &str| {
+        let profile = Profile::built_in(name, all()).unwrap().unwrap();
+        profile.params("ssh.bruteforce").is_some()
+    };
+    assert!(enables("web"));
+    assert!(!enables("minimal"));
     assert!(Profile::built_in("paranoid", all()).unwrap().is_none());
 }
 
@@ -132,7 +138,7 @@ fn unknown_modules_and_bases_are_errors() {
     let err = parse("schema = 1\n[modules.\"ssh.sevrer\"]\n").unwrap_err();
     assert!(
         err.to_string()
-            .starts_with("unknown module `ssh.sevrer`; modules are kernel.sysctl"),
+            .starts_with("unknown module `ssh.sevrer`; modules are ssh.bruteforce"),
         "{err}"
     );
     let err = parse("schema = 1\nextends = \"paranoid\"\n").unwrap_err();

@@ -2,7 +2,7 @@
 source: crates/vps-ready/src/cli/mod.rs
 expression: "String::from_utf8(text).unwrap()"
 ---
-Audit of Ubuntu 24.04.5 LTS: 28 controls
+Audit of Ubuntu 24.04.5 LTS: 29 controls
 
 STATUS   ID       SEVERITY  CONTROL
 FAIL     SSH-002  high      Password authentication disabled
@@ -34,10 +34,17 @@ FAIL     SSH-005  low       X11 forwarding disabled
          A server has no use for graphical apps, and a forwarded display lets
          the server reach into your desktop session.
          fix: not automated yet
+FAIL     SSH-008  low       Repeated failed logins are slowed down
+         sshd has no PerSourcePenalties (OpenSSH before 9.8) and fail2ban's sshd
+         jail is not running
+         Bots try common passwords all day. Holding back an address that keeps
+         failing cuts the log noise and slows down a guess at a weak password.
+         fix: sudo vps-ready apply --module ssh.bruteforce
 
-4 passed, 5 failed (1 high, 3 medium, 1 low), 0 unknown, 19 skipped
+4 passed, 6 failed (1 high, 3 medium, 2 low), 0 unknown, 19 skipped
 Skipped: kernel settings are not checked inside a container.
 Skipped: Docker is not installed.
-vps-ready can fix 1 of the 5 (UPD-001): run `sudo vps-ready plan`.
+vps-ready can fix 2 of the 6 (UPD-001, SSH-008): run `sudo vps-ready plan
+--module updates.auto --module ssh.bruteforce`.
 The other 4 need a manual fix for now; each says so above.
 Run `vps-ready audit --all` to list the 4 passing controls too.

@@ -1,0 +1,45 @@
+---
+source: crates/vps-ready/src/cli/change/tests.rs
+expression: out
+---
+ssh.bruteforce: Ban addresses that keep failing to log in over SSH
+  note: no SSH session found, so only localhost is exempt from bans
+  note: if this installs fail2ban, rollback leaves it installed and enabled, as the package sets it up, so it runs the distro's own jails after a reboot; `systemctl disable --now fail2ban` turns it off
+  + /etc/fail2ban/jail.d/90-vps-ready.local (mode 0644, root:root)        reversible
+      @@ -0,0 +1,9 @@
+      +# Written by vps-ready (ssh.bruteforce). `vps-ready rollback --last`
+      +# restores the previous state; edits here are replaced by the next apply.
+      +[DEFAULT]
+      +banaction = nftables
+      +backend = systemd
+      +
+      +[sshd]
+      +enabled = true
+      +ignoreip = 127.0.0.1/8 ::1
+  ~ enable and start fail2ban.service                                     reversible
+kernel.sysctl: Harden kernel settings (fixes KRN-001, KRN-002, KRN-003, KRN-007, KRN-008, NET-002)
+  + /etc/sysctl.d/90-vps-ready.conf (mode 0644, root:root)                reversible
+      @@ -0,0 +1,8 @@
+      +# Written by vps-ready (kernel.sysctl). `vps-ready rollback --last`
+      +# restores the previous state; edits here are replaced by the next apply.
+      +kernel.kptr_restrict = 1
+      +kernel.dmesg_restrict = 1
+      +kernel.unprivileged_bpf_disabled = 2
+      +fs.protected_fifos = 1
+      +fs.protected_regular = 1
+      +net.ipv4.conf.all.accept_source_route = 0
+  ~ kernel.kptr_restrict 0 -> 1                                           reversible
+  ~ kernel.dmesg_restrict 0 -> 1                                          reversible
+  ~ kernel.unprivileged_bpf_disabled 0 -> 2                               reversible
+  ~ fs.protected_fifos 0 -> 1                                             reversible
+  ~ fs.protected_regular 0 -> 1                                           reversible
+  ~ net.ipv4.conf.all.accept_source_route 1 -> 0                          reversible
+updates.auto: Install security updates automatically (fixes UPD-001)
+  + /etc/apt/apt.conf.d/52vps-ready (mode 0644, root:root)                reversible
+      @@ -0,0 +1,3 @@
+      +APT::Periodic::Enable "1";
+      +APT::Periodic::Update-Package-Lists "1";
+      +APT::Periodic::Unattended-Upgrade "1";
+
+10 changes in 3 modules: 3 files, 6 kernel settings, 1 service.
+Run `sudo vps-ready apply --profile web` to make them.

@@ -27,6 +27,10 @@ pub struct Ssh {
     pub activation: SshActivation,
     /// Effective configuration from `sshd -T`, if it could be read.
     pub effective: Option<SshdConfig>,
+    /// Whether fail2ban's `sshd` jail runs, from `fail2ban-client status
+    /// sshd`: `false` when fail2ban is not installed, not running or has no
+    /// such jail; `None` when it could not be asked, e.g. without root.
+    pub fail2ban: Option<bool>,
 }
 
 /// How sshd is started. This matters for port changes: with socket
@@ -60,6 +64,26 @@ pub(super) fn detect(runner: &dyn Runner, notices: &mut Vec<String>) -> Ssh {
         version: version(runner, notices),
         activation: activation(runner, notices),
         effective: effective(runner, notices),
+        fail2ban: fail2ban(runner, notices),
+    }
+}
+
+fn fail2ban(runner: &dyn Runner, notices: &mut Vec<String>) -> Option<bool> {
+    let cmd = Cmd::new("fail2ban-client")
+        .args(["status", "sshd"])
+        .timeout(Duration::from_secs(10));
+    match probe(runner, &cmd, notices) {
+        Probe::Ran(out) if out.ok() => Some(true),
+        // Its socket is root's: "Permission denied to socket: ...".
+        Probe::Ran(out) if String::from_utf8_lossy(&out.stderr).contains("Permission denied") => {
+            notices.push(
+                "`fail2ban-client` needs root; whether fail2ban's sshd jail runs is unknown"
+                    .to_owned(),
+            );
+            None
+        }
+        Probe::Ran(_) | Probe::Missing => Some(false),
+        Probe::Failed => None,
     }
 }
 
@@ -306,6 +330,46 @@ mod tests {
         assert!(ubuntu.contains("until the first SSH login"), "{ubuntu}");
 
         assert!(sshd_t_failure("").contains("(no error output)"));
+    }
+
+    #[test]
+    fn asks_fail2ban_for_its_sshd_jail() {
+        use crate::sys::Output;
+        use crate::sys::fake::FakeRunner;
+
+        let ask = |runner: FakeRunner| {
+            let mut notices = Vec::new();
+            (fail2ban(&runner, &mut notices), notices.len())
+        };
+        let exits = |status, stderr: &str| {
+            FakeRunner::new().on(
+                "fail2ban-client",
+                ["status", "sshd"],
+                Output {
+                    status,
+                    stdout: Vec::new(),
+                    stderr: stderr.as_bytes().to_vec(),
+                },
+            )
+        };
+        assert_eq!(ask(exits(0, "")), (Some(true), 0));
+        assert_eq!(
+            ask(exits(
+                255,
+                "ERROR  Failed to access socket path: /var/run/fail2ban/fail2ban.sock. \
+                 Is fail2ban running?\n"
+            )),
+            (Some(false), 0)
+        );
+        assert_eq!(
+            ask(exits(
+                255,
+                "ERROR  Permission denied to socket: /var/run/fail2ban/fail2ban.sock, \
+                 (you must be root)\n"
+            )),
+            (None, 1)
+        );
+        assert_eq!(ask(FakeRunner::new()), (Some(false), 0));
     }
 
     proptest::proptest! {
