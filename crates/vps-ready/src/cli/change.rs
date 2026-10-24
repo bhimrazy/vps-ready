@@ -3,17 +3,18 @@
 
 use std::collections::BTreeMap;
 use std::io::{self, BufRead, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::bail;
 use owo_colors::OwoColorize;
 
-use super::{EXIT_ERROR, EXIT_INCOMPLETE, EXIT_ROLLED_BACK, print_report};
+use super::{EXIT_ERROR, EXIT_INCOMPLETE, EXIT_PENDING, EXIT_ROLLED_BACK, print_report};
 use crate::audit::{self, Outcome};
 use crate::config::Profile;
 use crate::engine::{
-    self, ApplyOutcome, Engine, EngineError, ModuleStatus, Plan, Progress, Selected, StateDir,
-    Target, TxnInfo, TxnState,
+    self, ApplyOutcome, Deadman, DeadmanOutcome, Engine, EngineError, ModuleStatus, Plan, Progress,
+    Rollback, Selected, StateDir, Target, TxnInfo, TxnState,
 };
 use crate::facts::Facts;
 use crate::modules::Module;
@@ -33,6 +34,8 @@ pub(super) struct Host<'a> {
     /// Collects the facts; called again after apply for the audit.
     pub facts: fn(Sys) -> anyhow::Result<Facts>,
     pub color: bool,
+    /// This binary, which the dead-man timer and boot hook run.
+    pub binary: PathBuf,
 }
 
 /// The modules `plan` and `apply` run without `--profile` and `--module`:
@@ -155,11 +158,13 @@ pub(super) fn plan(
 }
 
 /// `apply`: plans under the lock, asks, applies, then audits what it fixed.
-/// `input` is stdin when it is a terminal.
+/// `window` is the dead-man window. `input` is stdin when it is a terminal.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn apply(
     host: &Host,
     sel: &Selection,
     yes: bool,
+    window: Duration,
     input: Option<&mut dyn BufRead>,
     out: &mut dyn Write,
     err: &mut dyn Write,
@@ -204,8 +209,22 @@ pub(super) fn apply(
         err,
         "If this is interrupted, run `sudo vps-ready rollback --last` to undo it."
     )?;
-    match engine.apply(&plan, &mut |p| print_progress(err, &p))? {
+    let deadman = Deadman {
+        window,
+        binary: host.binary.clone(),
+    };
+    match engine.apply(&plan, &deadman, &mut |p| print_progress(err, &p))? {
         ApplyOutcome::NothingToDo => writeln!(out, "Nothing to do.")?,
+        ApplyOutcome::Pending { txn, deadline } => {
+            writeln!(
+                out,
+                "Applied {n} {} (transaction {txn}). The changes are live and are rolled \
+                 back at {} unless confirmed. Undo them now with `sudo vps-ready rollback --last`.",
+                plural(n, "change"),
+                clock(deadline.wall)
+            )?;
+            return Ok(EXIT_PENDING);
+        }
         ApplyOutcome::Applied { txn } => {
             let journal = host.state_dir.join("txn").join(&txn);
             writeln!(
@@ -243,6 +262,58 @@ pub(super) fn rollback(
     let state = StateDir::create(host.sys.fs, host.state_dir, host.state_uid)?;
     let done =
         Engine::lock(&state, host.sys)?.rollback(target, &mut |p| print_progress(err, &p))?;
+    print_rollback(out, &done)?;
+    Ok(0)
+}
+
+/// `rollback --txn ID --deadman`, run by the dead-man timer: waits for the
+/// lock, then rolls back the transaction unless it was confirmed, finished
+/// or extended meanwhile. Its output goes to the unit's log.
+pub(super) fn rollback_deadman(
+    host: &Host,
+    txn: &str,
+    attempt: u32,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> anyhow::Result<u8> {
+    require_root(host, "rollback")?;
+    let state = StateDir::create(host.sys.fs, host.state_dir, host.state_uid)?;
+    let engine = Engine::lock_wait(&state, host.sys)?;
+    match engine.deadman(txn, &host.binary, attempt, &mut |p| print_progress(err, &p))? {
+        DeadmanOutcome::Finished(state) => {
+            writeln!(out, "Transaction {txn} is {state}; nothing to roll back.")?;
+        }
+        DeadmanOutcome::Rearmed(deadline) => writeln!(
+            out,
+            "Transaction {txn} now reverts at {}; re-armed for then.",
+            clock(deadline.wall)
+        )?,
+        DeadmanOutcome::RolledBack(done) => print_rollback(out, &done)?,
+    }
+    Ok(0)
+}
+
+/// `rollback --deadman-boot`, run by the boot hook before sshd starts.
+pub(super) fn rollback_deadman_boot(
+    host: &Host,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> anyhow::Result<u8> {
+    require_root(host, "rollback")?;
+    let state = StateDir::create(host.sys.fs, host.state_dir, host.state_uid)?;
+    let engine = Engine::lock_wait(&state, host.sys)?;
+    let done = engine.deadman_boot(&mut |p| print_progress(err, &p))?;
+    if done.is_empty() {
+        writeln!(out, "Nothing was left unconfirmed by the reboot.")?;
+    }
+    for done in &done {
+        print_rollback(out, done)?;
+    }
+    Ok(0)
+}
+
+/// What a rollback did, including what it left and the edits it kept.
+fn print_rollback(out: &mut dyn Write, done: &Rollback) -> io::Result<()> {
     writeln!(
         out,
         "Rolled back transaction {}: restored {} {}.",
@@ -260,7 +331,34 @@ pub(super) fn rollback(
             done.at_next_boot.join(", ")
         )?;
     }
-    Ok(0)
+    for copy in &done.during {
+        writeln!(
+            out,
+            "A file changed since apply was restored anyway; its edit is in {}.",
+            copy.display()
+        )?;
+    }
+    if !done.skipped.is_empty() {
+        writeln!(
+            out,
+            "Left as they are because they changed since apply; restore them by hand:"
+        )?;
+        for step in &done.skipped {
+            writeln!(out, "  {step}")?;
+        }
+    }
+    Ok(())
+}
+
+/// Unix seconds as the time of day, e.g. `14:07:30 UTC`.
+fn clock(at: u64) -> String {
+    let secs = at % 86_400;
+    format!(
+        "{:02}:{:02}:{:02} UTC",
+        secs / 3600,
+        secs % 3600 / 60,
+        secs % 60
+    )
 }
 
 /// `history`: every transaction, newest first. Needs root, since the state
@@ -556,6 +654,21 @@ fn print_progress(err: &mut dyn Write, progress: &Progress) {
         }
         // The engine leaves only sysctls.
         Progress::Leave(_) => return,
+        Progress::Armed { deadline } => format!(
+            "Armed the dead-man switch: changes revert by {} if apply does not finish",
+            clock(deadline.wall)
+        ),
+        Progress::Reload(reload) => format!("reload: {reload}"),
+        Progress::Waiting { left } => format!("waiting for a confirm: {}s left", left.as_secs()),
+        Progress::During { path, copy } => format!(
+            "{} changed since apply; keeping it as {}, then restoring it",
+            path.display(),
+            copy.display()
+        ),
+        Progress::Skip(step) => format!("leave {step} (it changed since apply)"),
+        Progress::ReloadSkipped { reload, reason } => {
+            format!("skip {reload}, so the daemon keeps its config: {reason}")
+        }
     };
     let _ = writeln!(err, "{line}");
 }
@@ -585,11 +698,14 @@ fn print_history(out: &mut dyn Write, txns: &[TxnInfo]) -> io::Result<()> {
         };
         writeln!(
             out,
-            "{:<20}  {state:<26}  {modules:<width$}  {} {}",
+            "{:<20}  {state:<29}  {modules:<width$}  {} {}",
             t.id,
             t.changes,
             plural(t.changes, "change")
         )?;
+        for step in &t.skipped {
+            writeln!(out, "  left by the dead-man rollback: {step}")?;
+        }
     }
     Ok(())
 }

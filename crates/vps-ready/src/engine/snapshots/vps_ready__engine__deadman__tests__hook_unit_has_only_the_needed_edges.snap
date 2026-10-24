@@ -1,0 +1,16 @@
+---
+source: crates/vps-ready/src/engine/deadman.rs
+expression: "hook_unit(Path::new(\"/usr/local/bin/vps-ready\"))"
+---
+[Unit]
+Description=vps-ready: roll back an unconfirmed change after a reboot
+DefaultDependencies=no
+After=local-fs.target vps-ready-firewall.service
+Before=ssh.service ssh.socket shutdown.target
+Conflicts=shutdown.target
+[Service]
+Type=oneshot
+TimeoutStartSec=120
+ExecStart=/usr/local/bin/vps-ready rollback --deadman-boot
+[Install]
+WantedBy=multi-user.target

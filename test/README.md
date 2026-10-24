@@ -49,7 +49,10 @@ test/container-apply.sh ubuntu-24.04 target/aarch64-unknown-linux-musl/release/v
 KVM (2 vCPUs, 2 GiB, a copy-on-write overlay over the image), seeds a user
 and a throwaway SSH key with cloud-init, and drives the VM over SSH. It runs
 `kernel.sysctl` apply and rollback in the same boot and across a reboot, then
-the `updates.auto` cycle. It needs `/dev/kvm`, `qemu-system-x86_64`,
+the `updates.auto` cycle, then the dead-man switch: an unconfirmed apply of
+the test module `test.deadman` reverts at its deadline, also after an edit
+during the window, and at boot after a reboot. That module exists only in a
+binary built with `--features vps-ready/testing`. It needs `/dev/kvm`, `qemu-system-x86_64`,
 `qemu-img`, `cloud-localds` (cloud-image-utils), `ssh` and `jq`. The `vm`
 workflow pins the images and runs it on four distros.
 
@@ -62,6 +65,7 @@ settings and apt configuration, so use a throwaway one.
 limactl create --name=vpsr-dev --cpus=1 --memory=1 --disk=10 --mount-none template:ubuntu-24.04
 limactl start vpsr-dev
 sed -e 's/^Host .*/Host vm/' -e '/Control/d' ~/.lima/vpsr-dev/ssh.config >/tmp/vm.ssh_config
+cargo build --release --target aarch64-unknown-linux-musl --features vps-ready/testing
 VM_SSH_CONFIG=/tmp/vm.ssh_config test/vm-cycle.sh ubuntu-24.04 target/aarch64-unknown-linux-musl/release/vps-ready -
 limactl delete --force vpsr-dev
 ```

@@ -1,18 +1,24 @@
 //! Modules: the policy that decides which [`Resource`]s a fix needs. They
 //! only plan and verify; the engine applies and rolls back.
 
+use std::time::Duration;
+
 use serde::de::DeserializeOwned;
 
 use crate::audit::CatalogError;
 use crate::engine::Reload;
 use crate::facts::Facts;
 use crate::resource::{Resource, ResourceError};
-use crate::sys::{Sys, SysError};
+use crate::sys::{Cmd, Sys, SysError};
 
+#[cfg(feature = "testing")]
+mod deadman_test;
 pub mod kernel_sysctl;
 pub mod ssh_bruteforce;
 mod updates_auto;
 
+#[cfg(feature = "testing")]
+pub use deadman_test::DeadmanTest;
 pub use kernel_sysctl::KernelSysctl;
 pub use ssh_bruteforce::SshBruteforce;
 pub use updates_auto::UpdatesAuto;
@@ -118,6 +124,16 @@ pub trait Module {
     fn title(&self) -> &'static str;
     /// Why the change matters.
     fn why(&self) -> &'static str;
+    /// Whether its changes can lock the admin out, so apply arms the
+    /// dead-man switch and waits for a confirm.
+    fn needs_deadman(&self) -> bool {
+        false
+    }
+    /// Whether a dead-man rollback restores its resources even if they
+    /// changed since apply, since leaving them is the lockout.
+    fn force_restore(&self) -> bool {
+        false
+    }
     /// Whether it can run on this host.
     fn applicable(&self, facts: &Facts) -> Applicability;
     /// What the plan should say besides its changes, e.g. something the
@@ -154,6 +170,11 @@ pub trait Module {
     fn verify(&self, _cx: &PlanCx, _sys: Sys) -> Result<(), String> {
         Ok(())
     }
+    /// The longest [`Module::verify`] may run, by the timeouts of its
+    /// commands; the dead-man's first deadline leaves apply this long.
+    fn verify_timeout(&self) -> Duration {
+        Cmd::DEFAULT_TIMEOUT
+    }
 }
 
 /// Every module, in the order the plan lists and applies them.
@@ -163,6 +184,19 @@ pub fn all() -> &'static [&'static dyn Module] {
         &SshBruteforce::ROOT,
         &KernelSysctl::ROOT,
         &UpdatesAuto::ROOT,
+    ]
+}
+
+/// [`all`] and the test module [`DeadmanTest`]; only in a build with the
+/// `testing` feature.
+#[cfg(feature = "testing")]
+#[must_use]
+pub fn with_test() -> &'static [&'static dyn Module] {
+    &[
+        &SshBruteforce::ROOT,
+        &KernelSysctl::ROOT,
+        &UpdatesAuto::ROOT,
+        &DeadmanTest,
     ]
 }
 

@@ -89,7 +89,7 @@ impl Host {
         let state = self.state();
         let outcome = Engine::lock(&state, self.sys())
             .unwrap()
-            .apply(plan, &mut |_| {})
+            .apply(plan, &crate::engine::Deadman::default(), &mut |_| {})
             .unwrap();
         assert!(
             matches!(

@@ -25,6 +25,11 @@ pub struct Service {
 /// systemd's default start and stop timeout of 90 s, which a start waits for.
 const SYSTEMCTL_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// The longest snapshot and apply may run: `systemctl show`, then
+/// `daemon-reload`, `enable` and `start`.
+pub(super) const TIMEOUT: Duration =
+    Duration::from_secs(Cmd::DEFAULT_TIMEOUT.as_secs() + 3 * SYSTEMCTL_TIMEOUT.as_secs());
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct State {
     enabled: bool,

@@ -85,7 +85,9 @@ impl User {
         })
     }
 
-    pub(super) fn apply(&self, sys: Sys) -> Result<(), ResourceError> {
+    /// Creates the account or adds the groups; returns the uid of a created
+    /// account.
+    pub(super) fn apply(&self, sys: Sys) -> Result<Option<u32>, ResourceError> {
         self.check_names()?;
         if lookup(sys, &self.name)?.is_none() {
             let mut cmd =
@@ -97,14 +99,14 @@ impl User {
                 cmd = cmd.args(["--password", "*"]);
             }
             run(sys, &cmd.arg(&self.name))?;
-            return Ok(());
+            return Ok(lookup(sys, &self.name)?.map(|e| e.uid));
         }
         let missing = self.missing_groups(sys)?;
         if !missing.is_empty() {
             let cmd = Cmd::new("usermod").args(["--append", "--groups", &missing.join(",")]);
             run(sys, &cmd.arg(&self.name))?;
         }
-        Ok(())
+        Ok(None)
     }
 
     fn check_names(&self) -> Result<(), ResourceError> {
@@ -149,11 +151,15 @@ pub(super) fn restore(
     Ok(())
 }
 
-/// The safety check. A created account is unchanged whether it exists or is
-/// already gone; its uid is not checked, since it is not known when the
-/// backup is written. An existing one is unchanged if it is in all of the
-/// added groups or in none of them.
-pub(crate) fn unchanged(sys: Sys, backup: &Backup) -> Result<bool, ResourceError> {
+/// The safety check. A created account is unchanged if it is already gone,
+/// or still has `uid`, the uid apply journaled for it; without one (a crash
+/// before the `applied` line), any account of that name counts. An existing
+/// one is unchanged if it is in all of the added groups or in none of them.
+pub(crate) fn unchanged(
+    sys: Sys,
+    backup: &Backup,
+    uid: Option<u32>,
+) -> Result<bool, ResourceError> {
     let Backup::User {
         name,
         created,
@@ -163,8 +169,13 @@ pub(crate) fn unchanged(sys: Sys, backup: &Backup) -> Result<bool, ResourceError
         return Ok(false);
     };
     check_name("user", name)?;
-    if *created || lookup(sys, name)?.is_none() {
+    let Some(entry) = lookup(sys, name)? else {
         return Ok(true);
+    };
+    if *created {
+        // No uid (a journal from before 0.3, or a crash between `useradd`
+        // and the `applied` line): the name is all there is to go by.
+        return Ok(uid.is_none_or(|uid| uid == entry.uid));
     }
     let current = groups(sys, name)?;
     let in_group = |g: &String| current.contains(g);
@@ -363,8 +374,41 @@ mod tests {
                     "sudo,adm",
                     "admin",
                 ]),
+                getent(),
             ]
         );
+    }
+
+    #[test]
+    fn apply_returns_the_uid_of_a_created_account() {
+        /// `getent` finds `admin` once `useradd` ran.
+        struct Created(std::sync::Mutex<bool>);
+        impl crate::sys::Runner for Created {
+            fn run(&self, cmd: &Cmd) -> Result<Output, crate::sys::SysError> {
+                let mut created = self.0.lock().unwrap();
+                match cmd.program.as_str() {
+                    "useradd" => *created = true,
+                    "getent" if *created => return Ok(Output::success(ENTRY)),
+                    _ => return Ok(exit(2)),
+                }
+                Ok(Output::success(""))
+            }
+        }
+        let fs = FakeFs::new();
+        let created = Created(std::sync::Mutex::new(false));
+        let applied = user(&[], Password::Locked)
+            .apply(Sys {
+                fs: &fs,
+                runner: &created,
+            })
+            .unwrap();
+        assert_eq!(applied.uid, Some(1001));
+        // An existing account was not created: no uid.
+        let runner = existing("admin");
+        let applied = user(&[], Password::Locked)
+            .apply(sys(&fs, &runner))
+            .unwrap();
+        assert_eq!(applied.uid, None);
     }
 
     #[test]
@@ -528,8 +572,9 @@ mod tests {
             created: false,
             added_groups: vec!["sudo".into(), "adm".into()],
         };
-        let check =
-            |runner: FakeRunner, backup: &Backup| unchanged(sys(&fs, &runner), backup).unwrap();
+        let check = |runner: FakeRunner, backup: &Backup| {
+            unchanged(sys(&fs, &runner), backup, None).unwrap()
+        };
         assert!(check(existing("admin sudo adm"), &added));
         assert!(check(existing("admin"), &added));
         assert!(!check(existing("admin sudo"), &added));
@@ -541,6 +586,13 @@ mod tests {
         };
         assert!(check(existing("admin"), &created));
         assert!(check(missing(), &created));
+        // With the uid apply journaled, another account of that name is a
+        // change: its rollback must not `userdel` it.
+        let with_uid =
+            |runner: FakeRunner, uid| unchanged(sys(&fs, &runner), &created, Some(uid)).unwrap();
+        assert!(with_uid(existing("admin"), 1001));
+        assert!(!with_uid(existing("admin"), 1002));
+        assert!(with_uid(missing(), 1002));
     }
 
     #[test]

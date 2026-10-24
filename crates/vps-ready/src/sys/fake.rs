@@ -165,6 +165,8 @@ struct State {
     counts: BTreeMap<Op, usize>,
     /// The call of each operation that fails.
     fail_at: BTreeMap<Op, usize>,
+    /// The first call of each operation from which every call fails.
+    fail_from: BTreeMap<Op, usize>,
 }
 
 impl State {
@@ -199,7 +201,9 @@ impl State {
     fn tick(&mut self, op: Op, path: &Path) -> Result<(), SysError> {
         let n = self.counts.entry(op).or_default();
         *n += 1;
-        if self.fail_at.get(&op) == Some(n) {
+        if self.fail_at.get(&op) == Some(n)
+            || self.fail_from.get(&op).is_some_and(|from| *n >= *from)
+        {
             return Err(SysError::Io {
                 context: path.display().to_string(),
                 source: io::Error::other(format!("injected failure of {op:?} call {n}")),
@@ -302,6 +306,24 @@ impl FakeFs {
     pub fn fail(self, op: Op, n: usize) -> Self {
         self.lock().fail_at.insert(op, n);
         self
+    }
+
+    /// Like [`FakeFs::fail`], but every call of `op` from the `n`-th on
+    /// fails, as on a full disk; with `1`, every call from now on.
+    pub fn fail_from(&self, op: Op, n: usize) {
+        self.lock().fail_from.insert(op, n);
+    }
+
+    /// Makes the next call of `op` fail, as [`FakeFs::fail`] does.
+    pub fn fail_next(&self, op: Op) {
+        let mut state = self.lock();
+        let next = state.counts.get(&op).copied().unwrap_or_default() + 1;
+        state.fail_at.insert(op, next);
+    }
+
+    /// Ends every [`FakeFs::fail_from`]: the disk has space again.
+    pub fn heal(&self) {
+        self.lock().fail_from.clear();
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {

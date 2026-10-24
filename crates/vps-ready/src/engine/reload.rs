@@ -27,7 +27,7 @@ pub enum Reload {
 
 /// Longer than systemd's default start and stop timeout (90 s), so systemd
 /// reports a hung unit before the command is killed.
-const SYSTEMCTL_TIMEOUT: Duration = Duration::from_secs(120);
+pub(super) const SYSTEMCTL_TIMEOUT: Duration = Duration::from_secs(120);
 
 impl Reload {
     /// The name the journal records, e.g. `sshd-reload`.
@@ -66,6 +66,12 @@ impl Reload {
         Cmd::new("systemctl")
             .args(args.iter().copied())
             .timeout(SYSTEMCTL_TIMEOUT)
+    }
+
+    /// The longest the check and the reload may run, by their timeouts.
+    #[must_use]
+    pub fn timeout(self) -> Duration {
+        self.check().map_or(Duration::ZERO, |c| c.timeout) + self.command().timeout
     }
 }
 

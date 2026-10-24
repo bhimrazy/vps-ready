@@ -7,6 +7,7 @@
 //! planning again.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -181,6 +182,35 @@ impl Resource {
         }
     }
 
+    /// The longest the commands of [`Resource::snapshot`] and
+    /// [`Resource::apply`] may run, in total, by their timeouts.
+    #[must_use]
+    pub fn timeout(&self) -> Duration {
+        match self {
+            Self::File(f) if f.validate.is_some() => Cmd::DEFAULT_TIMEOUT,
+            Self::File(_) | Self::Sysctl(_) => Duration::ZERO,
+            Self::Package(_) => package::TIMEOUT,
+            Self::Service(_) => service::TIMEOUT,
+            // `getent`, `id`, then `useradd` or `usermod`.
+            Self::User(_) => Cmd::DEFAULT_TIMEOUT * 4,
+            // `getent` in snapshot and in apply.
+            Self::AuthorizedKeys(_) => Cmd::DEFAULT_TIMEOUT * 2,
+        }
+    }
+
+    /// The longest the commands of [`Resource::diff`] may run, in total, by
+    /// their timeouts.
+    #[must_use]
+    pub fn diff_timeout(&self) -> Duration {
+        match self {
+            Self::File(_) | Self::Sysctl(_) => Duration::ZERO,
+            // `dpkg-query`; `systemctl show`; `getent`.
+            Self::Package(_) | Self::Service(_) | Self::AuthorizedKeys(_) => Cmd::DEFAULT_TIMEOUT,
+            // `getent`, then `id`.
+            Self::User(_) => Cmd::DEFAULT_TIMEOUT * 2,
+        }
+    }
+
     /// The change [`Resource::apply`] would make; `None` if the system is
     /// already in the desired state. Only reads.
     ///
@@ -240,16 +270,26 @@ impl Resource {
     ///
     /// [`ResourceError::Command`] if a command fails; as for
     /// [`Resource::snapshot`]; any [`SysError`].
-    pub fn apply(&self, sys: Sys) -> Result<(), ResourceError> {
+    pub fn apply(&self, sys: Sys) -> Result<Applied, ResourceError> {
         match self {
             Self::File(f) => f.apply(sys),
             Self::Sysctl(s) => s.apply(sys),
             Self::Package(p) => p.apply(sys),
             Self::Service(s) => s.apply(sys),
-            Self::User(u) => u.apply(sys),
+            Self::User(u) => return u.apply(sys).map(|uid| Applied { uid }),
             Self::AuthorizedKeys(k) => k.apply(sys),
-        }
+        }?;
+        Ok(Applied::default())
     }
+}
+
+/// What [`Resource::apply`] learned that the safety check of a rollback
+/// needs, journaled with the `applied` line.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Applied {
+    /// The uid of the account a [`User`] created, so a rollback does not
+    /// remove another account that took its name since.
+    pub uid: Option<u32>,
 }
 
 /// The state of a resource before apply, as written to the journal.
@@ -368,6 +408,13 @@ pub fn before_path(txn_dir: &Path, n: u32) -> PathBuf {
 #[must_use]
 pub fn after_path(txn_dir: &Path, n: u32) -> PathBuf {
     txn_dir.join("files").join(format!("{n}.after"))
+}
+
+/// Where a dead-man rollback keeps the bytes file `n` had when it was
+/// restored anyway: `files/<n>.during`.
+#[must_use]
+pub fn during_path(txn_dir: &Path, n: u32) -> PathBuf {
+    txn_dir.join("files").join(format!("{n}.during"))
 }
 
 /// Puts back the state recorded in `backup`, with the file copies of the
