@@ -113,17 +113,23 @@ fn run(
     )
 }
 
+fn only(ids: &[&str]) -> Selection {
+    Selection {
+        profile: None,
+        modules: ids.iter().map(|s| (*s).to_owned()).collect(),
+    }
+}
+
 fn plan_cmd(host: &Host, ids: &[&str]) -> (u8, String, String) {
-    let ids: Vec<String> = ids.iter().map(|s| (*s).to_owned()).collect();
-    run(|out, _| plan(host, &ids, false, out))
+    run(|out, _| plan(host, &only(ids), false, out))
 }
 
 fn apply_yes(host: &Host) -> (u8, String, String) {
-    run(|out, err| apply(host, &[], true, None, out, err))
+    run(|out, err| apply(host, &only(&[]), true, None, out, err))
 }
 
 fn apply_answer(host: &Host, input: &mut dyn BufRead) -> (u8, String, String) {
-    run(|out, err| apply(host, &[], false, Some(input), out, err))
+    run(|out, err| apply(host, &only(&[]), false, Some(input), out, err))
 }
 
 fn rollback_last(host: &Host) -> (u8, String, String) {
@@ -207,7 +213,7 @@ fn plan_with_a_module_lists_it_as_not_applicable() {
 #[test]
 fn plan_json_is_the_plan() {
     let fs = fixture();
-    let (code, out, _) = run(|out, _| plan(&host(&fs), &[], true, out));
+    let (code, out, _) = run(|out, _| plan(&host(&fs), &only(&[]), true, out));
     assert_eq!(code, 0);
     let json: serde_json::Value = serde_json::from_str(&out).unwrap();
     let module = &json["modules"][0];
@@ -308,7 +314,7 @@ fn apply_asks_first() {
     assert_eq!(tree(&fs), original);
     assert!(txn_ids(&fs).is_empty());
 
-    let (code, _, err) = run(|out, err| apply(&host, &[], false, None, out, err));
+    let (code, _, err) = run(|out, err| apply(&host, &only(&[]), false, None, out, err));
     assert_eq!(code, 2);
     assert_eq!(
         err,
@@ -457,7 +463,7 @@ fn apply_errors_exit_2() {
         facts: container,
         ..host(&fs)
     };
-    let ids = ["kernel.sysctl".to_owned()];
+    let ids = only(&["kernel.sysctl"]);
     let (code, _, err) = run(|out, err| apply(&host, &ids, true, None, out, err));
     assert_eq!(code, 2);
     assert_eq!(
@@ -708,8 +714,8 @@ impl Module for NoApt {
     }
 }
 
-/// Without `--module` every module is listed and only those that apply are
-/// applied; `--module` selects in registry order.
+/// Without `--module` only the default modules are listed; `--module`
+/// selects in registry order.
 #[test]
 fn several_modules() {
     let fs = fixture();
@@ -720,15 +726,12 @@ fn several_modules() {
     };
     let (code, out, _) = plan_cmd(&host, &[]);
     assert_eq!(code, 0);
-    assert!(
-        out.contains("test.noapt: not applicable (apt not found)\n\n7 changes in 1 module: 1 file, 6 kernel settings."),
-        "{out}"
-    );
+    assert!(!out.contains("test.noapt"), "{out}");
     let (code, out, _) = plan_cmd(&host, &["test.noapt"]);
     assert_eq!(code, 0);
     assert!(!out.contains("kernel.sysctl"), "{out}");
 
-    let ids = ["test.noapt".to_owned(), "kernel.sysctl".to_owned()];
+    let ids = only(&["test.noapt", "kernel.sysctl"]);
     let (code, _, err) = run(|out, err| apply(&host, &ids, true, None, out, err));
     assert_eq!(code, 2);
     assert_eq!(
@@ -738,4 +741,97 @@ fn several_modules() {
     let (code, out, _) = apply_yes(&host);
     assert_eq!(code, 0);
     assert!(out.contains("Applied 7 changes"), "{out}");
+}
+
+fn with_profile(profile: &str, ids: &[&str]) -> Selection {
+    Selection {
+        profile: Some(profile.to_owned()),
+        ..only(ids)
+    }
+}
+
+fn plan_with(host: &Host, sel: &Selection) -> (u8, String, String) {
+    run(|out, _| plan(host, sel, false, out))
+}
+
+#[test]
+fn plan_profile_minimal_snapshot() {
+    let fs = fixture();
+    let (code, out, err) = plan_with(&host(&fs), &with_profile("minimal", &[]));
+    assert_eq!((code, err.as_str()), (0, ""));
+    insta::assert_snapshot!(out);
+}
+
+/// Today the default selection and the built-in profiles are the same
+/// modules.
+#[test]
+fn default_selection_is_the_safe_modules() {
+    let fs = fixture();
+    let host = host(&fs);
+    // Without the last line, which repeats the command.
+    let body = |sel: &Selection| {
+        let out = plan_with(&host, sel).1;
+        out.lines().rev().skip(1).collect::<Vec<_>>().join("\n")
+    };
+    let default = body(&only(&[]));
+    assert!(default.contains("updates.auto"), "{default}");
+    assert_eq!(default, body(&with_profile("minimal", &[])));
+    assert_eq!(default, body(&with_profile("web", &[])));
+}
+
+#[test]
+fn a_profile_file_is_read_and_checked() {
+    let fs = fixture().with_file(
+        "/srv/mine.toml",
+        "schema = 1\nextends = \"web\"\n[modules.\"updates.auto\"]\nenabled = false\n",
+    );
+    let (code, out, _) = plan_with(&host(&fs), &with_profile("/srv/mine.toml", &[]));
+    assert_eq!(code, 0);
+    assert!(out.starts_with("kernel.sysctl:"), "{out}");
+    assert!(!out.contains("updates.auto"), "{out}");
+    assert!(
+        out.ends_with("`sudo vps-ready apply --profile /srv/mine.toml` to make them.\n"),
+        "{out}"
+    );
+
+    let fs = fixture().with_file(
+        "/srv/typo.toml",
+        "schema = 1\n[modules.\"kernel.sysctl\"]\nx = 1\n",
+    );
+    let (code, _, err) = plan_with(&host(&fs), &with_profile("/srv/typo.toml", &[]));
+    assert_eq!(code, 2);
+    assert!(
+        err.starts_with("error: profile /srv/typo.toml: module `kernel.sysctl`: invalid params:"),
+        "{err}"
+    );
+    let (code, _, err) = plan_with(&host(&fs), &with_profile("/srv/none.toml", &[]));
+    assert_eq!(code, 2);
+    assert!(
+        err.starts_with("error: /srv/none.toml is not a built-in profile ("),
+        "{err}"
+    );
+}
+
+#[test]
+fn module_narrows_a_profile() {
+    let fs = fixture();
+    let (_, out, _) = plan_with(&host(&fs), &with_profile("web", &["updates.auto"]));
+    assert!(!out.contains("kernel.sysctl"), "{out}");
+    assert!(out.contains("updates.auto"), "{out}");
+    assert!(
+        out.contains("apply --profile web --module updates.auto"),
+        "{out}"
+    );
+}
+
+#[test]
+fn a_module_the_profile_does_not_enable_is_an_error() {
+    let fs = fixture().with_file("/srv/p.toml", "schema = 1\n[modules.\"updates.auto\"]\n");
+    let sel = with_profile("/srv/p.toml", &["kernel.sysctl"]);
+    let (code, _, err) = plan_with(&host(&fs), &sel);
+    assert_eq!(code, 2);
+    assert_eq!(
+        err,
+        "error: kernel.sysctl is not enabled by profile /srv/p.toml\n"
+    );
 }

@@ -14,6 +14,8 @@
 //! - [`sys`]: the only place that touches the host (processes and files),
 //!   behind the [`sys::Runner`] and [`sys::Fs`] traits so everything else is
 //!   testable with fakes.
+//! - [`config`]: profiles, the TOML files that select modules and set their
+//!   params.
 //! - [`facts`]: read-only discovery of what the host is (OS, init system, ...).
 //! - [`audit`]: checks the facts against the embedded controls catalog.
 //! - [`engine`]: plans modules, applies the plan as a journaled transaction,
@@ -32,6 +34,7 @@ use serde::Serialize;
 
 pub mod audit;
 pub mod cli;
+pub mod config;
 pub mod engine;
 pub mod facts;
 pub mod modules;
