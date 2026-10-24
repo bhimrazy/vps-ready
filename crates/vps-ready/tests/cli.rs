@@ -169,7 +169,9 @@ fn notices_have_no_log_labels_by_default() {
         .assert()
         .success()
         .stderr(predicate::str::contains("vps-ready: /proc/sys not found"))
-        .stderr(predicate::str::contains("WARN").not());
+        .stderr(predicate::str::contains("WARN").not())
+        // A mounted tree has no process table, so no session is looked for.
+        .stderr(predicate::str::contains("no SSH session").not());
     vps_ready()
         .args(["detect", "-v", "--root", root])
         .assert()
