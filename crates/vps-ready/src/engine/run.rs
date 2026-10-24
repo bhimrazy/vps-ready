@@ -21,8 +21,8 @@ use crate::sys::{Cmd, FileKind, FileOwner, Fs, FsLock, Sys, SysError};
 
 /// The engine with the lock held: apply and rollback run through it.
 pub struct Engine<'a> {
-    state: &'a StateDir,
-    sys: Sys<'a>,
+    pub(super) state: &'a StateDir,
+    pub(super) sys: Sys<'a>,
     _lock: FsLock,
 }
 
@@ -181,6 +181,10 @@ pub struct TxnInfo {
     /// What a dead-man rollback left, with the steps to restore it by hand.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub skipped: Vec<ByHand>,
+    /// For one pending a confirm: seconds until its timer rolls it back, 0
+    /// once its deadline or boot passed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reverts_in: Option<u64>,
 }
 
 /// How a rollback treats resources that changed since apply.
@@ -242,6 +246,26 @@ impl<'a> Engine<'a> {
                     }
                     std::thread::sleep(LOCK_POLL);
                 }
+                other => return other,
+            }
+        }
+    }
+
+    /// Takes the lock of `state`, waiting at most `max`: for `confirm`,
+    /// whose lock a dead-man rollback may hold for a moment.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::Busy`] once `max` passed, or [`EngineError::Sys`].
+    pub fn lock_timeout(
+        state: &'a StateDir,
+        sys: Sys<'a>,
+        max: Duration,
+    ) -> Result<Self, EngineError> {
+        let start = std::time::Instant::now();
+        loop {
+            match Self::lock(state, sys) {
+                Err(EngineError::Busy) if start.elapsed() < max => std::thread::sleep(LOCK_POLL),
                 other => return other,
             }
         }
@@ -722,14 +746,17 @@ impl<'a> Engine<'a> {
     /// pending, or unfinished with an `armed` record, from a boot other than
     /// this one, as [`Engine::deadman`] does with reason `deadman-reboot`.
     /// A boot ID that cannot be read counts as another boot. A journal that
-    /// cannot be read does not stop the others. Disables the hook once none
-    /// is left. Every command it runs has 20 s at most.
+    /// cannot be read does not stop the others. A rollback that did not
+    /// complete is tried again by timers that run `binary`, as after the
+    /// timer's rollback. Disables the hook once none is left. Every command
+    /// it runs has 20 s at most.
     ///
     /// # Errors
     ///
     /// The first error, after every transaction was tried.
     pub fn deadman_boot(
         &self,
+        binary: &Path,
         progress: &mut dyn FnMut(Progress),
     ) -> Result<Vec<Rollback>, EngineError> {
         let capped = deadman::Capped {
@@ -745,12 +772,13 @@ impl<'a> Engine<'a> {
             },
             _lock: FsLock::new(()),
         };
-        engine.boot_rollbacks(progress)
+        engine.boot_rollbacks(binary, progress)
     }
 
     /// [`Engine::deadman_boot`], with the commands already capped.
     fn boot_rollbacks(
         &self,
+        binary: &Path,
         progress: &mut dyn FnMut(Progress),
     ) -> Result<Vec<Rollback>, EngineError> {
         let fs = self.sys.fs;
@@ -778,8 +806,11 @@ impl<'a> Engine<'a> {
                 }
                 let mut open = Open::resume_best_effort(fs, txn.clone())?;
                 let reason = RollbackReason::DeadmanReboot;
-                self.roll_back(&mut open, reason, Mode::Deadman, progress)
-                    .map(Some)
+                let done = self.roll_back(&mut open, reason, Mode::Deadman, progress);
+                if let Err(EngineError::RollbackIncomplete { .. }) = done {
+                    self.retry(&mut open, 0, binary);
+                }
+                done.map(Some)
             })();
             match result {
                 Ok(Some(rollback)) => done.push(rollback),
@@ -798,7 +829,7 @@ impl<'a> Engine<'a> {
     }
 
     /// The transaction with ID `id`.
-    fn find(&self, id: &str) -> Result<Txn, EngineError> {
+    pub(super) fn find(&self, id: &str) -> Result<Txn, EngineError> {
         self.state
             .txns(self.sys.fs)?
             .into_iter()
@@ -834,7 +865,7 @@ impl<'a> Engine<'a> {
     /// Stops the timer `unit`, with its service if `service`, and disables
     /// the boot hook, best effort: a timer that fires anyway finds the
     /// transaction finished, and so does the hook.
-    fn disarm(&self, unit: Option<&str>, service: bool) {
+    pub(super) fn disarm(&self, unit: Option<&str>, service: bool) {
         if let Some(unit) = unit
             && let Err(e) = deadman::stop(self.sys, unit, service)
         {
@@ -1233,10 +1264,18 @@ pub fn history(state: &StateDir, fs: &dyn Fs) -> Result<Vec<TxnInfo>, EngineErro
             Event::Begin { modules, .. } => modules.clone(),
             _ => Vec::new(),
         };
+        let state = journal::replay(&records)?;
+        let unfinished = journal::is_unfinished(&records);
+        let reverts_in = match state {
+            TxnState::PendingConfirm { deadline, .. } if !unfinished => {
+                Some(super::confirm::left(fs, &records, deadline).as_secs())
+            }
+            _ => None,
+        };
         infos.push(TxnInfo {
             id: txn.id().to_owned(),
-            state: journal::replay(&records)?,
-            unfinished: journal::is_unfinished(&records),
+            state,
+            unfinished,
             started: first.at,
             modules,
             changes: records
@@ -1253,6 +1292,7 @@ pub fn history(state: &StateDir, fs: &dyn Fs) -> Result<Vec<TxnInfo>, EngineErro
                     _ => None,
                 })
                 .collect(),
+            reverts_in,
         });
     }
     Ok(infos)
@@ -1378,7 +1418,7 @@ fn by_hand(dir: &Path, resource: &str, backup: &Backup) -> Option<ByHand> {
 
 /// A transaction being written. Every append is checked with
 /// [`journal::transition`] first.
-struct Open<'a> {
+pub(super) struct Open<'a> {
     fs: &'a dyn Fs,
     txn: Txn,
     records: Vec<Record>,
@@ -1389,7 +1429,7 @@ struct Open<'a> {
 }
 
 impl<'a> Open<'a> {
-    fn new(fs: &'a dyn Fs, txn: Txn, records: Vec<Record>) -> Result<Self, EngineError> {
+    pub(super) fn new(fs: &'a dyn Fs, txn: Txn, records: Vec<Record>) -> Result<Self, EngineError> {
         let state = if records.is_empty() {
             None
         } else {
@@ -1442,7 +1482,7 @@ impl<'a> Open<'a> {
         Ok(&self.records)
     }
 
-    fn append(&mut self, event: Event) -> Result<(), EngineError> {
+    pub(super) fn append(&mut self, event: Event) -> Result<(), EngineError> {
         self.records()?;
         let next = journal::transition(self.state, &event)?;
         let record = Record {

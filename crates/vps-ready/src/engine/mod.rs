@@ -2,6 +2,7 @@
 //! dead-man switch, manual rollback and history, over the state directory,
 //! its lock and the journal that records each transaction.
 
+mod confirm;
 pub mod deadman;
 pub mod id;
 pub mod journal;
@@ -12,6 +13,7 @@ mod state;
 #[cfg(test)]
 mod tests;
 
+pub use confirm::{Extended, Refusal, Watch, watch};
 pub use deadman::Deadman;
 pub use journal::{Deadline, Event, Record, RollbackReason, TxnState};
 pub use plan::{ModulePlan, ModuleStatus, Plan, Selected, Step, plan};
@@ -107,6 +109,9 @@ pub enum EngineError {
         /// What is wrong with it.
         reason: String,
     },
+    /// `confirm` or `confirm --extend` refused.
+    #[error(transparent)]
+    Refused(#[from] Refusal),
     /// The dead-man switch could not be armed, re-armed or read.
     #[error("dead-man switch: {0}")]
     Deadman(String),
