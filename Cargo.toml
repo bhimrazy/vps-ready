@@ -12,6 +12,7 @@ repository = "https://github.com/bhimrazy/vps-ready"
 [workspace.dependencies]
 # The alias crate pins the exact same version.
 vps-ready = { path = "crates/vps-ready", version = "=0.2.1" }
+sshd-config = { path = "crates/sshd-config", version = "=0.2.1" }
 
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive", "env", "wrap_help"] }

@@ -1,0 +1,21 @@
+[package]
+name = "sshd-config"
+description = "Read sshd_config and its Include files, and parse the output of `sshd -T`."
+categories = ["parser-implementations", "config"]
+keywords = ["sshd", "openssh", "ssh", "config", "parser"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+# Kept off crates.io until the API settles.
+publish = false
+
+[dependencies]
+serde.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

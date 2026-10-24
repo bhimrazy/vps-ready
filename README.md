@@ -134,7 +134,7 @@ cargo run -p vps-ready -- detect
 | `make build-musl` | Static release builds for `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` |
 | `make deny` | Dependency checks: advisories, licenses, banned crates and allowed sources |
 
-The code is a Cargo workspace with two crates today: `crates/vps-ready` (library plus thin binary) and `crates/vpsready` (the same command under the alias name). A standalone `sshd-config` parser crate is planned for M3. All system access goes through two traits, `Runner` and `Fs`, so every module is tested against fakes before it ever touches a real machine. The layout and the reasoning are in [the architecture doc](docs/architecture.md#repo-layout).
+The code is a Cargo workspace with three crates: `crates/vps-ready` (library plus thin binary), `crates/vpsready` (the same command under the alias name) and `crates/sshd-config` (a standalone reader for `sshd_config` and `sshd -T`, not published yet). All system access goes through two traits, `Runner` and `Fs`, so every module is tested against fakes before it ever touches a real machine. The layout and the reasoning are in [the architecture doc](docs/architecture.md#repo-layout).
 
 ## Contributing and security
 
