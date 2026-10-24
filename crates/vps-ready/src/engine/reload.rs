@@ -89,7 +89,8 @@ pub(super) fn run(sys: Sys, cmd: &Cmd) -> Result<(), String> {
     }
 }
 
-fn line(cmd: &Cmd) -> String {
+/// `cmd` as a shell line, for messages.
+pub(super) fn line(cmd: &Cmd) -> String {
     std::iter::once(cmd.program.as_str())
         .chain(cmd.args.iter().map(String::as_str))
         .collect::<Vec<_>>()

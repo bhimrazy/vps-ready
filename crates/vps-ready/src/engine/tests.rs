@@ -521,14 +521,27 @@ fn a_failed_rollback_after_a_failed_apply_finishes_on_a_rerun() {
 
 #[test]
 fn a_crash_at_any_point_is_refused_by_apply_and_undone_by_rollback() {
+    crash_at_any_point(&[&demo()]);
+}
+
+#[test]
+fn a_crash_at_any_point_with_reloads_replays_the_journaled_ones() {
+    let [ssh, plain, fw] = reloading();
+    crash_at_any_point(&[&ssh, &plain, &fw]);
+}
+
+/// Applies `modules`, then for each journal prefix (whole, or with a torn
+/// next line) rebuilds the tree a crash there could leave and rolls it back.
+/// The rollback replays exactly the reloads in the prefix, newest first.
+fn crash_at_any_point(modules: &[&dyn Module]) {
     let facts = facts();
     let original_fs = fixture();
-    let demo = demo();
-    let plan = plan_of(&original_fs, &facts, &[&demo]);
+    let plan = plan_of(&original_fs, &facts, modules);
     let original = tree(&original_fs);
 
     let fs = fixture();
-    let ApplyOutcome::Applied { txn } = apply(&fs, &plan).unwrap() else {
+    let ok = runner(Output::success(""));
+    let ApplyOutcome::Applied { txn } = apply_with(&fs, &ok, &plan).unwrap() else {
         panic!("not applied");
     };
     let applied = tree(&fs);
@@ -561,6 +574,21 @@ fn a_crash_at_any_point_is_refused_by_apply_and_undone_by_rollback() {
                 _ => false,
             })
         };
+        let replayed: Vec<String> = records
+            .iter()
+            .rev()
+            .filter_map(|e| match e {
+                Event::Reloaded { reload } => Some(reload),
+                _ => None,
+            })
+            .flat_map(|r| {
+                r.check()
+                    .iter()
+                    .chain([&r.command()])
+                    .map(reload::line)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
         // A resource with a `backup` line but no `applied` line may or may
         // not have been changed when the crash came.
         for changed_unjournaled in [false, true] {
@@ -604,7 +632,9 @@ fn a_crash_at_any_point_is_refused_by_apply_and_undone_by_rollback() {
                             "{case}"
                         );
                     }
-                    rollback(&fs, Target::Last).unwrap_or_else(|e| panic!("{case}: {e}"));
+                    let run = runner(Output::success(""));
+                    rollback_with(&fs, &run).unwrap_or_else(|e| panic!("{case}: {e}"));
+                    assert_eq!(calls(&run), replayed, "{case}");
                 }
                 assert_eq!(host(&fs), host(&original_fs), "{case}");
                 assert!(st.unfinished(&fs).unwrap().is_empty(), "{case}");
@@ -1012,10 +1042,20 @@ fn a_failed_reload_in_rollback_is_finished_by_a_rerun() {
         .on("sshd", ["-t"], Output::success(""))
         .on("systemctl", Vec::<String>::new(), failed("Job failed"));
     let err = rollback_with(&fs, &broken).unwrap_err();
-    assert!(
-        matches!(&err, EngineError::RollbackIncomplete { left: Some(left), .. } if left.is_empty()),
-        "{err:?}"
+    let EngineError::RollbackIncomplete {
+        left: Some(left), ..
+    } = &err
+    else {
+        panic!("{err:?}");
+    };
+    assert_eq!(
+        left,
+        &[ByHand {
+            resource: "sshd-reload".into(),
+            step: SSHD_RELOAD[1].into(),
+        }]
     );
+    assert_eq!(host(&fs), before);
     assert!(matches!(
         apply_with(&fs, &broken, &plan),
         Err(EngineError::Unfinished(id)) if id == txn
@@ -1030,6 +1070,60 @@ fn a_failed_reload_in_rollback_is_finished_by_a_rerun() {
         names[names.len() - 2..],
         ["reloaded sshd-reload", "state rolled-back (manual)"]
     );
+}
+
+#[test]
+fn a_failed_reload_in_rollback_does_not_stop_earlier_modules() {
+    let fs = fixture();
+    let facts = facts();
+    let before = host(&fs);
+    let [ssh, plain, fw] = reloading();
+    let plan = plan_of(&fs, &facts, &[&ssh, &plain, &fw]);
+    let ok = runner(Output::success(""));
+    let ApplyOutcome::Applied { txn } = apply_with(&fs, &ok, &plan).unwrap() else {
+        panic!("not applied");
+    };
+    let broken = FakeRunner::new()
+        .on("nft", ["-c"], Output::success(""))
+        .on(
+            "systemctl",
+            ["try-reload-or-restart", "vps-ready-firewall.service"],
+            failed("Job failed"),
+        )
+        .on("sshd", ["-t"], Output::success(""))
+        .on("systemctl", Vec::<String>::new(), Output::success(""));
+    let err = rollback_with(&fs, &broken).unwrap_err();
+    let EngineError::RollbackIncomplete {
+        left: Some(left), ..
+    } = &err
+    else {
+        panic!("{err:?}");
+    };
+    assert_eq!(
+        left,
+        &[ByHand {
+            resource: "firewall-reload".into(),
+            step: FIREWALL_RELOAD[1].into(),
+        }]
+    );
+    // The sshd module was still restored and reloaded.
+    assert_eq!(host(&fs), before);
+    assert_eq!(calls(&broken), [FIREWALL_RELOAD, SSHD_RELOAD].concat());
+    let names = names(&fs, &txn);
+    assert_eq!(
+        names[names.len() - 5..],
+        [
+            "rollback",
+            "restored file:/etc/demo.d/new.conf",
+            "restored sysctl:kernel.kptr_restrict",
+            "restored file:/etc/demo.conf",
+            "reloaded sshd-reload",
+        ]
+    );
+
+    let run = runner(Output::success(""));
+    rollback_with(&fs, &run).unwrap();
+    assert_eq!(calls(&run), [FIREWALL_RELOAD, SSHD_RELOAD].concat());
 }
 
 #[test]

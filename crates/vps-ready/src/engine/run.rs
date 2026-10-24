@@ -398,9 +398,12 @@ impl<'a> Engine<'a> {
             })
             .collect();
         // Reloads journaled by apply, not by an earlier run of this rollback.
+        // A rollback's lines start with `rollback`, or with `restored` where
+        // that line is best effort (the dead-man paths, which also add
+        // `skipped`).
         let applying = records
             .iter()
-            .position(|r| matches!(r.event, Event::Rollback { .. }))
+            .position(|r| matches!(r.event, Event::Rollback { .. } | Event::Restored { .. }))
             .map_or(records, |i| &records[..i]);
         let undo: Vec<Undo> = applying
             .iter()
@@ -470,13 +473,17 @@ impl<'a> Engine<'a> {
         let mut at_next_boot = Vec::new();
         // A reload runs once the restores journaled before it, back to the
         // previous reload, are done: those of its module, perhaps with
-        // those of a module without reloads.
+        // those of a module without reloads. A failed reload does not stop
+        // the restores of earlier modules, which may be the ones that matter
+        // (e.g. an sshd drop-in before a firewall); the rollback then ends
+        // incomplete, without a final state.
         let mut due = None;
+        let mut failed = Vec::new();
         for (i, item) in undo.iter().enumerate().rev() {
             let (resource, backup) = match item {
                 Undo::Reload(reload) => {
                     if let Some(due) = due.replace(*reload) {
-                        self.replay(open, due)
+                        self.replay(open, due, &mut failed)
                             .map_err(|e| incomplete(&id, &dir, left(i), e))?;
                     }
                     continue;
@@ -507,8 +514,20 @@ impl<'a> Engine<'a> {
             }
         }
         if let Some(due) = due {
-            self.replay(open, due)
+            self.replay(open, due, &mut failed)
                 .map_err(|e| incomplete(&id, &dir, left(0), e))?;
+        }
+        if !failed.is_empty() {
+            let left = failed
+                .iter()
+                .map(|(reload, _)| ByHand {
+                    resource: reload.name().to_owned(),
+                    step: reload::line(&reload.command()),
+                })
+                .collect();
+            let (reload, reason) = failed.swap_remove(0);
+            let source = EngineError::Reload { reload, reason };
+            return Err(incomplete(&id, &dir, Some(left), source));
         }
         open.append(Event::State {
             state: TxnState::RolledBack { reason },
@@ -520,16 +539,24 @@ impl<'a> Engine<'a> {
     /// Runs a reload that apply journaled, check first. A failed check skips
     /// it, so a running daemon keeps its config instead of loading a broken
     /// one (e.g. an `sshd_config` edited since apply). A resumed rollback
-    /// runs every such reload again; that is harmless.
-    fn replay(&self, open: &mut Open, reload: Reload) -> Result<(), EngineError> {
+    /// runs every such reload again; that is harmless. A failed reload is
+    /// added to `failed`; only a failed journal line is an error.
+    fn replay(
+        &self,
+        open: &mut Open,
+        reload: Reload,
+        failed: &mut Vec<(Reload, String)>,
+    ) -> Result<(), EngineError> {
         if let Some(check) = reload.check()
             && let Err(reason) = reload::run(self.sys, &check)
         {
             tracing::warn!("not running {reload}, so the daemon keeps its config: {reason}");
             return Ok(());
         }
-        reload::run(self.sys, &reload.command())
-            .map_err(|reason| EngineError::Reload { reload, reason })?;
+        if let Err(reason) = reload::run(self.sys, &reload.command()) {
+            failed.push((reload, reason));
+            return Ok(());
+        }
         open.append(Event::Reloaded { reload })
     }
 }
