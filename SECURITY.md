@@ -32,9 +32,10 @@ require an attacker who is already root.
 
 | Version | Supported |
 | ------- | --------- |
-| `0.2.x` | best effort: fixes ship in the next 0.2.x release |
-| `0.1.x` | no: upgrade to 0.2.x |
-| `0.1.0-alpha.x` (pre-release) | no: upgrade to 0.2.x |
+| `0.3.x` | best effort: fixes ship in the next 0.3.x release |
+| `0.2.x` | no: upgrade to 0.3.x |
+| `0.1.x` | no: upgrade to 0.3.x |
+| `0.1.0-alpha.x` (pre-release) | no: upgrade to 0.3.x |
 
 The latest minor version receives security fixes.
 
@@ -61,8 +62,9 @@ gh attestation verify vps-ready-<version>-<target>.tar.gz --repo bhimrazy/vps-re
 ## Official channels
 
 - GitHub Releases: <https://github.com/bhimrazy/vps-ready/releases>
-- crates.io: the `vps-ready` crate, and `vpsready`, an alias published from
-  this repository by the same release workflow
+- crates.io: the `vps-ready` crate; `vpsready`, an alias; and `sshd-config`,
+  the library that reads the SSH server configuration (from v0.3.0). All three
+  are published from this repository by the same release workflow
 - Later: apt, rpm and apk repositories announced in the README
 
 Anything else (other download sites, container images, packages under other

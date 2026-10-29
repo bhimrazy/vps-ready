@@ -86,18 +86,21 @@ Only the last two steps need `contents: write`, and they run in the `release` en
 ### Rust users / CI
 
 ```sh
-cargo install vps-ready --locked   # compiles from source; add --version 0.1.0-alpha.N for a pre-release
+cargo install vps-ready --locked   # compiles from source; add --version <version> for a pre-release
 ```
 
 - **`cargo install --locked`** builds on your machine from the source published to crates.io. `--locked` uses the `Cargo.lock` shipped in the crate; without it, cargo resolves the newest semver-compatible dependencies, which nobody has reviewed. Be honest about the trust model: this path is **only as trustworthy as crates.io and that lockfile**. No cosign signature or SLSA attestation covers it. (Publishing from CI with crates.io trusted publishing, so there is no long-lived token to steal, narrows the gap.) For the full chain of trust, use the release tarball and verify it with the commands above.
 
 ### Publishing to crates.io
 
-- The `crates` job in `release.yml` publishes `vps-ready`, then `vpsready`, with `cargo publish --workspace --locked` in the `crates-io` environment, using crates.io trusted publishing (no stored token).
+- The `crates` job in `release.yml` publishes `sshd-config`, then `vps-ready` (which depends on it), then `vpsready`, with `cargo publish --workspace --locked` in the `crates-io` environment, using crates.io trusted publishing (no stored token).
 - Trusted publishing cannot create a crate, so each crate's first version (`0.1.0-alpha.1`) was published by hand from a clean `main` with a short-lived API token, without pushing a tag. Both crates are configured for trusted publishing (owner `bhimrazy`, repo `vps-ready`, workflow `release.yml`, environment `crates-io`) and have **trusted publishing only** turned on, so an API token can no longer publish them.
 - Pre-releases are tags such as `v0.1.0-alpha.2`: they go through the same workflow, become GitHub pre-releases, and `cargo install` skips them unless asked for with `--version`.
 - The version appears three times in the root `Cargo.toml`: `[workspace.package] version` and the `=` pins of `vps-ready` and `sshd-config` in `[workspace.dependencies]`. Bump all together.
-- `sshd-config` has `publish = false`, so `cargo publish --workspace` skips it and `vps-ready`, which depends on it, cannot be published. Before the first release that includes it: remove `publish = false`, publish `sshd-config` once by hand (trusted publishing cannot create a crate) and configure trusted publishing for it. The workspace publish then orders it before `vps-ready`.
+- `sshd-config` is published from v0.3.0 (it had `publish = false` before, and `vps-ready` depends on it). Trusted publishing cannot create it, and `cargo publish --workspace` refuses to start when any of its versions already exists on crates.io, so publishing `sshd-config` 0.3.0 by hand would make the tag's `crates` job fail. Before pushing the `v0.3.0` tag, once:
+  1. From a clean `main`, set the version to `0.3.0-alpha.1` locally (the `[workspace.package]` version and the `sshd-config` pin), run `cargo publish -p sshd-config --allow-dirty` with a short-lived API token, then discard the edit. This creates the crate; nothing depends on that pre-release.
+  2. Configure trusted publishing for `sshd-config` as for the other two (owner `bhimrazy`, repo `vps-ready`, workflow `release.yml`, environment `crates-io`), turn on **trusted publishing only**, and revoke the token.
+  3. Push the tag: the `crates` job then publishes `sshd-config` 0.3.0 before `vps-ready`.
 - If `vps-ready` uploads but `vpsready` fails, re-running the job fails on the already-published `vps-ready`. To recover, turn off trusted publishing only for `vpsready` in its crates.io settings, run `cargo publish -p vpsready --locked` with a short-lived token, then turn the setting back on and revoke the token.
 
 ## No self-update
@@ -118,4 +121,4 @@ A root tool that replaces itself is extra attack surface for a program that usua
   For a tool whose pitch is "trust the release", we want every release step short enough to audit by reading it.
   cargo-dist stays a valid option to revisit if installers or targets multiply.
 - **License: MIT OR Apache-2.0** (the Rust-standard dual license). Apache-2.0 brings a patent grant, MIT keeps it usable by GPLv2 projects; both are friendly to hosting providers and panels that might bundle it. GPL-licensed competitors (hostveil, hardbox) are less embeddable. Use DCO sign-off, no CLA.
-- **SECURITY.md:** GitHub private vulnerability reporting, supported versions, how to verify releases, and which channels are official (GitHub Releases, crates.io `vps-ready` and its alias `vpsready`; `sshd-config` later, and the package repos).
+- **SECURITY.md:** GitHub private vulnerability reporting, supported versions, how to verify releases, and which channels are official (GitHub Releases, crates.io `vps-ready`, its alias `vpsready` and the `sshd-config` library from v0.3.0; the package repos later).

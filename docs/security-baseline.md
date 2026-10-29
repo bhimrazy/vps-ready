@@ -56,7 +56,7 @@ Legend: **Risk** = chance of lockout or breakage (L/M/H). **Profile** = M(inimal
 **Mechanism:** write **one** drop-in, `/etc/ssh/sshd_config.d/00-vps-ready.conf`.
 - sshd uses the **first value it reads** for each keyword, and the `Include` is at the top of `sshd_config`.
 - So `00-` beats cloud-init's `50-cloud-init.conf` (which sets `PasswordAuthentication yes`).
-- Also write `/etc/cloud/cloud.cfg.d/99-vps-ready.cfg` containing `ssh_pwauth: false` so cloud-init doesn't write it back.
+- `/etc/cloud/cloud.cfg.d/99-vps-ready.cfg` with `ssh_pwauth: false` is not needed: cloud-init only writes `50-cloud-init.conf`, which `00-` already beats (v0.3.0 does not write it).
 - If there's no `Include` line (check Alpine/Arch), add one as the first line.
 
 ```sshconfig
@@ -99,6 +99,7 @@ AllowGroups sshusers        # add admin + deploy to the group FIRST
 | Ubuntu (ufw) | `ufw default deny incoming; ufw limit 22/tcp; ufw allow 80,443/tcp; ufw allow 443/udp; ufw --force enable` | dead-man switch → `ufw disable` |
 | RHEL (firewalld) | Apply **runtime-only** first, confirm, then `--runtime-to-permanent` | Reloading or rebooting reverts by itself |
 | Debian/Alpine (nftables) | Write `/etc/nftables.conf` → `nft -c -f` → `nft -f` | Keep the previous ruleset file for a one-shot restore |
+| vps-ready (v0.3.0, Debian and Ubuntu) | Its own table `inet vps_ready` in `/etc/vps-ready/firewall.nft`, loaded by `vps-ready-firewall.service`; not applicable while ufw or firewalld is active | dead-man switch; rollback deletes only that table, so Docker's and fail2ban's chains stay |
 
 **Warning: Docker bypasses ufw/firewalld.** Published ports are NATed before INPUT. Mitigations, best first:
 1. `"ip": "127.0.0.1"` in `daemon.json` so ports default to loopback, with the reverse proxy as the only public entry.
@@ -114,7 +115,7 @@ Also: `ufw reset` / `nft flush ruleset` deletes Docker's chains, so run `systemc
 | Option | Use when |
 |---|---|
 | OpenSSH **PerSourcePenalties** (9.8+, on by default) | Minimal profile; nothing to install |
-| **fail2ban** | Simple, single host. On Debian 12+ **must** set `backend = systemd` + install `python3-systemd` (there's no `auth.log` by default) + `banaction = nftables-multiport`. `ignoreip` = admin IP |
+| **fail2ban** (`ssh.bruteforce`, web profile) | Simple, single host. On Debian 12+ **must** set `backend = systemd` + install `python3-systemd` (there's no `auth.log` by default) + `banaction = nftables`. `ignoreip` = admin IP |
 | **CrowdSec** + firewall bouncer | Web host; also parses nginx/Caddy logs; shared blocklist (privacy trade-off) |
 | sshguard | Alpine / tiny boxes |
 
@@ -176,9 +177,11 @@ Also make sure **needrestart ≥ 3.8**, because older versions have local-root C
 
 0. Preflight + backups + snapshot advice.
 1. Update, time, hostname, swap.
-2. Admin user + key + sudo → **Challenge 1:** the user opens a *new* terminal and runs `ssh admin@host sudo vps-ready confirm <code>`. This proves a fresh login with the right user, key and sudo all work. Nothing restrictive runs before it.
-3. SSH drop-in: write → `sshd -t` → `sshd -T` effective check → **arm dead-man** → reload → **Challenge 2** from a new connection → disarm.
-4. Firewall: allow current SSH + admin IP → arm dead-man → enable → confirm from a new connection.
+2. Admin user + key + sudo → **Challenge 1:** the user opens a *new* terminal and runs `ssh admin@host sudo vps-ready confirm`. This proves a fresh login with the right user, key and sudo all work.
+3. SSH drop-in: `sshd -t -f` on the new file → write → `sshd -t` → reload → `sshd -T -C` effective check → **Challenge 2** from a new connection.
+4. Firewall: allow every current SSH port → `nft -c -f` → load → read the table back → confirm from a new connection.
+
+   Since v0.3.0, steps 2 to 4 run in **one transaction with one confirm** (`apply --profile minimal`): the dead-man switch is **armed before the first change**, and one new login as the admin proves the user, the sshd config and the firewall together. The confirm window is **5 minutes** by default (`--deadman 1m` to `30m`; `confirm --extend` adds time), counted from when the changes are live. Without a confirm, or after a reboot during the window, everything reverts. `--module user.admin` first, then the rest, shows which step fails.
 5. Brute-force protection, updates, sysctl, journald, auditd.
 6. Deployment modules.
 7. Tailscale → confirm SSH over tailnet → close public 22 (dead-man).
@@ -193,7 +196,7 @@ Also make sure **needrestart ≥ 3.8**, because older versions have local-root C
 | Base (update, time, hostname, swap) | ✓ | ✓ | ✓ |
 | Admin user, root off, SSH drop-in | ✓ | ✓ | ✓ + FIDO2/TOTP, no TCP forwarding |
 | Firewall | SSH only | SSH, 80, 443 tcp+udp, Docker-safe | SSH via tailnet only |
-| Brute force | PerSourcePenalties | CrowdSec or fail2ban | CrowdSec on proxy |
+| Brute force | PerSourcePenalties | fail2ban (CrowdSec opt-in later) | CrowdSec on proxy |
 | Auto updates | security, no reboot | security + reboot window, Docker excluded | + auto reboot / livepatch |
 | sysctl | safe | safe, forwarding on, accept_ra=2 | + paranoid keys |
 | journald / auditd | yes / no | ✓ / basic | ✓ + remote / full + immutable |
