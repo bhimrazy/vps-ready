@@ -52,14 +52,19 @@ and a throwaway SSH key with cloud-init, and drives the VM over SSH. It runs
 the `updates.auto` cycle, then the dead-man switch: an unconfirmed apply of
 the test module `test.deadman` reverts at its deadline, also after an edit
 during the window, and at boot after a reboot. That module exists only in a
-binary built with `--features vps-ready/testing`. It needs `/dev/kvm`, `qemu-system-x86_64`,
+binary built with `--features vps-ready/testing`. Last, an unconfirmed
+`ssh.server` apply refuses new root logins during the window (also through
+`ssh.socket`) and reverts at its deadline after an edit. It needs `/dev/kvm`, `qemu-system-x86_64`,
 `qemu-img`, `cloud-localds` (cloud-image-utils), `ssh` and `jq`. The `vm`
 workflow pins the images and runs it on four distros.
 
 Without KVM, for example on a Mac, pass `-` as the image and point
 `VM_SSH_CONFIG` at an ssh config whose `Host vm` reaches a user with
 passwordless sudo, such as a Lima VM's. The cycle changes that VM's kernel
-settings and apt configuration, so use a throwaway one.
+settings and apt configuration, so use a throwaway one. On Debian 13, Lima's
+forwarded port reaches sshd over vsock, so sshd sets `SSH_CONNECTION` to
+`UNKNOWN` and vps-ready finds no SSH session (`ssh.server` then refuses to
+plan). Add a `ProxyJump` through that host to the guest's `127.0.0.1:22`.
 
 ```sh
 limactl create --name=vpsr-dev --cpus=1 --memory=1 --disk=10 --mount-none template:ubuntu-24.04

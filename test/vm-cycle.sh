@@ -32,6 +32,11 @@
 #     reboot: `systemd-analyze verify` of the boot hook finds no ordering
 #       cycle; apply, reboot during the window -> rolled back with
 #       deadman-reboot, and the hook finished before sshd started.
+#   ssh.server with `--deadman 1m`, not confirmed: root (given the user's
+#     key) logs in before apply; during the window a new root login is
+#     refused (the reload reached new connections, also through ssh.socket)
+#     and the user's login works; the drop-in is edited -> at the deadline it
+#     is gone, the edit is in files/1.during, and root logs in again.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -332,6 +337,36 @@ first=$(jq -r .__MONOTONIC_TIMESTAMP "$tmp/ssh.json" | head -n 1)
 [ "$done_at" -lt "$first" ] || die "sshd started at $first us, before $hook finished at $done_at us"
 echo "$hook finished at $done_at us, sshd's first unit started at $first us"
 vm sudo journalctl -b -u "$hook" --no-pager | tail -n 20
+
+ssh_dropin=/etc/ssh/sshd_config.d/00-vps-ready.conf
+# Logs in as root over a new connection, with the same key.
+root_login() {
+  ssh -F "$sshcfg" -o BatchMode=yes -o ConnectTimeout=5 -l root vm true 2>/dev/null
+}
+
+echo "== $distro: ssh.server, edited during the window and not confirmed"
+# Root's key lets a new connection show whether sshd reloaded the drop-in.
+vm "sudo install -d -m 700 /root/.ssh && sudo install -m 600 ~/.ssh/authorized_keys /root/.ssh/authorized_keys"
+root_login || die "root cannot log in before apply"
+vm test ! -e "$ssh_dropin" || die "$ssh_dropin exists before apply"
+rc=0; vr apply --yes --module ssh.server --deadman 1m || rc=$?
+[ "$rc" -eq 4 ] || die "apply exited $rc, expected 4 (pending)"
+expect_newest pending-confirm
+txn=$(jq -r '.[0].id' "$tmp/history.json")
+vm cat "$ssh_dropin"
+[ "$(vm sudo sshd -T | awk '$1 == "permitrootlogin" { print $2 }')" = no ] ||
+  die "sshd -T does not show permitrootlogin no"
+# The reload reaches new connections (with ssh.socket too); this one stays.
+! root_login || die "root still logs in over a new connection"
+vm true || die "the admin cannot log in during the window"
+vm "echo 'PermitRootLogin yes' | sudo tee $ssh_dropin >/dev/null"
+wait_deadman
+expect_reverted deadman-timeout
+vm test ! -e "$ssh_dropin" || die "$ssh_dropin still exists"
+during=/var/lib/vps-ready/txn/$txn/files/1.during
+[ "$(vm sudo cat "$during")" = "PermitRootLogin yes" ] || die "$during does not hold the edit"
+root_login || die "root cannot log in after the rollback"
+vm sudo rm -f /root/.ssh/authorized_keys
 
 echo "== $distro: vps-ready history"
 vr history
