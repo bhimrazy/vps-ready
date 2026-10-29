@@ -30,7 +30,7 @@ The cheap layers run on every change; the slow, expensive ones run only where th
 - **Property tests** with `proptest` (random inputs, shrunk to a minimal failing case):
   - plan → apply (to `FakeFs`) → plan must be **empty** (idempotency);
   - apply → rollback must restore the **exact** original tree (rollback fidelity).
-- **Fuzzing** with `cargo-fuzz` for parsers: `sshd -T` output, os-release, nft output. Parsers read text the tool doesn't control, so they must never panic.
+- **Parsers never panic** on text the tool doesn't control: property tests feed the `sshd-config` reader and the `sshd -T` parser arbitrary input today; `cargo-fuzz` targets for `sshd -T`, os-release and nft output are planned.
 - **CLI tests** with `assert_cmd` + `predicates`: run the built binary, assert exit codes and output (e.g. `audit` exits non-zero on a failed control).
 
 ## Layer 2: containers (every PR, minutes)
@@ -63,12 +63,18 @@ Containers can't test kernel sysctls, reboots, sshd socket activation, the host 
 - **`kernel.sysctl`, across a reboot:** weaken, `plan`, `apply --yes`, reboot, every control the module fixes passes and `plan` is empty, then `rollback --last` exits 0, removes the drop-in and leaves the kernel settings to the next boot; after a second reboot they are back to the image's defaults. On Ubuntu the boot sets `fs.protected_regular` to 2, neither the weak nor the applied value, which v0.2.0 refused to roll back.
 - **`updates.auto`:** the container cycle, with real apt and systemd.
 
-**Planned (M3):**
+- **The dead-man switch**, with the test module `test.deadman` (only in a binary built with `--features vps-ready/testing`) and `--deadman 1m`; `apply` runs in the background, since it waits for a confirm:
+  - **timeout:** apply and do not confirm → within the deadline + 10 s the file is gone, the reason is `deadman-timeout`, the boot hook is disabled, logins work and `apply` exited 1;
+  - **edited:** edit the managed file during the window → it is still reverted, and the edit is in `files/1.during`;
+  - **confirm:** over real SSH logins from inside the VM to its own sshd, `confirm` is refused from the applying session, from a session opened before apply and through a `ControlMaster` connection; `--extend` works from any session; a new login confirms, `apply` exits 0, and the hook and timers are off;
+  - **reboot:** `systemd-analyze verify` of the boot hook finds no ordering cycle; apply, reboot during the window → rolled back with `deadman-reboot`, and the hook finished before sshd started.
+- **`ssh.server`**, over real logins to the VM's own sshd:
+  - the `minimal` profile (`user.admin`, `ssh.server`, `firewall.inbound` and the rest) with a new admin: during the window a new root login is refused and sshd offers no password method → confirm as the admin → `SSH-001` to `SSH-007` and `FW-001` pass, the admin logs in and root does not → `rollback --last` removes the drop-in, the table and the admin, and root logs in again;
+  - `--module ssh.server`, not confirmed: a new root login is refused (the reload reached new logins, also through `ssh.socket` on Ubuntu 24.04); the drop-in is edited → at the deadline it is gone and the edit is in `files/1.during`;
+  - a `Match User` block with `PermitRootLogin yes` read before the drop-in → verify (`sshd -T -C`) fails and apply rolls back.
+- **Checked by hand, not in the script** (Lima, Debian 13 and Ubuntu 24.04): the firewall drops a port it does not allow (port 80 timed out from another network namespace while 22 connected), a DHCP lease renewal works under it, a reboot in the window loads the firewall, then runs the hook, then starts sshd, and `systemd-analyze verify` of `vps-ready-firewall.service` is clean.
 
-1. Apply the SSH profile → SSH as the new user → assert success; assert root and password login are refused.
-2. Apply and **don't confirm** → assert the old config is back within timeout + 10 s.
-3. Reboot during the confirm window → assert it reverted.
-4. Change the port on Ubuntu 24.04 (`ssh.socket`) → assert `ss -ltn` shows the new port.
+Layer 1 covers the rest of the dead-man design on fakes: a crash at every journal line after `armed`, a full disk during the rollback, the timer firing mid-apply, the confirm rules and their refusals, and session detection on fake `/proc` trees copied from real hosts.
 
 **Locally on your Mac:** there is no KVM, but `test/vm-cycle.sh` can drive a Lima VM you already have (see [test/README.md](../test/README.md)).
 

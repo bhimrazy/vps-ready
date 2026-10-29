@@ -1,5 +1,7 @@
 # M3 plan: dangerous modules and the dead-man switch (v0.3.0)
 
+> **Status: done.** Everything below shipped in v0.3.0 (PRs #46 to #59 and #61). The plan is kept as the design record; where the code differs, a note says so, and [the architecture doc](architecture.md) describes the code as it is.
+
 M3 adds the modules that can lock someone out (`user.admin`, `ssh.server`, `firewall.inbound`), one that can annoy them (`ssh.bruteforce`), the dead-man switch and `confirm` that make the first three safe, the `minimal` and `web` profiles, and the `sshd-config` crate. It builds on the M2 engine as it is (see [the M2 plan](m2-plan.md)) and is the subset of [the architecture](architecture.md) these modules need; the rest waits (see [Deferred](#deferred-from-the-architecture)).
 
 Debian 12/13 and Ubuntu 22.04/24.04 with systemd only, as in M2.
@@ -12,7 +14,7 @@ Debian 12/13 and Ubuntu 22.04/24.04 with systemd only, as in M2.
 |---|---|---|---|
 | `user.admin` | a login user (created or existing), its `~/.ssh/authorized_keys`, `/etc/sudoers.d/90-vps-ready-admin` | none (a precondition for `ssh.server`) | yes: the confirm is "Challenge 1" |
 | `ssh.server` | `/etc/ssh/sshd_config.d/00-vps-ready.conf`; reloads sshd | `SSH-001` to `SSH-007` | yes |
-| `firewall.inbound` | installs `nftables` if missing; `/etc/vps-ready/firewall.nft`, `/etc/systemd/system/vps-ready-firewall.service`, which it enables and starts | `FW-001` | yes |
+| `firewall.inbound` | installs `nftables` if missing; the `/etc/vps-ready` directory, `/etc/vps-ready/firewall.nft`, `/etc/systemd/system/vps-ready-firewall.service`, which it enables and starts | `FW-001` | yes |
 | `ssh.bruteforce` | installs `nftables`, `python3-systemd` and `fail2ban`; `/etc/fail2ban/jail.d/90-vps-ready.local`; enables and starts `fail2ban` | `SSH-008` (new) | no |
 
 The registry order is `user.admin`, `ssh.server`, `firewall.inbound`, `ssh.bruteforce`, `kernel.sysctl`, `updates.auto`. A fixed order is enough: the only dependency (`ssh.server` needs a working admin) is a plan-time check, not an ordering problem, so there is still no `requires` or topological sort.
@@ -60,7 +62,7 @@ The registry order is `user.admin`, `ssh.server`, `firewall.inbound`, `ssh.brute
   - our unit is ordered `After=nftables.service`, so a boot that loads `/etc/nftables.conf` loads ours after its flush;
   - the plan notes when `nftables.service` is enabled ("restarting it removes the vps-ready table until `systemctl restart vps-ready-firewall`").
 - Our own unit `vps-ready-firewall.service` is `Type=oneshot`, `RemainAfterExit=yes`, `ExecStart`/`ExecReload=nft -f /etc/vps-ready/firewall.nft`, `ExecStop=-nft delete table inet vps_ready` (the `-` ignores a table someone already flushed), with `DefaultDependencies=no`, ordered `Before=network-pre.target shutdown.target` with `Conflicts=shutdown.target`. The file replaces only our table (`table inet vps_ready {}` then `delete table inet vps_ready` then the definition, in one atomic load).
-- The ruleset (askama template, pinned by `insta`):
+- The ruleset (askama template, pinned by `insta`). As shipped, ICMPv6 is `meta l4proto icmpv6`: without `/etc/protocols` (netbase), nft 1.1.3 cannot resolve `ipv6-icmp` and the whole ruleset fails to load. systemd-networkd's DHCP client does not need the DHCPv4 rule (it receives replies on a packet socket; a counter on the rule stayed at 0 in VM tests); the rule stays for clients that use a UDP socket:
 
 ```
 table inet vps_ready {
@@ -70,8 +72,8 @@ table inet vps_ready {
     ct state invalid drop
     iif lo accept
     meta l4proto icmp accept
-    meta l4proto ipv6-icmp accept            # neighbor discovery, path MTU: never block ICMPv6
-    udp sport 67 udp dport 68 accept         # DHCPv4 replies that conntrack does not match (broadcast)
+    meta l4proto icmpv6 accept               # neighbor discovery, path MTU: never block ICMPv6
+    udp sport 67 udp dport 68 accept         # DHCPv4 replies to clients that use a UDP socket
     ip6 saddr fe80::/10 udp dport 546 accept # DHCPv6 client
     tcp dport { 22, 80, 443 } accept         # profile `allow` plus every current SSH port
     udp dport { 443 } accept
@@ -95,7 +97,7 @@ table inet vps_ready {
 
 ### Resources
 
-M3 adds three kinds to the closed enum. `Reversibility` stays `Reversible | Partial`; nothing in M3 is irreversible.
+M3 adds three kinds to the closed enum, plus a fourth as shipped: `Directory { path, owner }` for `/etc/vps-ready`, which creates only a missing directory and whose restore removes it if it is empty. `Reversibility` stays `Reversible | Partial`; nothing in M3 is irreversible.
 
 ```rust
 pub enum Resource {
@@ -107,7 +109,7 @@ pub enum Resource {
 
 pub enum Backup {
     // M2 variants unchanged
-    Service { unit: String, was_enabled: bool, was_active: bool },
+    Service { unit: String, was_enabled: bool, was_active: bool, enabled: bool, active: bool },  // shipped: the applied state too
     User { name: String, created: bool, added_groups: Vec<String> },
     AuthorizedKeys { user: String, path: PathBuf, n: u32, original: Option<FileCopy>, created_dir: bool },
 }
@@ -139,11 +141,14 @@ pub trait Module {
     fn force_restore(&self) -> bool { false }            // new: the dead-man restores its resources even if changed
     fn applicable(&self, facts: &Facts) -> Applicability;
     fn notes(&self, facts: &Facts) -> Vec<String>;
+    fn check_params(&self, params: &toml::Table) -> Result<(), ModuleError>;     // shipped with PR 8
     fn plan(&self, cx: &PlanCx, sys: Sys) -> Result<ModuleSteps, ModuleError>;  // was (facts, sys) -> Vec<Resource>
     fn verify(&self, cx: &PlanCx, sys: Sys) -> Result<(), String> { Ok(()) }     // new: sshd -T -C, nft list table
 }
 pub struct PlanCx<'a> { pub facts: &'a Facts, pub params: &'a toml::Table, pub session: Option<&'a Session> }
 pub struct ModuleSteps { pub resources: Vec<Resource>, pub reloads: Vec<Reload> }
+// As shipped: the session is `facts.session`, so `PlanCx` has no `session`; it gained `planned`
+// (the resources of the modules planned before), and `ModuleSteps` gained `notes`.
 
 #[derive(Serialize, Deserialize)]            // journaled, so a later process can replay it
 #[serde(rename_all = "kebab-case")]
@@ -166,7 +171,7 @@ pub enum Reload {
 TOML (D4), strict, embedded with `include_str!`:
 
 ```toml
-# profiles/minimal.toml
+# crates/vps-ready/src/config/profiles/minimal.toml
 schema = 1
 [modules."user.admin"]
 [modules."ssh.server"]
@@ -342,7 +347,7 @@ Existing engine code that must learn the new states:
 ```json
 {"at":1792932000,"event":"armed","unit":"vps-ready-deadman-20261025T120000Z-1","boot_id":"0d5c...","deadline":{"boottime":1234,"wall":1792932900}}
 {"at":1792932040,"event":"reloaded","reload":"sshd-reload"}
-{"at":1792932041,"event":"state","state":"pending-confirm","unit":"vps-ready-deadman-20261025T120000Z-2","deadline":{"boottime":1575,"wall":1792932341},"live_since":1275,"session":{"pid":812,"start":10433}}
+{"at":1792932041,"event":"state","state":"pending-confirm","unit":"vps-ready-deadman-20261025T120000Z-2","deadline":{"boottime":1575,"wall":1792932341},"live_since":1275,"session":{"pid":812,"start":10433},"admins":["admin"],"ssh_port":22}
 {"at":1792932100,"event":"extended","unit":"vps-ready-deadman-20261025T120000Z-3","deadline":{"boottime":1934,"wall":1792932700}}
 {"at":1792932130,"event":"confirmed","session":{"pid":951,"start":12655},"user":"admin","client":"198.51.100.7"}
 {"at":1792932130,"event":"state","state":"confirmed"}
@@ -357,6 +362,7 @@ A dead-man rollback that had to skip something:
 {"at":1792932401,"event":"state","state":"rolled-back","reason":"deadman-timeout"}
 ```
 
+- As shipped, two more events: `reload-skipped {reload, reason}` when a rollback's reload check fails, and `retry {unit, attempt}` when an incomplete dead-man rollback is tried again by a later timer. `state pending-confirm` also carries `admins` and `ssh_port` (see `confirm`).
 - A pending-confirm transaction is finished in the M2 sense (its last line is a `state` record), but `apply` also refuses while one exists, and `rollback --last` picks it first.
 - The state directory, lock, IDs and atomic writes are unchanged. The all-or-nothing safety check stays for a manual `rollback`; the dead-man paths use the per-resource rule above.
 
@@ -375,7 +381,7 @@ A dead-man rollback that had to skip something:
 `crates/sshd-config`, a workspace member with no dependency on the app:
 - `effective::parse`: the `sshd -T` parser that is in `facts/ssh.rs` today (`SshdConfig`), moved as is.
 - `files`: a small reader for `sshd_config` and its `Include`s (keywords, quoted arguments, `Include` globs in lexical order, `Match` boundaries). It answers two questions: does an `Include` cover a directory before a given keyword or `Match`, and which file sets a keyword first. The second explains a failing control in `audit` ("set by /etc/ssh/sshd_config.d/50-cloud-init.conf").
-- Not a full linter, no rendering, no crypto checks. Property tests (any input, no panic) instead of fuzzing for now. `publish = false` until the API settles (see Deferred).
+- Not a full linter, no rendering, no crypto checks. Property tests (any input, no panic) instead of fuzzing for now. Planned `publish = false` until the API settled; it is published to crates.io from v0.3.0, since `vps-ready` depends on it and cannot be published otherwise.
 
 ### Known limits
 
@@ -409,11 +415,13 @@ A dead-man rollback that had to skip something:
 4. `systemd-analyze verify` of `vps-ready-deadman.service` and `vps-ready-firewall.service` reports no ordering cycle; apply, reboot during the window → after boot, rolled back with `deadman-reboot` before sshd accepts the first login.
 5. `confirm` from the applying session, from a session opened before apply, and through a `ControlMaster` connection are refused.
 6. Ubuntu 24.04 (`ssh.socket`): the reload applies the drop-in to new connections.
-The seed adds a key for root so test 1 can try a root login. QEMU's user network makes every connection come from 10.0.2.2, which is fine: sessions differ by sshd process, not by address. Session detection is tested over real `ssh` connections: Lima's Debian 13 shell uses vsock (`SSH_CONNECTION` is `UNKNOWN 65535 ...`), so a Lima shell is not a stand-in for an SSH login.
+As shipped (see [the testing doc](testing.md#layer-3-real-vms-prs-touching-the-engine-or-modules-plus-nightly)), cycles 1 to 6 run in `test/vm-cycle.sh` except two parts of cycle 1, which were checked by hand in Lima: port 80 timing out and the DHCP renewal under the firewall. The seed adds a key for root so test 1 can try a root login. QEMU's user network makes every connection come from 10.0.2.2, which is fine: sessions differ by sshd process, not by address. Session detection is tested over real `ssh` connections: Lima's Debian 13 shell uses vsock (`SSH_CONNECTION` is `UNKNOWN 65535 ...`), so a Lima shell is not a stand-in for an SSH login.
 
 ## PR sequence
 
 Each PR leaves `main` releasable. Dangerous modules are registered only once the dead-man exists.
+
+As merged: 1 #46, 2 #48, 3 #49, 4 #51, 5 #50, 6 #54, 7 #59, 8 #52, 9 #56, 10 #58, 11 #57, 12 #55, 13 #61. Outside the sequence: #47 (`audit` lists only problems) and #53 (`RealFs` never follows a symlinked parent, found in the review of #51).
 
 1. **`docs: plan M3`** (this document).
 
@@ -459,7 +467,7 @@ Waves: {2, 3, 4, 5} → {6, 8} → {7, 12} → {9, 10, 11} → 13.
 | `paranoid` profile, JSON Schema (`schemars`), `/etc/vps-ready/config.toml`, multi-level `extends` | `minimal`, `web`, one-level `extends` from built-ins | JSON Schema with the wizard (M4); `config.toml` with `drift` (M6) |
 | `requires`/`conflicts` and a topological sort | Fixed registry order and a plan-time check | When a module order cannot be fixed |
 | `FirewallRuleset`, `LineInFile`, `Command` resources | `File` + `Service` | If a module cannot do without them |
-| Publishing `sshd-config` to crates.io; `cargo-fuzz` targets | Workspace crate, property tests | After v0.3.0, once its API settles |
+| `cargo-fuzz` targets for `sshd-config` | Property tests | Later (the crate itself is published from v0.3.0) |
 | Incus VM tests | Existing QEMU/KVM harness | Not planned |
 | Tailscale and closing public 22 | Not in M3 | M5 |
 
@@ -482,10 +490,12 @@ Checked on VMs (Debian 13 with OpenSSH 10.0p2, Ubuntu 24.04 with 9.6p1; some als
 | A drop-policy table with `established` and the SSH port keeps the live session; a pre-conntrack flow without an accept rule can drop | Debian 13, Ubuntu 24.04 |
 | `sshd-session` split and `PerSourcePenalties` on by default since 9.8 | OpenSSH 9.8 release notes |
 
-Not yet checked; each is covered by a test in the PR that depends on it:
-- On Debian 12 and Ubuntu 22.04: the `ssh.socket` and reload behavior (22.04 has no socket activation), the process titles, whether `nft` is preinstalled, and the conntrack behavior.
-- The boot hook ordering (`DefaultDependencies=no`, before `ssh.socket`) on a real boot, and `systemd-analyze verify` of both units: VM cycle 4.
-- That broadcast DHCPv4 replies need the `udp sport 67 dport 68` rule: VM cycle 1.
+Checked during M3 (these were open when the plan was written):
+- On Debian 12 and Ubuntu 22.04: the reload, the process titles and the confirm, and the `minimal` profile with the firewall (installing `nftables` where it is missing, keeping the driving SSH session), pass in the `vm` workflow's cycles on all four distros.
+- The boot hook ordering on a real boot: the firewall loaded, then the hook rolled back with `deadman-reboot`, then sshd started, with no ordering cycle in the boot journal; `systemd-analyze verify` of both units printed nothing (systemd 255 and 257, Lima, Debian 13 and Ubuntu 24.04).
+- The DHCPv4 rule: **not needed** for systemd-networkd, whose DHCP client receives replies on a packet socket (a counter on the rule stayed at 0 while `networkctl reconfigure` renewed the lease under the firewall, Debian 13 and Ubuntu 24.04). The rule is kept for clients that use a UDP socket.
+- A `Match` block in an included file ends at the end of that file (`sshd -T -C` on OpenSSH 8.9, 9.2, 9.6 and 10.0).
+- In the boot hook, `sshd -t` fails on Ubuntu ("Missing privilege separation directory: /run/sshd") because sshd has not started; the hook therefore skips `sshd-reload`, and sshd starts with the restored config.
 
 ## Decided by the owner (2026-10-24)
 

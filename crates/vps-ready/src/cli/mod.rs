@@ -604,7 +604,11 @@ fn print_report(
             _ => (1, Reverse(Severity::Low), ""),
         });
     }
-    let title = format!("Audit of {host}: {} controls", report.findings.len());
+    let n = report.findings.len();
+    let title = format!(
+        "Audit of {host}: {n} {}",
+        if n == 1 { "control" } else { "controls" }
+    );
     if color {
         writeln!(out, "{}", title.bold())?;
     } else {
@@ -1126,7 +1130,7 @@ mod tests {
         print_report(&mut text, &report, "this host", false, false, false).unwrap();
         assert_eq!(
             String::from_utf8(text).unwrap(),
-            "Audit of this host: 1 controls\n\n1 passed, 0 failed, 0 unknown\n"
+            "Audit of this host: 1 control\n\n1 passed, 0 failed, 0 unknown\n"
         );
     }
 

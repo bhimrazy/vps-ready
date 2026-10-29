@@ -197,6 +197,16 @@ enum Mode {
     /// The dead-man paths: forced resources are restored anyway, others
     /// skipped; restores go first and the journal is best effort.
     Deadman,
+    /// The boot hook: as `Deadman`, but before sshd starts, so without
+    /// `sshd-reload`.
+    Boot,
+}
+
+impl Mode {
+    /// Whether a failed journal line or restore lets the others go on.
+    fn best_effort(self) -> bool {
+        matches!(self, Self::Deadman | Self::Boot)
+    }
 }
 
 /// The longest a command of the boot hook may run, which has 120 s in all
@@ -843,7 +853,7 @@ impl<'a> Engine<'a> {
                 }
                 let mut open = Open::resume_best_effort(fs, txn.clone())?;
                 let reason = RollbackReason::DeadmanReboot;
-                let done = self.roll_back(&mut open, reason, Mode::Deadman, progress);
+                let done = self.roll_back(&mut open, reason, Mode::Boot, progress);
                 if let Err(EngineError::RollbackIncomplete { .. }) = done {
                     self.retry(&mut open, 0, binary);
                 }
@@ -946,7 +956,7 @@ impl<'a> Engine<'a> {
     ) -> Result<Rollback, EngineError> {
         let boot = boot_id(self.sys.fs);
         let boot = boot.as_deref();
-        let best_effort = mode == Mode::Deadman;
+        let best_effort = mode.best_effort();
         let (id, dir) = (open.txn.id().to_owned(), open.txn.dir().to_path_buf());
         let records = if best_effort {
             open.records_best_effort()
@@ -1241,7 +1251,12 @@ impl<'a> Engine<'a> {
         failed: &mut Vec<(Reload, String)>,
         progress: &mut dyn FnMut(Progress),
     ) -> Result<(), EngineError> {
-        let best_effort = mode == Mode::Deadman;
+        let best_effort = mode.best_effort();
+        // The hook runs before sshd starts, which then reads the restored
+        // config; `sshd -t` fails there on Ubuntu (no /run/sshd yet).
+        if mode == Mode::Boot && reload == Reload::SshdReload {
+            return Ok(());
+        }
         progress(Progress::Reload(reload));
         if let Some(check) = reload.check()
             && let Err(reason) = reload::run(self.sys, &check)
