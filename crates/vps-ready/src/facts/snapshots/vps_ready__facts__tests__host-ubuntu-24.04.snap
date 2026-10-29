@@ -229,6 +229,7 @@ firewall_tools:
   ufw: ~
   firewalld: false
   nftables_service: false
+  legacy_filter: false
 ipv6: false
 session: ~
 sysctl: ~

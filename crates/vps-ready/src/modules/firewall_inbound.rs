@@ -182,10 +182,10 @@ impl Module for FirewallInbound {
         } else if tools.ufw == Some(true) {
             "ufw is enabled; vps-ready leaves the firewall to it"
         } else if tools.firewalld == Some(true) {
-            "firewalld is running; vps-ready leaves the firewall to it"
+            "firewalld is running or enabled; vps-ready leaves the firewall to it"
         } else if tools.firewalld.is_none() {
             "whether firewalld is running is unknown (`systemctl show` failed)"
-        } else if firewall.is_some_and(|f| f.legacy_filter_v4 || f.legacy_filter_v6) {
+        } else if tools.legacy_filter {
             "the filter table of iptables-legacy is loaded, and vps-ready cannot read its rules"
         } else if tools.nft && firewall.is_none() {
             "`nft list ruleset` failed, so the ruleset cannot be read or changed here \
@@ -222,25 +222,11 @@ impl Module for FirewallInbound {
             );
         }
         let firewall = facts.firewall.as_ref();
-        let published: Vec<String> = firewall
-            .into_iter()
-            .flat_map(|f| &f.published)
-            .map(|p| format!("{}/{}", p.proto, p.port))
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        if !published.is_empty() {
-            notes.push(format!(
-                "Docker publishes {}: that traffic is forwarded to containers and does \
-                 not pass this firewall (FW-002); publish on 127.0.0.1 or filter it in \
-                 DOCKER-USER",
-                published.join(", ")
-            ));
-        }
+        notes.extend(published_notes(facts));
         let others: Vec<String> = firewall
             .into_iter()
             .flat_map(|f| &f.input_chains)
-            .filter(|c| !(c.family == "inet" && c.table == "vps_ready"))
+            .filter(|c| c.drops_unmatched && !(c.family == "inet" && c.table == "vps_ready"))
             .map(|c| format!("{} {} {}", c.family, c.table, c.name))
             .collect();
         if !others.is_empty() {
@@ -338,6 +324,47 @@ impl Module for FirewallInbound {
     fn verify_timeout(&self) -> Duration {
         NFT_TIMEOUT
     }
+}
+
+/// What happens to the ports Docker publishes. Over IPv4 they are DNATed
+/// and forwarded, so this input chain does not see them. Over IPv6 without
+/// Docker's ip6tables (the default before Docker 27) a connection ends in
+/// docker-proxy on the host, passes the input chain and is dropped unless
+/// `allow` lists the port.
+fn published_notes(facts: &Facts) -> Vec<String> {
+    let published = facts.firewall.iter().flat_map(|f| &f.published);
+    let set = |family: &str| -> BTreeSet<String> {
+        published
+            .clone()
+            .filter(|p| p.family == family)
+            .map(|p| format!("{}/{}", p.port, p.proto))
+            .collect()
+    };
+    let (v4, v6) = (set("ip"), set("ip6"));
+    let mut notes = Vec::new();
+    if !v4.is_empty() || !v6.is_empty() {
+        let all: BTreeSet<&String> = v4.iter().chain(&v6).collect();
+        notes.push(format!(
+            "Docker publishes {}: traffic it forwards to containers does not pass this \
+             firewall (FW-002); publish on 127.0.0.1 or filter it in DOCKER-USER",
+            all.into_iter().cloned().collect::<Vec<_>>().join(", ")
+        ));
+    }
+    let proxied: Vec<String> = v4.difference(&v6).cloned().collect();
+    if facts.ipv6 && !proxied.is_empty() {
+        notes.push(format!(
+            "over IPv6, Docker's ip6tables is off (the default before Docker 27), so \
+             connections to {} reach docker-proxy on the host and this firewall drops \
+             them; to keep them, add them to `allow`: [{}]",
+            proxied.join(", "),
+            proxied
+                .iter()
+                .map(|p| format!("\"{p}\""))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    notes
 }
 
 /// Whether `json`, the loaded table, has an input chain that drops by

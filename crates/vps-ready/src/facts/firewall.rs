@@ -59,13 +59,16 @@ pub struct FirewallTools {
     /// Whether ufw is enabled (`ENABLED=yes` in `/etc/ufw/ufw.conf`);
     /// `None` when ufw is not installed.
     pub ufw: Option<bool>,
-    /// Whether `firewalld.service` is active; `None` when systemd could not
-    /// be asked.
+    /// Whether `firewalld.service` is active or enabled, so it filters now
+    /// or after the next boot; `None` when systemd could not be asked.
     pub firewalld: Option<bool>,
     /// Whether `nftables.service` is enabled. It loads `/etc/nftables.conf`,
     /// which starts with `flush ruleset` on Debian and Ubuntu. `None` when
     /// systemd could not be asked.
     pub nftables_service: Option<bool>,
+    /// Whether the `filter` table of iptables-legacy is loaded, for IPv4 or
+    /// IPv6. Read without nft, which may not be installed.
+    pub legacy_filter: bool,
 }
 
 /// A port Docker forwards to a container, from a DNAT rule in its `nat`
@@ -277,10 +280,12 @@ pub(super) fn tools(
         ufw,
         firewalld: unit(UNITS[0], |u| {
             ["active", "activating", "reloading"].contains(&prop(u, "ActiveState"))
+                || prop(u, "UnitFileState").starts_with("enabled")
         }),
         nftables_service: unit(UNITS[1], |u| {
             prop(u, "UnitFileState").starts_with("enabled")
         }),
+        legacy_filter: LEGACY_TABLES.iter().any(|p| has_legacy_filter(fs, p)),
     }
 }
 
@@ -1436,6 +1441,48 @@ mod tests {
             notices[0].ends_with("needs root (CAP_NET_ADMIN)"),
             "{notices:?}"
         );
+    }
+
+    /// The tools are read without nft: on a host without it the ruleset
+    /// is unknown, but ufw, firewalld and iptables-legacy still count.
+    #[test]
+    fn reads_the_tools_without_nft() {
+        let units = |firewalld: &str| {
+            FakeRunner::new().on(
+                "systemctl",
+                ["show"],
+                Output::success(format!(
+                    "Id=firewalld.service\nLoadState=loaded\n{firewalld}\n\n\
+                     Id=nftables.service\nLoadState=loaded\nActiveState=inactive\n\
+                     UnitFileState=disabled\n"
+                )),
+            )
+        };
+        let fs = FakeFs::new()
+            .with_file(LEGACY_TABLES[1], "filter\n")
+            .with_file("/etc/ufw/ufw.conf", "ENABLED=no\n");
+        let inactive = units("ActiveState=inactive\nUnitFileState=disabled");
+        assert_eq!(
+            tools(&fs, &inactive, false, &mut Vec::new()),
+            FirewallTools {
+                nft: false,
+                ufw: Some(false),
+                firewalld: Some(false),
+                nftables_service: Some(false),
+                legacy_filter: true,
+            }
+        );
+        // Enabled but not running: it filters after the next boot.
+        let enabled = units("ActiveState=inactive\nUnitFileState=enabled");
+        let found = tools(&FakeFs::new(), &enabled, true, &mut Vec::new());
+        assert_eq!((found.firewalld, found.legacy_filter), (Some(true), false));
+        let mut notices = Vec::new();
+        assert_eq!(tools_of(&mut notices).firewalld, None);
+        assert_eq!(notices.len(), 1, "{notices:?}");
+    }
+
+    fn tools_of(notices: &mut Vec<String>) -> FirewallTools {
+        tools(&FakeFs::new(), &FakeRunner::new(), true, notices)
     }
 
     /// With iptables-legacy rules loaded (Ubuntu 24.04, `iptables -P INPUT

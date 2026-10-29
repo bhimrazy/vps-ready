@@ -762,10 +762,10 @@ fn short(secs: u64) -> String {
 }
 
 fn plural(n: usize, word: &str) -> String {
-    match (n, word.strip_suffix('y')) {
+    match (n, word) {
         (1, _) => word.to_owned(),
-        (_, Some(stem)) => format!("{stem}ies"),
-        (_, None) => format!("{word}s"),
+        (_, "directory") => "directories".to_owned(),
+        _ => format!("{word}s"),
     }
 }
 

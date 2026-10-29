@@ -101,11 +101,18 @@ fn leaves_other_firewall_managers_alone() {
     );
     assert_eq!(
         with(&|f| f.firewall_tools.firewalld = Some(true)),
-        "firewalld is running; vps-ready leaves the firewall to it"
+        "firewalld is running or enabled; vps-ready leaves the firewall to it"
     );
     assert!(with(&|f| f.firewall_tools.firewalld = None).contains("unknown"));
+    assert!(with(&|f| f.firewall_tools.legacy_filter = true).contains("iptables-legacy"));
+    // Also when nft is missing, so the ruleset was not read.
     assert!(
-        with(&|f| f.firewall.as_mut().unwrap().legacy_filter_v6 = true).contains("iptables-legacy")
+        with(&|f| {
+            f.firewall = None;
+            f.firewall_tools.nft = false;
+            f.firewall_tools.legacy_filter = true;
+        })
+        .contains("iptables-legacy")
     );
     assert!(with(&|f| f.firewall = None).contains("`nft list ruleset` failed"));
     assert_eq!(
@@ -311,7 +318,9 @@ fn notes_what_it_leaves_alone() {
         ufw: Some(false),
         firewalld: Some(false),
         nftables_service: Some(true),
+        legacy_filter: false,
     };
+    facts.ipv6 = true;
     let fw = facts.firewall.as_mut().unwrap();
     fw.published.push(crate::facts::PublishedPort {
         family: "ip".into(),
@@ -320,16 +329,41 @@ fn notes_what_it_leaves_alone() {
         address: None,
         filtered: false,
     });
-    fw.input_chains.push(InputChain {
+    // Published over IPv6 too: Docker's ip6tables is on, nothing is proxied.
+    fw.published.push(crate::facts::PublishedPort {
+        family: "ip6".into(),
+        proto: "tcp".into(),
+        port: 8080,
+        address: None,
+        filtered: false,
+    });
+    fw.published.push(crate::facts::PublishedPort {
         family: "ip".into(),
-        table: "filter".into(),
-        name: "INPUT".into(),
-        drops_unmatched: false,
+        proto: "tcp".into(),
+        port: 8080,
+        address: None,
+        filtered: false,
+    });
+    let chain = |table: &str, name: &str, drops_unmatched| InputChain {
+        family: "ip".into(),
+        table: table.into(),
+        name: name.into(),
+        drops_unmatched,
         open_ports: Vec::new(),
         interface_ports: Vec::new(),
         unread_ports: Vec::new(),
-    });
+    };
+    // Docker's accept-policy INPUT is not worth a note; a dropping one is.
+    fw.input_chains.push(chain("filter", "INPUT", false));
+    fw.input_chains.push(chain("mine", "input", true));
     insta::assert_yaml_snapshot!(FirewallInbound.notes(&facts));
+    facts.ipv6 = false;
+    assert!(
+        !FirewallInbound
+            .notes(&facts)
+            .iter()
+            .any(|n| n.contains("docker-proxy"))
+    );
 }
 
 #[test]

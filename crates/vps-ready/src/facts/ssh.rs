@@ -94,13 +94,21 @@ impl Ssh {
 }
 
 pub(super) fn detect(runner: &dyn Runner, notices: &mut Vec<String>) -> Ssh {
-    Ssh {
+    let ssh = Ssh {
         version: version(runner, notices),
         activation: activation(runner, notices),
         effective: effective(runner, notices),
         socket_ports: socket_ports(runner, notices),
         fail2ban: fail2ban(runner, notices),
+    };
+    if ssh.activation == SshActivation::Socket && ssh.socket_ports.is_empty() {
+        notices.push(
+            "`systemctl show --property=Listen ssh.socket` showed no port; the ports \
+             ssh.socket listens on are unknown"
+                .to_owned(),
+        );
     }
+    ssh
 }
 
 fn fail2ban(runner: &dyn Runner, notices: &mut Vec<String>) -> Option<bool> {
