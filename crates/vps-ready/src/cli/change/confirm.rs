@@ -173,8 +173,9 @@ pub(super) fn wait(
                     )?;
                     err.flush()?;
                     on_line = true;
-                } else if minute != Some(left.as_secs() / 60) {
-                    minute = Some(left.as_secs() / 60);
+                } else if minute != Some(left.as_secs().div_ceil(60)) {
+                    // Rounded up, so 1:00 and 0:59 share a line.
+                    minute = Some(left.as_secs().div_ceil(60));
                     print_progress(err, &Progress::Waiting { left });
                 }
             }
