@@ -55,19 +55,20 @@ pub(in crate::cli) fn confirm(
         )?;
         return Ok(0);
     }
-    let id = engine.waiting(txn)?;
+    let (id, admins) = engine.waiting(txn)?;
     let facts = (host.facts)(host.sys)?;
     let ports = sshd_ports(&facts, host.sys.runner);
+    let again = |session| again(host, &admins, session, &ports);
     let session = match (host.session)(host.sys) {
         Ok(session) => session,
         Err(NoSession::NotSsh) => bail!(
             "this is not an SSH login (the console, tmux, screen or mosh), so it proves \
              nothing about the changes. {}",
-            again(host, None, &ports)
+            again(None)
         ),
         Err(NoSession::Unknown(why)) => bail!(
             "cannot find the SSH login this runs in: {why}. {}",
-            again(host, None, &ports)
+            again(None)
         ),
     };
     match engine.confirm(Some(&id), &session, &ports) {
@@ -76,7 +77,7 @@ pub(in crate::cli) fn confirm(
                 out,
                 "Confirmed transaction {txn} from a new SSH login ({} from {}). The changes \
                  stay; undo them with `sudo vps-ready rollback --last`.",
-                login_user(host, Some(&session)),
+                session.user.as_deref().unwrap_or("a user without a name"),
                 session.client.ip()
             )?;
             Ok(0)
@@ -84,10 +85,10 @@ pub(in crate::cli) fn confirm(
         Err(EngineError::Refused(r @ (Refusal::SameSession | Refusal::OldSession))) => bail!(
             "{r}. This is not a new SSH login: tmux, screen and mosh sessions, the console, \
              and ssh connections shared through ControlMaster all count as old. {}",
-            again(host, Some(&session), &ports)
+            again(Some(&session))
         ),
-        Err(EngineError::Refused(r @ Refusal::OtherSshd { .. })) => {
-            bail!("{r}. {}", again(host, Some(&session), &ports))
+        Err(EngineError::Refused(r @ (Refusal::OtherSshd { .. } | Refusal::NotAdmin { .. }))) => {
+            bail!("{r}. {}", again(Some(&session)))
         }
         Err(e) => Err(e.into()),
     }
@@ -98,6 +99,7 @@ pub(in crate::cli) fn confirm(
 pub(super) fn print_pending(
     host: &Host,
     facts: &Facts,
+    admins: &[String],
     deadline: Deadline,
     left: Duration,
     out: &mut dyn Write,
@@ -105,7 +107,7 @@ pub(super) fn print_pending(
     let ports = sshd_ports(facts, host.sys.runner);
     let session = facts.session.as_ref();
     writeln!(out, "Changes are live. Open a NEW terminal and run:\n")?;
-    writeln!(out, "    {}", ssh_line(host, session, &ports))?;
+    writeln!(out, "    {}", ssh_line(host, admins, session, &ports))?;
     if let Some(ip) = session.map(|s| s.server.ip())
         && !public(ip)
     {
@@ -263,18 +265,19 @@ fn listen_ports(text: &str) -> Vec<u16> {
 }
 
 /// "Open a new terminal and run: `ssh ...`".
-fn again(host: &Host, session: Option<&Session>, ports: &[u16]) -> String {
+fn again(host: &Host, admins: &[String], session: Option<&Session>, ports: &[u16]) -> String {
     format!(
         "Open a new terminal and run: `{}`",
-        ssh_line(host, session, ports)
+        ssh_line(host, admins, session, ports)
     )
 }
 
 /// `ssh -t -o ControlPath=none -p <port> <user>@<address> sudo vps-ready
-/// confirm`, with the server address and port of `session`. `-o
+/// confirm`, with the server address and port of `session`, and the first
+/// of `admins` as the user. `-o
 /// ControlPath=none` keeps a `ControlMaster` from reusing an old connection;
 /// `-t` gives sudo a terminal to ask for a password on.
-fn ssh_line(host: &Host, session: Option<&Session>, ports: &[u16]) -> String {
+fn ssh_line(host: &Host, admins: &[String], session: Option<&Session>, ports: &[u16]) -> String {
     let port = session
         .map(|s| s.server.port())
         .or_else(|| ports.first().copied())
@@ -285,14 +288,17 @@ fn ssh_line(host: &Host, session: Option<&Session>, ports: &[u16]) -> String {
     );
     format!(
         "ssh -t -o ControlPath=none -p {port} {}@{address} sudo vps-ready confirm",
-        login_user(host, session)
+        login_user(host, admins, session)
     )
 }
 
-/// Who logs in to confirm: whoever ran sudo, else the session's user.
-fn login_user(host: &Host, session: Option<&Session>) -> String {
-    host.sudo_user
-        .clone()
+/// Who logs in to confirm: the first user the plan gave SSH keys, else
+/// whoever ran sudo, else the session's user.
+fn login_user(host: &Host, admins: &[String], session: Option<&Session>) -> String {
+    admins
+        .first()
+        .cloned()
+        .or_else(|| host.sudo_user.clone())
         .or_else(|| session.and_then(|s| s.user.clone()))
         .unwrap_or_else(|| "<user>".to_owned())
 }

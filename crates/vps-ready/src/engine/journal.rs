@@ -122,6 +122,14 @@ pub enum Event {
         /// The dead-man unit armed for it; only with `pending-confirm`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         unit: Option<String>,
+        /// The users a confirm must log in as: those the plan gave SSH
+        /// keys. Only with `pending-confirm`; empty means any user.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        admins: Vec<String>,
+        /// The server port of the SSH session apply ran in. Only with
+        /// `pending-confirm`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssh_port: Option<u16>,
     },
 }
 
@@ -149,7 +157,12 @@ impl Event {
     /// A `state` record without a unit.
     #[must_use]
     pub fn state(state: TxnState) -> Self {
-        Self::State { state, unit: None }
+        Self::State {
+            state,
+            unit: None,
+            admins: Vec::new(),
+            ssh_port: None,
+        }
     }
 }
 
@@ -540,8 +553,10 @@ mod tests {
             line(Event::State {
                 state: pending(),
                 unit: Some("vps-ready-deadman-20261025T120000Z-2".into()),
+                admins: vec!["admin".into()],
+                ssh_port: Some(22),
             }),
-            r#"{"at":7,"event":"state","state":"pending-confirm","deadline":{"boottime":1575,"wall":1792932341},"live_since":1275,"session":{"pid":812,"start":10433},"unit":"vps-ready-deadman-20261025T120000Z-2"}"#
+            r#"{"at":7,"event":"state","state":"pending-confirm","deadline":{"boottime":1575,"wall":1792932341},"live_since":1275,"session":{"pid":812,"start":10433},"unit":"vps-ready-deadman-20261025T120000Z-2","admins":["admin"],"ssh_port":22}"#
         );
         assert_eq!(
             line(extended(1934)),
@@ -611,6 +626,8 @@ mod tests {
                 rec(Event::State {
                     state: pending(),
                     unit: Some("u".into()),
+                    admins: Vec::new(),
+                    ssh_port: None,
                 }),
                 rec(state(TxnState::PendingConfirm {
                     deadline: DEADLINE,
@@ -720,6 +737,8 @@ mod tests {
             rec(Event::State {
                 state: pending(),
                 unit: Some("u-2".into()),
+                admins: Vec::new(),
+                ssh_port: None,
             }),
         ];
         assert_eq!(replay(&pending_txn).unwrap(), pending());

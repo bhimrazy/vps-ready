@@ -1283,3 +1283,4 @@ fn rollback_checks_and_restores_authorized_keys() {
 }
 
 mod dead_man;
+mod manual;

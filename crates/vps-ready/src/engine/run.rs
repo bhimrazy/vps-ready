@@ -476,6 +476,8 @@ impl<'a> Engine<'a> {
                 session: plan.facts.session.as_ref().map(|s| s.id),
             },
             unit: Some(unit),
+            admins: plan.admins(),
+            ssh_port: plan.facts.session.as_ref().map(|s| s.server.port()),
         })?;
         Ok(deadline)
     }
@@ -597,6 +599,23 @@ impl<'a> Engine<'a> {
         target: Target,
         progress: &mut dyn FnMut(Progress),
     ) -> Result<Rollback, EngineError> {
+        self.rollback_by(target, &[], progress)
+    }
+
+    /// [`Engine::rollback`], run by the users in `own` (the login and the
+    /// one who ran sudo): it refuses to remove an account that is one of
+    /// them, since `userdel` fails while that user has processes, and its
+    /// by-hand step ends their session.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::OwnAccount`], or those of [`Engine::rollback`].
+    pub fn rollback_by(
+        &self,
+        target: Target,
+        own: &[String],
+        progress: &mut dyn FnMut(Progress),
+    ) -> Result<Rollback, EngineError> {
         let fs = self.sys.fs;
         let txn = match target {
             Target::Last => match self.state.unfinished(fs)?.pop() {
@@ -614,6 +633,12 @@ impl<'a> Engine<'a> {
         }
         if let TxnState::RolledBack { .. } = journal::replay(&records)? {
             return Err(EngineError::AlreadyRolledBack(txn.id().to_owned()));
+        }
+        if let Some(user) = created_users(&records).find(|u| own.iter().any(|o| o == u)) {
+            return Err(EngineError::OwnAccount {
+                txn: txn.id().to_owned(),
+                user: user.to_owned(),
+            });
         }
         let switch = deadman::switch(&records);
         let unit = deadman::last_unit(&records).map(|(u, _)| u.to_owned());
@@ -925,6 +950,9 @@ impl<'a> Engine<'a> {
                 )
             })
             .map_or(records, |i| &records[..i]);
+        // A module's reloads follow its backups: a backup between two
+        // reloads starts another module's group.
+        let mut group = 0;
         let undo: Vec<Undo> = applying
             .iter()
             .filter_map(|r| match &r.event {
@@ -932,16 +960,19 @@ impl<'a> Engine<'a> {
                     resource,
                     backup,
                     force_restore,
-                } if !restored.contains(resource.as_str()) => Some(Undo::Restore {
-                    uid: applying.iter().find_map(|r| match &r.event {
-                        Event::Applied { resource: id, uid } if id == resource => *uid,
-                        _ => None,
-                    }),
-                    resource: resource.clone(),
-                    backup: backup.clone(),
-                    force: *force_restore,
-                }),
-                Event::Reloaded { reload } => Some(Undo::Reload(*reload)),
+                } => {
+                    group += 1;
+                    (!restored.contains(resource.as_str())).then(|| Undo::Restore {
+                        uid: applying.iter().find_map(|r| match &r.event {
+                            Event::Applied { resource: id, uid } if id == resource => *uid,
+                            _ => None,
+                        }),
+                        resource: resource.clone(),
+                        backup: backup.clone(),
+                        force: *force_restore,
+                    })
+                }
+                Event::Reloaded { reload } => Some(Undo::Reload(*reload, group)),
                 _ => None,
             })
             .collect();
@@ -953,7 +984,7 @@ impl<'a> Engine<'a> {
                     uid,
                     ..
                 } => Some((resource, backup, *uid)),
-                Undo::Reload(_) => None,
+                Undo::Reload(..) => None,
             })
         };
         let left = |upto: usize| {
@@ -1022,95 +1053,109 @@ impl<'a> Engine<'a> {
             skipped: Vec::new(),
             during: Vec::new(),
         };
-        // A reload runs once the restores journaled before it, back to the
-        // previous reload, are done: those of its module, perhaps with
-        // those of a module without reloads. A failed reload does not stop
-        // the restores of earlier modules, which may be the ones that matter
-        // (e.g. an sshd drop-in before a firewall); the rollback then ends
-        // incomplete, without a final state. In the dead-man paths a failed
-        // restore does not stop the others either.
-        let mut due = None;
+        // The reloads a module journaled run once the restores journaled
+        // before them, back to the previous module's reloads, are done:
+        // those of their module, perhaps with those of a module without
+        // reloads. Consecutive reloads (e.g. `daemon-reload` then the
+        // firewall's) are one group and run in journal order. A failed
+        // reload does not stop the restores of earlier modules, which may be
+        // the ones that matter (e.g. an sshd drop-in before a firewall); the
+        // rollback then ends incomplete, without a final state. In the
+        // dead-man paths a failed restore does not stop the others either;
+        // elsewhere it ends the rollback, but only after the reloads due by
+        // then ran, so a daemon does not keep a config whose files are
+        // already restored.
+        let mut due: Vec<Reload> = Vec::new();
         let mut failed = Vec::new();
         let mut unrestored: Vec<(ByHand, EngineError)> = Vec::new();
-        for (i, item) in undo.iter().enumerate().rev() {
-            let (resource, backup, force, uid) = match item {
-                Undo::Reload(reload) => {
-                    if let Some(due) = due.replace(*reload) {
-                        self.replay(open, due, mode, &mut failed, progress)
-                            .map_err(|e| incomplete(&id, &dir, left(i), e))?;
+        let mut run = || -> Result<(), EngineError> {
+            // The group of the reloads in `due`.
+            let mut due_group = None;
+            for (i, item) in undo.iter().enumerate().rev() {
+                let (resource, backup, force, uid) = match item {
+                    Undo::Reload(reload, group) => {
+                        if due_group.replace(*group).is_some_and(|g| g != *group) {
+                            self.flush(open, &mut due, mode, &mut failed, progress)
+                                .map_err(|e| incomplete(&id, &dir, left(i), e))?;
+                        }
+                        due.insert(0, *reload);
+                        continue;
                     }
+                    Undo::Restore {
+                        resource,
+                        backup,
+                        force,
+                        uid,
+                    } => (resource, backup, *force, *uid),
+                };
+                if let Backup::Sysctl { key, .. } = backup
+                    && earlier_boot(backup, boot)
+                {
+                    progress(Progress::Leave(backup));
+                    done.at_next_boot.push(key.clone());
+                    let line = Event::Restored {
+                        resource: resource.clone(),
+                    };
+                    note(open, line, best_effort)
+                        .map_err(|e| incomplete(&id, &dir, left(i + 1), e))?;
                     continue;
                 }
-                Undo::Restore {
-                    resource,
-                    backup,
-                    force,
-                    uid,
-                } => (resource, backup, *force, *uid),
-            };
-            if let Backup::Sysctl { key, .. } = backup
-                && earlier_boot(backup, boot)
-            {
-                progress(Progress::Leave(backup));
-                done.at_next_boot.push(key.clone());
+                if best_effort {
+                    let same =
+                        unchanged(self.sys, &dir, resource, backup, uid).unwrap_or_else(|e| {
+                            tracing::warn!("{resource}: {e}; treating it as changed");
+                            false
+                        });
+                    if !same && !force {
+                        if let Some(step) = by_hand(&dir, resource, backup) {
+                            progress(Progress::Skip(&step));
+                            let line = Event::Skipped {
+                                resource: resource.clone(),
+                                by_hand: step.step.clone(),
+                            };
+                            note(open, line, true)?;
+                            done.skipped.push(step);
+                        }
+                        continue;
+                    }
+                    if !same
+                        && let Backup::File { path, n, .. } = backup
+                        && let Some(copy) = keep_during(self.sys, &dir, path, *n)
+                    {
+                        progress(Progress::During { path, copy: &copy });
+                        done.during.push(copy);
+                    }
+                }
+                progress(Progress::Restore(backup));
+                let result =
+                    restore(self.sys, &dir, backup).map_err(|source| EngineError::Resource {
+                        id: resource.clone(),
+                        source,
+                    });
+                match result {
+                    Ok(()) => done.restored += 1,
+                    Err(e) if best_effort => {
+                        tracing::error!("{e}; restoring the others");
+                        let step = by_hand(&dir, resource, backup).unwrap_or_else(|| ByHand {
+                            resource: resource.clone(),
+                            step: "see the journal".into(),
+                        });
+                        unrestored.push((step, e));
+                        continue;
+                    }
+                    Err(e) => return Err(incomplete(&id, &dir, left(i + 1), e)),
+                }
                 let line = Event::Restored {
                     resource: resource.clone(),
                 };
                 note(open, line, best_effort).map_err(|e| incomplete(&id, &dir, left(i + 1), e))?;
-                continue;
             }
-            if best_effort {
-                let same = unchanged(self.sys, &dir, resource, backup, uid).unwrap_or_else(|e| {
-                    tracing::warn!("{resource}: {e}; treating it as changed");
-                    false
-                });
-                if !same && !force {
-                    if let Some(step) = by_hand(&dir, resource, backup) {
-                        progress(Progress::Skip(&step));
-                        let line = Event::Skipped {
-                            resource: resource.clone(),
-                            by_hand: step.step.clone(),
-                        };
-                        note(open, line, true)?;
-                        done.skipped.push(step);
-                    }
-                    continue;
-                }
-                if !same
-                    && let Backup::File { path, n, .. } = backup
-                    && let Some(copy) = keep_during(self.sys, &dir, path, *n)
-                {
-                    progress(Progress::During { path, copy: &copy });
-                    done.during.push(copy);
-                }
-            }
-            progress(Progress::Restore(backup));
-            let result = restore(self.sys, &dir, backup).map_err(|source| EngineError::Resource {
-                id: resource.clone(),
-                source,
-            });
-            match result {
-                Ok(()) => done.restored += 1,
-                Err(e) if best_effort => {
-                    tracing::error!("{e}; restoring the others");
-                    let step = by_hand(&dir, resource, backup).unwrap_or_else(|| ByHand {
-                        resource: resource.clone(),
-                        step: "see the journal".into(),
-                    });
-                    unrestored.push((step, e));
-                    continue;
-                }
-                Err(e) => return Err(incomplete(&id, &dir, left(i + 1), e)),
-            }
-            let line = Event::Restored {
-                resource: resource.clone(),
-            };
-            note(open, line, best_effort).map_err(|e| incomplete(&id, &dir, left(i + 1), e))?;
-        }
-        if let Some(due) = due {
-            self.replay(open, due, mode, &mut failed, progress)
-                .map_err(|e| incomplete(&id, &dir, left(0), e))?;
-        }
+            Ok(())
+        };
+        let ran = run();
+        let flushed = self.flush(open, &mut due, mode, &mut failed, progress);
+        ran?;
+        flushed.map_err(|e| incomplete(&id, &dir, left(0), e))?;
         if !unrestored.is_empty() || !failed.is_empty() {
             let mut left: Vec<ByHand> = unrestored.iter().map(|(step, _)| step.clone()).collect();
             left.extend(failed.iter().map(|(reload, _)| ByHand {
@@ -1129,6 +1174,28 @@ impl<'a> Engine<'a> {
         open.append(Event::state(TxnState::RolledBack { reason }))
             .map_err(|e| incomplete(&id, &dir, left(0), e))?;
         Ok(done)
+    }
+
+    /// Replays the reloads in `due`, in order, and empties it. A failed
+    /// journal line does not stop the others; the first is returned.
+    fn flush(
+        &self,
+        open: &mut Open,
+        due: &mut Vec<Reload>,
+        mode: Mode,
+        failed: &mut Vec<(Reload, String)>,
+        progress: &mut dyn FnMut(Progress),
+    ) -> Result<(), EngineError> {
+        let mut first = Ok(());
+        for reload in due.drain(..) {
+            if let Err(e) = self.replay(open, reload, mode, failed, progress) {
+                tracing::error!("{e}");
+                if first.is_ok() {
+                    first = Err(e);
+                }
+            }
+        }
+        first
     }
 
     /// Runs a reload that apply journaled, check first. A failed check skips
@@ -1163,6 +1230,28 @@ impl<'a> Engine<'a> {
         }
         note(open, Event::Reloaded { reload }, best_effort)
     }
+}
+
+/// The accounts `records` created and no rollback removed yet.
+fn created_users(records: &[Record]) -> impl Iterator<Item = &str> {
+    records.iter().filter_map(move |r| match &r.event {
+        Event::Backup {
+            resource,
+            backup:
+                Backup::User {
+                    name,
+                    created: true,
+                    ..
+                },
+            ..
+        } if !records.iter().any(
+            |r| matches!(&r.event, Event::Restored { resource: done } if done == resource),
+        ) =>
+        {
+            Some(name.as_str())
+        }
+        _ => None,
+    })
 }
 
 /// Appends `event`; with `best_effort`, a failure is only logged (to
@@ -1242,8 +1331,9 @@ enum Undo {
         /// The uid of its `applied` record.
         uid: Option<u32>,
     },
-    /// A reload that apply journaled.
-    Reload(Reload),
+    /// A reload that apply journaled, and its module's group: reloads with
+    /// no backup between them share one.
+    Reload(Reload, usize),
 }
 
 /// Every transaction with a `begin` record, newest first. Reads only; takes

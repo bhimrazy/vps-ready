@@ -181,6 +181,19 @@ pub enum EngineError {
         #[source]
         source: Box<EngineError>,
     },
+    /// A rollback would remove the account of the user running it.
+    #[error(
+        "refusing to roll back transaction {txn}: it would remove the account {user}, \
+         which this session is logged in as; `userdel` fails while it has processes. \
+         Run the rollback from another account (root on the console, or another sudo \
+         user), or confirm the changes and keep {user}"
+    )]
+    OwnAccount {
+        /// Transaction ID.
+        txn: String,
+        /// The account.
+        user: String,
+    },
     /// Two steps of a plan change the same resource.
     #[error("the plan changes {0} twice")]
     DuplicateResource(String),

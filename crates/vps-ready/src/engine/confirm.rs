@@ -51,13 +51,27 @@ pub enum Refusal {
     /// listen on: another sshd, which proves nothing about this one's config.
     #[error(
         "this SSH login came in on port {port}, which the host's sshd does not listen on ({})",
-        if .ports.is_empty() { "its ports are unknown".to_owned() } else { list_ports(.ports) }
+        list_ports(.ports)
     )]
     OtherSshd {
         /// The server port of the login.
         port: u16,
         /// The ports sshd listens on.
         ports: Vec<u16>,
+    },
+    /// The login is not one of the users the plan gave SSH keys, so it
+    /// proves nothing about their login.
+    #[error(
+        "this SSH login is {}, but the changes give SSH keys to {}: log in as {} to confirm",
+        .user.as_deref().unwrap_or("a user without a name"),
+        .admins.join(", "),
+        .admins.join(" or ")
+    )]
+    NotAdmin {
+        /// The login user.
+        user: Option<String>,
+        /// Who may confirm.
+        admins: Vec<String>,
     },
 }
 
@@ -79,6 +93,9 @@ struct Waiting {
     records: Vec<Record>,
     live_since: u64,
     session: Option<SessionId>,
+    /// From its `state pending-confirm` record.
+    admins: Vec<String>,
+    ssh_port: Option<u16>,
 }
 
 /// How [`Engine::extend`] moved a deadline.
@@ -95,16 +112,18 @@ pub struct Extended {
 }
 
 impl Engine<'_> {
-    /// The ID of the transaction a confirm would act on: `id`, or the only
-    /// one pending. It must be pending, with no rollback started and its
-    /// deadline and boot not passed.
+    /// The ID of the transaction a confirm would act on (`id`, or the only
+    /// one pending), and the users who may confirm it, none meaning any. It
+    /// must be pending, with no rollback started and its deadline and boot
+    /// not passed.
     ///
     /// # Errors
     ///
     /// [`EngineError::Refused`] says why not; others if a journal cannot be
     /// read.
-    pub fn waiting(&self, id: Option<&str>) -> Result<String, EngineError> {
-        self.waiting_txn(id).map(|w| w.txn.id().to_owned())
+    pub fn waiting(&self, id: Option<&str>) -> Result<(String, Vec<String>), EngineError> {
+        self.waiting_txn(id)
+            .map(|w| (w.txn.id().to_owned(), w.admins))
     }
 
     fn waiting_txn(&self, id: Option<&str>) -> Result<Waiting, EngineError> {
@@ -145,18 +164,36 @@ impl Engine<'_> {
         if let Some(reason) = deadman::switch(&records).and_then(|s| s.expired(fs)) {
             return Err(Refusal::Expired { txn: id, reason }.into());
         }
+        let (admins, ssh_port) = records
+            .iter()
+            .rev()
+            .find_map(|r| match &r.event {
+                Event::State {
+                    state: TxnState::PendingConfirm { .. },
+                    admins,
+                    ssh_port,
+                    ..
+                } => Some((admins.clone(), *ssh_port)),
+                _ => None,
+            })
+            .unwrap_or_default();
         Ok(Waiting {
             txn,
             records,
             live_since,
             session,
+            admins,
+            ssh_port,
         })
     }
 
     /// Confirms the pending transaction `id` (or the only one) from
     /// `session`, which must be a new SSH login: not the session that
-    /// applied it, started after its changes went live, and through one of
-    /// `ports`, those the host's sshd listens on. Journals `confirmed` and
+    /// applied it, started after its changes went live, through one of
+    /// `ports` (those the host's sshd listens on) or the port apply's
+    /// session came in on, and as one of the users the plan gave SSH keys,
+    /// if any. With no port known at all, the port is not checked.
+    /// Journals `confirmed` and
     /// the state, and only then stops its timers and disables the boot hook,
     /// best effort: a timer or a hook that runs anyway finds it confirmed.
     /// Returns its ID.
@@ -178,11 +215,17 @@ impl Engine<'_> {
         if !session.is_new(w.session, w.live_since) {
             return Err(Refusal::OldSession.into());
         }
+        // The firewall always accepts the port apply's session came in on.
+        let mut ports = ports.to_vec();
+        ports.extend(w.ssh_port.filter(|p| !ports.contains(p)));
         let port = session.server.port();
-        if !ports.contains(&port) {
-            return Err(Refusal::OtherSshd {
-                port,
-                ports: ports.to_vec(),
+        if !ports.is_empty() && !ports.contains(&port) {
+            return Err(Refusal::OtherSshd { port, ports }.into());
+        }
+        if !w.admins.is_empty() && !session.user.as_ref().is_some_and(|u| w.admins.contains(u)) {
+            return Err(Refusal::NotAdmin {
+                user: session.user.clone(),
+                admins: w.admins,
             }
             .into());
         }

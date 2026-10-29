@@ -243,7 +243,7 @@ pub(super) fn apply(
                 engine::Watch::Pending { left, .. } => left,
                 _ => Duration::ZERO,
             };
-            confirm::print_pending(host, &facts, deadline, left, out)?;
+            confirm::print_pending(host, &facts, &plan.admins(), deadline, left, out)?;
             out.flush()?;
             return confirm::wait(host, &state, &txn, deadline, &plan, out, err);
         }
@@ -282,8 +282,12 @@ pub(super) fn rollback(
 ) -> anyhow::Result<u8> {
     require_root(host, "rollback")?;
     let state = StateDir::create(host.sys.fs, host.state_dir, host.state_uid)?;
-    let done =
-        Engine::lock(&state, host.sys)?.rollback(target, &mut |p| print_progress(err, &p))?;
+    // Who runs it: a rollback must not remove their account.
+    let mut own: Vec<String> = host.sudo_user.iter().cloned().collect();
+    own.extend((host.session)(host.sys).ok().and_then(|s| s.user));
+    let done = Engine::lock(&state, host.sys)?.rollback_by(target, &own, &mut |p| {
+        print_progress(err, &p);
+    })?;
     print_rollback(out, &done)?;
     Ok(0)
 }

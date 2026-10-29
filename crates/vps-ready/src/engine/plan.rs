@@ -107,6 +107,13 @@ impl Plan<'_> {
         self.modules.iter().flat_map(|m| m.changes())
     }
 
+    /// The users other than root its steps give SSH keys: who must log in
+    /// to confirm it.
+    #[must_use]
+    pub fn admins(&self) -> Vec<String> {
+        crate::resource::keyed_users(self.steps().map(|s| &s.resource))
+    }
+
     /// The IDs of the modules with at least one change.
     #[must_use]
     pub fn changed_modules(&self) -> Vec<String> {

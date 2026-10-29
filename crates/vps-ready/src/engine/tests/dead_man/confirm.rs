@@ -149,11 +149,16 @@ fn only_a_new_login_through_the_hosts_sshd_confirms() {
             "{session:?}"
         );
     }
-    let err = refusal(engine.confirm(None, &login(903, 1050), &[]));
+    // With sshd's ports unknown, the port apply's session came in on counts.
+    let rescue = Session {
+        server: SocketAddr::from(([203, 0, 113, 10], 2222)),
+        ..login(903, 1050)
+    };
+    let err = refusal(engine.confirm(None, &rescue, &[]));
     assert_eq!(
         err.to_string(),
-        "this SSH login came in on port 22, which the host's sshd does not listen on \
-         (its ports are unknown)"
+        "this SSH login came in on port 2222, which the host's sshd does not listen on \
+         (it listens on 22)"
     );
     assert!(calls(&run).is_empty());
     assert!(matches!(
@@ -164,6 +169,84 @@ fn only_a_new_login_through_the_hosts_sshd_confirms() {
     engine
         .confirm(None, &login(812, 1050), &[22, 2222])
         .unwrap();
+}
+
+/// Rewrites the `state pending-confirm` record of `txn` with `fields`
+/// (JSON members) added, as a plan with an admin or no session writes it.
+fn with_pending_fields(fs: &FakeFs, txn: &str, fields: &str) {
+    let path = PathBuf::from(format!("{STATE}/txn/{txn}/journal.jsonl"));
+    let text = String::from_utf8(fs.read(&path).unwrap()).unwrap();
+    let text = text.replace(
+        "\"state\":\"pending-confirm\",",
+        &format!("\"state\":\"pending-confirm\",{fields}"),
+    );
+    fs.write(&path, text.as_bytes()).unwrap();
+}
+
+#[test]
+fn only_the_admins_the_plan_gave_keys_confirm() {
+    let fs = armable();
+    let txn = applied(&fs);
+    with_pending_fields(&fs, &txn, r#""admins":["admin","deploy"],"#);
+    set_uptime(&fs, 1100);
+    let ubuntu = Session {
+        user: Some("ubuntu".into()),
+        ..login(951, 1050)
+    };
+    let err = refusal(confirm(&fs, &dm_runner(), None, &ubuntu));
+    assert_eq!(
+        err,
+        Refusal::NotAdmin {
+            user: Some("ubuntu".into()),
+            admins: vec!["admin".into(), "deploy".into()],
+        }
+    );
+    assert_eq!(
+        err.to_string(),
+        "this SSH login is ubuntu, but the changes give SSH keys to admin, deploy: log in \
+         as admin or deploy to confirm"
+    );
+    let state = state(&fs);
+    let run = dm_runner();
+    let engine = Engine::lock(
+        &state,
+        Sys {
+            fs: &fs,
+            runner: &run,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        engine.waiting(None).unwrap(),
+        (txn.clone(), vec!["admin".to_owned(), "deploy".to_owned()])
+    );
+    let deploy = Session {
+        user: Some("deploy".into()),
+        ..login(952, 1050)
+    };
+    assert_eq!(engine.confirm(None, &deploy, &[22]).unwrap(), txn);
+}
+
+#[test]
+fn with_no_port_known_the_port_is_not_checked() {
+    let fs = armable();
+    // Applied with no session, so no port is journaled.
+    let [lock, ..] = locking();
+    let facts = facts();
+    let plan = plan_of(&fs, &facts, &[&lock]);
+    let (txn, _) = pending(&fs, &plan);
+    set_uptime(&fs, 1100);
+    let rescue = Session {
+        server: SocketAddr::from(([203, 0, 113, 10], 2222)),
+        ..login(951, 1050)
+    };
+    assert_eq!(confirm_ports(&fs, &rescue, &[]).unwrap(), txn);
+}
+
+fn confirm_ports(fs: &FakeFs, session: &Session, ports: &[u16]) -> Result<String, EngineError> {
+    let state = state(fs);
+    let run = dm_runner();
+    Engine::lock(&state, Sys { fs, runner: &run })?.confirm(None, session, ports)
 }
 
 #[test]

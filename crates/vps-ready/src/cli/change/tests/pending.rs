@@ -403,3 +403,76 @@ fn rollback_last_undoes_a_pending_apply_and_disarms() {
     );
     assert!(history_text(&host).contains("rolled-back (manual)"));
 }
+
+/// The printed line logs in as the plan's admin, not as root who ran it.
+#[test]
+fn the_ssh_line_names_the_planned_admin() {
+    let fs = armable();
+    let runner = dm_runner();
+    let host = Host {
+        sudo_user: Some("root".into()),
+        ..lockout_host(&fs, &runner)
+    };
+    let facts = vm_in_session(host.sys).unwrap();
+    let deadline = engine::Deadline {
+        boottime: 1300,
+        wall: 0,
+    };
+    let line = |admins: &[String]| {
+        let mut out = Vec::new();
+        super::super::confirm::print_pending(
+            &host,
+            &facts,
+            admins,
+            deadline,
+            Duration::from_secs(300),
+            &mut out,
+        )
+        .unwrap();
+        String::from_utf8(out)
+            .unwrap()
+            .lines()
+            .nth(2)
+            .unwrap()
+            .to_owned()
+    };
+    assert_eq!(
+        line(&["admin".into(), "deploy".into()]),
+        "    ssh -t -o ControlPath=none -p 22 admin@10.0.2.15 sudo vps-ready confirm"
+    );
+    assert_eq!(
+        line(&[]),
+        "    ssh -t -o ControlPath=none -p 22 root@10.0.2.15 sudo vps-ready confirm"
+    );
+}
+
+/// With an admin in the plan, a login as anyone else is refused and told
+/// whom to log in as.
+#[test]
+fn confirm_refuses_a_login_other_than_the_admin() {
+    let fs = armable();
+    let runner = dm_runner();
+    let host = lockout_host(&fs, &runner);
+    apply_lockout(&host);
+    let txn = txn_ids(&fs).pop().unwrap();
+    let path = PathBuf::from(format!("{STATE}/txn/{txn}/journal.jsonl"));
+    let text = String::from_utf8(fs.read(&path).unwrap()).unwrap().replace(
+        "\"state\":\"pending-confirm\",",
+        "\"state\":\"pending-confirm\",\"admins\":[\"deploy\"],",
+    );
+    fs.write(&path, text.as_bytes()).unwrap();
+    set_uptime(&fs, 1100);
+    let new = Host {
+        session: new_login,
+        ..lockout_host(&fs, &runner)
+    };
+    let (code, _, err) = confirm_cmd(&new, None);
+    assert_eq!(code, 2);
+    assert_eq!(
+        err,
+        "error: this SSH login is admin, but the changes give SSH keys to deploy: log in as \
+         deploy to confirm. Open a new terminal and run: `ssh -t -o ControlPath=none -p 22 \
+         deploy@10.0.2.15 sudo vps-ready confirm`\n"
+    );
+    assert!(history_text(&host).contains("pending-confirm"));
+}
