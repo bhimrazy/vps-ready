@@ -27,6 +27,10 @@ pub struct Ssh {
     pub activation: SshActivation,
     /// Effective configuration from `sshd -T`, if it could be read.
     pub effective: Option<SshdConfig>,
+    /// Ports `ssh.socket` listens on, from `systemctl show --property=Listen
+    /// ssh.socket`, whether or not it is active. Under socket activation
+    /// they, not `sshd -T`, are where sshd accepts connections.
+    pub socket_ports: Vec<u16>,
     /// Whether fail2ban's `sshd` jail runs, from `fail2ban-client status
     /// sshd`: `false` when fail2ban is not installed, not running or has no
     /// such jail; `None` when it could not be asked, e.g. without root.
@@ -59,13 +63,52 @@ impl fmt::Display for SshActivation {
     }
 }
 
+impl Ssh {
+    /// Every port sshd accepts connections on now: `port` and
+    /// `listenaddress` from `sshd -T`, and `ssh.socket`'s while it is the
+    /// running unit. Sorted, without duplicates.
+    #[must_use]
+    pub fn ports(&self) -> Vec<u16> {
+        let mut ports = Vec::new();
+        if let Some(config) = &self.effective {
+            ports.extend(
+                config
+                    .get_all("port")
+                    .iter()
+                    .filter_map(|p| p.parse::<u16>().ok()),
+            );
+            ports.extend(
+                config
+                    .get_all("listenaddress")
+                    .iter()
+                    .filter_map(|a| last_port(a)),
+            );
+        }
+        if self.activation == SshActivation::Socket {
+            ports.extend(&self.socket_ports);
+        }
+        ports.sort_unstable();
+        ports.dedup();
+        ports
+    }
+}
+
 pub(super) fn detect(runner: &dyn Runner, notices: &mut Vec<String>) -> Ssh {
-    Ssh {
+    let ssh = Ssh {
         version: version(runner, notices),
         activation: activation(runner, notices),
         effective: effective(runner, notices),
+        socket_ports: socket_ports(runner, notices),
         fail2ban: fail2ban(runner, notices),
+    };
+    if ssh.activation == SshActivation::Socket && ssh.socket_ports.is_empty() {
+        notices.push(
+            "`systemctl show --property=Listen ssh.socket` showed no port; the ports \
+             ssh.socket listens on are unknown"
+                .to_owned(),
+        );
     }
+    ssh
 }
 
 fn fail2ban(runner: &dyn Runner, notices: &mut Vec<String>) -> Option<bool> {
@@ -155,6 +198,35 @@ fn sshd_t_failure(stderr: &str) -> String {
         notice.push_str(". `sshd -T` needs root");
     }
     notice
+}
+
+/// No notice when this fails: [`activation`] has one for that.
+fn socket_ports(runner: &dyn Runner, notices: &mut Vec<String>) -> Vec<u16> {
+    let cmd = Cmd::new("systemctl").args(["show", "--property=Listen", "ssh.socket"]);
+    match probe(runner, &cmd, notices) {
+        Probe::Ran(out) if out.ok() => parse_listen(&String::from_utf8_lossy(&out.stdout)),
+        _ => Vec::new(),
+    }
+}
+
+/// `Listen=[::]:22 (Stream)`, one line per socket; other kinds, such as a
+/// `(Datagram)` or a path, are skipped.
+fn parse_listen(text: &str) -> Vec<u16> {
+    let mut ports: Vec<u16> = text
+        .lines()
+        .filter_map(|line| {
+            let addr = line.strip_prefix("Listen=")?.strip_suffix(" (Stream)")?;
+            addr.contains(':').then(|| last_port(addr))?
+        })
+        .collect();
+    ports.sort_unstable();
+    ports.dedup();
+    ports
+}
+
+/// The port after the last `:` of `[::]:22` or `0.0.0.0:22`, or a bare `22`.
+fn last_port(addr: &str) -> Option<u16> {
+    addr.rsplit(':').next()?.parse().ok()
 }
 
 fn activation(runner: &dyn Runner, notices: &mut Vec<String>) -> SshActivation {
@@ -372,9 +444,35 @@ mod tests {
         assert_eq!(ask(FakeRunner::new()), (Some(false), 0));
     }
 
+    #[test]
+    fn reads_the_socket_ports() {
+        let text = "Listen=0.0.0.0:22 (Stream)\nListen=[::]:22 (Stream)\n\
+                    Listen=[::]:2222 (Stream)\nListen=/run/x.sock (Stream)\n\
+                    Listen=[::]:53 (Datagram)\n";
+        assert_eq!(parse_listen(text), [22, 2222]);
+        assert!(parse_listen("").is_empty());
+    }
+
+    #[test]
+    fn ports_are_sshd_t_and_the_running_socket() {
+        let mut ssh = Ssh {
+            version: None,
+            activation: SshActivation::Service,
+            effective: Some(SshdConfig::parse(
+                "port 22\nlistenaddress [::]:2222\nlistenaddress 0.0.0.0:22\n",
+            )),
+            socket_ports: vec![22, 2200],
+            fail2ban: None,
+        };
+        assert_eq!(ssh.ports(), [22, 2222]);
+        ssh.activation = SshActivation::Socket;
+        assert_eq!(ssh.ports(), [22, 2200, 2222]);
+    }
+
     proptest::proptest! {
         #[test]
         fn parsers_never_panic(s in "\\PC*") {
+            let _ = parse_listen(&s);
             let _ = parse_version(&s);
             let _ = activation_from_units(&parse_units(&s), &mut Vec::new());
             let _ = sshd_t_failure(&s);

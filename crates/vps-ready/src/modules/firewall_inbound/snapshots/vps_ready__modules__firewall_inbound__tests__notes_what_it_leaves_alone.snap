@@ -1,0 +1,11 @@
+---
+source: crates/vps-ready/src/modules/firewall_inbound/tests.rs
+expression: FirewallInbound.notes(&facts)
+---
+- "always accepts TCP 22, the current SSH ports (this session's, sshd's listeners and `Port`), whatever `allow` says"
+- "Docker is installed: input from docker0 and br-* is accepted, so containers can reach services on the host; a compromised container can reach all of them, as with no firewall"
+- "Docker publishes 5432/tcp, 8080/tcp: traffic it forwards to containers does not pass this firewall (FW-002); publish on 127.0.0.1 or filter it in DOCKER-USER"
+- "other chains also filter incoming traffic, and a packet must pass each of them: ip mine input"
+- "`ufw status` does not show these rules; `nft list table inet vps_ready` does"
+- "nftables.service is enabled: restarting it flushes the whole ruleset and removes this table until `systemctl restart vps-ready-firewall.service`"
+- "if this installs nftables, rollback leaves it installed"

@@ -13,6 +13,7 @@ use crate::sys::{Cmd, Sys, SysError};
 
 #[cfg(feature = "testing")]
 mod deadman_test;
+pub mod firewall_inbound;
 pub mod kernel_sysctl;
 pub mod ssh_bruteforce;
 mod updates_auto;
@@ -20,6 +21,7 @@ pub mod user_admin;
 
 #[cfg(feature = "testing")]
 pub use deadman_test::DeadmanTest;
+pub use firewall_inbound::FirewallInbound;
 pub use kernel_sysctl::KernelSysctl;
 pub use ssh_bruteforce::SshBruteforce;
 pub use updates_auto::UpdatesAuto;
@@ -45,6 +47,9 @@ pub enum ModuleError {
     /// The module cannot plan on this host as configured, and why.
     #[error("{0}")]
     Refused(String),
+    /// A file's template did not render.
+    #[error("rendering a template: {0}")]
+    Template(#[from] askama::Error),
 }
 
 impl From<CatalogError> for ModuleError {
@@ -189,6 +194,7 @@ pub trait Module {
 pub fn all() -> &'static [&'static dyn Module] {
     &[
         &UserAdmin,
+        &FirewallInbound,
         &SshBruteforce::ROOT,
         &KernelSysctl::ROOT,
         &UpdatesAuto::ROOT,
@@ -202,6 +208,7 @@ pub fn all() -> &'static [&'static dyn Module] {
 pub fn with_test() -> &'static [&'static dyn Module] {
     &[
         &UserAdmin,
+        &FirewallInbound,
         &SshBruteforce::ROOT,
         &KernelSysctl::ROOT,
         &UpdatesAuto::ROOT,

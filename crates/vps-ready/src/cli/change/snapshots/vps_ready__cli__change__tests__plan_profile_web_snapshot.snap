@@ -13,6 +13,57 @@ user.admin: Set up an admin account that logs in with an SSH key and uses sudo
       +# Written by vps-ready (user.admin). `vps-ready rollback --last`
       +# restores the previous state; edits here are replaced by the next apply.
       +admin ALL=(ALL:ALL) NOPASSWD: ALL
+firewall.inbound: Drop incoming traffic that no rule allows (fixes FW-001)
+  note: always accepts TCP 22, the current SSH ports (this session's, sshd's listeners and `Port`), whatever `allow` says
+  + directory /etc/vps-ready (mode 0755, root:root)                       reversible
+  + /etc/vps-ready/firewall.nft (mode 0644, root:root)                    reversible
+      @@ -0,0 +1,24 @@
+      +# Written by vps-ready (firewall.inbound). `vps-ready rollback --last`
+      +# restores the previous state; edits here are replaced by the next apply.
+      +# vps-ready-firewall.service loads it. It replaces only the table
+      +# inet vps_ready: other tables, such as Docker's or fail2ban's, stay.
+      +table inet vps_ready {}
+      +delete table inet vps_ready
+      +table inet vps_ready {
+      +  chain input {
+      +    type filter hook input priority filter; policy drop;
+      +    ct state established,related accept
+      +    ct state invalid drop
+      +    iif lo accept
+      +    meta l4proto icmp accept
+      +    # Neighbor discovery and path MTU: never block ICMPv6.
+      +    meta l4proto icmpv6 accept
+      +    # DHCPv4 replies that conntrack does not match (broadcast).
+      +    udp sport 67 udp dport 68 accept
+      +    # DHCPv6 client.
+      +    ip6 saddr fe80::/10 udp dport 546 accept
+      +    # The profile's `allow`, plus every current SSH port.
+      +    tcp dport { 22, 80, 443 } accept
+      +    udp dport { 443 } accept
+      +  }
+      +}
+  + /etc/systemd/system/vps-ready-firewall.service (mode 0644, root:root)  reversible
+      @@ -0,0 +1,19 @@
+      +# Written by vps-ready (firewall.inbound). `vps-ready rollback --last`
+      +# restores the previous state; edits here are replaced by the next apply.
+      +[Unit]
+      +Description=vps-ready: inbound firewall (nftables table inet vps_ready)
+      +DefaultDependencies=no
+      +Wants=network-pre.target
+      +After=nftables.service
+      +Before=network-pre.target shutdown.target
+      +Conflicts=shutdown.target
+      +
+      +[Service]
+      +Type=oneshot
+      +RemainAfterExit=yes
+      +ExecStart=/usr/sbin/nft -f /etc/vps-ready/firewall.nft
+      +ExecReload=/usr/sbin/nft -f /etc/vps-ready/firewall.nft
+      +ExecStop=-/usr/sbin/nft delete table inet vps_ready
+      +
+      +[Install]
+      +WantedBy=sysinit.target
+  ~ enable and start vps-ready-firewall.service                           reversible
 ssh.bruteforce: Ban addresses that keep failing to log in over SSH
   note: no SSH session found, so only localhost is exempt from bans
   note: if this installs fail2ban, rollback leaves it installed and enabled, as the package sets it up, so it runs the distro's own jails after a reboot; `systemctl disable --now fail2ban` turns it off
@@ -52,6 +103,6 @@ updates.auto: Install security updates automatically (fixes UPD-001)
       +APT::Periodic::Update-Package-Lists "1";
       +APT::Periodic::Unattended-Upgrade "1";
 
-13 changes in 4 modules: 5 files, 6 kernel settings, 1 service, 1 user.
+17 changes in 5 modules: 7 files, 1 directory, 6 kernel settings, 2 services, 1 user.
 partial: rollback removes a user it created but keeps its home directory.
 Run `sudo vps-ready apply --profile web` to make them.

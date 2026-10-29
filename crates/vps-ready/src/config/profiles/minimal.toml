@@ -2,6 +2,9 @@ schema = 1
 
 [modules."user.admin"]
 
+[modules."firewall.inbound"]
+allow = ["22/tcp"]
+
 [modules."kernel.sysctl"]
 
 [modules."updates.auto"]
