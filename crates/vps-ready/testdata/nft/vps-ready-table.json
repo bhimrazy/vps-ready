@@ -11,7 +11,7 @@
       "table": {
         "family": "inet",
         "name": "vps_ready",
-        "handle": 8
+        "handle": 11
       }
     },
     {
@@ -116,7 +116,7 @@
                   "key": "l4proto"
                 }
               },
-              "right": 1
+              "right": "icmp"
             }
           },
           {
@@ -140,7 +140,7 @@
                   "key": "l4proto"
                 }
               },
-              "right": 58
+              "right": "ipv6-icmp"
             }
           },
           {
