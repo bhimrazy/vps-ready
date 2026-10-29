@@ -682,6 +682,27 @@ fn the_boot_hook_leaves_a_transaction_of_this_boot() {
     assert_eq!(calls(&run), [DISABLE]);
 }
 
+/// sshd has not started when the hook runs, so it reads the restored
+/// config anyway; the hook neither checks nor reloads it.
+#[test]
+fn the_boot_hook_does_not_reload_sshd() {
+    let fs = armable();
+    let facts = facts();
+    let before = host_without_hook(&fs);
+    let [lock, ..] = locking();
+    let plan = plan_of(&fs, &facts, &[&lock]);
+    let (txn, _) = pending(&fs, &plan);
+    fs.write(Path::new(BOOT_ID), b"b\n").unwrap();
+    let run = dm_runner();
+    assert_eq!(boot_hook(&fs, &run).unwrap().len(), 1);
+    assert_eq!(calls(&run), [DISABLE]);
+    assert_eq!(host_without_hook(&fs), before);
+    assert_eq!(
+        state_of(&fs, &txn),
+        rolled_back(RollbackReason::DeadmanReboot)
+    );
+}
+
 #[test]
 fn a_manual_rollback_of_a_pending_transaction_disarms() {
     let fs = armable();

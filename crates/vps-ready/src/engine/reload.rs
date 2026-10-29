@@ -81,17 +81,24 @@ impl fmt::Display for Reload {
     }
 }
 
-/// Runs `cmd`; `Err` holds its exit status and stderr, or why it could not
-/// run.
+/// Runs `cmd`; `Err` holds its exit status and output (stderr, else
+/// stdout), or why it could not run.
 pub(super) fn run(sys: Sys, cmd: &Cmd) -> Result<(), String> {
     match sys.runner.run(cmd) {
         Ok(out) if out.ok() => Ok(()),
-        Ok(out) => Err(format!(
-            "`{}` exited with status {}: {}",
-            line(cmd),
-            out.status,
-            String::from_utf8_lossy(&out.stderr).trim()
-        )),
+        Ok(out) => {
+            let mut reason = format!("`{}` exited with status {}", line(cmd), out.status);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            if let Some(said) = [stderr.trim(), stdout.trim()]
+                .into_iter()
+                .find(|s| !s.is_empty())
+            {
+                reason += ": ";
+                reason += said;
+            }
+            Err(reason)
+        }
         Err(e) => Err(format!("`{}` could not run: {e}", line(cmd))),
     }
 }
@@ -107,6 +114,32 @@ pub(super) fn line(cmd: &Cmd) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sys::Output;
+    use crate::sys::fake::{FakeFs, FakeRunner};
+
+    /// A failed check's reason has the command, the status and any output,
+    /// e.g. the firewall check after a rollback removed `firewall.nft`.
+    #[test]
+    fn failure_reason_is_never_empty() {
+        let check = |stdout: &str, stderr: &str| {
+            let out = Output {
+                status: 1,
+                stdout: stdout.into(),
+                stderr: stderr.into(),
+            };
+            let runner = FakeRunner::new().on("nft", ["-c"], out);
+            let fs = FakeFs::new();
+            let sys = Sys {
+                fs: &fs,
+                runner: &runner,
+            };
+            run(sys, &Reload::FirewallReload.check().unwrap()).unwrap_err()
+        };
+        let cmd = "`nft -c -f /etc/vps-ready/firewall.nft` exited with status 1";
+        assert_eq!(check("", ""), cmd);
+        assert_eq!(check("out\n", " \n"), format!("{cmd}: out"));
+        assert_eq!(check("out", "err\n"), format!("{cmd}: err"));
+    }
 
     const ALL: [Reload; 4] = [
         Reload::SshdReload,
