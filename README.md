@@ -26,7 +26,7 @@
 </div>
 
 > [!NOTE]
-> vps-ready is at **v0.2**. `detect` and `audit` (28 controls so far), and `plan`, `apply` and `rollback` for two modules (`kernel.sysctl` and `updates.auto`) work today. SSH and firewall hardening, with the dead-man switch, arrives in M3, and there may be breaking changes before 1.0.
+> vps-ready is at **v0.3**. `detect` and `audit` (29 controls), and `plan`, `apply`, `confirm` and `rollback` for six modules work today on Debian 12/13 and Ubuntu 22.04/24.04 with systemd: an admin user, SSH hardening and an inbound firewall behind a dead-man switch, plus fail2ban, kernel settings and automatic updates. There may be breaking changes before 1.0.
 
 ## Why
 
@@ -39,15 +39,29 @@ Auditors like Lynis tell you what is wrong but fix nothing. Ansible roles fix th
 On the server, as root. Installation is three steps on purpose: download, read, run.
 
 ```console
-# curl -fsSLO https://github.com/bhimrazy/vps-ready/releases/download/v0.2.1/install.sh
+# curl -fsSLO https://github.com/bhimrazy/vps-ready/releases/download/v0.3.0/install.sh
 # less install.sh
 # sh install.sh        # checks the SHA-256, verifies the signature if gh or cosign is installed
 # vps-ready detect
 # vps-ready audit                 # failures and unknowns; --all also lists the passing controls
 # vps-ready plan                  # what would change, and why; nothing is written
-# vps-ready apply                 # shows the plan, asks, then applies
+# vps-ready apply                 # kernel settings and automatic updates: shows the plan, asks, then applies
+# vps-ready apply --profile minimal   # also an admin user, SSH hardening and a firewall; waits for a confirm
 # vps-ready rollback --last       # restores the previous state
 ```
+
+With `--profile minimal` (or `web`), `apply` ends like this, with your own admin, address and port:
+
+```text
+Changes are live. Open a NEW terminal and run:
+
+    ssh -t -o ControlPath=none -p 22 admin@203.0.113.10 sudo vps-ready confirm
+
+If no new session confirms by 14:07:30 UTC (5:00 left), every change is rolled back.
+More time: sudo vps-ready confirm --extend
+```
+
+Run that command from a new terminal. If the new login works, `confirm` succeeds and `apply` exits 0. If it does not, wait: after 5 minutes (or at the next boot) every change is rolled back and the old login works again.
 
 <p align="center">
   <img src="assets/demo.png" alt="A real session in a Debian 13 VM, in three terminal windows. The end of sudo vps-ready audit: 21 passed, 5 failed, 1 unknown and 1 skipped of 28 controls, with 2 failures that have an automatic fix. sudo vps-ready plan: a kernel.sysctl drop-in that sets kernel.kptr_restrict and kernel.yama.ptrace_scope from 0 to 1 (fixes KRN-001 and KRN-004) and an updates.auto drop-in for apt, each labeled reversible. sudo vps-ready apply, answered y: four progress lines, verify ok, the transaction ID with the rollback command, and an audit of 15 controls after apply, all passing" width="88%">
@@ -63,12 +77,23 @@ The command is also installed as `vpsready`, without the hyphen. With Rust insta
 | `vps-ready detect` | Read-only facts: distro, init system, virtualization, effective SSH config, listening ports, whether Docker is present | available |
 | `vps-ready audit` | Checks the host against controls with stable IDs (for example `SSH-002`), each with the reason it matters. Lists only failed and unknown controls, and `--all` adds the rest. Text or JSON (`--json`, always complete); exits 0 only when no control fails or is unknown | available |
 | `vps-ready plan` | A diff of every file and setting that would change, with a one-line reason for each | available |
-| `vps-ready apply` | Snapshots originals, validates, writes atomically and rolls back if anything fails. Available for `kernel.sysctl` and `updates.auto`; the dead-man timer for anything that could lock you out is M3 | available, M3 |
-| `vps-ready confirm` | Run from a **new** SSH session to prove the new configuration works. Without it, the change reverts automatically | M3 |
+| `vps-ready apply` | Snapshots originals, validates, writes atomically and rolls back if anything fails. Changes that could lock you out arm a dead-man timer first and wait for a confirm. Exit codes: 0 applied or confirmed, 1 failed or rolled back, 2 error, 3 rollback did not complete, 4 still pending (you pressed Ctrl-C while it waited; the timer keeps running) | available |
+| `vps-ready confirm` | Run from a **new** SSH login, as the admin, to prove the new configuration works (no code to type). Without it, the change reverts automatically. `--extend` adds time | available |
 | `vps-ready rollback` | Restores the previous state from the transaction journal (`--last` or `--txn ID`); `vps-ready history` lists transactions | available |
 | `vps-ready export cloud-init` | Turns the profile you chose into `user-data` for your next servers | M5 |
 
-Hardening will be grouped into modules you can toggle: base system, admin user, SSH, firewall, brute-force protection, automatic updates, sysctl, logging, and deployment readiness (Docker done right, deploy user, reverse proxy, Tailscale, backups). Three profiles cover most people: **minimal**, **web** and **paranoid**.
+Hardening is grouped into modules:
+
+| Module | What it does | Fixes | Dead-man |
+|---|---|---|---|
+| `user.admin` | A login user other than root, with your SSH keys (copied from the account you logged in with, or given in a profile) and sudo | needed before root login is turned off | yes |
+| `ssh.server` | One drop-in, `/etc/ssh/sshd_config.d/00-vps-ready.conf`, that turns off root and password logins and the other failing settings; reloads sshd. The port stays 22 | `SSH-001` to `SSH-007` | yes |
+| `firewall.inbound` | Drops unsolicited inbound traffic in vps-ready's own nftables table, always allowing every current SSH port; Docker's and fail2ban's rules stay untouched | `FW-001` | yes |
+| `ssh.bruteforce` | fail2ban's `sshd` jail, reading the journal and banning in nftables | `SSH-008` | no |
+| `kernel.sysctl` | Safer kernel and network settings | `KRN-*`, `NET-*` | no |
+| `updates.auto` | Automatic security updates with `unattended-upgrades` | `UPD-001` | no |
+
+Profiles pick the modules: **minimal** is `user.admin`, `ssh.server`, `firewall.inbound` (SSH only), `kernel.sysctl` and `updates.auto`; **web** adds ports 80 and 443 (TCP, and UDP for HTTP/3) and `ssh.bruteforce`. A profile file can extend either and set your own admin name and keys. A plain `apply`, without `--profile` or `--module`, leaves the modules that can lock you out (and `ssh.bruteforce`, which installs packages) out, so it changes only kernel settings and automatic updates. Logging, a **paranoid** profile and deployment readiness (Docker done right, deploy user, reverse proxy, Tailscale, backups) come later.
 
 ## How a run works
 
@@ -79,14 +104,14 @@ Hardening will be grouped into modules you can toggle: base system, admin user, 
   </picture>
 </p>
 
-If any step inside `apply` fails, the engine restores the snapshots in reverse order before it ever reaches the confirm step. The full design is in [the architecture doc](docs/architecture.md).
+If any step inside `apply` fails, the engine restores the snapshots in reverse order before it ever reaches the confirm step. For the modules that can lock you out, the dead-man timer is armed **before the first change**, so even a crash or a dropped connection mid-apply is rolled back. The full design is in [the architecture doc](docs/architecture.md).
 
 ## Safety guarantees
 
-The engine (M2 and M3) is built around these rules, so they hold for every module rather than being left to each one. Today `apply` changes only kernel settings and automatic updates, and none of that can lock you out; the SSH and firewall rules below are enforced from M3.
+The engine is built around these rules, so they hold for every module rather than being left to each one.
 
 - **Never lock the user out.** Passwords and root login are not disabled until a keyed sudo user has logged in from a fresh session. The firewall always allows the SSH port that is actually in use.
-- **Confirm from a new connection.** Your open terminal proves nothing, because sshd reloads and conntrack keep existing sessions alive. The dead-man timer reverts SSH and firewall changes unless you confirm from a new session, even if the tool or the terminal is gone, and even across a reboot.
+- **Confirm from a new connection.** Your open terminal proves nothing, because sshd reloads and conntrack keep existing sessions alive. The dead-man timer reverts the admin user, SSH and firewall changes unless you confirm from a new SSH login within 5 minutes (`--deadman 1m` to `30m`), even if the tool or the terminal is gone, and even across a reboot. tmux, screen, mosh and connections shared through `ControlMaster` count as old.
 - **Show, then do.** Nothing changes without a plan you can read. Every change carries a reversibility label: reversible, partial, or irreversible.
 - **Effective state over file state.** Checks use `sshd -T`, `/proc/sys`, `apt-config`, `nft` and `ss`, not a guess at what a config file means.
 - **Drop-ins, not edits.** The tool owns files like `/etc/ssh/sshd_config.d/00-vps-ready.conf` and never rewrites your `sshd_config` in place. That is also what beats cloud-init re-enabling passwords.
@@ -97,7 +122,7 @@ The engine (M2 and M3) is built around these rules, so they hold for every modul
 
 | Family | Distros | Firewall | Init | Status |
 |---|---|---|---|---|
-| Debian | Ubuntu 22.04, 24.04, 26.04; Debian 12, 13 | ufw or nftables | systemd | first (v0.2) |
+| Debian | Ubuntu 22.04, 24.04; Debian 12, 13 (26.04 next) | nftables (its own table; not applied while ufw or firewalld is active) | systemd | since v0.2 |
 | RHEL | Rocky and Alma 9, 10; Fedora | firewalld | systemd | v0.6 |
 | Alpine | 3.2x | nftables | OpenRC | v0.6 |
 
@@ -114,7 +139,7 @@ Architectures: x86_64 and aarch64, as static musl binaries. Windows, BSD, Kubern
 | [Testing strategy](docs/testing.md) | Unit tests with fakes, systemd containers, real VMs, nightly cloud runs |
 | [Decisions](docs/decisions.md) | What is decided and why, and what is still open |
 
-The roadmap lives in the [GitHub milestones](https://github.com/bhimrazy/vps-ready/milestones): M0 skeleton, M1 read-only `detect` and `audit` (v0.1.0), M2 engine and safe modules (v0.2.0), M3 SSH, firewall and dead-man switch, M4 interactive wizard, M5 deployment readiness, M6 more distros.
+The roadmap lives in the [GitHub milestones](https://github.com/bhimrazy/vps-ready/milestones): M0 skeleton, M1 read-only `detect` and `audit` (v0.1.0), M2 engine and safe modules (v0.2.0), M3 SSH, firewall and dead-man switch (v0.3.0), M4 interactive wizard, M5 deployment readiness, M6 more distros.
 
 ## Development
 
@@ -134,7 +159,7 @@ cargo run -p vps-ready -- detect
 | `make build-musl` | Static release builds for `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` |
 | `make deny` | Dependency checks: advisories, licenses, banned crates and allowed sources |
 
-The code is a Cargo workspace with three crates: `crates/vps-ready` (library plus thin binary), `crates/vpsready` (the same command under the alias name) and `crates/sshd-config` (a standalone reader for `sshd_config` and `sshd -T`, not published yet). All system access goes through two traits, `Runner` and `Fs`, so every module is tested against fakes before it ever touches a real machine. The layout and the reasoning are in [the architecture doc](docs/architecture.md#repo-layout).
+The code is a Cargo workspace with three crates: `crates/vps-ready` (library plus thin binary), `crates/vpsready` (the same command under the alias name) and `crates/sshd-config` (a standalone reader for `sshd_config` and `sshd -T`, [published on crates.io](https://crates.io/crates/sshd-config)). All system access goes through two traits, `Runner` and `Fs`, so every module is tested against fakes before it ever touches a real machine. The layout and the reasoning are in [the architecture doc](docs/architecture.md#repo-layout).
 
 ## Contributing and security
 
