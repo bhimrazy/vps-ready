@@ -151,6 +151,7 @@ fn resources(host: &Host, facts: &Facts) -> Vec<Resource> {
             &PlanCx {
                 facts,
                 params: &params,
+                planned: &[],
             },
             host.sys(),
         )

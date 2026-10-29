@@ -1,0 +1,18 @@
+---
+source: crates/vps-ready/src/modules/ssh_server/tests.rs
+expression: "plan(&fs, &host, &facts)"
+---
+modules:
+  - id: ssh.server
+    title: Turn off root and password logins over SSH
+    status: applicable
+    changes:
+      - id: "file:/etc/ssh/sshd_config.d/00-vps-ready.conf"
+        summary: "create /etc/ssh/sshd_config.d/00-vps-ready.conf (0644 0:0)"
+        diff: "@@ -0,0 +1,7 @@\n+# Written by vps-ready (ssh.server). `vps-ready rollback --last`\n+# restores the previous state; edits here are replaced by the next apply.\n+# sshd uses the first value it reads for each keyword, and reads this file\n+# before 50-cloud-init.conf and the rest of sshd_config.\n+PermitRootLogin no\n+PasswordAuthentication no\n+X11Forwarding no\n"
+        reversibility: reversible
+    reloads:
+      - sshd-reload
+    notes:
+      - SSH sessions that are open now stay open; the new settings apply to new logins
+      - "Port, ListenAddress, AllowGroups, AuthenticationMethods and the crypto settings stay as they are"

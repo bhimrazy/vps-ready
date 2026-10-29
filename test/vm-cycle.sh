@@ -39,6 +39,18 @@
 #     reboot: `systemd-analyze verify` of the boot hook finds no ordering
 #       cycle; apply, reboot during the window -> rolled back with
 #       deadman-reboot, and the hook finished before sshd started.
+#   ssh.server, applied and confirmed from real logins to the VM's own sshd:
+#     profile minimal (user.admin, ssh.server, firewall.inbound and the
+#     rest) with a new admin: during the window a new root login is refused
+#     and sshd offers no password method -> confirm as the admin -> the
+#     SSH-001..007 and FW-001 controls pass, the admin logs in and root
+#     does not -> rollback removes the drop-in, the table and the admin, and
+#     root logs in again.
+#     --module ssh.server, not confirmed: a new root login is refused (the
+#     reload reached new logins, also through ssh.socket); the drop-in is
+#     edited -> at the deadline it is gone and the edit is in files/1.during.
+#     A `Match User <user>` block with `PermitRootLogin yes` read before the
+#     drop-in -> verify (`sshd -T -C`) fails and apply rolls back.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -344,12 +356,16 @@ user=$(vm id -un)
 vm 'test -f ~/.ssh/vr_local || ssh-keygen -q -t ed25519 -N "" -C vr-local -f ~/.ssh/vr_local'
 # shellcheck disable=SC2016 # expanded in the VM
 vm 'grep -qF "$(cat ~/.ssh/vr_local.pub)" ~/.ssh/authorized_keys || cat ~/.ssh/vr_local.pub >>~/.ssh/authorized_keys'
-vm 'cat >/tmp/vr-ssh' <<'SH'
+# Writes /tmp/vr-ssh again after a reboot clears /tmp.
+write_vr_ssh() {
+  vm 'cat >/tmp/vr-ssh' <<'SH'
 #!/bin/sh
 # ssh to this host's own sshd with the cycle's key; arguments as for ssh.
 exec ssh -i "$HOME/.ssh/vr_local" -o BatchMode=yes -o IdentitiesOnly=yes \
   -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -p 22 "$@"
 SH
+}
+write_vr_ssh
 # local_ssh <ssh args...>: ssh from inside the VM to its own sshd.
 local_ssh() { vm sh /tmp/vr-ssh "$@"; }
 [ "$(local_ssh -o ControlPath=none "$user@127.0.0.1" id -un)" = "$user" ] || die "no SSH login to localhost as $user"
@@ -437,6 +453,90 @@ first=$(jq -r .__MONOTONIC_TIMESTAMP "$tmp/ssh.json" | head -n 1)
 [ "$done_at" -lt "$first" ] || die "sshd started at $first us, before $hook finished at $done_at us"
 echo "$hook finished at $done_at us, sshd's first unit started at $first us"
 vm sudo journalctl -b -u "$hook" --no-pager | tail -n 20
+
+ssh_dropin=/etc/ssh/sshd_config.d/00-vps-ready.conf
+admin=vradmin
+write_vr_ssh
+# Root gets the cycle's key, so a new login shows whether sshd reloaded.
+vm 'sudo install -d -m 700 /root/.ssh && sudo install -m 600 ~/.ssh/vr_local.pub /root/.ssh/authorized_keys'
+root_login() { local_ssh -o ControlPath=none root@127.0.0.1 true 2>/dev/null; }
+# A login that offers only passwords; sshd lists the methods it accepts.
+password_methods() {
+  local_ssh -o ControlPath=none -o PubkeyAuthentication=no \
+    -o PreferredAuthentications=password,keyboard-interactive "$user@127.0.0.1" true 2>&1 | tail -n 1 || true
+}
+# apply_session <args>: runs `vps-ready apply --yes <args>` from a new login
+# as the user, in the background; its exit code lands in /tmp/vr-apply.rc.
+apply_session() {
+  vm "rm -f /tmp/vr-apply.rc; setsid -f sh -c 'sh /tmp/vr-ssh -o ControlPath=none $user@127.0.0.1 sudo vps-ready apply --yes $* >/tmp/vr-apply.out 2>&1; echo \$? >/tmp/vr-apply.rc' </dev/null >/dev/null 2>&1"
+  expect_pending
+}
+
+echo "== $distro: profile minimal, confirmed by the new admin"
+root_login || die "root cannot log in before apply"
+vm test ! -e "$ssh_dropin" || die "$ssh_dropin exists before apply"
+printf 'schema = 1\nextends = "minimal"\n[modules."user.admin"]\nname = "%s"\n' "$admin" | vm 'cat >/tmp/vr-minimal.toml'
+apply_session --profile /tmp/vr-minimal.toml --deadman 2m
+vm cat "$ssh_dropin"
+! root_login || die "root still logs in over a new login during the window"
+password_methods
+! password_methods | grep -q password || die "sshd still offers password logins"
+rc=0; local_ssh -o ControlPath=none "$admin@127.0.0.1" sudo vps-ready confirm || rc=$?
+[ "$rc" -eq 0 ] || die "confirm as $admin exited $rc, expected 0"
+expect_newest confirmed
+expect_rc /tmp/vr-apply.rc 0
+rc=0; vr audit --json >"$tmp/audit.json" || rc=$?
+[ "$rc" -le 1 ] || die "audit exited $rc, expected 0 or 1"
+fixed='.fix == "ssh.server" or .fix == "firewall.inbound"'
+jq -r ".findings[] | select($fixed) | \"\(.id) \(.status)\"" "$tmp/audit.json"
+jq -e "[.findings[] | select(($fixed) and .status != \"pass\")] | length == 0" \
+  "$tmp/audit.json" >/dev/null || die "an ssh.server or firewall.inbound control does not pass after the confirm"
+expect_empty_plan ssh.server
+! root_login || die "root logs in after the confirm"
+local_ssh -o ControlPath=none "$admin@127.0.0.1" true || die "$admin cannot log in after the confirm"
+# `userdel` fails while the admin has processes, e.g. its systemd --user.
+i=0
+while vm pgrep -u "$admin" >/dev/null; do
+  i=$((i + 1)); [ "$i" -le 30 ] || die "$admin still has processes after 30 s"
+  sleep 1
+done
+rc=0; vr rollback --last || rc=$?
+[ "$rc" -eq 0 ] || die "rollback of the confirmed transaction exited $rc, expected 0"
+vm test ! -e "$ssh_dropin" || die "$ssh_dropin still exists after rollback"
+! vm sudo nft list table inet vps_ready >/dev/null 2>&1 || die "the vps_ready table is still loaded after rollback"
+! vm id "$admin" >/dev/null 2>&1 || die "$admin still exists after rollback"
+root_login || die "root cannot log in after the rollback"
+
+echo "== $distro: ssh.server, edited during the window and not confirmed"
+apply_session --module ssh.server --deadman 1m
+vm cat "$ssh_dropin"
+[ "$(vm sudo sshd -T | awk '$1 == "permitrootlogin" { print $2 }')" = no ] ||
+  die "sshd -T does not show permitrootlogin no"
+# The reload reaches new logins (with ssh.socket too); open ones stay.
+! root_login || die "root still logs in over a new login"
+vm true || die "the open connection was cut"
+vm "echo 'PermitRootLogin yes' | sudo tee $ssh_dropin >/dev/null"
+wait_deadman
+expect_reverted deadman-timeout
+expect_rc /tmp/vr-apply.rc 1
+vm test ! -e "$ssh_dropin" || die "$ssh_dropin still exists"
+during=/var/lib/vps-ready/txn/$txn/files/1.during
+[ "$(vm sudo cat "$during")" = "PermitRootLogin yes" ] || die "$during does not hold the edit"
+root_login || die "root cannot log in after the rollback"
+
+echo "== $distro: ssh.server, a Match block for the admin fails verify"
+# Read before the drop-in, but only for the admin's own connection, which
+# verify checks with `sshd -T -C`.
+match_conf=/etc/ssh/sshd_config.d/01-match.conf
+printf 'Match User %s\n  PermitRootLogin yes\n' "$user" | vm "sudo tee $match_conf >/dev/null"
+rc=0; local_ssh -o ControlPath=none "$user@127.0.0.1" sudo vps-ready apply --yes --module ssh.server --deadman 1m || rc=$?
+[ "$rc" -eq 1 ] || { vm sudo rm -f "$match_conf"; die "apply exited $rc, expected 1 (rolled back)"; }
+vm sudo rm -f "$match_conf"
+expect_newest rolled-back
+jq -e '.[0].reason == "verify-failed"' "$tmp/history.json" >/dev/null ||
+  { vr history; die "rolled back, but not with reason verify-failed"; }
+vm test ! -e "$ssh_dropin" || die "$ssh_dropin still exists"
+vm sudo rm -f /root/.ssh/authorized_keys
 
 echo "== $distro: vps-ready history"
 vr history

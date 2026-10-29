@@ -247,6 +247,7 @@ fn plan_steps(
         &PlanCx {
             facts,
             params: &params,
+            planned: &[],
         },
         Sys { fs, runner },
     )

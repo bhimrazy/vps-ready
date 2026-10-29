@@ -139,7 +139,7 @@ fn unknown_modules_and_bases_are_errors() {
     let err = parse("schema = 1\n[modules.\"ssh.sevrer\"]\n").unwrap_err();
     assert!(
         err.to_string().starts_with(
-            "unknown module `ssh.sevrer`; modules are user.admin, firewall.inbound, ssh.bruteforce"
+            "unknown module `ssh.sevrer`; modules are user.admin, ssh.server, firewall.inbound, ssh.bruteforce"
         ),
         "{err}"
     );

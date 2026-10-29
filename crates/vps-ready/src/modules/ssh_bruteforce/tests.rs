@@ -167,7 +167,11 @@ fn steps(facts: &Facts, params: &toml::Table) -> Result<ModuleSteps, ModuleError
         crate::sys::fake::FakeRunner::new(),
     );
     SshBruteforce::ROOT.plan(
-        &PlanCx { facts, params },
+        &PlanCx {
+            facts,
+            params,
+            planned: &[],
+        },
         Sys {
             fs: &fs,
             runner: &runner,

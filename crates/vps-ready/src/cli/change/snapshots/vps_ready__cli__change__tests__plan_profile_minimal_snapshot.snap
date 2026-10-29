@@ -13,6 +13,18 @@ user.admin: Set up an admin account that logs in with an SSH key and uses sudo
       +# Written by vps-ready (user.admin). `vps-ready rollback --last`
       +# restores the previous state; edits here are replaced by the next apply.
       +admin ALL=(ALL:ALL) NOPASSWD: ALL
+ssh.server: Turn off root and password logins over SSH (fixes SSH-001, SSH-002, SSH-005)
+  note: SSH sessions that are open now stay open; the new settings apply to new logins
+  note: Port, ListenAddress, AllowGroups, AuthenticationMethods and the crypto settings stay as they are
+  + /etc/ssh/sshd_config.d/00-vps-ready.conf (mode 0644, root:root)       reversible
+      @@ -0,0 +1,7 @@
+      +# Written by vps-ready (ssh.server). `vps-ready rollback --last`
+      +# restores the previous state; edits here are replaced by the next apply.
+      +# sshd uses the first value it reads for each keyword, and reads this file
+      +# before 50-cloud-init.conf and the rest of sshd_config.
+      +PermitRootLogin no
+      +PasswordAuthentication no
+      +X11Forwarding no
 firewall.inbound: Drop incoming traffic that no rule allows (fixes FW-001)
   note: always accepts TCP 22, the current SSH ports (this session's, sshd's listeners and `Port`), whatever `allow` says
   + directory /etc/vps-ready (mode 0755, root:root)                       reversible
@@ -87,6 +99,6 @@ updates.auto: Install security updates automatically (fixes UPD-001)
       +APT::Periodic::Update-Package-Lists "1";
       +APT::Periodic::Unattended-Upgrade "1";
 
-15 changes in 4 modules: 6 files, 1 directory, 6 kernel settings, 1 service, 1 user.
+16 changes in 5 modules: 7 files, 1 directory, 6 kernel settings, 1 service, 1 user.
 partial: rollback removes a user it created but keeps its home directory.
 Run `sudo vps-ready apply --profile minimal` to make them.

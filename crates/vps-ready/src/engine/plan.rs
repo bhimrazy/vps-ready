@@ -57,6 +57,9 @@ pub struct ModulePlan<'a> {
     pub notes: Vec<String>,
     #[serde(skip)]
     pub(super) selected: Selected<'a>,
+    /// [`PlanCx::planned`] when it was planned, for verify.
+    #[serde(skip)]
+    pub(super) planned: Vec<Resource>,
     /// [`keyed_users`] of all its desired resources, changed or not.
     #[serde(skip)]
     pub(super) keyed: Vec<String>,
@@ -189,6 +192,7 @@ impl ModulePlan<'_> {
         let cx = PlanCx {
             facts,
             params: self.selected.params,
+            planned: &self.planned,
         };
         self.selected.module.verify(&cx, sys)
     }
@@ -207,9 +211,11 @@ pub fn plan<'a>(
     sys: Sys,
 ) -> Result<Plan<'a>, EngineError> {
     let mut plans = Vec::new();
+    let mut planned = Vec::new();
     for &selected in modules {
         let module = selected.module;
         let mut notes = Vec::new();
+        let before = planned.clone();
         let mut keyed = Vec::new();
         let status = match module.applicable(facts) {
             Applicability::NotApplicable { reason } => ModuleStatus::NotApplicable { reason },
@@ -218,19 +224,19 @@ pub fn plan<'a>(
                 let cx = PlanCx {
                     facts,
                     params: selected.params,
+                    planned: &before,
                 };
                 let ModuleSteps {
                     resources,
                     mut reloads,
                     notes: found,
-                } = module
-                    .plan(&cx, sys)
-                    .map_err(|source| EngineError::Module {
-                        module: module.id(),
-                        source,
-                    })?;
+                } = module.plan(&cx, sys).map_err(|error| EngineError::Module {
+                    module: module.id(),
+                    error,
+                })?;
                 notes.extend(found);
                 keyed = keyed_users(&resources);
+                planned.extend(resources.iter().cloned());
                 let mut changes = Vec::new();
                 for resource in resources {
                     let change = resource.diff(sys).map_err(|source| EngineError::Resource {
@@ -253,6 +259,7 @@ pub fn plan<'a>(
             status,
             notes,
             selected,
+            planned: before,
             keyed,
         });
     }

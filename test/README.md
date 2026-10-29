@@ -61,7 +61,10 @@ the applying session, an older session and a `ControlMaster` connection, and
 accepted from a new login. Those sessions are real `ssh` logins from inside
 the VM to its own sshd, since the connection that drives the VM may not be
 one (Lima's shell uses vsock). That module exists only in a
-binary built with `--features vps-ready/testing`. It needs `/dev/kvm`, `qemu-system-x86_64`,
+binary built with `--features vps-ready/testing`. Last, `ssh.server`: the
+`minimal` profile confirmed by the admin it creates, then an unconfirmed apply
+that refuses new root logins during the window (also through `ssh.socket`) and
+reverts at its deadline after an edit. It needs `/dev/kvm`, `qemu-system-x86_64`,
 `qemu-img`, `cloud-localds` (cloud-image-utils), `ssh` and `jq`. The `vm`
 workflow pins the images and runs it on four distros.
 

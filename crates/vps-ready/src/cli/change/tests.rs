@@ -913,7 +913,8 @@ fn plan_profile_web_snapshot() {
 }
 
 /// The default selection leaves out the dead-man modules of `minimal`
-/// (`user.admin`) and `ssh.bruteforce` of `web`, which installs packages.
+/// (`user.admin`, `ssh.server`) and `ssh.bruteforce` of `web`, which
+/// installs packages.
 #[test]
 fn default_selection_is_the_safe_modules() {
     let fs = fixture();
@@ -923,9 +924,11 @@ fn default_selection_is_the_safe_modules() {
     assert!(default.contains("updates.auto:"), "{default}");
     assert!(default.contains("kernel.sysctl:"), "{default}");
     assert!(!default.contains("user.admin"), "{default}");
+    assert!(!default.contains("ssh.server"), "{default}");
     assert!(!default.contains("ssh.bruteforce"), "{default}");
     let minimal = body(&with_profile("minimal", &[]));
     assert!(minimal.starts_with("user.admin:"), "{minimal}");
+    assert!(minimal.contains("ssh.server:"), "{minimal}");
     assert!(!default.contains("firewall.inbound"), "{default}");
     assert!(minimal.contains("firewall.inbound:"), "{minimal}");
     assert!(!minimal.contains("ssh.bruteforce"), "{minimal}");
@@ -940,7 +943,8 @@ fn a_profile_file_is_read_and_checked() {
     let fs = fixture().with_file(
         "/srv/mine.toml",
         "schema = 1\nextends = \"web\"\n[modules.\"updates.auto\"]\nenabled = false\n\
-         [modules.\"user.admin\"]\nenabled = false\n",
+         [modules.\"user.admin\"]\nenabled = false\n\
+         [modules.\"ssh.server\"]\nenabled = false\n",
     );
     let (code, out, _) = plan_with(&host(&fs), &with_profile("/srv/mine.toml", &[]));
     assert_eq!(code, 0);

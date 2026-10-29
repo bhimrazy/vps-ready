@@ -16,6 +16,7 @@ mod deadman_test;
 pub mod firewall_inbound;
 pub mod kernel_sysctl;
 pub mod ssh_bruteforce;
+pub mod ssh_server;
 mod updates_auto;
 pub mod user_admin;
 
@@ -24,6 +25,7 @@ pub use deadman_test::DeadmanTest;
 pub use firewall_inbound::FirewallInbound;
 pub use kernel_sysctl::KernelSysctl;
 pub use ssh_bruteforce::SshBruteforce;
+pub use ssh_server::SshServer;
 pub use updates_auto::UpdatesAuto;
 pub use user_admin::UserAdmin;
 
@@ -44,12 +46,12 @@ pub enum ModuleError {
     /// the parse error is large.
     #[error("invalid params: {0}")]
     Params(#[source] Box<toml::de::Error>),
-    /// The module cannot plan on this host as configured, and why.
-    #[error("{0}")]
-    Refused(String),
     /// A file's template did not render.
     #[error("rendering a template: {0}")]
     Template(#[from] askama::Error),
+    /// The module cannot plan on this host as configured, and why.
+    #[error("{0}")]
+    Refused(String),
 }
 
 impl From<CatalogError> for ModuleError {
@@ -77,6 +79,9 @@ pub struct PlanCx<'a> {
     pub facts: &'a Facts,
     /// The module's table from the profile; empty when there is none.
     pub params: &'a toml::Table,
+    /// The resources of the modules planned before this one in the same
+    /// plan, in their desired state, e.g. the admin `user.admin` creates.
+    pub planned: &'a [Resource],
 }
 
 impl PlanCx<'_> {
@@ -194,6 +199,7 @@ pub trait Module {
 pub fn all() -> &'static [&'static dyn Module] {
     &[
         &UserAdmin,
+        &SshServer,
         &FirewallInbound,
         &SshBruteforce::ROOT,
         &KernelSysctl::ROOT,
@@ -208,6 +214,7 @@ pub fn all() -> &'static [&'static dyn Module] {
 pub fn with_test() -> &'static [&'static dyn Module] {
     &[
         &UserAdmin,
+        &SshServer,
         &FirewallInbound,
         &SshBruteforce::ROOT,
         &KernelSysctl::ROOT,
@@ -236,6 +243,7 @@ mod tests {
         let cx = PlanCx {
             facts: &facts,
             params: &params,
+            planned: &[],
         };
         let (fs, runner) = (
             crate::sys::fake::FakeFs::new(),
