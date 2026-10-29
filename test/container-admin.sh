@@ -1,17 +1,20 @@
 #!/bin/sh
-# Apply and roll back user.admin with the real binary in a systemd test container.
+# Apply, confirm and roll back user.admin with the real binary in a systemd
+# test container.
 #
 # Usage: test/container-admin.sh <distro> [binary]      e.g. debian-13
 #   Same binary and image requirements as test/container-audit.sh. Needs docker
 #   and jq; no network access.
 #
 # Root gets two keys, one restricted with `command=` as on Ubuntu and AWS
-# images. Cycle 1: apply --module user.admin -> exit 4, pending-confirm -> the
-# admin exists with only the plain key, the sudoers drop-in is 0440 and valid,
-# and the admin logs in over SSH with that key and runs sudo without a
-# password -> rollback --last -> the account, its keys and the drop-in are
-# gone, its home directory stays. Cycle 2: apply --deadman 1m and do not
-# confirm -> the timer rolls it back (deadman-timeout).
+# images; a user `other` has the same key and sudo. Cycle 1: apply --module
+# user.admin waits for a confirm -> the admin exists with only the plain key,
+# the sudoers drop-in is 0440 and valid, and the printed ssh line names the
+# admin -> confirm over a new SSH login as `other` is refused (not the admin)
+# -> `sudo vps-ready confirm` over a new login as the admin succeeds and apply
+# exits 0 -> rollback --last removes the account, its keys and the drop-in,
+# and keeps its home directory. Cycle 2: apply --deadman 1m, no confirm -> the
+# timer rolls it back (deadman-timeout) and apply exits 1.
 # The container is capped at 1 GB and 1 CPU and is removed afterwards.
 set -eu
 cd "$(dirname "$0")/.."
@@ -50,8 +53,38 @@ docker exec "$name" chmod 755 /usr/local/bin/vps-ready
 vr() { docker exec "$name" vps-ready "$@"; }
 die() { echo "FAIL [$distro]: $*" >&2; exit 1; }
 newest() { vr history --json | jq -r "$1"; }
+# A new SSH login to the container's own sshd as user $1, running the rest.
+login() {
+  user=$1; shift
+  docker exec "$name" ssh -i /root/test_key -o BatchMode=yes -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null -o LogLevel=QUIET -o ControlPath=none "$user@127.0.0.1" "$@"
+}
+# Starts apply in the background; its output and exit code land in
+# /tmp/apply.out and /tmp/apply.rc. Waits until it is pending-confirm.
+apply_bg() {
+  docker exec "$name" rm -f /tmp/apply.out /tmp/apply.rc
+  docker exec -d "$name" sh -c \
+    "vps-ready apply --yes --module user.admin $* >/tmp/apply.out 2>&1; echo \$? >/tmp/apply.rc"
+  i=0
+  until [ "$(newest '.[0].state // empty' 2>/dev/null)" = pending-confirm ]; do
+    i=$((i + 1))
+    [ "$i" -lt 60 ] || { docker exec "$name" cat /tmp/apply.out; die "apply did not get to pending-confirm"; }
+    sleep 1
+  done
+}
+# Waits for the background apply to exit and checks its code.
+apply_rc() {
+  i=0
+  until docker exec "$name" test -s /tmp/apply.rc; do
+    i=$((i + 1)); [ "$i" -lt 120 ] || die "apply did not exit"
+    sleep 1
+  done
+  rc=$(docker exec "$name" cat /tmp/apply.rc)
+  [ "$rc" -eq "$1" ] || { docker exec "$name" cat /tmp/apply.out; die "apply exited $rc, expected $1"; }
+}
 
-# Root's keys: the restricted one first, as cloud images have it.
+# Root's keys: the restricted one first, as cloud images have it. `other`
+# logs in with the same key and has sudo, but is not the planned admin.
 docker exec "$name" sh -c '
   set -e
   mkdir -p -m 700 /root/.ssh
@@ -60,6 +93,11 @@ docker exec "$name" sh -c '
   { printf "no-port-forwarding,command=\"echo Please login as the user debian\" "
     cat /root/cloud_key.pub; cat /root/test_key.pub; } >/root/.ssh/authorized_keys
   chmod 600 /root/.ssh/authorized_keys
+  useradd --create-home --shell /bin/bash other
+  install -d -m 700 -o other -g other /home/other/.ssh
+  install -m 600 -o other -g other /root/test_key.pub /home/other/.ssh/authorized_keys
+  echo "other ALL=(ALL:ALL) NOPASSWD: ALL" >/etc/sudoers.d/other
+  chmod 440 /etc/sudoers.d/other
   systemctl start ssh.socket 2>/dev/null || systemctl start ssh.service'
 key=$(docker exec "$name" cat /root/test_key.pub)
 
@@ -67,28 +105,41 @@ echo "== $distro: before"
 docker exec "$name" sh -c '! getent passwd admin >/dev/null' || die "admin exists before apply"
 docker exec "$name" sh -c "test ! -e $sudoers" || die "$sudoers exists before apply"
 
-echo "== $distro: vps-ready apply --yes --module user.admin"
-rc=0; vr apply --yes --module user.admin || rc=$?
-[ "$rc" -eq 4 ] || die "apply exited $rc, expected 4 (pending)"
-[ "$(newest '.[0].state')" = pending-confirm ] || die "newest transaction is not pending-confirm"
+echo "== $distro: vps-ready apply --yes --module user.admin, in the background"
+apply_bg
+docker exec "$name" cat /tmp/apply.out
+docker exec "$name" grep -q 'admin@' /tmp/apply.out || die "the printed ssh line does not name admin"
+txn=$(newest '.[0].id')
+docker exec "$name" tail -n 1 "/var/lib/vps-ready/txn/$txn/journal.jsonl" |
+  jq -e '.state == "pending-confirm" and .admins == ["admin"]' >/dev/null ||
+  die "the pending-confirm record does not name admin as the admin"
 docker exec "$name" getent passwd admin
 [ "$(docker exec "$name" cat /home/admin/.ssh/authorized_keys)" = "$key" ] ||
   die "authorized_keys is not exactly root's plain key"
 [ "$(docker exec "$name" stat -c '%a %U:%G' "$sudoers")" = "440 root:root" ] ||
   die "$sudoers is not 0440 root:root"
 docker exec "$name" visudo -c >/dev/null || die "visudo -c fails"
-docker exec "$name" sudo -n -l -U admin | grep -q 'NOPASSWD: ALL' || die "admin has no NOPASSWD rule"
-
-echo "== $distro: ssh admin@127.0.0.1 sudo -n true"
-docker exec "$name" ssh -i /root/test_key -o BatchMode=yes -o StrictHostKeyChecking=no \
-  -o UserKnownHostsFile=/dev/null -o LogLevel=QUIET admin@127.0.0.1 sudo -n true ||
-  die "admin cannot log in with the key and run sudo"
 
 echo "== $distro: vps-ready plan --json --module user.admin"
 rc=0; vr plan --json --module user.admin >"$tmp/plan.json" || rc=$?
 [ "$rc" -eq 0 ] || die "plan exited $rc, expected 0"
 jq -e '[.modules[].changes | length] | add == 0' "$tmp/plan.json" >/dev/null ||
   { cat "$tmp/plan.json"; die "plan still has changes after apply"; }
+
+echo "== $distro: confirm from a new login as other is refused"
+rc=0; login other sudo vps-ready confirm >"$tmp/other.out" 2>&1 || rc=$?
+cat "$tmp/other.out"
+[ "$rc" -eq 2 ] || die "confirm as other exited $rc, expected 2"
+grep -q "the changes give SSH keys to admin" "$tmp/other.out" || die "the refusal does not name the admin"
+[ "$(newest '.[0].state')" = pending-confirm ] || die "the refusal changed the transaction"
+
+echo "== $distro: ssh admin@127.0.0.1 sudo vps-ready confirm"
+rc=0; login admin sudo vps-ready confirm || rc=$?
+[ "$rc" -eq 0 ] || die "confirm as admin exited $rc, expected 0"
+apply_rc 0
+[ "$(newest '.[0].state')" = confirmed ] || die "newest transaction is not confirmed"
+docker exec "$name" sh -c 'systemctl is-enabled vps-ready-deadman.service' 2>/dev/null |
+  grep -qx disabled || die "the boot hook is still enabled after confirm"
 
 echo "== $distro: vps-ready rollback --last"
 rc=0; vr rollback --last || rc=$?
@@ -103,15 +154,11 @@ docker exec "$name" test ! -e /home/admin/.ssh || die "/home/admin/.ssh is still
 docker exec "$name" rm -rf /home/admin
 
 echo "== $distro: vps-ready apply --yes --module user.admin --deadman 1m, no confirm"
-rc=0; vr apply --yes --module user.admin --deadman 1m || rc=$?
-[ "$rc" -eq 4 ] || die "apply exited $rc, expected 4 (pending)"
+apply_bg --deadman 1m
 docker exec "$name" getent passwd admin >/dev/null || die "admin was not created"
-i=0
-until [ "$(newest '.[0].state + " " + .[0].reason')" = "rolled-back deadman-timeout" ]; do
-  i=$((i + 1)); [ "$i" -lt 120 ] || { vr history; die "the timer did not roll back"; }
-  sleep 1
-done
-echo "rolled back by the timer after about ${i}s"
+apply_rc 1
+[ "$(newest '.[0].state + " " + .[0].reason')" = "rolled-back deadman-timeout" ] ||
+  { vr history; die "the timer did not roll back"; }
 docker exec "$name" sh -c '! getent passwd admin >/dev/null' || die "admin is still there"
 docker exec "$name" sh -c "test ! -e $sudoers" || die "$sudoers is still there"
 docker exec "$name" sh -c 'systemctl is-enabled vps-ready-deadman.service' 2>/dev/null |

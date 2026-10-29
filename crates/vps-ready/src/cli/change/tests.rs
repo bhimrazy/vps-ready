@@ -3,9 +3,11 @@
 use std::collections::BTreeMap;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::*;
+use crate::cli::EXIT_PENDING;
 use crate::engine::{Event, Record};
 use crate::facts::{AptUpdates, Virt, sysctl};
 use crate::sys::fake::{FakeFs, FakeRunner, Op};
@@ -113,6 +115,12 @@ fn host(fs: &FakeFs) -> Host<'_> {
         facts: vm,
         color: false,
         binary: BINARY.into(),
+        session: |_| Err(crate::facts::NoSession::NotSsh),
+        sudo_user: Some("admin".into()),
+        stop: Arc::new(AtomicBool::new(false)),
+        catch_sigint: false,
+        tty: false,
+        poll: std::time::Duration::ZERO,
     }
 }
 
@@ -833,6 +841,8 @@ fn a_dead_man_apply_is_pending_until_the_timer_reverts_it() {
             fs: &fs,
             runner: &runner,
         },
+        // As if Ctrl-C came at once: apply stops waiting.
+        stop: Arc::new(AtomicBool::new(true)),
         ..host(&fs)
     };
     let (code, out, _) = apply_yes(&host);
@@ -844,9 +854,7 @@ fn a_dead_man_apply_is_pending_until_the_timer_reverts_it() {
     assert_eq!(code, EXIT_PENDING, "{err}");
     let txn = txn_ids(&fs).pop().unwrap();
     assert!(
-        out.contains(&format!(
-            "Applied 1 change (transaction {txn}). The changes are live and are rolled back at "
-        )),
+        out.contains(&format!("Applied 1 change (transaction {txn}).")),
         "{out}"
     );
     assert!(
@@ -1006,3 +1014,5 @@ fn restore_progress_of_users() {
     );
     assert_eq!(line(false, &[]), "leave user admin as it is\n");
 }
+
+mod pending;

@@ -35,10 +35,11 @@ match their state before. It needs network access for `apt-get`.
 `test/container-bruteforce.sh <distro> [binary]` runs the same kind of cycle
 for `ssh.bruteforce`: the jail runs, reads the journal and bans into
 nftables, `SSH-008` passes, and rollback removes the drop-in.
-`test/container-admin.sh <distro> [binary]` runs `user.admin`: apply leaves it
-pending, the admin logs in with the key copied from root and runs sudo,
-`rollback --last` removes the account; a second apply with `--deadman 1m` is
-rolled back by the timer.
+`test/container-admin.sh <distro> [binary]` runs `user.admin`: apply waits
+for a confirm, a new login as another sudo user cannot confirm, a new login as
+the admin (with the key copied from root) confirms with `sudo vps-ready
+confirm`, and `rollback --last` removes the account; a second apply with
+`--deadman 1m` is rolled back by the timer.
 
 ```sh
 cargo build --release --target aarch64-unknown-linux-musl   # x86_64-... on Intel
@@ -55,7 +56,11 @@ and a throwaway SSH key with cloud-init, and drives the VM over SSH. It runs
 `kernel.sysctl` apply and rollback in the same boot and across a reboot, then
 the `updates.auto` cycle, then the dead-man switch: an unconfirmed apply of
 the test module `test.deadman` reverts at its deadline, also after an edit
-during the window, and at boot after a reboot. That module exists only in a
+during the window, and at boot after a reboot; and `confirm` is refused from
+the applying session, an older session and a `ControlMaster` connection, and
+accepted from a new login. Those sessions are real `ssh` logins from inside
+the VM to its own sshd, since the connection that drives the VM may not be
+one (Lima's shell uses vsock). That module exists only in a
 binary built with `--features vps-ready/testing`. It needs `/dev/kvm`, `qemu-system-x86_64`,
 `qemu-img`, `cloud-localds` (cloud-image-utils), `ssh` and `jq`. The `vm`
 workflow pins the images and runs it on four distros.

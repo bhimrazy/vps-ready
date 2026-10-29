@@ -602,6 +602,8 @@ fn creates_the_admin_and_rolls_back() {
         ]
     );
     assert!(first.needs_deadman());
+    // The planned admin, not root of the applying session, must confirm.
+    assert_eq!(first.admins(), ["admin"]);
     let state = StateDir::create(&fs, STATE, 0).unwrap();
     let engine = engine_on(&fs, &runner, &state);
     let outcome = engine.apply(&first, &deadman(), &mut |_| {}).unwrap();
@@ -650,6 +652,10 @@ fn creates_the_admin_and_rolls_back() {
         resource: "user:admin".into(),
         uid: Some(1001),
     }));
+    let Some(Event::State { admins, .. }) = events.last() else {
+        panic!("{:?}", events.last());
+    };
+    assert_eq!(admins, &["admin"]);
 
     let next = plan(&fs, &runner, &facts, &params);
     assert!(change_ids(&next).is_empty(), "{:?}", change_ids(&next));
@@ -717,12 +723,15 @@ fn the_dead_man_skips_an_edited_key_file() {
     assert!(!fs.exists(Path::new(SUDOERS)));
     assert!(runner.accounts().users.is_empty());
     assert_eq!(fs.read(keys).unwrap(), edited.as_bytes());
-    assert!(events(&fs, &state, &txn).contains(&Event::State {
-        state: crate::engine::TxnState::RolledBack {
-            reason: RollbackReason::DeadmanTimeout
-        },
-        unit: None,
-    }));
+    assert!(events(&fs, &state, &txn).iter().any(|e| matches!(
+        e,
+        Event::State {
+            state: crate::engine::TxnState::RolledBack {
+                reason: RollbackReason::DeadmanTimeout
+            },
+            ..
+        }
+    )));
 }
 
 #[test]
