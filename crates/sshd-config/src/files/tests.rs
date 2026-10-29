@@ -230,6 +230,8 @@ fn include_check_on_fixtures() {
 
     assert_eq!(check("stock"), IncludeCheck::Covered);
     assert_eq!(check("cloud-init"), IncludeCheck::Covered);
+    // other.d/*.conf is read after the whole of sshd_config.d/*.conf.
+    assert_eq!(check("include-two-patterns"), IncludeCheck::Covered);
     assert_eq!(check("include-missing"), IncludeCheck::Missing);
     assert_eq!(
         check("include-after-match"),
@@ -310,6 +312,133 @@ fn include_check_matches_patterns_not_files() {
         check("Match all\nInclude /etc/ssh/sshd_config.d/*.conf"),
         IncludeCheck::AfterMatch { line: 1, .. }
     ));
+    assert_eq!(
+        check("Match all\nPasswordAuthentication yes"),
+        IncludeCheck::Missing
+    );
+}
+
+/// A `Match` in a file read earlier ends with that file (checked with
+/// `sshd -T -C` on OpenSSH 8.9 to 10.0), so it does not hold the drop-in.
+/// A file the same `Include` reads first can still set a keyword first.
+#[test]
+fn include_check_looks_at_files_read_before_the_target() {
+    let target = Path::new(DROP_IN);
+    let check = |files: &[(&str, &str)]| read(&Mem::new(files)).include_check(target, &MANAGED);
+    let main = (MAIN, "Include /etc/ssh/sshd_config.d/*.conf\n");
+
+    assert_eq!(
+        check(&[
+            (
+                MAIN,
+                "Include /etc/ssh/m.conf\nInclude sshd_config.d/*.conf\n"
+            ),
+            (
+                "/etc/ssh/m.conf",
+                "Match User bob\nPasswordAuthentication yes\n"
+            ),
+        ]),
+        IncludeCheck::Covered
+    );
+    assert_eq!(
+        check(&[
+            main,
+            (
+                "/etc/ssh/sshd_config.d/00-a.conf",
+                "Match User bob\nPermitRootLogin yes\n"
+            ),
+        ]),
+        IncludeCheck::Covered
+    );
+    assert_eq!(
+        check(&[
+            main,
+            ("/etc/ssh/sshd_config.d/0-a.conf", "PermitRootLogin yes\n"),
+            (
+                "/etc/ssh/sshd_config.d/50-b.conf",
+                "PasswordAuthentication yes\n"
+            ),
+        ]),
+        IncludeCheck::AfterKeyword {
+            keyword: "permitrootlogin".to_owned(),
+            file: "/etc/ssh/sshd_config.d/0-a.conf".into(),
+            line: 1
+        }
+    );
+    // A file read before the target that includes another, which sets a keyword.
+    assert_eq!(
+        check(&[
+            main,
+            (
+                "/etc/ssh/sshd_config.d/0-a.conf",
+                "Include /etc/ssh/x.conf\n"
+            ),
+            ("/etc/ssh/x.conf", "PasswordAuthentication yes\n"),
+        ]),
+        IncludeCheck::AfterKeyword {
+            keyword: "passwordauthentication".to_owned(),
+            file: "/etc/ssh/x.conf".into(),
+            line: 1
+        }
+    );
+    // Lines after the expansion are read after the target.
+    assert_eq!(
+        check(&[
+            (
+                MAIN,
+                "Include /etc/ssh/a.conf\nPasswordAuthentication yes\n"
+            ),
+            ("/etc/ssh/a.conf", "Include sshd_config.d/*.conf\n"),
+        ]),
+        IncludeCheck::Covered
+    );
+    // The target's own lines and later files do not count.
+    assert_eq!(
+        check(&[
+            main,
+            (DROP_IN, "PermitRootLogin no\n"),
+            ("/etc/ssh/sshd_config.d/50-b.conf", "PermitRootLogin yes\n"),
+        ]),
+        IncludeCheck::Covered
+    );
+    // With two patterns, the files of the first are read before those of
+    // the second, whichever covers the target.
+    let other = (
+        "/etc/ssh/other.d/10-later.conf",
+        "PasswordAuthentication yes\n",
+    );
+    assert_eq!(
+        check(&[
+            (MAIN, "Include sshd_config.d/*.conf other.d/*.conf\n"),
+            other
+        ]),
+        IncludeCheck::Covered
+    );
+    assert_eq!(
+        check(&[
+            (MAIN, "Include other.d/*.conf sshd_config.d/*.conf\n"),
+            other
+        ]),
+        IncludeCheck::AfterKeyword {
+            keyword: "passwordauthentication".to_owned(),
+            file: "/etc/ssh/other.d/10-later.conf".into(),
+            line: 1
+        }
+    );
+    // An Include inside a Match of an included file is conditional.
+    assert_eq!(
+        check(&[
+            (MAIN, "Include /etc/ssh/a.conf\n"),
+            (
+                "/etc/ssh/a.conf",
+                "Match User bob\nInclude sshd_config.d/*.conf\n"
+            ),
+        ]),
+        IncludeCheck::AfterMatch {
+            file: "/etc/ssh/a.conf".into(),
+            line: 1
+        }
+    );
 }
 
 mod props {

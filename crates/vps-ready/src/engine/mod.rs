@@ -70,14 +70,14 @@ pub enum EngineError {
         /// The event's tag.
         event: &'static str,
     },
-    /// A module failed to plan.
-    #[error("planning {module}: {source}")]
+    /// A module failed to plan. The failure is in the message, not the
+    /// source chain, so `{:#}` does not print it twice.
+    #[error("planning {module}: {error}")]
     Module {
         /// Module ID.
         module: &'static str,
         /// The failure.
-        #[source]
-        source: ModuleError,
+        error: ModuleError,
     },
     /// A resource failed to diff, snapshot, apply or restore.
     #[error("{id}: {source}")]

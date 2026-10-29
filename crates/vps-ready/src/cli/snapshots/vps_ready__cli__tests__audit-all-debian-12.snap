@@ -9,19 +9,19 @@ FAIL     SSH-001  medium    Root login disabled
          permitrootlogin is without-password, expected no
          Root is the one account name every scanner tries, and its actions are
          not tied to a person. Log in as a named user and use sudo.
-         fix: not automated yet
+         fix: sudo vps-ready apply --module ssh.server
 FAIL     SSH-002  high      Password authentication disabled
          passwordauthentication is yes, expected no
          Passwords can be guessed or reused from leaks; SSH keys cannot be
          brute-forced.
-         fix: not automated yet
+         fix: sudo vps-ready apply --module ssh.server
 PASS     SSH-003  high      Keyboard-interactive authentication disabled
 PASS     SSH-004  high      Empty passwords rejected
 FAIL     SSH-005  low       X11 forwarding disabled
          x11forwarding is yes, expected no
          A server has no use for graphical apps, and a forwarded display lets
          the server reach into your desktop session.
-         fix: not automated yet
+         fix: sudo vps-ready apply --module ssh.server
 PASS     SSH-006  low       Host-based authentication disabled
 PASS     SSH-007  low       User environment files ignored
 FAIL     SSH-008  low       Repeated failed logins are slowed down
@@ -67,6 +67,6 @@ SKIP     MAC-001  medium    AppArmor enabled
 4 passed, 6 failed (1 high, 3 medium, 2 low), 0 unknown, 19 skipped
 Skipped: kernel settings are not checked inside a container.
 Skipped: Docker is not installed.
-vps-ready can fix 3 of the 6 (SSH-008, UPD-001, FW-001): run `sudo vps-ready
-plan --module ssh.bruteforce --module updates.auto --module firewall.inbound`.
-The other 3 need a manual fix for now; each says so above.
+vps-ready can fix all 6 (SSH-001, SSH-002, SSH-005, SSH-008, UPD-001, FW-001):
+run `sudo vps-ready plan --module ssh.server --module ssh.bruteforce --module
+updates.auto --module firewall.inbound`.

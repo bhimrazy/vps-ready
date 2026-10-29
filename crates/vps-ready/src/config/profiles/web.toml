@@ -2,6 +2,8 @@ schema = 1
 
 [modules."user.admin"]
 
+[modules."ssh.server"]
+
 [modules."firewall.inbound"]
 allow = ["22/tcp", "80/tcp", "443/tcp", "443/udp"]
 

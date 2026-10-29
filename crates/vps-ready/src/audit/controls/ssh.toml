@@ -8,6 +8,7 @@ severity = "medium"
 title = "Root login disabled"
 why = "Root is the one account name every scanner tries, and its actions are not tied to a person. Log in as a named user and use sudo."
 check = { kind = "sshd_effective", key = "permitrootlogin", equals = "no" }
+fix = "ssh.server"
 
 [[control]]
 id = "SSH-002"
@@ -15,6 +16,7 @@ severity = "high"
 title = "Password authentication disabled"
 why = "Passwords can be guessed or reused from leaks; SSH keys cannot be brute-forced."
 check = { kind = "sshd_effective", key = "passwordauthentication", equals = "no" }
+fix = "ssh.server"
 
 [[control]]
 id = "SSH-003"
@@ -22,6 +24,7 @@ severity = "high"
 title = "Keyboard-interactive authentication disabled"
 why = "It is a second way to ask for a password, through PAM, so leaving it on undoes SSH-002."
 check = { kind = "sshd_effective", key = "kbdinteractiveauthentication", equals = "no" }
+fix = "ssh.server"
 
 [[control]]
 id = "SSH-004"
@@ -29,6 +32,7 @@ severity = "high"
 title = "Empty passwords rejected"
 why = "An account with an empty password could be logged into by name alone."
 check = { kind = "sshd_effective", key = "permitemptypasswords", equals = "no" }
+fix = "ssh.server"
 
 [[control]]
 id = "SSH-005"
@@ -36,6 +40,7 @@ severity = "low"
 title = "X11 forwarding disabled"
 why = "A server has no use for graphical apps, and a forwarded display lets the server reach into your desktop session."
 check = { kind = "sshd_effective", key = "x11forwarding", equals = "no" }
+fix = "ssh.server"
 
 [[control]]
 id = "SSH-006"
@@ -43,6 +48,7 @@ severity = "low"
 title = "Host-based authentication disabled"
 why = "It lets a client machine vouch for its users, so a compromised machine the server trusts can log in as them without their keys."
 check = { kind = "sshd_effective", key = "hostbasedauthentication", equals = "no" }
+fix = "ssh.server"
 
 [[control]]
 id = "SSH-007"
@@ -50,6 +56,7 @@ severity = "low"
 title = "User environment files ignored"
 why = "With it on, a user's ~/.ssh/environment can set variables such as LD_PRELOAD, which can bypass restrictions like a forced command."
 check = { kind = "sshd_effective", key = "permituserenvironment", equals = "no" }
+fix = "ssh.server"
 
 [[control]]
 id = "SSH-008"

@@ -49,7 +49,11 @@ fn params(text: &str) -> toml::Table {
 fn steps(facts: &Facts, params: &toml::Table) -> Result<ModuleSteps, ModuleError> {
     let (fs, runner) = (FakeFs::new(), FakeRunner::new());
     FirewallInbound.plan(
-        &PlanCx { facts, params },
+        &PlanCx {
+            facts,
+            params,
+            planned: &[],
+        },
         Sys {
             fs: &fs,
             runner: &runner,

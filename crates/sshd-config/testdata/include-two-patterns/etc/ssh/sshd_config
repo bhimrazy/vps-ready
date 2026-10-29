@@ -1,0 +1,3 @@
+# The drop-in directory comes first; other.d is read after the drop-in.
+Include sshd_config.d/*.conf other.d/*.conf
+UsePAM yes

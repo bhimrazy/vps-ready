@@ -7,7 +7,7 @@
 #
 # Writes crates/vps-ready/testdata/hosts/<distro>/:
 #   root/...        files the facts code reads (os-release, /proc/1/comm,
-#                   /proc/net/if_inet6)
+#                   /proc/net/if_inet6, /etc/ssh/sshd_config and its drop-ins)
 #   commands.tsv    name, exit code, then the exact argv, tab-separated.
 #                   Several entries can share an argv (scenarios); the first wins
 #                   by default, so the plain capture comes before the scenarios.
@@ -75,6 +75,9 @@ docker exec "$name" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/n
 docker exec "$name" cat /etc/os-release >"$out/root/etc/os-release"
 docker exec "$name" cat /proc/1/comm >"$out/root/proc/1/comm"
 docker exec "$name" cat /proc/net/if_inet6 >"$out/root/proc/net/if_inet6"
+mkdir -p "$out/root/etc/ssh"
+docker exec "$name" cat /etc/ssh/sshd_config >"$out/root/etc/ssh/sshd_config"
+docker cp -q "$name:/etc/ssh/sshd_config.d" "$out/root/etc/ssh/"
 
 capture virt-container systemd-detect-virt --container
 capture virt-vm        systemd-detect-virt --vm
