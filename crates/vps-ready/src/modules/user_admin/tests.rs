@@ -255,7 +255,8 @@ fn plan_steps(
 fn refusal(result: Result<ModuleSteps, ModuleError>) -> String {
     match result {
         Err(ModuleError::Refused(reason)) => reason,
-        other => panic!("{other:?}"),
+        Ok(_) => panic!("planned instead of refusing"),
+        Err(_) => panic!("failed with another error"),
     }
 }
 
@@ -371,7 +372,7 @@ fn copies_root_keys_without_options() {
     let runner = Debian::new(&fs, Accounts::default());
     let steps = plan_steps(&fs, &runner, &facts(), "").unwrap();
     let Resource::AuthorizedKeys(keys) = &steps.resources[1] else {
-        panic!("{:?}", steps.resources);
+        panic!("not the expected resource");
     };
     assert_eq!(keys.keys, [ROOT_KEY]);
     assert_eq!(
@@ -386,13 +387,12 @@ fn copies_root_keys_without_options() {
     // Keys given in the profile are used as they are.
     let given = steps_with_keys(&fs, &runner);
     let Resource::AuthorizedKeys(keys) = &given.resources[1] else {
-        panic!("{:?}", given.resources);
+        panic!("not the expected resource");
     };
     assert_eq!(keys.keys, [KEY]);
     assert!(
         !given.notes.iter().any(|n| n.contains("copies")),
-        "{:?}",
-        given.notes
+        "a note says keys are copied"
     );
 
     // Nothing to copy.
@@ -446,7 +446,7 @@ fn copies_the_keys_of_the_session_user() {
     }
     let steps = plan_steps(&fs, &runner, &facts, "").unwrap();
     let Resource::AuthorizedKeys(keys) = &steps.resources[1] else {
-        panic!("{:?}", steps.resources);
+        panic!("not the expected resource");
     };
     assert_eq!(keys.keys, [KEY]);
     assert_eq!(
@@ -462,7 +462,7 @@ fn star_password_only_when_usepam_is_off() {
     let password = |facts: &Facts| {
         let steps = plan_steps(&fs, &runner, facts, "").unwrap();
         let Resource::User(user) = &steps.resources[0] else {
-            panic!("{:?}", steps.resources);
+            panic!("not the expected resource");
         };
         let noted = steps.notes.iter().any(|n| n.starts_with("UsePAM is off"));
         (user.password, noted)
@@ -480,8 +480,7 @@ fn star_password_only_when_usepam_is_off() {
     let steps = plan_steps(&fs, &runner, &facts, "").unwrap();
     assert!(
         !steps.notes.iter().any(|n| n.starts_with("UsePAM")),
-        "{:?}",
-        steps.notes
+        "a note says UsePAM is off"
     );
 }
 
@@ -505,8 +504,7 @@ fn an_existing_user_keeps_its_sudo() {
                   and no sudoers file is written"
                     .to_owned()
             ),
-            "{sudo}: {:?}",
-            steps.notes
+            "{sudo}"
         );
     }
 }
