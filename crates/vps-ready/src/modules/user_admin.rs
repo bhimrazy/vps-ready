@@ -8,7 +8,7 @@ use serde::Deserialize;
 
 use super::{Applicability, Module, ModuleError, ModuleSteps, PlanCx};
 use crate::facts::{Facts, Init, OsFamily};
-use crate::resource::user::lookup;
+use crate::resource::user::{Entry, lookup};
 use crate::resource::{AuthorizedKeys, File, Password, Resource, User, Validate};
 use crate::sys::{Cmd, FileOwner, Sys, SysError};
 
@@ -19,6 +19,11 @@ pub const SUDOERS: &str = "/etc/sudoers.d/90-vps-ready-admin";
 const SUDOERS_DIR: &str = "/etc/sudoers.d";
 
 const SHADOW: &str = "/etc/shadow";
+
+const SHELLS: &str = "/etc/shells";
+
+/// The first uid `adduser` gives a login user on Debian and Ubuntu.
+const FIRST_LOGIN_UID: u32 = 1000;
 
 const HEADER: &str = "\
 # Written by vps-ready (user.admin). `vps-ready rollback --last`
@@ -107,6 +112,9 @@ impl Module for UserAdmin {
             return refuse("`name` is root; the admin must be another account");
         }
         let existing = lookup(sys, name)?;
+        if let Some(entry) = &existing {
+            check_login_account(sys, name, entry)?;
+        }
         if existing.is_none() && group_exists(sys, name)? {
             // `useradd --user-group` fails then; joining that group instead
             // could grant what it grants, e.g. Ubuntu's `%admin ALL=(ALL) ALL`.
@@ -141,6 +149,15 @@ impl Module for UserAdmin {
         if existing.is_none() && usepam_off {
             notes.push("UsePAM is off: password set to `*` so key logins work".to_owned());
         }
+        if existing.is_some()
+            && usepam_off
+            && shadow_field(sys, name)?.is_some_and(|f| f.starts_with('!'))
+        {
+            return refuse(&format!(
+                "UsePAM is off, and {name}'s password is locked (`!` in {SHADOW}), so sshd \
+                 refuses its key logins; set a password or run `usermod -p '*' {name}` first"
+            ));
+        }
 
         let sudoers = File {
             path: SUDOERS.into(),
@@ -155,9 +172,26 @@ impl Module for UserAdmin {
         let mut groups = Vec::new();
         let mut drop_in = None;
         // The drop-in is vps-ready's: once there, it is kept to its content,
-        // though its rule is also what `sudo -l` lists.
-        if sys.fs.exists(Path::new(SUDOERS)) {
-            drop_in = Some(sudoers);
+        // though its rule is also what `sudo -l` lists. It is not handed to
+        // another admin, which would take sudo from the one it names.
+        if let Some(current) = read_if_exists(sys, Path::new(SUDOERS))? {
+            match sudoers_user(&current) {
+                Some(other) if other != name => {
+                    return refuse(&format!(
+                        "{SUDOERS} gives sudo to {other}, not {name}, and rewriting it would \
+                         take that away; roll back the transaction that wrote it \
+                         (`vps-ready history`), or remove the file, first"
+                    ));
+                }
+                _ if params.sudo == Sudo::Password => {
+                    return refuse(&format!(
+                        "{SUDOERS} gives {name} sudo without a password, which \
+                         `sudo = \"password\"` would leave in place; roll back the transaction \
+                         that wrote it (`vps-ready history`), or remove the file, first"
+                    ));
+                }
+                _ => drop_in = Some(sudoers),
+            }
         } else if existing.is_some() && has_sudo_rules(sys, name)? {
             notes.push(format!(
                 "{name} already has sudo rules (`sudo -l -U {name}`); they stay as they are, \
@@ -291,12 +325,55 @@ fn copied_keys(
 }
 
 /// Whether `line` starts with a key type rather than options.
+/// Whether `line` starts with a key type rather than options, and has a key
+/// after it.
 fn is_plain_key(line: &str) -> bool {
-    line.split_whitespace().next().is_some_and(|kind| {
+    let mut fields = line.split_whitespace();
+    fields.next().is_some_and(|kind| {
         ["ssh-", "ecdsa-", "sk-"]
             .iter()
             .any(|p| kind.starts_with(p))
-    })
+    }) && fields.next().is_some()
+}
+
+/// Refuses an existing account that is not a login user: a system account,
+/// or one whose shell is not in `/etc/shells`, such as `www-data` or
+/// `nobody`, which must not get keys and sudo.
+fn check_login_account(sys: Sys, name: &str, entry: &Entry) -> Result<(), ModuleError> {
+    let other = "set `name` to a login user or to a new account";
+    if entry.uid < FIRST_LOGIN_UID {
+        return refuse(&format!(
+            "{name} is a system account (uid {}, below {FIRST_LOGIN_UID}); {other}",
+            entry.uid
+        ));
+    }
+    // An empty shell field means `/bin/sh`.
+    let shell = if entry.shell.is_empty() {
+        "/bin/sh"
+    } else {
+        &entry.shell
+    };
+    let shells = read_if_exists(sys, Path::new(SHELLS))?.unwrap_or_default();
+    let listed = String::from_utf8_lossy(&shells)
+        .lines()
+        .map(str::trim)
+        .any(|l| l == shell);
+    if !listed {
+        return refuse(&format!(
+            "{name}'s shell {shell} is not in {SHELLS}, so it is not a login account; {other}"
+        ));
+    }
+    Ok(())
+}
+
+/// The user of the rule in a drop-in vps-ready wrote, if it has one.
+fn sudoers_user(content: &[u8]) -> Option<String> {
+    String::from_utf8_lossy(content)
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty() && !l.starts_with('#'))
+        .and_then(|l| l.split_whitespace().next())
+        .map(str::to_owned)
 }
 
 fn group_exists(sys: Sys, name: &str) -> Result<bool, ModuleError> {
@@ -336,13 +413,16 @@ fn has_sudo_rules(sys: Sys, name: &str) -> Result<bool, ModuleError> {
 /// Whether `name` has a password hash in `/etc/shadow`: not empty, and not
 /// locked (`!`) or unset (`*`).
 fn has_password(sys: Sys, name: &str) -> Result<bool, ModuleError> {
+    Ok(shadow_field(sys, name)?
+        .is_some_and(|hash| !hash.is_empty() && !hash.starts_with(['!', '*'])))
+}
+
+/// The password field of `name` in `/etc/shadow`, if it is listed.
+fn shadow_field(sys: Sys, name: &str) -> Result<Option<String>, ModuleError> {
     let shadow = sys.fs.read(Path::new(SHADOW))?;
-    Ok(String::from_utf8_lossy(&shadow).lines().any(|line| {
+    Ok(String::from_utf8_lossy(&shadow).lines().find_map(|line| {
         let mut fields = line.split(':');
-        fields.next() == Some(name)
-            && fields
-                .next()
-                .is_some_and(|hash| !hash.is_empty() && !hash.starts_with(['!', '*']))
+        (fields.next() == Some(name)).then(|| fields.next().unwrap_or_default().to_owned())
     }))
 }
 

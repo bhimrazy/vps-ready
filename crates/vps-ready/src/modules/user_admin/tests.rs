@@ -107,7 +107,15 @@ impl Runner for Debian<'_> {
             ("getent", ["passwd", "root"]) => Output::success("root:x:0:0:root:/root:/bin/bash\n"),
             ("getent", ["passwd", name]) => match acc.users.get(*name) {
                 Some((uid, _)) => {
-                    Output::success(format!("{name}:x:{uid}:{uid}::/home/{name}:/bin/bash\n"))
+                    {
+                        // As `nobody`.
+                        let shell = if *uid == 65534 {
+                            "/usr/sbin/nologin"
+                        } else {
+                            "/bin/bash"
+                        };
+                        Output::success(format!("{name}:x:{uid}:{uid}::/home/{name}:{shell}\n"))
+                    }
                 }
                 None => exit(2, ""),
             },
@@ -196,6 +204,10 @@ fn fs() -> FakeFs {
         .with_dir("/home", root_dir(0o755))
         .with_dir(SUDOERS_DIR, root_dir(0o755))
         .with_file(SHADOW, "root:*:20000:0:99999:7:::\n")
+        .with_file(
+            SHELLS,
+            "# /etc/shells: valid login shells\n/bin/sh\n/bin/bash\n",
+        )
         .with_file(BOOT_ID, "a\n")
         .with_file(UPTIME, "1000.25 900.00\n")
         .with_file(BIN, "\x7fELF");
@@ -537,6 +549,98 @@ fn password_sudo_needs_a_password() {
         panic!();
     };
     assert_eq!(user.groups, ["sudo"]);
+}
+
+#[test]
+fn refuses_an_account_that_is_not_a_login_user() {
+    let fs = fs();
+    let accounts = Accounts::default()
+        .with_user("www-data", 33)
+        .with_user("nobody", 65534);
+    let runner = Debian::new(&fs, accounts);
+    assert_eq!(
+        refusal(plan_steps(&fs, &runner, &facts(), "name = \"www-data\"")),
+        "www-data is a system account (uid 33, below 1000); set `name` to a login user \
+         or to a new account"
+    );
+    assert_eq!(
+        refusal(plan_steps(&fs, &runner, &facts(), "name = \"nobody\"")),
+        "nobody's shell /usr/sbin/nologin is not in /etc/shells, so it is not a login \
+         account; set `name` to a login user or to a new account"
+    );
+}
+
+#[test]
+fn an_existing_drop_in_is_not_handed_to_another_admin() {
+    let fs = fs().with_file(
+        SUDOERS,
+        format!("{HEADER}deploy ALL=(ALL:ALL) NOPASSWD: ALL\n"),
+    );
+    let runner = Debian::new(&fs, Accounts::default().with_user("deploy", 1001));
+    assert_eq!(
+        refusal(plan_steps(&fs, &runner, &facts(), "")),
+        "/etc/sudoers.d/90-vps-ready-admin gives sudo to deploy, not admin, and rewriting \
+         it would take that away; roll back the transaction that wrote it \
+         (`vps-ready history`), or remove the file, first"
+    );
+    // Its own admin keeps it, but not with password sudo.
+    let steps = plan_steps(&fs, &runner, &facts(), "name = \"deploy\"").unwrap();
+    assert!(
+        steps
+            .resources
+            .iter()
+            .any(|r| r.id() == format!("file:{SUDOERS}"))
+    );
+    assert_eq!(
+        refusal(plan_steps(
+            &fs,
+            &runner,
+            &facts(),
+            "name = \"deploy\"\nsudo = \"password\""
+        )),
+        "/etc/sudoers.d/90-vps-ready-admin gives deploy sudo without a password, which \
+         `sudo = \"password\"` would leave in place; roll back the transaction that wrote it \
+         (`vps-ready history`), or remove the file, first"
+    );
+}
+
+#[test]
+fn a_locked_existing_account_is_refused_without_pam() {
+    let fs = fs();
+    let runner = Debian::new(&fs, Accounts::default().with_user("admin", 1001));
+    let mut facts = facts();
+    facts.ssh.effective = Some(SshdConfig::parse("usepam no\n"));
+    let shadow = |field: &str| {
+        fs.write(
+            Path::new(SHADOW),
+            format!("admin:{field}:20000::::::\n").as_bytes(),
+        )
+        .unwrap();
+    };
+    for locked in ["!", "!*", &format!("!{HASH}")] {
+        shadow(locked);
+        assert_eq!(
+            refusal(plan_steps(&fs, &runner, &facts, "")),
+            "UsePAM is off, and admin's password is locked (`!` in /etc/shadow), so sshd \
+             refuses its key logins; set a password or run `usermod -p '*' admin` first",
+            "{locked:?}"
+        );
+    }
+    for usable in ["*", HASH] {
+        shadow(usable);
+        plan_steps(&fs, &runner, &facts, "").unwrap();
+    }
+    // With PAM, a locked password does not stop key logins.
+    shadow("!");
+    facts.ssh.effective = Some(SshdConfig::parse("usepam yes\n"));
+    plan_steps(&fs, &runner, &facts, "").unwrap();
+}
+
+#[test]
+fn a_key_line_needs_a_key() {
+    assert!(is_plain_key(KEY));
+    assert!(!is_plain_key("ssh-rsa"));
+    assert!(!is_plain_key(RESTRICTED));
 }
 
 #[test]
