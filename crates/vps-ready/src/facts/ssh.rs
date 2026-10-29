@@ -63,6 +63,36 @@ impl fmt::Display for SshActivation {
     }
 }
 
+impl Ssh {
+    /// Every port sshd accepts connections on now: `port` and
+    /// `listenaddress` from `sshd -T`, and `ssh.socket`'s while it is the
+    /// running unit. Sorted, without duplicates.
+    #[must_use]
+    pub fn ports(&self) -> Vec<u16> {
+        let mut ports = Vec::new();
+        if let Some(config) = &self.effective {
+            ports.extend(
+                config
+                    .get_all("port")
+                    .iter()
+                    .filter_map(|p| p.parse::<u16>().ok()),
+            );
+            ports.extend(
+                config
+                    .get_all("listenaddress")
+                    .iter()
+                    .filter_map(|a| last_port(a)),
+            );
+        }
+        if self.activation == SshActivation::Socket {
+            ports.extend(&self.socket_ports);
+        }
+        ports.sort_unstable();
+        ports.dedup();
+        ports
+    }
+}
+
 pub(super) fn detect(runner: &dyn Runner, notices: &mut Vec<String>) -> Ssh {
     Ssh {
         version: version(runner, notices),
@@ -178,12 +208,17 @@ fn parse_listen(text: &str) -> Vec<u16> {
         .lines()
         .filter_map(|line| {
             let addr = line.strip_prefix("Listen=")?.strip_suffix(" (Stream)")?;
-            addr.rsplit_once(':')?.1.parse().ok()
+            addr.contains(':').then(|| last_port(addr))?
         })
         .collect();
     ports.sort_unstable();
     ports.dedup();
     ports
+}
+
+/// The port after the last `:` of `[::]:22` or `0.0.0.0:22`, or a bare `22`.
+fn last_port(addr: &str) -> Option<u16> {
+    addr.rsplit(':').next()?.parse().ok()
 }
 
 fn activation(runner: &dyn Runner, notices: &mut Vec<String>) -> SshActivation {
@@ -408,6 +443,22 @@ mod tests {
                     Listen=[::]:53 (Datagram)\n";
         assert_eq!(parse_listen(text), [22, 2222]);
         assert!(parse_listen("").is_empty());
+    }
+
+    #[test]
+    fn ports_are_sshd_t_and_the_running_socket() {
+        let mut ssh = Ssh {
+            version: None,
+            activation: SshActivation::Service,
+            effective: Some(SshdConfig::parse(
+                "port 22\nlistenaddress [::]:2222\nlistenaddress 0.0.0.0:22\n",
+            )),
+            socket_ports: vec![22, 2200],
+            fail2ban: None,
+        };
+        assert_eq!(ssh.ports(), [22, 2222]);
+        ssh.activation = SshActivation::Socket;
+        assert_eq!(ssh.ports(), [22, 2200, 2222]);
     }
 
     proptest::proptest! {

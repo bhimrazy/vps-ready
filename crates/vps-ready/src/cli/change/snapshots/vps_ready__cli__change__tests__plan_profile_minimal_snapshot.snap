@@ -76,5 +76,5 @@ updates.auto: Install security updates automatically (fixes UPD-001)
       +APT::Periodic::Update-Package-Lists "1";
       +APT::Periodic::Unattended-Upgrade "1";
 
-12 changes in 3 modules: 4 files, 6 kernel settings, 1 service.
+12 changes in 3 modules: 4 files, 1 directory, 6 kernel settings, 1 service.
 Run `sudo vps-ready apply --profile minimal` to make them.

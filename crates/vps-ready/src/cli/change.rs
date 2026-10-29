@@ -557,6 +557,7 @@ fn kinds(plan: &Plan) -> String {
             count(|r| matches!(r, Resource::File(_) | Resource::AuthorizedKeys(_))),
             "file",
         ),
+        (count(|r| matches!(r, Resource::Directory(_))), "directory"),
         (
             count(|r| matches!(r, Resource::Sysctl(_))),
             "kernel setting",
@@ -718,10 +719,10 @@ fn print_history(out: &mut dyn Write, txns: &[TxnInfo]) -> io::Result<()> {
 }
 
 fn plural(n: usize, word: &str) -> String {
-    if n == 1 {
-        word.to_owned()
-    } else {
-        format!("{word}s")
+    match (n, word.strip_suffix('y')) {
+        (1, _) => word.to_owned(),
+        (_, Some(stem)) => format!("{stem}ies"),
+        (_, None) => format!("{word}s"),
     }
 }
 

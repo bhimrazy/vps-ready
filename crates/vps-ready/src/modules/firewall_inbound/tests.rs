@@ -270,6 +270,7 @@ proptest! {
             .chain(other.iter().map(|p| listener(*p, "postgres")))
             .collect();
         facts.ssh.socket_ports = socket.clone();
+        facts.ssh.activation = crate::facts::SshActivation::Socket;
         let sshd_t: String = config.iter().map(|p| format!("port {p}\n")).collect();
         facts.ssh.effective = Some(sshd_config::SshdConfig::parse(&sshd_t));
         let list = allow

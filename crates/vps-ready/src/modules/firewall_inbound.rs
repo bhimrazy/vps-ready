@@ -118,11 +118,10 @@ impl Ruleset {
     }
 }
 
-/// Every port SSH may be reached on now: the applying session's, every
-/// port sshd listens on, the ports of `ssh.socket` and `port` from
-/// `sshd -T`.
+/// Every port SSH may be reached on now: [`crate::facts::Ssh::ports`], the
+/// applying session's and every port an sshd process listens on.
 fn ssh_ports(facts: &Facts) -> BTreeSet<u16> {
-    let mut ports: BTreeSet<u16> = facts.ssh.socket_ports.iter().copied().collect();
+    let mut ports: BTreeSet<u16> = facts.ssh.ports().into_iter().collect();
     ports.extend(facts.session.as_ref().map(|s| s.server.port()));
     ports.extend(
         facts
@@ -131,14 +130,6 @@ fn ssh_ports(facts: &Facts) -> BTreeSet<u16> {
             .filter(|l| l.proto == Proto::Tcp && l.processes.iter().any(|p| SSHD.contains(&&**p)))
             .map(|l| l.port),
     );
-    if let Some(config) = &facts.ssh.effective {
-        ports.extend(
-            config
-                .get_all("port")
-                .iter()
-                .filter_map(|p| p.parse::<u16>().ok()),
-        );
-    }
     ports
 }
 
