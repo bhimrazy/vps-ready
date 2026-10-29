@@ -13,6 +13,7 @@ use crate::sys::{Cmd, Sys, SysError};
 
 #[cfg(feature = "testing")]
 mod deadman_test;
+pub mod firewall_inbound;
 pub mod kernel_sysctl;
 pub mod ssh_bruteforce;
 pub mod ssh_server;
@@ -21,6 +22,7 @@ pub mod user_admin;
 
 #[cfg(feature = "testing")]
 pub use deadman_test::DeadmanTest;
+pub use firewall_inbound::FirewallInbound;
 pub use kernel_sysctl::KernelSysctl;
 pub use ssh_bruteforce::SshBruteforce;
 pub use ssh_server::SshServer;
@@ -198,6 +200,7 @@ pub fn all() -> &'static [&'static dyn Module] {
     &[
         &UserAdmin,
         &SshServer,
+        &FirewallInbound,
         &SshBruteforce::ROOT,
         &KernelSysctl::ROOT,
         &UpdatesAuto::ROOT,
@@ -212,6 +215,7 @@ pub fn with_test() -> &'static [&'static dyn Module] {
     &[
         &UserAdmin,
         &SshServer,
+        &FirewallInbound,
         &SshBruteforce::ROOT,
         &KernelSysctl::ROOT,
         &UpdatesAuto::ROOT,

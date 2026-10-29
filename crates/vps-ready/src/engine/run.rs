@@ -14,8 +14,8 @@ use super::reload::{self, Reload, SYSTEMCTL_TIMEOUT};
 use super::{EngineError, StateDir, Txn, id};
 use crate::resource::sysctl::boot_id;
 use crate::resource::{
-    Backup, Resource, ResourceError, Sysctl, after_path, authorized_keys, before_path, during_path,
-    restore, service, user,
+    Backup, Resource, ResourceError, Sysctl, after_path, authorized_keys, before_path, directory,
+    during_path, restore, service, user,
 };
 use crate::sys::{Cmd, FileKind, FileOwner, Fs, FsLock, Sys, SysError};
 
@@ -1487,6 +1487,7 @@ fn unchanged(
             }
             Ok(false)
         }
+        Backup::Directory { .. } => directory::unchanged(sys, backup).map_err(at(resource)),
         // Restoring a package does nothing.
         Backup::Package { .. } => Ok(true),
         Backup::Service { .. } => service::unchanged(sys, backup).map_err(at(resource)),
@@ -1523,6 +1524,7 @@ fn by_hand(dir: &Path, resource: &str, backup: &Backup) -> Option<ByHand> {
             original: None,
             ..
         } => format!("remove {}", path.display()),
+        Backup::Directory { .. } => directory::by_hand(backup)?,
         Backup::Sysctl { key, value, .. } => format!("sysctl -w '{key}={value}'"),
         Backup::Package { .. } => return None,
         Backup::Service { .. } => service::by_hand(backup)?,

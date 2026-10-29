@@ -60,14 +60,13 @@ FAIL     FW-001   medium    Incoming traffic denied by default
          Without it, any service listening on all addresses, such as a database
          left at its defaults, is reachable from the internet. A firewall at
          your provider also protects the server, but this check cannot see it.
-         fix: not automated yet
+         fix: sudo vps-ready apply --module firewall.inbound
 SKIP     FW-002   medium    Container ports do not bypass the firewall
 SKIP     MAC-001  medium    AppArmor enabled
 
 4 passed, 6 failed (1 high, 3 medium, 2 low), 0 unknown, 19 skipped
 Skipped: kernel settings are not checked inside a container.
 Skipped: Docker is not installed.
-vps-ready can fix 5 of the 6 (SSH-001, SSH-002, SSH-005, SSH-008, UPD-001): run
-`sudo vps-ready plan --module ssh.server --module ssh.bruteforce --module
-updates.auto`.
-The other one needs a manual fix for now; it says so above.
+vps-ready can fix all 6 (SSH-001, SSH-002, SSH-005, SSH-008, UPD-001, FW-001):
+run `sudo vps-ready plan --module ssh.server --module ssh.bruteforce --module
+updates.auto --module firewall.inbound`.

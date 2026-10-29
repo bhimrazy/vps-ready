@@ -22,7 +22,7 @@ pub mod sysctl;
 pub mod updates;
 pub mod virt;
 
-pub use firewall::{Firewall, InputChain, Ports, PublishedPort};
+pub use firewall::{Firewall, FirewallTools, InputChain, Ports, PublishedPort};
 pub use listeners::{Listener, Proto};
 pub use os_release::{OsFamily, OsRelease};
 pub use session::{Env, NoSession, Session, SessionId};
@@ -55,6 +55,8 @@ pub struct Facts {
     /// The packet filter, from the live nftables ruleset. `None` when it
     /// could not be read, usually for lack of root.
     pub firewall: Option<Firewall>,
+    /// What manages the packet filter: nft, ufw, firewalld.
+    pub firewall_tools: FirewallTools,
     /// Whether the host has a global IPv6 address (not loopback or
     /// link-local).
     pub ipv6: bool,
@@ -129,7 +131,8 @@ pub fn collect(fs: &dyn Fs, runner: &dyn Runner, env: &Env) -> Result<Facts, Fac
     let virtualization = virt::detect(fs, runner, &mut notices);
     let ssh = ssh::detect(fs, runner, &mut notices);
     let listeners = listeners::detect(runner, &mut notices);
-    let firewall = firewall::detect(fs, runner, &mut notices);
+    let (firewall, nft) = firewall::detect(fs, runner, &mut notices);
+    let firewall_tools = firewall::tools(fs, runner, nft, &mut notices);
     let ipv6 = firewall::has_ipv6(fs);
     let session = session::collect(env, fs, &mut notices);
     let sysctl = (!virtualization.in_container()).then(|| sysctl::detect(fs, &mut notices));
@@ -147,6 +150,7 @@ pub fn collect(fs: &dyn Fs, runner: &dyn Runner, env: &Env) -> Result<Facts, Fac
         ssh,
         listeners,
         firewall,
+        firewall_tools,
         ipv6,
         session,
         sysctl,
@@ -334,7 +338,7 @@ mod tests {
     /// here, where review sees it. `iptables-save -t filter` and
     /// `ip6tables-save -t filter` run only when nft shows a multiport rule,
     /// so they are pinned in `firewall`'s tests.
-    const READ_ONLY_COMMANDS: [&[&str]; 11] = [
+    const READ_ONLY_COMMANDS: [&[&str]; 12] = [
         &["systemd-detect-virt", "--container"],
         &["systemd-detect-virt", "--vm"],
         &["ssh", "-V"],
@@ -349,9 +353,16 @@ mod tests {
             "ssh.service",
             "sshd.service",
         ],
-        &["systemctl", "show", "ssh.socket", "-p", "Listen"],
+        &["systemctl", "show", "--property=Listen", "ssh.socket"],
         &["ss", "-tulnpH"],
         &["nft", "-j", "list", "ruleset"],
+        &[
+            "systemctl",
+            "show",
+            "--property=Id,LoadState,ActiveState,UnitFileState",
+            "firewalld.service",
+            "nftables.service",
+        ],
         &["apt-config", "dump", "APT::Periodic"],
         &[
             "systemctl",
@@ -509,14 +520,14 @@ mod tests {
         assert!(facts.listeners.is_empty());
         assert!(!facts.docker);
         // os-release, init, virtualization, ssh version, sshd activation,
-        // sshd config, ss, nft, /proc/sys.
-        assert_eq!(facts.notices.len(), 9, "{:?}", facts.notices);
+        // sshd config, ss, nft, firewalld, /proc/sys.
+        assert_eq!(facts.notices.len(), 10, "{:?}", facts.notices);
         assert_eq!(facts.session, None);
 
         // No /proc for the session walk either.
         let env = Env { pid: Some(902) };
         let facts = collect(&FakeFs::new(), &FakeRunner::new(), &env).unwrap();
-        assert_eq!(facts.notices.len(), 10, "{:?}", facts.notices);
+        assert_eq!(facts.notices.len(), 11, "{:?}", facts.notices);
         assert!(facts.notices.iter().any(|n| n.starts_with(session::NOTICE)));
     }
 

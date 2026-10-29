@@ -40,10 +40,12 @@
 #       cycle; apply, reboot during the window -> rolled back with
 #       deadman-reboot, and the hook finished before sshd started.
 #   ssh.server, applied and confirmed from real logins to the VM's own sshd:
-#     profile minimal with a new admin: during the window a new root login
-#     is refused and sshd offers no password method -> confirm as the admin
-#     -> the ssh.server controls pass and the plan is empty -> rollback
-#     removes the drop-in and the admin, and root logs in again.
+#     profile minimal (user.admin, ssh.server, firewall.inbound and the
+#     rest) with a new admin: during the window a new root login is refused
+#     and sshd offers no password method -> confirm as the admin -> the
+#     SSH-001..007 and FW-001 controls pass, the admin logs in and root
+#     does not -> rollback removes the drop-in, the table and the admin, and
+#     root logs in again.
 #     --module ssh.server, not confirmed: a new root login is refused (the
 #     reload reached new logins, also through ssh.socket); the drop-in is
 #     edited -> at the deadline it is gone and the edit is in files/1.during.
@@ -478,11 +480,13 @@ expect_newest confirmed
 expect_rc /tmp/vr-apply.rc 0
 rc=0; vr audit --json >"$tmp/audit.json" || rc=$?
 [ "$rc" -le 1 ] || die "audit exited $rc, expected 0 or 1"
-jq -r '.findings[] | select(.fix == "ssh.server") | "\(.id) \(.status)"' "$tmp/audit.json"
-jq -e '[.findings[] | select(.fix == "ssh.server" and .status != "pass")] | length == 0' \
-  "$tmp/audit.json" >/dev/null || die "an ssh.server control does not pass after the confirm"
+fixed='.fix == "ssh.server" or .fix == "firewall.inbound"'
+jq -r ".findings[] | select($fixed) | \"\(.id) \(.status)\"" "$tmp/audit.json"
+jq -e "[.findings[] | select(($fixed) and .status != \"pass\")] | length == 0" \
+  "$tmp/audit.json" >/dev/null || die "an ssh.server or firewall.inbound control does not pass after the confirm"
 expect_empty_plan ssh.server
 ! root_login || die "root logs in after the confirm"
+local_ssh -o ControlPath=none "$admin@127.0.0.1" true || die "$admin cannot log in after the confirm"
 # `userdel` fails while the admin has processes, e.g. its systemd --user.
 i=0
 while vm pgrep -u "$admin" >/dev/null; do
@@ -492,6 +496,7 @@ done
 rc=0; vr rollback --last || rc=$?
 [ "$rc" -eq 0 ] || die "rollback of the confirmed transaction exited $rc, expected 0"
 vm test ! -e "$ssh_dropin" || die "$ssh_dropin still exists after rollback"
+! vm sudo nft list table inet vps_ready >/dev/null 2>&1 || die "the vps_ready table is still loaded after rollback"
 ! vm id "$admin" >/dev/null 2>&1 || die "$admin still exists after rollback"
 root_login || die "root cannot log in after the rollback"
 

@@ -15,7 +15,7 @@ FAIL     FW-001   medium    Incoming traffic denied by default
          Without it, any service listening on all addresses, such as a database
          left at its defaults, is reachable from the internet. A firewall at
          your provider also protects the server, but this check cannot see it.
-         fix: not automated yet
+         fix: sudo vps-ready apply --module firewall.inbound
 FAIL     SSH-001  medium    Root login disabled
          permitrootlogin is without-password, expected no
          Root is the one account name every scanner tries, and its actions are
@@ -38,7 +38,7 @@ FAIL     SSH-005  low       X11 forwarding disabled
 5 passed, 5 failed (1 high, 3 medium, 1 low), 0 unknown, 19 skipped
 Skipped: kernel settings are not checked inside a container.
 Skipped: Docker is not installed.
-vps-ready can fix 4 of the 5 (SSH-002, SSH-001, UPD-001, SSH-005): run `sudo
-vps-ready plan --module ssh.server --module updates.auto`.
-The other one needs a manual fix for now; it says so above.
+vps-ready can fix all 5 (SSH-002, FW-001, SSH-001, UPD-001, SSH-005): run `sudo
+vps-ready plan --module ssh.server --module firewall.inbound --module
+updates.auto`.
 Run `vps-ready audit --all` to list the 5 passing controls too.

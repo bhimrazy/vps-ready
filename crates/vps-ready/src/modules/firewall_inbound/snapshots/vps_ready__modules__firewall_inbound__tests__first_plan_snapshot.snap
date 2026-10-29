@@ -1,0 +1,35 @@
+---
+source: crates/vps-ready/src/modules/firewall_inbound/tests.rs
+expression: "plan(&fs, &host, &facts)"
+---
+modules:
+  - id: firewall.inbound
+    title: Drop incoming traffic that no rule allows
+    status: applicable
+    changes:
+      - id: "package:nftables"
+        summary: install nftables
+        diff: ~
+        reversibility: partial
+      - id: "directory:/etc/vps-ready"
+        summary: "create directory /etc/vps-ready (0755 0:0)"
+        diff: ~
+        reversibility: reversible
+      - id: "file:/etc/vps-ready/firewall.nft"
+        summary: "create /etc/vps-ready/firewall.nft (0644 0:0)"
+        diff: "@@ -0,0 +1,23 @@\n+# Written by vps-ready (firewall.inbound). `vps-ready rollback --last`\n+# restores the previous state; edits here are replaced by the next apply.\n+# vps-ready-firewall.service loads it. It replaces only the table\n+# inet vps_ready: other tables, such as Docker's or fail2ban's, stay.\n+table inet vps_ready {}\n+delete table inet vps_ready\n+table inet vps_ready {\n+  chain input {\n+    type filter hook input priority filter; policy drop;\n+    ct state established,related accept\n+    ct state invalid drop\n+    iif lo accept\n+    meta l4proto icmp accept\n+    # Neighbor discovery and path MTU: never block ICMPv6.\n+    meta l4proto icmpv6 accept\n+    # DHCPv4 replies that conntrack does not match (broadcast).\n+    udp sport 67 udp dport 68 accept\n+    # DHCPv6 client.\n+    ip6 saddr fe80::/10 udp dport 546 accept\n+    # The profile's `allow`, plus every current SSH port.\n+    tcp dport { 22 } accept\n+  }\n+}\n"
+        reversibility: reversible
+      - id: "file:/etc/systemd/system/vps-ready-firewall.service"
+        summary: "create /etc/systemd/system/vps-ready-firewall.service (0644 0:0)"
+        diff: "@@ -0,0 +1,19 @@\n+# Written by vps-ready (firewall.inbound). `vps-ready rollback --last`\n+# restores the previous state; edits here are replaced by the next apply.\n+[Unit]\n+Description=vps-ready: inbound firewall (nftables table inet vps_ready)\n+DefaultDependencies=no\n+Wants=network-pre.target\n+After=nftables.service\n+Before=network-pre.target shutdown.target\n+Conflicts=shutdown.target\n+\n+[Service]\n+Type=oneshot\n+RemainAfterExit=yes\n+ExecStart=/usr/sbin/nft -f /etc/vps-ready/firewall.nft\n+ExecReload=/usr/sbin/nft -f /etc/vps-ready/firewall.nft\n+ExecStop=-/usr/sbin/nft delete table inet vps_ready\n+\n+[Install]\n+WantedBy=sysinit.target\n"
+        reversibility: reversible
+      - id: "service:vps-ready-firewall.service"
+        summary: enable and start vps-ready-firewall.service
+        diff: ~
+        reversibility: reversible
+    reloads:
+      - daemon-reload
+      - firewall-reload
+    notes:
+      - "always accepts TCP 22, the current SSH ports (this session's, sshd's listeners and `Port`), whatever `allow` says"
+      - "if this installs nftables, rollback leaves it installed"

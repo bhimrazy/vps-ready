@@ -279,7 +279,7 @@ pub fn run(controls: Vec<Control>, facts: &Facts) -> Report {
     }
 }
 
-fn evaluate(check: &Check, facts: &Facts) -> Outcome {
+pub(crate) fn evaluate(check: &Check, facts: &Facts) -> Outcome {
     match check {
         Check::SshdEffective { key, equals } => {
             let Some(config) = &facts.ssh.effective else {

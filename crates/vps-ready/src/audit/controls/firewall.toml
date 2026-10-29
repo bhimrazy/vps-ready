@@ -7,6 +7,7 @@ severity = "medium"
 title = "Incoming traffic denied by default"
 why = "Without it, any service listening on all addresses, such as a database left at its defaults, is reachable from the internet. A firewall at your provider also protects the server, but this check cannot see it."
 check = { kind = "inbound_default_deny" }
+fix = "firewall.inbound"
 
 [[control]]
 id = "FW-002"
