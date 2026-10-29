@@ -35,13 +35,18 @@ const START: [(&str, &str); 13] = [
     ("net.ipv4.icmp_echo_ignore_broadcasts", "1"),
 ];
 
-/// Kernel defaults as `/proc/sys`, and apt with `unattended-upgrades`
-/// installed but without vps-ready's drop-in.
+/// Kernel defaults as `/proc/sys`, apt with `unattended-upgrades`
+/// installed but without vps-ready's drop-in, sudo, and root with a key.
 fn fixture() -> FakeFs {
     START.iter().fold(
         FakeFs::new()
             .with_file("/etc/sysctl.d/README.sysctl", "distro\n")
-            .with_file("/etc/apt/apt.conf.d/20auto-upgrades", "distro\n"),
+            .with_file("/etc/apt/apt.conf.d/20auto-upgrades", "distro\n")
+            .with_file("/etc/sudoers.d/README", "distro\n")
+            .with_file(
+                "/root/.ssh/authorized_keys",
+                "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGroot root@laptop\n",
+            ),
         |fs, (key, value)| fs.with_file(format!("/proc/sys/{}", key.replace('.', "/")), *value),
     )
 }
@@ -78,9 +83,20 @@ fn host(fs: &FakeFs) -> Host<'_> {
     // `apt-config -c` validates a path on the fake fs, so it is answered
     // here rather than run.
     static RUNNER: std::sync::LazyLock<FakeRunner> = std::sync::LazyLock::new(|| {
+        // `user.admin` finds root and no other account.
+        let missing = Output {
+            status: 2,
+            ..Output::default()
+        };
         FakeRunner::new()
             .on("dpkg-query", ["-W"], Output::success("installed"))
             .on("apt-config", ["-c"], Output::success(""))
+            .on(
+                "getent",
+                ["passwd", "root"],
+                Output::success("root:x:0:0:root:/root:/bin/bash\n"),
+            )
+            .on("getent", Vec::<String>::new(), missing)
             .on(
                 "systemctl",
                 ["show"],
@@ -896,34 +912,35 @@ fn plan_profile_web_snapshot() {
     insta::assert_snapshot!(out);
 }
 
-/// Today the default selection is the modules of `minimal`; `web` adds
-/// `ssh.bruteforce`, which installs packages.
+/// The default selection leaves out the dead-man modules of `minimal`
+/// (`user.admin`) and `ssh.bruteforce` of `web`, which installs packages.
 #[test]
 fn default_selection_is_the_safe_modules() {
     let fs = fixture();
     let host = host(&fs);
-    // Without the last line, which repeats the command.
-    let body = |sel: &Selection| {
-        let out = plan_with(&host, sel).1;
-        out.lines().rev().skip(1).collect::<Vec<_>>().join("\n")
-    };
+    let body = |sel: &Selection| plan_with(&host, sel).1;
     let default = body(&only(&[]));
-    assert!(default.contains("updates.auto"), "{default}");
+    assert!(default.contains("updates.auto:"), "{default}");
+    assert!(default.contains("kernel.sysctl:"), "{default}");
+    assert!(!default.contains("user.admin"), "{default}");
     assert!(!default.contains("ssh.bruteforce"), "{default}");
-    assert!(!default.contains("firewall.inbound"), "{default}");
     let minimal = body(&with_profile("minimal", &[]));
+    assert!(minimal.starts_with("user.admin:"), "{minimal}");
+    assert!(!default.contains("firewall.inbound"), "{default}");
     assert!(minimal.contains("firewall.inbound:"), "{minimal}");
     assert!(!minimal.contains("ssh.bruteforce"), "{minimal}");
     let web = body(&with_profile("web", &[]));
+    assert!(web.starts_with("user.admin:"), "{web}");
     assert!(web.contains("ssh.bruteforce:"), "{web}");
-    assert!(web.contains("updates.auto"), "{web}");
+    assert!(web.contains("updates.auto:"), "{web}");
 }
 
 #[test]
 fn a_profile_file_is_read_and_checked() {
     let fs = fixture().with_file(
         "/srv/mine.toml",
-        "schema = 1\nextends = \"web\"\n[modules.\"updates.auto\"]\nenabled = false\n",
+        "schema = 1\nextends = \"web\"\n[modules.\"updates.auto\"]\nenabled = false\n\
+         [modules.\"user.admin\"]\nenabled = false\n",
     );
     let (code, out, _) = plan_with(&host(&fs), &with_profile("/srv/mine.toml", &[]));
     assert_eq!(code, 0);

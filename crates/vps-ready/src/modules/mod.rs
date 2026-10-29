@@ -17,6 +17,7 @@ pub mod firewall_inbound;
 pub mod kernel_sysctl;
 pub mod ssh_bruteforce;
 mod updates_auto;
+pub mod user_admin;
 
 #[cfg(feature = "testing")]
 pub use deadman_test::DeadmanTest;
@@ -24,6 +25,7 @@ pub use firewall_inbound::FirewallInbound;
 pub use kernel_sysctl::KernelSysctl;
 pub use ssh_bruteforce::SshBruteforce;
 pub use updates_auto::UpdatesAuto;
+pub use user_admin::UserAdmin;
 
 /// Errors from planning a module.
 #[derive(Debug, thiserror::Error)]
@@ -42,6 +44,9 @@ pub enum ModuleError {
     /// the parse error is large.
     #[error("invalid params: {0}")]
     Params(#[source] Box<toml::de::Error>),
+    /// The module cannot plan on this host as configured, and why.
+    #[error("{0}")]
+    Refused(String),
     /// A file's template did not render.
     #[error("rendering a template: {0}")]
     Template(#[from] askama::Error),
@@ -110,13 +115,15 @@ pub struct ModuleSteps {
     /// Run in order after the module's resources are applied, if any of
     /// them changed.
     pub reloads: Vec<Reload>,
+    /// Shown after [`Module::notes`], for what only planning finds out.
+    pub notes: Vec<String>,
 }
 
 impl From<Vec<Resource>> for ModuleSteps {
     fn from(resources: Vec<Resource>) -> Self {
         Self {
             resources,
-            reloads: Vec::new(),
+            ..Self::default()
         }
     }
 }
@@ -186,6 +193,7 @@ pub trait Module {
 #[must_use]
 pub fn all() -> &'static [&'static dyn Module] {
     &[
+        &UserAdmin,
         &FirewallInbound,
         &SshBruteforce::ROOT,
         &KernelSysctl::ROOT,
@@ -199,6 +207,7 @@ pub fn all() -> &'static [&'static dyn Module] {
 #[must_use]
 pub fn with_test() -> &'static [&'static dyn Module] {
     &[
+        &UserAdmin,
         &FirewallInbound,
         &SshBruteforce::ROOT,
         &KernelSysctl::ROOT,

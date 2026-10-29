@@ -357,13 +357,23 @@ fn notes_what_it_leaves_alone() {
     fw.input_chains.push(chain("filter", "INPUT", false));
     fw.input_chains.push(chain("mine", "input", true));
     insta::assert_yaml_snapshot!(FirewallInbound.notes(&facts));
-    facts.ipv6 = false;
-    assert!(
-        !FirewallInbound
-            .notes(&facts)
-            .iter()
-            .any(|n| n.contains("docker-proxy"))
+    // Over IPv6 only 5432/tcp is proxied, and only until `allow` has it.
+    let plan_notes = |facts: &Facts, allow: &str| {
+        steps(facts, &params(&format!("allow = [{allow}]")))
+            .unwrap()
+            .notes
+    };
+    assert_eq!(
+        plan_notes(&facts, ""),
+        [
+            "over IPv6, Docker's ip6tables is off (the default before Docker 27), so \
+          connections to 5432/tcp reach docker-proxy on the host and this firewall drops \
+          them; to keep them, add them to `allow`: [\"5432/tcp\"]"
+        ]
     );
+    assert!(plan_notes(&facts, "\"5432/tcp\"").is_empty());
+    facts.ipv6 = false;
+    assert!(plan_notes(&facts, "").is_empty());
 }
 
 #[test]

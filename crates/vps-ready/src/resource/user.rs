@@ -36,10 +36,12 @@ pub enum Password {
 
 /// An entry of the user database.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct Entry {
-    pub(super) uid: u32,
-    pub(super) gid: u32,
-    pub(super) home: PathBuf,
+pub(crate) struct Entry {
+    pub(crate) uid: u32,
+    pub(crate) gid: u32,
+    pub(crate) home: PathBuf,
+    /// Login shell; empty when the entry has none.
+    pub(crate) shell: String,
 }
 
 impl User {
@@ -203,7 +205,7 @@ pub(crate) fn by_hand(backup: &Backup) -> Option<String> {
 }
 
 /// The account's entry from `getent passwd`; `None` if there is none.
-pub(super) fn lookup(sys: Sys, name: &str) -> Result<Option<Entry>, ResourceError> {
+pub(crate) fn lookup(sys: Sys, name: &str) -> Result<Option<Entry>, ResourceError> {
     check_name("user", name)?;
     let out = sys.runner.run(&Cmd::new("getent").args(["passwd", name]))?;
     match out.status {
@@ -215,7 +217,7 @@ pub(super) fn lookup(sys: Sys, name: &str) -> Result<Option<Entry>, ResourceErro
     let text = out.stdout_str()?;
     let fields: Vec<&str> = text.trim_end().split(':').collect();
     let entry = match fields[..] {
-        [n, _, uid, gid, _, home, _] if n == name && home.starts_with('/') => uid
+        [n, _, uid, gid, _, home, shell] if n == name && home.starts_with('/') => uid
             .parse()
             .ok()
             .zip(gid.parse().ok())
@@ -223,6 +225,7 @@ pub(super) fn lookup(sys: Sys, name: &str) -> Result<Option<Entry>, ResourceErro
                 uid,
                 gid,
                 home: PathBuf::from(home),
+                shell: shell.to_owned(),
             }),
         _ => None,
     };
@@ -605,6 +608,7 @@ mod tests {
                 uid: 1001,
                 gid: 1001,
                 home: "/home/admin".into(),
+                shell: "/bin/bash".into(),
             })
         );
         let runner = FakeRunner::new().on("getent", ["passwd"], Output::success("admin:x:1001\n"));

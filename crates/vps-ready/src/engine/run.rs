@@ -640,6 +640,18 @@ impl<'a> Engine<'a> {
                 user: user.to_owned(),
             });
         }
+        // The dead-man paths need no such check: they roll back only a
+        // pending or unfinished transaction, and apply refuses to start
+        // while one exists, so it is always the newest.
+        if let Some(user) = created_users(&records).next()
+            && let Some(later) = self.later_in_place(txn.id())?
+        {
+            return Err(EngineError::LaterTxn {
+                txn: txn.id().to_owned(),
+                user: user.to_owned(),
+                later,
+            });
+        }
         let switch = deadman::switch(&records);
         let unit = deadman::last_unit(&records).map(|(u, _)| u.to_owned());
         let reason = switch
@@ -867,6 +879,23 @@ impl<'a> Engine<'a> {
         for txn in self.state.txns(self.sys.fs)?.into_iter().rev() {
             if let TxnState::PendingConfirm { .. } = journal::replay(&txn.read(self.sys.fs)?)? {
                 return Ok(Some(txn));
+            }
+        }
+        Ok(None)
+    }
+
+    /// The newest transaction after `id` that is applied, confirmed or
+    /// pending a confirm, if any.
+    fn later_in_place(&self, id: &str) -> Result<Option<String>, EngineError> {
+        for txn in self.state.txns(self.sys.fs)?.into_iter().rev() {
+            // `txns` is in ID order, oldest first.
+            if txn.id() == id {
+                break;
+            }
+            if let TxnState::Applied | TxnState::Confirmed | TxnState::PendingConfirm { .. } =
+                journal::replay(&txn.read(self.sys.fs)?)?
+            {
+                return Ok(Some(txn.id().to_owned()));
             }
         }
         Ok(None)

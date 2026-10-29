@@ -222,7 +222,7 @@ impl Module for FirewallInbound {
             );
         }
         let firewall = facts.firewall.as_ref();
-        notes.extend(published_notes(facts));
+        notes.extend(forwarded_note(facts));
         let others: Vec<String> = firewall
             .into_iter()
             .flat_map(|f| &f.input_chains)
@@ -262,7 +262,8 @@ impl Module for FirewallInbound {
     /// loads it when it starts.
     fn plan(&self, cx: &PlanCx, _: Sys) -> Result<ModuleSteps, ModuleError> {
         let params: Params = cx.params()?;
-        let ruleset = Ruleset::new(cx.facts, &params).render()?;
+        let model = Ruleset::new(cx.facts, &params);
+        let ruleset = model.render()?;
         let mut resources = Vec::new();
         if !cx.facts.firewall_tools.nft {
             resources.push(Resource::Package(Package {
@@ -296,6 +297,7 @@ impl Module for FirewallInbound {
         Ok(ModuleSteps {
             resources,
             reloads: vec![Reload::DaemonReload, Reload::FirewallReload],
+            notes: proxied_note(cx.facts, &model).into_iter().collect(),
         })
     }
 
@@ -326,45 +328,68 @@ impl Module for FirewallInbound {
     }
 }
 
-/// What happens to the ports Docker publishes. Over IPv4 they are DNATed
-/// and forwarded, so this input chain does not see them. Over IPv6 without
-/// Docker's ip6tables (the default before Docker 27) a connection ends in
-/// docker-proxy on the host, passes the input chain and is dropped unless
-/// `allow` lists the port.
-fn published_notes(facts: &Facts) -> Vec<String> {
-    let published = facts.firewall.iter().flat_map(|f| &f.published);
-    let set = |family: &str| -> BTreeSet<String> {
-        published
-            .clone()
-            .filter(|p| p.family == family)
-            .map(|p| format!("{}/{}", p.port, p.proto))
-            .collect()
-    };
-    let (v4, v6) = (set("ip"), set("ip6"));
-    let mut notes = Vec::new();
-    if !v4.is_empty() || !v6.is_empty() {
-        let all: BTreeSet<&String> = v4.iter().chain(&v6).collect();
-        notes.push(format!(
+/// The ports Docker publishes for `family` (`ip` or `ip6`), as `5432/tcp`.
+fn published(facts: &Facts, family: &str) -> BTreeSet<(u16, String)> {
+    facts
+        .firewall
+        .iter()
+        .flat_map(|f| &f.published)
+        .filter(|p| p.family == family)
+        .map(|p| (p.port, p.proto.clone()))
+        .collect()
+}
+
+fn show(ports: &BTreeSet<(u16, String)>, quoted: bool) -> String {
+    ports
+        .iter()
+        .map(|(port, proto)| match quoted {
+            true => format!("\"{port}/{proto}\""),
+            false => format!("{port}/{proto}"),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Over IPv4 the ports Docker publishes are DNATed and forwarded, so this
+/// input chain does not see them (FW-002).
+fn forwarded_note(facts: &Facts) -> Option<String> {
+    let all: BTreeSet<_> = published(facts, "ip")
+        .union(&published(facts, "ip6"))
+        .cloned()
+        .collect();
+    (!all.is_empty()).then(|| {
+        format!(
             "Docker publishes {}: traffic it forwards to containers does not pass this \
              firewall (FW-002); publish on 127.0.0.1 or filter it in DOCKER-USER",
-            all.into_iter().cloned().collect::<Vec<_>>().join(", ")
-        ));
-    }
-    let proxied: Vec<String> = v4.difference(&v6).cloned().collect();
-    if facts.ipv6 && !proxied.is_empty() {
-        notes.push(format!(
+            show(&all, false)
+        )
+    })
+}
+
+/// Over IPv6 without Docker's ip6tables (the default before Docker 27), a
+/// port published only for IPv4 is served by docker-proxy on the host: the
+/// connection passes the input chain and is dropped unless `allow` lists
+/// the port. Those not in `ruleset` yet.
+fn proxied_note(facts: &Facts, ruleset: &Ruleset) -> Option<String> {
+    let accepted = |(port, proto): &(u16, String)| match proto.as_str() {
+        "tcp" => ruleset.tcp.contains(port),
+        "udp" => ruleset.udp.contains(port),
+        _ => false,
+    };
+    let proxied: BTreeSet<_> = published(facts, "ip")
+        .difference(&published(facts, "ip6"))
+        .filter(|p| !accepted(p))
+        .cloned()
+        .collect();
+    (facts.ipv6 && !proxied.is_empty()).then(|| {
+        format!(
             "over IPv6, Docker's ip6tables is off (the default before Docker 27), so \
              connections to {} reach docker-proxy on the host and this firewall drops \
              them; to keep them, add them to `allow`: [{}]",
-            proxied.join(", "),
-            proxied
-                .iter()
-                .map(|p| format!("\"{p}\""))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-    }
-    notes
+            show(&proxied, false),
+            show(&proxied, true)
+        )
+    })
 }
 
 /// Whether `json`, the loaded table, has an input chain that drops by

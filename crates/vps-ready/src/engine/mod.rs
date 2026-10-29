@@ -194,6 +194,22 @@ pub enum EngineError {
         /// The account.
         user: String,
     },
+    /// A rollback would remove an account it created while a later
+    /// transaction, which may rely on it as the only way in (e.g. one that
+    /// turned off root and password logins), is still in place.
+    #[error(
+        "refusing to roll back transaction {txn}: it would remove the account {user}, \
+         and the later transaction {later} is still in place and may need it to log in; \
+         roll back {later} first"
+    )]
+    LaterTxn {
+        /// Transaction ID.
+        txn: String,
+        /// The account.
+        user: String,
+        /// The later transaction that is applied, confirmed or pending.
+        later: String,
+    },
     /// Two steps of a plan change the same resource.
     #[error("the plan changes {0} twice")]
     DuplicateResource(String),

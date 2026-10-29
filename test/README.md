@@ -35,6 +35,11 @@ match their state before. It needs network access for `apt-get`.
 `test/container-bruteforce.sh <distro> [binary]` runs the same kind of cycle
 for `ssh.bruteforce`: the jail runs, reads the journal and bans into
 nftables, `SSH-008` passes, and rollback removes the drop-in.
+`test/container-admin.sh <distro> [binary]` runs `user.admin`: apply waits
+for a confirm, a new login as another sudo user cannot confirm, a new login as
+the admin (with the key copied from root) confirms with `sudo vps-ready
+confirm`, and `rollback --last` removes the account; a second apply with
+`--deadman 1m` is rolled back by the timer.
 
 ```sh
 cargo build --release --target aarch64-unknown-linux-musl   # x86_64-... on Intel

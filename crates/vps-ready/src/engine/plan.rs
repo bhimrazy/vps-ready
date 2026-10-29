@@ -222,12 +222,14 @@ pub fn plan<'a>(
                 let ModuleSteps {
                     resources,
                     mut reloads,
+                    notes: found,
                 } = module
                     .plan(&cx, sys)
                     .map_err(|source| EngineError::Module {
                         module: module.id(),
                         source,
                     })?;
+                notes.extend(found);
                 keyed = keyed_users(&resources);
                 let mut changes = Vec::new();
                 for resource in resources {
