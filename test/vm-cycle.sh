@@ -354,12 +354,16 @@ user=$(vm id -un)
 vm 'test -f ~/.ssh/vr_local || ssh-keygen -q -t ed25519 -N "" -C vr-local -f ~/.ssh/vr_local'
 # shellcheck disable=SC2016 # expanded in the VM
 vm 'grep -qF "$(cat ~/.ssh/vr_local.pub)" ~/.ssh/authorized_keys || cat ~/.ssh/vr_local.pub >>~/.ssh/authorized_keys'
-vm 'cat >/tmp/vr-ssh' <<'SH'
+# Writes /tmp/vr-ssh again after a reboot clears /tmp.
+write_vr_ssh() {
+  vm 'cat >/tmp/vr-ssh' <<'SH'
 #!/bin/sh
 # ssh to this host's own sshd with the cycle's key; arguments as for ssh.
 exec ssh -i "$HOME/.ssh/vr_local" -o BatchMode=yes -o IdentitiesOnly=yes \
   -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -p 22 "$@"
 SH
+}
+write_vr_ssh
 # local_ssh <ssh args...>: ssh from inside the VM to its own sshd.
 local_ssh() { vm sh /tmp/vr-ssh "$@"; }
 [ "$(local_ssh -o ControlPath=none "$user@127.0.0.1" id -un)" = "$user" ] || die "no SSH login to localhost as $user"
@@ -450,6 +454,7 @@ vm sudo journalctl -b -u "$hook" --no-pager | tail -n 20
 
 ssh_dropin=/etc/ssh/sshd_config.d/00-vps-ready.conf
 admin=vradmin
+write_vr_ssh
 # Root gets the cycle's key, so a new login shows whether sshd reloaded.
 vm 'sudo install -d -m 700 /root/.ssh && sudo install -m 600 ~/.ssh/vr_local.pub /root/.ssh/authorized_keys'
 root_login() { local_ssh -o ControlPath=none root@127.0.0.1 true 2>/dev/null; }
