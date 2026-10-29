@@ -42,7 +42,10 @@ pub enum ModuleError {
     /// the parse error is large.
     #[error("invalid params: {0}")]
     Params(#[source] Box<toml::de::Error>),
-    /// Applying the plan could lock the admin out; the message says why.
+    /// A file's template did not render.
+    #[error("rendering a template: {0}")]
+    Template(#[from] askama::Error),
+    /// The module cannot plan on this host as configured, and why.
     #[error("{0}")]
     Refused(String),
 }
@@ -189,7 +192,7 @@ pub trait Module {
 #[must_use]
 pub fn all() -> &'static [&'static dyn Module] {
     &[
-        &SshServer::ROOT,
+        &SshServer,
         &SshBruteforce::ROOT,
         &KernelSysctl::ROOT,
         &UpdatesAuto::ROOT,
@@ -202,7 +205,7 @@ pub fn all() -> &'static [&'static dyn Module] {
 #[must_use]
 pub fn with_test() -> &'static [&'static dyn Module] {
     &[
-        &SshServer::ROOT,
+        &SshServer,
         &SshBruteforce::ROOT,
         &KernelSysctl::ROOT,
         &UpdatesAuto::ROOT,

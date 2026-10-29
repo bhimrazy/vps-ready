@@ -1209,7 +1209,7 @@ fn unknown_params_name_the_module() {
             &err,
             EngineError::Module {
                 module: "test.demo",
-                source: ModuleError::Params(_)
+                error: ModuleError::Params(_)
             }
         ),
         "{err:?}"

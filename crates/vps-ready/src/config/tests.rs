@@ -138,7 +138,7 @@ fn unknown_modules_and_bases_are_errors() {
     let err = parse("schema = 1\n[modules.\"ssh.sevrer\"]\n").unwrap_err();
     assert!(
         err.to_string()
-            .starts_with("unknown module `ssh.sevrer`; modules are ssh.bruteforce"),
+            .starts_with("unknown module `ssh.sevrer`; modules are ssh.server, ssh.bruteforce"),
         "{err}"
     );
     let err = parse("schema = 1\nextends = \"paranoid\"\n").unwrap_err();

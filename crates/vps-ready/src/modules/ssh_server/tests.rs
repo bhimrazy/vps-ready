@@ -131,7 +131,7 @@ fn steps(
     fs: &FakeFs,
     runner: &dyn Runner,
 ) -> Result<ModuleSteps, ModuleError> {
-    SshServer::ROOT.plan(
+    SshServer.plan(
         &PlanCx {
             facts,
             params: &toml::Table::new(),
@@ -160,7 +160,7 @@ fn keywords(text: &str) -> Vec<String> {
 }
 
 fn reason(facts: &Facts) -> String {
-    match SshServer::ROOT.applicable(facts) {
+    match SshServer.applicable(facts) {
         Applicability::NotApplicable { reason } => reason,
         Applicability::Applicable => panic!("applies"),
     }
@@ -180,7 +180,7 @@ fn with_config(main: &str, files: &[(&str, &str)]) -> Facts {
 
 #[test]
 fn applies_only_where_the_drop_in_wins() {
-    let module = SshServer::ROOT;
+    let module = SshServer;
     for name in crate::facts::fixtures::HOSTS {
         assert_eq!(
             module.applicable(&host(name, &[])),
@@ -289,7 +289,7 @@ fn never_writes_ports_listeners_groups_methods_or_crypto() {
             value: VALUE,
         })
         .collect();
-    let written = keywords(&render(&all));
+    let written = keywords(&DropIn { settings: &all }.render().unwrap());
     assert_eq!(
         written,
         MANAGED.map(|(key, _)| key.to_owned()),
@@ -354,9 +354,9 @@ fn writes_failing_keywords_and_those_the_drop_in_lists() {
 
 #[test]
 fn takes_no_params() {
-    assert!(SshServer::ROOT.check_params(&toml::Table::new()).is_ok());
+    assert!(SshServer.check_params(&toml::Table::new()).is_ok());
     let typo: toml::Table = toml::from_str("port = 2222").unwrap();
-    let err = SshServer::ROOT.check_params(&typo).unwrap_err();
+    let err = SshServer.check_params(&typo).unwrap_err();
     assert!(err.to_string().contains("unknown field `port`"), "{err}");
 }
 
@@ -464,7 +464,7 @@ fn keys_paths_expand_like_sshd() {
 }
 
 fn plan<'a>(fs: &FakeFs, runner: &dyn Runner, facts: &'a Facts) -> Plan<'a> {
-    engine::plan(&[Selected::new(&SshServer::ROOT)], facts, sys(fs, runner)).unwrap()
+    engine::plan(&[Selected::new(&SshServer)], facts, sys(fs, runner)).unwrap()
 }
 
 #[test]
@@ -566,7 +566,7 @@ fn verify_checks_the_admins_own_connection() {
     // No drop-in, nothing to check.
     let none = fs();
     assert_eq!(
-        SshServer::ROOT.verify(&cx, sys(&none, &Host::new(&none, &facts))),
+        SshServer.verify(&cx, sys(&none, &Host::new(&none, &facts))),
         Ok(())
     );
 
@@ -574,7 +574,7 @@ fn verify_checks_the_admins_own_connection() {
     let mut matched = Host::new(&fs, &facts);
     matched.effective = String::new();
     assert_eq!(
-        SshServer::ROOT.verify(&cx, sys(&fs, &matched)),
+        SshServer.verify(&cx, sys(&fs, &matched)),
         Ok(()),
         "the drop-in alone shows passwordauthentication no"
     );
@@ -588,12 +588,12 @@ fn verify_checks_the_admins_own_connection() {
         }
     }
     assert_eq!(
-        SshServer::ROOT.verify(&cx, sys(&fs, &Matched)),
+        SshServer.verify(&cx, sys(&fs, &Matched)),
         Err(
             "`sshd -T -C user=admin,host=192.0.2.10,addr=192.0.2.10` shows \
              passwordauthentication yes, not no"
                 .to_owned()
         )
     );
-    assert_eq!(SshServer::ROOT.verify_timeout(), Duration::from_secs(10));
+    assert_eq!(SshServer.verify_timeout(), Duration::from_secs(10));
 }

@@ -200,12 +200,10 @@ pub fn plan<'a>(
                 let ModuleSteps {
                     resources,
                     mut reloads,
-                } = module
-                    .plan(&cx, sys)
-                    .map_err(|source| EngineError::Module {
-                        module: module.id(),
-                        source,
-                    })?;
+                } = module.plan(&cx, sys).map_err(|error| EngineError::Module {
+                    module: module.id(),
+                    error,
+                })?;
                 planned.extend(resources.iter().cloned());
                 let mut changes = Vec::new();
                 for resource in resources {

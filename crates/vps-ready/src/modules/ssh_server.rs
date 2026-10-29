@@ -67,21 +67,7 @@ struct Setting {
 /// override it. Needs the dead-man switch: a wrong setting locks the admin
 /// out of new logins while the open session survives the reload.
 #[derive(Debug, Clone, Copy)]
-pub struct SshServer {
-    uid: u32,
-    gid: u32,
-}
-
-impl SshServer {
-    /// The drop-in owned by root:root.
-    pub const ROOT: Self = Self { uid: 0, gid: 0 };
-
-    /// The drop-in owned by `uid:gid`, for tests that cannot `chown` to root.
-    #[cfg(test)]
-    const fn owned_by(uid: u32, gid: u32) -> Self {
-        Self { uid, gid }
-    }
-}
+pub struct SshServer;
 
 impl Module for SshServer {
     fn id(&self) -> &'static str {
@@ -166,11 +152,15 @@ impl Module for SshServer {
         Ok(ModuleSteps {
             resources: vec![Resource::File(File {
                 path: DROP_IN.into(),
-                content: render(&settings).into_bytes(),
+                content: DropIn {
+                    settings: &settings,
+                }
+                .render()?
+                .into_bytes(),
                 owner: FileOwner {
                     mode: 0o644,
-                    uid: self.uid,
-                    gid: self.gid,
+                    uid: 0,
+                    gid: 0,
                 },
                 validate: Some(Validate::new("sshd", ["-t", "-f", Validate::PATH])),
             })],
@@ -230,10 +220,6 @@ impl Module for SshServer {
 /// is one this sshd does not know, so it is never written.
 fn fails(effective: &SshdConfig, key: &str) -> bool {
     effective.get(key).is_some_and(|v| v != VALUE)
-}
-
-fn render(settings: &[Setting]) -> String {
-    DropIn { settings }.to_string()
 }
 
 /// Why [`DROP_IN`] would not win, if it would not. Only keywords that fail

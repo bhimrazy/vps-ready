@@ -170,11 +170,15 @@ fn socket_ports(runner: &dyn Runner, notices: &mut Vec<String>) -> Vec<u16> {
 }
 
 fn parse_listen(text: &str) -> Vec<u16> {
-    text.lines()
+    let mut ports: Vec<u16> = text
+        .lines()
         .filter_map(|l| l.strip_prefix("Listen="))
         .filter_map(|v| v.strip_suffix(" (Stream)"))
         .filter_map(last_port)
-        .collect()
+        .collect();
+    ports.sort_unstable();
+    ports.dedup();
+    ports
 }
 
 /// The port after the last `:` of `[::]:22` or `0.0.0.0:22`, or a bare `22`.
