@@ -564,13 +564,20 @@ fn print_plan(
             plural(modules, "module"),
             kinds(plan)
         )?;
-        if plan
-            .steps()
-            .any(|s| s.change.reversibility == Reversibility::Partial)
-        {
+        let partial = |kind: fn(&Resource) -> bool| {
+            plan.steps()
+                .any(|s| s.change.reversibility == Reversibility::Partial && kind(&s.resource))
+        };
+        if partial(|r| matches!(r, Resource::Package(_))) {
             writeln!(
                 out,
                 "partial: rollback restores the files but leaves installed packages in place."
+            )?;
+        }
+        if partial(|r| matches!(r, Resource::User(_))) {
+            writeln!(
+                out,
+                "partial: rollback removes a user it created but keeps its home directory."
             )?;
         }
         Ok(())

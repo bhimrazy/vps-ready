@@ -3,6 +3,7 @@
 //! who runs it is not removed.
 
 use super::*;
+use crate::facts::SessionId;
 
 const ADMIN: &str = "admin:x:1001:1001::/home/admin:/bin/bash\n";
 
@@ -143,6 +144,107 @@ fn a_rollback_does_not_remove_the_account_running_it() {
     engine
         .rollback_by(Target::Last, &["ubuntu".to_owned()], &mut |_| {})
         .unwrap();
+}
+
+/// A later transaction, at the same second, that ends `events`: one that
+/// may have turned off root and password logins, relying on `admin`.
+fn later(fs: &FakeFs, events: Vec<Event>) -> String {
+    let txn = super::state(fs).create_txn(fs, 1).unwrap();
+    let begin = Event::Begin {
+        version: "0.3.0".into(),
+        modules: vec!["ssh.server".into()],
+    };
+    for event in std::iter::once(begin).chain(events) {
+        txn.append(fs, &Record { at: 2, event }).unwrap();
+    }
+    txn.id().to_owned()
+}
+
+#[test]
+fn a_created_account_outlives_a_later_transaction() {
+    let fs = host_fs();
+    let older = applied(&fs);
+    let pending = Event::state(TxnState::PendingConfirm {
+        deadline: Deadline {
+            boottime: 1300,
+            wall: 1_792_932_341,
+        },
+        live_since: 1000,
+        session: None,
+    });
+    let confirmed = vec![
+        pending.clone(),
+        Event::Confirmed {
+            session: SessionId {
+                pid: 951,
+                start: 12655,
+            },
+            user: "admin".into(),
+            client: "198.51.100.7".parse().unwrap(),
+        },
+        Event::state(TxnState::Confirmed),
+    ];
+    for events in [
+        vec![Event::state(TxnState::Applied)],
+        vec![pending],
+        confirmed,
+    ] {
+        let newer = later(&fs, events);
+        let run = users(Output::success(""));
+        let state = state(&fs);
+        let engine = Engine::lock(
+            &state,
+            Sys {
+                fs: &fs,
+                runner: &run,
+            },
+        )
+        .unwrap();
+        let err = engine
+            .rollback(Target::Txn(&older), &mut |_| {})
+            .unwrap_err();
+        assert!(
+            matches!(&err, EngineError::LaterTxn { user, later, .. }
+                if user == "admin" && *later == newer),
+            "{err:?}"
+        );
+        assert!(
+            err.to_string()
+                .ends_with(&format!("roll back {newer} first")),
+            "{err}"
+        );
+        assert!(calls(&run).is_empty());
+        // Once the later one is rolled back, the older one may be.
+        let txn = state.txns(&fs).unwrap().pop().unwrap();
+        for event in [
+            Event::Rollback {
+                reason: RollbackReason::Manual,
+            },
+            Event::state(TxnState::RolledBack {
+                reason: RollbackReason::Manual,
+            }),
+        ] {
+            txn.append(&fs, &Record { at: 3, event }).unwrap();
+        }
+    }
+    let run = users(Output::success(""));
+    let state = state(&fs);
+    Engine::lock(
+        &state,
+        Sys {
+            fs: &fs,
+            runner: &run,
+        },
+    )
+    .unwrap()
+    .rollback(Target::Txn(&older), &mut |_| {})
+    .unwrap();
+    assert_eq!(
+        state_of(&fs, &older),
+        TxnState::RolledBack {
+            reason: RollbackReason::Manual
+        }
+    );
 }
 
 fn state_of(fs: &dyn Fs, txn: &str) -> TxnState {
