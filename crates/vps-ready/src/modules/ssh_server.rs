@@ -169,15 +169,14 @@ impl Module for SshServer {
         })
     }
 
-    /// `sshd -T -C` for the admin's own connection shows every keyword of
-    /// the drop-in at its value, so a `Match` block for the admin or an
+    /// `sshd -T -C` for each admin's own connection shows every keyword of
+    /// the drop-in at its value, so a `Match` block for an admin or an
     /// earlier file cannot have undone it.
     fn verify(&self, cx: &PlanCx, sys: Sys) -> Result<(), String> {
         let listed = listed(sys).map_err(|e| e.to_string())?;
         if listed.is_empty() {
             return Ok(());
         }
-        let user = login_user(cx);
         let addr = cx
             .facts
             .session
@@ -185,29 +184,8 @@ impl Module for SshServer {
             .map_or(IpAddr::from([127, 0, 0, 1]), |s| {
                 s.client.ip().to_canonical()
             });
-        let spec = format!("user={user},host={addr},addr={addr}");
-        let cmd = Cmd::new("sshd")
-            .args(["-T", "-C", &spec])
-            .timeout(SSHD_T_TIMEOUT);
-        let out = sys
-            .runner
-            .run(&cmd)
-            .map_err(|e| format!("`sshd -T -C {spec}` could not run: {e}"))?;
-        if !out.ok() {
-            return Err(format!(
-                "`sshd -T -C {spec}` exited with status {}: {}",
-                out.status,
-                String::from_utf8_lossy(&out.stderr).trim()
-            ));
-        }
-        let shown = SshdConfig::parse(&String::from_utf8_lossy(&out.stdout));
-        for key in &listed {
-            let value = shown.get(key).unwrap_or("nothing");
-            if value != VALUE {
-                return Err(format!(
-                    "`sshd -T -C {spec}` shows {key} {value}, not {VALUE}"
-                ));
-            }
+        for user in login_users(cx) {
+            verify_user(sys, &user, addr, &listed)?;
         }
         Ok(())
     }
@@ -215,6 +193,36 @@ impl Module for SshServer {
     fn verify_timeout(&self) -> Duration {
         SSHD_T_TIMEOUT
     }
+}
+
+/// Checks that `sshd -T -C` for `user` connecting from `addr` shows every
+/// keyword in `listed` at [`VALUE`].
+fn verify_user(sys: Sys, user: &str, addr: IpAddr, listed: &BTreeSet<&str>) -> Result<(), String> {
+    let spec = format!("user={user},host={addr},addr={addr}");
+    let cmd = Cmd::new("sshd")
+        .args(["-T", "-C", &spec])
+        .timeout(SSHD_T_TIMEOUT);
+    let out = sys
+        .runner
+        .run(&cmd)
+        .map_err(|e| format!("`sshd -T -C {spec}` could not run: {e}"))?;
+    if !out.ok() {
+        return Err(format!(
+            "`sshd -T -C {spec}` exited with status {}: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    let shown = SshdConfig::parse(&String::from_utf8_lossy(&out.stdout));
+    for key in listed {
+        let value = shown.get(key).unwrap_or("nothing");
+        if value != VALUE {
+            return Err(format!(
+                "`sshd -T -C {spec}` shows {key} {value}, not {VALUE}"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Whether `key` has a value other than `no`. A key `sshd -T` does not show
@@ -287,17 +295,17 @@ fn listed(sys: Sys) -> Result<BTreeSet<&'static str>, ModuleError> {
         .collect())
 }
 
-/// The user the admin logs in as after apply, as [`Plan::admins`] picks
-/// it: a user the plan gives keys (`user.admin`), else the non-root user
-/// of this SSH session, else root.
+/// The users who may log in and confirm after apply, as [`Plan::admins`]
+/// picks them: those the plan gives keys (`user.admin`), else the non-root
+/// user of this SSH session, else root.
 ///
 /// [`Plan::admins`]: crate::engine::Plan::admins
-fn login_user(cx: &PlanCx) -> String {
-    keyed_users(cx.planned)
-        .into_iter()
-        .next()
-        .or_else(|| session_user(cx).map(str::to_owned))
-        .unwrap_or_else(|| "root".to_owned())
+fn login_users(cx: &PlanCx) -> Vec<String> {
+    let keyed = keyed_users(cx.planned);
+    if !keyed.is_empty() {
+        return keyed;
+    }
+    vec![session_user(cx).unwrap_or("root").to_owned()]
 }
 
 /// The user of this SSH session, unless it is root.
@@ -352,7 +360,7 @@ fn require_admin(cx: &PlanCx, sys: Sys, turned_off: &[&str]) -> Result<(), Modul
         Some((uid, None)) => why_not.push(format!("uid {uid} of this SSH session has no name")),
         Some((_, Some(name))) => match (has_keys(cx, sys, name)?, has_sudo(sys, name)?) {
             (true, true) => return Ok(()),
-            (false, _) => why_not.push(format!("{name} has no SSH key in authorized_keys")),
+            (false, _) => why_not.push(no_keys(cx, name)),
             (true, false) => why_not.push(format!("{name} has no sudo rights")),
         },
     }
@@ -376,12 +384,50 @@ fn require_admin(cx: &PlanCx, sys: Sys, turned_off: &[&str]) -> Result<(), Modul
     )))
 }
 
+/// Why `name` counts as having no key: none in its `authorized_keys`, which
+/// is all vps-ready reads, even where sshd also takes keys from a command
+/// or certificates from a CA.
+fn no_keys(cx: &PlanCx, name: &str) -> String {
+    let set = |key: &str| {
+        cx.facts
+            .ssh
+            .effective
+            .as_ref()
+            .and_then(|e| e.get(key))
+            .is_some_and(|v| v != "none")
+    };
+    let mut other = Vec::new();
+    if set("authorizedkeyscommand") {
+        other.push("AuthorizedKeysCommand");
+    }
+    if set("trustedusercakeys") {
+        other.push("TrustedUserCAKeys");
+    }
+    if other.is_empty() {
+        format!("{name} has no SSH key in authorized_keys")
+    } else {
+        format!(
+            "{name} has no SSH key in authorized_keys, and vps-ready cannot check the keys \
+             sshd also takes through {}",
+            other.join(" and ")
+        )
+    }
+}
+
 /// Whether `sudo -l -U` lists commands `name` may run. It exits 0 either way.
 fn has_sudo(sys: Sys, name: &str) -> Result<bool, ModuleError> {
     let cmd = Cmd::new("sudo")
         .args(["-n", "-l", "-U", name])
         .env("LC_ALL", "C");
-    let out = sys.runner.run(&cmd)?;
+    let out = match sys.runner.run(&cmd) {
+        Ok(out) => out,
+        Err(SysError::NotFound(_)) => {
+            return Err(ModuleError::Refused(
+                "sudo is not installed; install it with `apt-get install sudo` first".to_owned(),
+            ));
+        }
+        Err(e) => return Err(e.into()),
+    };
     Ok(out.ok() && String::from_utf8_lossy(&out.stdout).contains("may run the following commands"))
 }
 

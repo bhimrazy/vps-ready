@@ -597,3 +597,103 @@ fn verify_checks_the_admins_own_connection() {
     );
     assert_eq!(SshServer.verify_timeout(), Duration::from_secs(10));
 }
+
+/// Any user the plan gives keys may confirm, so verify asks for each of
+/// them: a `Match User bob` that turns passwords back on fails it.
+#[test]
+fn verify_checks_every_admin() {
+    struct MatchBob;
+    impl Runner for MatchBob {
+        fn run(&self, cmd: &Cmd) -> Result<Output, SysError> {
+            let value = if cmd.args.iter().any(|a| a.starts_with("user=bob,")) {
+                "yes"
+            } else {
+                "no"
+            };
+            Ok(Output::success(format!("passwordauthentication {value}\n")))
+        }
+    }
+    let facts = facts();
+    let fs = fs().with_file(DROP_IN, "PasswordAuthentication no\n");
+    let keys = |user: &str| {
+        Resource::AuthorizedKeys(AuthorizedKeys {
+            user: user.into(),
+            keys: vec![KEY.into()],
+        })
+    };
+    let verify = |facts: &Facts, planned: &[Resource]| {
+        let cx = PlanCx {
+            facts,
+            params: &toml::Table::new(),
+            planned,
+        };
+        SshServer.verify(&cx, sys(&fs, &MatchBob))
+    };
+    assert_eq!(verify(&facts, &[keys("alice")]), Ok(()));
+    assert_eq!(
+        verify(&facts, &[keys("alice"), keys("bob")]),
+        Err(
+            "`sshd -T -C user=bob,host=192.0.2.10,addr=192.0.2.10` shows \
+             passwordauthentication yes, not no"
+                .to_owned()
+        )
+    );
+    // No admin in the plan: the session's user.
+    assert_eq!(verify(&facts, &[]), Ok(()));
+    let mut bob = facts.clone();
+    bob.session = Some(session("bob", 1001));
+    assert!(verify(&bob, &[]).is_err());
+}
+
+/// vps-ready reads only `authorized_keys`; the refusal says so when sshd
+/// also takes keys from a command or certificates from a CA.
+#[test]
+fn a_refusal_names_keys_it_cannot_check() {
+    let mut facts = facts();
+    let text = Host::new(&fs(), &facts)
+        .effective
+        .replace(
+            "authorizedkeyscommand none",
+            "authorizedkeyscommand /usr/bin/get-keys",
+        )
+        .replace(
+            "trustedusercakeys none",
+            "trustedusercakeys /etc/ssh/user_ca.pub",
+        );
+    facts.ssh.effective = Some(SshdConfig::parse(&text));
+    let no_key = FakeFs::new().with_file(SSHD_CONFIG, "Include /etc/ssh/sshd_config.d/*.conf\n");
+    let host = Host::new(&no_key, &facts);
+    let Err(ModuleError::Refused(why)) = steps(&facts, &[], &no_key, &host) else {
+        panic!("not refused");
+    };
+    assert!(
+        why.contains(
+            "(admin has no SSH key in authorized_keys, and vps-ready cannot check the keys \
+             sshd also takes through AuthorizedKeysCommand and TrustedUserCAKeys)"
+        ),
+        "{why}"
+    );
+}
+
+#[test]
+fn a_missing_sudo_is_a_refusal() {
+    struct NoSudo<'a>(Host<'a>);
+    impl Runner for NoSudo<'_> {
+        fn run(&self, cmd: &Cmd) -> Result<Output, SysError> {
+            if cmd.program == "sudo" {
+                return Err(SysError::NotFound("sudo".into()));
+            }
+            self.0.run(cmd)
+        }
+    }
+    let facts = facts();
+    let fs = fs();
+    let runner = NoSudo(Host::new(&fs, &facts));
+    match steps(&facts, &[], &fs, &runner) {
+        Err(ModuleError::Refused(why)) => assert_eq!(
+            why,
+            "sudo is not installed; install it with `apt-get install sudo` first"
+        ),
+        other => panic!("{other:?}"),
+    }
+}
