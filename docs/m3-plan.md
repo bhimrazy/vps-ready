@@ -1,6 +1,6 @@
 # M3 plan: dangerous modules and the dead-man switch (v0.3.0)
 
-> **Status: done.** Everything below shipped in v0.3.0 (PRs #46 to #58 and the release PR). The plan is kept as the design record; where the code differs, a note says so, and [the architecture doc](architecture.md) describes the code as it is.
+> **Status: done.** Everything below shipped in v0.3.0 (PRs #46 to #59 and #61). The plan is kept as the design record; where the code differs, a note says so, and [the architecture doc](architecture.md) describes the code as it is.
 
 M3 adds the modules that can lock someone out (`user.admin`, `ssh.server`, `firewall.inbound`), one that can annoy them (`ssh.bruteforce`), the dead-man switch and `confirm` that make the first three safe, the `minimal` and `web` profiles, and the `sshd-config` crate. It builds on the M2 engine as it is (see [the M2 plan](m2-plan.md)) and is the subset of [the architecture](architecture.md) these modules need; the rest waits (see [Deferred](#deferred-from-the-architecture)).
 
@@ -421,7 +421,7 @@ As shipped (see [the testing doc](testing.md#layer-3-real-vms-prs-touching-the-e
 
 Each PR leaves `main` releasable. Dangerous modules are registered only once the dead-man exists.
 
-As merged: 1 #46, 2 #48, 3 #49, 4 #51, 5 #50, 6 #54, 7 #59, 8 #52, 9 #56, 10 #58, 11 #57, 12 #55, 13 the release PR. Outside the sequence: #47 (`audit` lists only problems) and #53 (`RealFs` never follows a symlinked parent, found in the review of #51).
+As merged: 1 #46, 2 #48, 3 #49, 4 #51, 5 #50, 6 #54, 7 #59, 8 #52, 9 #56, 10 #58, 11 #57, 12 #55, 13 #61. Outside the sequence: #47 (`audit` lists only problems) and #53 (`RealFs` never follows a symlinked parent, found in the review of #51).
 
 1. **`docs: plan M3`** (this document).
 
