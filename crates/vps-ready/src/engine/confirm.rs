@@ -32,6 +32,20 @@ pub enum Refusal {
     /// A rollback of it has started.
     #[error("transaction {0} is being rolled back")]
     RollingBack(String),
+    /// A confirm wrote its `confirmed` line but not the state, so the
+    /// transaction counts as unfinished.
+    #[error(
+        "a confirm of transaction {0} was interrupted before it finished, so it is not \
+         confirmed; its timer reverts the changes"
+    )]
+    Interrupted(String),
+    /// No port sshd listens on is known, so a login through another sshd
+    /// could not be told apart.
+    #[error(
+        "cannot tell which ports sshd listens on: fix `sshd -T`, or roll back with \
+         `sudo vps-ready rollback --last`"
+    )]
+    PortsUnknown,
     /// Its deadline or its boot passed; its dead-man rollback is due.
     #[error("{}; its changes are being rolled back", expired(.txn, *.reason))]
     Expired {
@@ -159,7 +173,17 @@ impl Engine<'_> {
             state => return Err(Refusal::NotPending { txn: id, state }.into()),
         };
         if journal::is_unfinished(&records) {
-            return Err(Refusal::RollingBack(id).into());
+            let interrupted = records
+                .iter()
+                .rev()
+                .find(|r| !matches!(r.event, Event::Extended { .. }))
+                .is_some_and(|r| matches!(r.event, Event::Confirmed { .. }));
+            return Err(if interrupted {
+                Refusal::Interrupted(id)
+            } else {
+                Refusal::RollingBack(id)
+            }
+            .into());
         }
         if let Some(reason) = deadman::switch(&records).and_then(|s| s.expired(fs)) {
             return Err(Refusal::Expired { txn: id, reason }.into());
@@ -191,8 +215,8 @@ impl Engine<'_> {
     /// `session`, which must be a new SSH login: not the session that
     /// applied it, started after its changes went live, through one of
     /// `ports` (those the host's sshd listens on) or the port apply's
-    /// session came in on, and as one of the users the plan gave SSH keys,
-    /// if any. With no port known at all, the port is not checked.
+    /// session came in on, and as one of the users the plan named as
+    /// admins, if any. With no port known at all, it refuses.
     /// Journals `confirmed` and
     /// the state, and only then stops its timers and disables the boot hook,
     /// best effort: a timer or a hook that runs anyway finds it confirmed.
@@ -218,8 +242,11 @@ impl Engine<'_> {
         // The firewall always accepts the port apply's session came in on.
         let mut ports = ports.to_vec();
         ports.extend(w.ssh_port.filter(|p| !ports.contains(p)));
+        if ports.is_empty() {
+            return Err(Refusal::PortsUnknown.into());
+        }
         let port = session.server.port();
-        if !ports.is_empty() && !ports.contains(&port) {
+        if !ports.contains(&port) {
             return Err(Refusal::OtherSshd { port, ports }.into());
         }
         if !w.admins.is_empty() && !session.user.as_ref().is_some_and(|u| w.admins.contains(u)) {

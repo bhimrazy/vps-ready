@@ -30,11 +30,12 @@
 #       work and apply exited 1.
 #     edited: apply, edit the file during the window -> it is still reverted,
 #       and the edit is in files/1.during.
-#     confirm: over real SSH logins to the VM's own sshd (a key of the user,
-#       also authorized for root), confirm is refused from the applying
-#       session, from a session opened before apply and through a
-#       ControlMaster connection; `--extend` works from any session; a new
-#       login confirms, apply exits 0, the hook and timers are off.
+#     confirm: over real SSH logins as the cycle's user to the VM's own sshd,
+#       confirm is refused from the applying session, from a session opened
+#       before apply and through a ControlMaster connection; `--extend` works
+#       from any session; a new login confirms, apply exits 0, the hook and
+#       timers are off. (The admin and port rules are covered by unit tests;
+#       the admin rule gets a VM check with user.admin.)
 #     reboot: `systemd-analyze verify` of the boot hook finds no ordering
 #       cycle; apply, reboot during the window -> rolled back with
 #       deadman-reboot, and the hook finished before sshd started.
@@ -337,16 +338,12 @@ during=/var/lib/vps-ready/txn/$txn/files/1.during
 
 # Real SSH logins from inside the VM to its own sshd, for the session rules:
 # the connection the cycle drives the VM through may not be one (Lima's
-# shell uses vsock). With a key of the user's own, also authorized for root.
+# shell uses vsock). With a key of the user's own.
 echo "== $distro: SSH logins to localhost"
 user=$(vm id -un)
 vm 'test -f ~/.ssh/vr_local || ssh-keygen -q -t ed25519 -N "" -C vr-local -f ~/.ssh/vr_local'
 # shellcheck disable=SC2016 # expanded in the VM
 vm 'grep -qF "$(cat ~/.ssh/vr_local.pub)" ~/.ssh/authorized_keys || cat ~/.ssh/vr_local.pub >>~/.ssh/authorized_keys'
-# shellcheck disable=SC2016 # expanded in the VM
-vm 'sudo install -d -m 700 /root/.ssh && sudo touch /root/.ssh/authorized_keys &&
-  { sudo grep -qF "$(cat ~/.ssh/vr_local.pub)" /root/.ssh/authorized_keys ||
-    sudo tee -a /root/.ssh/authorized_keys <~/.ssh/vr_local.pub >/dev/null; }'
 vm 'cat >/tmp/vr-ssh' <<'SH'
 #!/bin/sh
 # ssh to this host's own sshd with the cycle's key; arguments as for ssh.
@@ -356,7 +353,6 @@ SH
 # local_ssh <ssh args...>: ssh from inside the VM to its own sshd.
 local_ssh() { vm sh /tmp/vr-ssh "$@"; }
 [ "$(local_ssh -o ControlPath=none "$user@127.0.0.1" id -un)" = "$user" ] || die "no SSH login to localhost as $user"
-[ "$(local_ssh -o ControlPath=none root@127.0.0.1 id -un)" = root ] || die "no SSH login to localhost as root"
 
 echo "== $distro: dead-man switch, confirm only from a new login"
 vm "rm -f /tmp/vr-go /tmp/vr-*.rc /tmp/vr-*.out /tmp/vr-cm"

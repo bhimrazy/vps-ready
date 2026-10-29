@@ -456,10 +456,11 @@ fn confirm_refuses_a_login_other_than_the_admin() {
     apply_lockout(&host);
     let txn = txn_ids(&fs).pop().unwrap();
     let path = PathBuf::from(format!("{STATE}/txn/{txn}/journal.jsonl"));
-    let text = String::from_utf8(fs.read(&path).unwrap()).unwrap().replace(
-        "\"state\":\"pending-confirm\",",
-        "\"state\":\"pending-confirm\",\"admins\":[\"deploy\"],",
-    );
+    // Journaled as the applying user, `admin`; as if the plan gave keys to
+    // `deploy` instead.
+    let text = String::from_utf8(fs.read(&path).unwrap())
+        .unwrap()
+        .replace(r#""admins":["admin"]"#, r#""admins":["deploy"]"#);
     fs.write(&path, text.as_bytes()).unwrap();
     set_uptime(&fs, 1100);
     let new = Host {

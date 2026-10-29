@@ -8,7 +8,7 @@ use serde::Serialize;
 use super::{EngineError, Reload};
 use crate::facts::Facts;
 use crate::modules::{Applicability, Module, ModuleSteps, PlanCx};
-use crate::resource::{Change, Resource};
+use crate::resource::{Change, Resource, keyed_users};
 use crate::sys::Sys;
 
 /// A module to plan, with its params.
@@ -57,6 +57,9 @@ pub struct ModulePlan<'a> {
     pub notes: Vec<String>,
     #[serde(skip)]
     pub(super) selected: Selected<'a>,
+    /// [`keyed_users`] of all its desired resources, changed or not.
+    #[serde(skip)]
+    pub(super) keyed: Vec<String>,
 }
 
 impl fmt::Debug for ModulePlan<'_> {
@@ -107,11 +110,29 @@ impl Plan<'_> {
         self.modules.iter().flat_map(|m| m.changes())
     }
 
-    /// The users other than root its steps give SSH keys: who must log in
-    /// to confirm it.
+    /// Who must log in to confirm it: the users other than root that its
+    /// modules give SSH keys, whether or not those keys change now (an
+    /// admin set up by an earlier apply still counts). If there are none
+    /// and it needs the dead-man switch, the user of the session applying
+    /// it, unless that is root. Empty means any user.
     #[must_use]
     pub fn admins(&self) -> Vec<String> {
-        crate::resource::keyed_users(self.steps().map(|s| &s.resource))
+        let mut admins: Vec<String> = Vec::new();
+        for user in self.modules.iter().flat_map(|m| &m.keyed) {
+            if !admins.contains(user) {
+                admins.push(user.clone());
+            }
+        }
+        if admins.is_empty() && self.needs_deadman() {
+            admins.extend(
+                self.facts
+                    .session
+                    .as_ref()
+                    .and_then(|s| s.user.clone())
+                    .filter(|u| u != "root"),
+            );
+        }
+        admins
     }
 
     /// The IDs of the modules with at least one change.
@@ -189,6 +210,7 @@ pub fn plan<'a>(
     for &selected in modules {
         let module = selected.module;
         let mut notes = Vec::new();
+        let mut keyed = Vec::new();
         let status = match module.applicable(facts) {
             Applicability::NotApplicable { reason } => ModuleStatus::NotApplicable { reason },
             Applicability::Applicable => {
@@ -206,6 +228,7 @@ pub fn plan<'a>(
                         module: module.id(),
                         source,
                     })?;
+                keyed = keyed_users(&resources);
                 let mut changes = Vec::new();
                 for resource in resources {
                     let change = resource.diff(sys).map_err(|source| EngineError::Resource {
@@ -228,6 +251,7 @@ pub fn plan<'a>(
             status,
             notes,
             selected,
+            keyed,
         });
     }
     Ok(Plan {

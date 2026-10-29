@@ -139,8 +139,15 @@ pub(super) fn wait(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> anyhow::Result<u8> {
-    if host.catch_sigint {
-        signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&host.stop))?;
+    if host.catch_sigint
+        && let Err(e) =
+            signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&host.stop))
+    {
+        writeln!(
+            err,
+            "vps-ready: cannot catch Ctrl-C ({e}); it ends this wait, and the timer still \
+             reverts the changes unless confirmed"
+        )?;
     }
     let fs = host.sys.fs;
     let mut minute = None;

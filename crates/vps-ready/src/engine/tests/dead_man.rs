@@ -209,7 +209,7 @@ fn arms_before_the_first_change_and_waits_for_a_confirm() {
                 session: Some(session),
             },
             unit: Some(unit(2)),
-            admins: Vec::new(),
+            admins: vec!["admin".into()],
             ssh_port: Some(22),
         }
     );

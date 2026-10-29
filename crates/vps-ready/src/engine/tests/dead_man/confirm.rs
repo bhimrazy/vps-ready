@@ -171,15 +171,14 @@ fn only_a_new_login_through_the_hosts_sshd_confirms() {
         .unwrap();
 }
 
-/// Rewrites the `state pending-confirm` record of `txn` with `fields`
-/// (JSON members) added, as a plan with an admin or no session writes it.
-fn with_pending_fields(fs: &FakeFs, txn: &str, fields: &str) {
+/// Rewrites the admins of the `state pending-confirm` record of `txn`,
+/// which [`applied`] journals as `["admin"]` (its session's user), to the
+/// JSON array `admins`.
+fn with_admins(fs: &FakeFs, txn: &str, admins: &str) {
     let path = PathBuf::from(format!("{STATE}/txn/{txn}/journal.jsonl"));
     let text = String::from_utf8(fs.read(&path).unwrap()).unwrap();
-    let text = text.replace(
-        "\"state\":\"pending-confirm\",",
-        &format!("\"state\":\"pending-confirm\",{fields}"),
-    );
+    assert!(text.contains(r#""admins":["admin"]"#), "{text}");
+    let text = text.replace(r#""admins":["admin"]"#, &format!(r#""admins":{admins}"#));
     fs.write(&path, text.as_bytes()).unwrap();
 }
 
@@ -187,7 +186,7 @@ fn with_pending_fields(fs: &FakeFs, txn: &str, fields: &str) {
 fn only_the_admins_the_plan_gave_keys_confirm() {
     let fs = armable();
     let txn = applied(&fs);
-    with_pending_fields(&fs, &txn, r#""admins":["admin","deploy"],"#);
+    with_admins(&fs, &txn, r#"["admin","deploy"]"#);
     set_uptime(&fs, 1100);
     let ubuntu = Session {
         user: Some("ubuntu".into()),
@@ -228,7 +227,7 @@ fn only_the_admins_the_plan_gave_keys_confirm() {
 }
 
 #[test]
-fn with_no_port_known_the_port_is_not_checked() {
+fn with_no_port_known_a_confirm_is_refused() {
     let fs = armable();
     // Applied with no session, so no port is journaled.
     let [lock, ..] = locking();
@@ -236,11 +235,118 @@ fn with_no_port_known_the_port_is_not_checked() {
     let plan = plan_of(&fs, &facts, &[&lock]);
     let (txn, _) = pending(&fs, &plan);
     set_uptime(&fs, 1100);
-    let rescue = Session {
-        server: SocketAddr::from(([203, 0, 113, 10], 2222)),
-        ..login(951, 1050)
+    let err = refusal(confirm_ports(&fs, &login(951, 1050), &[]));
+    assert_eq!(err, Refusal::PortsUnknown);
+    assert_eq!(
+        err.to_string(),
+        "cannot tell which ports sshd listens on: fix `sshd -T`, or roll back with \
+         `sudo vps-ready rollback --last`"
+    );
+    assert_eq!(confirm_ports(&fs, &login(951, 1050), &[22]).unwrap(), txn);
+}
+
+#[test]
+fn an_interrupted_confirm_says_so() {
+    let fs = armable();
+    let txn = applied(&fs);
+    set_uptime(&fs, 1100);
+    let path = PathBuf::from(format!("{STATE}/txn/{txn}/journal.jsonl"));
+    fs.append_sync(
+        &path,
+        br#"{"at":1,"event":"confirmed","session":{"pid":951,"start":105000},"user":"admin","client":"198.51.100.7"}
+"#,
+    )
+    .unwrap();
+    let err = refusal(confirm(&fs, &dm_runner(), None, &login(952, 1050)));
+    assert_eq!(err, Refusal::Interrupted(txn.clone()));
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "a confirm of transaction {txn} was interrupted before it finished, so it is not \
+             confirmed; its timer reverts the changes"
+        )
+    );
+}
+
+/// The admins of a plan: the users its modules give keys, changed or not;
+/// else, with the dead-man switch, the applying session's user unless root.
+#[test]
+fn admins_are_the_keyed_users_else_the_applying_user() {
+    const KEY: &str = "ssh-ed25519 AAAA k";
+    let admin = FileOwner {
+        mode: 0o700,
+        uid: 1001,
+        gid: 1001,
     };
-    assert_eq!(confirm_ports(&fs, &rescue, &[]).unwrap(), txn);
+    // `admin`'s key is already in place, from an earlier apply.
+    let fs = armable().with_dir("/home/admin/.ssh", admin).with_dir(
+        "/root",
+        FileOwner {
+            uid: 0,
+            gid: 0,
+            ..admin
+        },
+    );
+    fs.write_atomic(
+        Path::new("/home/admin/.ssh/authorized_keys"),
+        format!("{KEY}\n").as_bytes(),
+        FileOwner {
+            mode: 0o600,
+            ..admin
+        },
+    )
+    .unwrap();
+    let runner = FakeRunner::new()
+        .on(
+            "getent",
+            ["passwd", "admin"],
+            Output::success("admin:x:1001:1001::/home/admin:/bin/bash\n"),
+        )
+        .on(
+            "getent",
+            ["passwd", "root"],
+            Output::success("root:x:0:0:root:/root:/bin/bash\n"),
+        );
+    let keys = |user: &str| {
+        Resource::AuthorizedKeys(crate::resource::AuthorizedKeys {
+            user: user.into(),
+            keys: vec![KEY.into()],
+        })
+    };
+    let session = |user: &str| Session {
+        user: Some(user.into()),
+        ..login(812, 900)
+    };
+    let mut facts = facts();
+    let plan_with = |facts: &Facts, modules: &[&dyn Module]| {
+        let selected: Vec<Selected> = modules.iter().map(|m| Selected::new(*m)).collect();
+        plan(
+            &selected,
+            facts,
+            Sys {
+                fs: &fs,
+                runner: &runner,
+            },
+        )
+        .unwrap()
+        .admins()
+    };
+    let [lock, _, plain] = locking();
+    let user_admin = module("test.admin", vec![keys("admin")]);
+    let root_keys = module("test.root", vec![keys("root")]);
+
+    facts.session = Some(session("ubuntu"));
+    // An admin module with no change still names its user.
+    assert_eq!(plan_with(&facts, &[&user_admin, &lock]), ["admin"]);
+    // Root's keys do not count; then the applying user does.
+    assert_eq!(plan_with(&facts, &[&root_keys, &lock]), ["ubuntu"]);
+    facts.session = Some(session("root"));
+    assert!(plan_with(&facts, &[&lock]).is_empty());
+    facts.session = None;
+    assert!(plan_with(&facts, &[&lock]).is_empty());
+    // Without the dead-man switch, no fallback.
+    facts.session = Some(session("ubuntu"));
+    assert!(plan_with(&facts, &[&plain]).is_empty());
 }
 
 fn confirm_ports(fs: &FakeFs, session: &Session, ports: &[u16]) -> Result<String, EngineError> {
