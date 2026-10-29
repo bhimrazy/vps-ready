@@ -70,7 +70,7 @@ fn timer(fs: &dyn Fs, runner: &FakeRunner, txn: &str) -> Result<DeadmanOutcome, 
 
 fn boot_hook(fs: &dyn Fs, runner: &FakeRunner) -> Result<Vec<Rollback>, EngineError> {
     let state = state(fs);
-    Engine::lock(&state, Sys { fs, runner })?.deadman_boot(&mut |_| {})
+    Engine::lock(&state, Sys { fs, runner })?.deadman_boot(Path::new(BIN), &mut |_| {})
 }
 
 fn manual(fs: &dyn Fs, runner: &FakeRunner) -> Result<Rollback, EngineError> {
@@ -209,6 +209,8 @@ fn arms_before_the_first_change_and_waits_for_a_confirm() {
                 session: Some(session),
             },
             unit: Some(unit(2)),
+            admins: vec!["admin".into()],
+            ssh_port: Some(22),
         }
     );
 
@@ -1151,3 +1153,5 @@ fn the_first_deadline_covers_package_installs_and_verify_probes() {
         calls(&run)
     );
 }
+
+mod confirm;

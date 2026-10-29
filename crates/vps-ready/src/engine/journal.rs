@@ -122,6 +122,14 @@ pub enum Event {
         /// The dead-man unit armed for it; only with `pending-confirm`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         unit: Option<String>,
+        /// The users a confirm must log in as: those the plan gave SSH
+        /// keys. Only with `pending-confirm`; empty means any user.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        admins: Vec<String>,
+        /// The server port of the SSH session apply ran in. Only with
+        /// `pending-confirm`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssh_port: Option<u16>,
     },
 }
 
@@ -149,7 +157,12 @@ impl Event {
     /// A `state` record without a unit.
     #[must_use]
     pub fn state(state: TxnState) -> Self {
-        Self::State { state, unit: None }
+        Self::State {
+            state,
+            unit: None,
+            admins: Vec::new(),
+            ssh_port: None,
+        }
     }
 }
 
@@ -346,13 +359,16 @@ pub fn replay(records: &[Record]) -> Result<TxnState, EngineError> {
     Ok(state.unwrap_or(TxnState::Planned))
 }
 
-/// Whether there are records and the last is not a `state` record: the
-/// transaction stopped during an apply or a rollback. A transaction with no
-/// records changed nothing.
+/// Whether there are records and the last one other than `extended` is
+/// not a `state` record: the transaction stopped during an apply or a
+/// rollback. `extended` only moves the deadline of a pending one. A
+/// transaction with no records changed nothing.
 #[must_use]
 pub fn is_unfinished(records: &[Record]) -> bool {
     records
-        .last()
+        .iter()
+        .rev()
+        .find(|r| !matches!(r.event, Event::Extended { .. }))
         .is_some_and(|r| !matches!(r.event, Event::State { .. }))
 }
 
@@ -537,8 +553,10 @@ mod tests {
             line(Event::State {
                 state: pending(),
                 unit: Some("vps-ready-deadman-20261025T120000Z-2".into()),
+                admins: vec!["admin".into()],
+                ssh_port: Some(22),
             }),
-            r#"{"at":7,"event":"state","state":"pending-confirm","deadline":{"boottime":1575,"wall":1792932341},"live_since":1275,"session":{"pid":812,"start":10433},"unit":"vps-ready-deadman-20261025T120000Z-2"}"#
+            r#"{"at":7,"event":"state","state":"pending-confirm","deadline":{"boottime":1575,"wall":1792932341},"live_since":1275,"session":{"pid":812,"start":10433},"unit":"vps-ready-deadman-20261025T120000Z-2","admins":["admin"],"ssh_port":22}"#
         );
         assert_eq!(
             line(extended(1934)),
@@ -608,6 +626,8 @@ mod tests {
                 rec(Event::State {
                     state: pending(),
                     unit: Some("u".into()),
+                    admins: Vec::new(),
+                    ssh_port: None,
                 }),
                 rec(state(TxnState::PendingConfirm {
                     deadline: DEADLINE,
@@ -717,6 +737,8 @@ mod tests {
             rec(Event::State {
                 state: pending(),
                 unit: Some("u-2".into()),
+                admins: Vec::new(),
+                ssh_port: None,
             }),
         ];
         assert_eq!(replay(&pending_txn).unwrap(), pending());
@@ -981,6 +1003,21 @@ mod tests {
         let started = rec(Event::Rollback {
             reason: RollbackReason::Manual,
         });
-        assert!(is_unfinished(&[&done[..], &[started]].concat()));
+        assert!(is_unfinished(
+            &[&done[..], std::slice::from_ref(&started)].concat()
+        ));
+
+        // A moved deadline leaves a pending transaction finished; a
+        // `confirmed` without its state does not.
+        let pending_txn = [rec(begin()), rec(armed()), rec(state(pending()))];
+        let moved = [&pending_txn[..], &[rec(extended(9)), rec(extended(10))]].concat();
+        assert!(!is_unfinished(&moved));
+        assert!(is_unfinished(&[&moved[..], &[rec(confirmed())]].concat()));
+        assert!(is_unfinished(
+            &[&moved[..], std::slice::from_ref(&started)].concat()
+        ));
+        assert!(is_unfinished(
+            &[&pending_txn[..], &[started, rec(extended(9))]].concat()
+        ));
     }
 }

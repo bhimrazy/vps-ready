@@ -423,6 +423,8 @@ mod tests {
                 at: 2,
                 event: Event::State {
                     unit: None,
+                    admins: Vec::new(),
+                    ssh_port: None,
                     state: TxnState::Applied,
                 },
             },

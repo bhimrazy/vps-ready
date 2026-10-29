@@ -416,6 +416,22 @@ impl From<FileCopy> for FileOwner {
     }
 }
 
+/// The users other than root that `resources` give a non-empty
+/// `authorized_keys`, in order, each once.
+pub fn keyed_users<'a>(resources: impl IntoIterator<Item = &'a Resource>) -> Vec<String> {
+    let mut users: Vec<String> = Vec::new();
+    for resource in resources {
+        if let Resource::AuthorizedKeys(keys) = resource
+            && !keys.keys.is_empty()
+            && keys.user != "root"
+            && !users.contains(&keys.user)
+        {
+            users.push(keys.user.clone());
+        }
+    }
+    users
+}
+
 /// Where the original bytes of backed-up file `n` are kept: `files/<n>.before`.
 #[must_use]
 pub fn before_path(txn_dir: &Path, n: u32) -> PathBuf {
@@ -517,6 +533,30 @@ fn test_sys(fs: &dyn crate::sys::Fs) -> Sys<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keyed_users_are_those_given_keys_other_than_root() {
+        let keys = |user: &str, keys: &[&str]| {
+            Resource::AuthorizedKeys(AuthorizedKeys {
+                user: user.into(),
+                keys: keys.iter().map(|k| (*k).to_owned()).collect(),
+            })
+        };
+        let resources = [
+            Resource::User(User {
+                name: "nokeys".into(),
+                groups: Vec::new(),
+                password: Password::Locked,
+            }),
+            keys("root", &["ssh-ed25519 AAAA root"]),
+            keys("empty", &[]),
+            keys("admin", &["ssh-ed25519 AAAA a"]),
+            keys("deploy", &["ssh-ed25519 AAAA d"]),
+            keys("admin", &["ssh-ed25519 AAAA b"]),
+        ];
+        assert_eq!(keyed_users(&resources), ["admin", "deploy"]);
+        assert!(keyed_users(&[]).is_empty());
+    }
 
     #[test]
     fn backup_json_shape() {
