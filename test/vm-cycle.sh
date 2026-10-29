@@ -24,19 +24,29 @@
 #     --last -> the apt.conf.d files match their state before.
 #   The dead-man switch, with the test module `test.deadman` (the binary must
 #   be built with `--features testing`) and `--deadman 1m`:
+#     apply runs in the background, since it waits for a confirm.
 #     timeout: apply, do not confirm -> within the deadline + 10 s the file is
-#       gone, the reason is deadman-timeout, the boot hook is disabled and
-#       logins work.
+#       gone, the reason is deadman-timeout, the boot hook is disabled, logins
+#       work and apply exited 1.
 #     edited: apply, edit the file during the window -> it is still reverted,
 #       and the edit is in files/1.during.
+#     confirm: over real SSH logins as the cycle's user to the VM's own sshd,
+#       confirm is refused from the applying session, from a session opened
+#       before apply and through a ControlMaster connection; `--extend` works
+#       from any session; a new login confirms, apply exits 0, the hook and
+#       timers are off. (The admin and port rules are covered by unit tests;
+#       the admin rule gets a VM check with user.admin.)
 #     reboot: `systemd-analyze verify` of the boot hook finds no ordering
 #       cycle; apply, reboot during the window -> rolled back with
 #       deadman-reboot, and the hook finished before sshd started.
-#   ssh.server with `--deadman 1m`, not confirmed: root (given the user's
-#     key) logs in before apply; during the window a new root login is
-#     refused (the reload reached new connections, also through ssh.socket)
-#     and the user's login works; the drop-in is edited -> at the deadline it
-#     is gone, the edit is in files/1.during, and root logs in again.
+#   ssh.server, applied and confirmed from real logins to the VM's own sshd:
+#     profile minimal with a new admin: during the window a new root login
+#     is refused and sshd offers no password method -> confirm as the admin
+#     -> the ssh.server controls pass and the plan is empty -> rollback
+#     removes the drop-in and the admin, and root logs in again.
+#     --module ssh.server, not confirmed: a new root login is refused (the
+#     reload reached new logins, also through ssh.socket); the drop-in is
+#     edited -> at the deadline it is gone and the edit is in files/1.during.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -267,15 +277,34 @@ vm "cd $apt_conf && test ! -e 52vps-ready && sha256sum -c --quiet /tmp/apt-befor
 deadman_file=/etc/vps-ready-deadman-test.conf
 hook=vps-ready-deadman.service
 
-# Applies test.deadman with a 1-minute window; it exits 4, still pending.
+# expect_pending: waits until the newest transaction waits for a confirm.
+expect_pending() {
+  i=0
+  until vr history --json >"$tmp/history.json" && jq -e '.[0].state == "pending-confirm"' "$tmp/history.json" >/dev/null; do
+    i=$((i + 1)); [ "$i" -le 60 ] || { vr history; die "not pending within 60 s"; }
+    sleep 1
+  done
+  txn=$(jq -r '.[0].id' "$tmp/history.json")
+}
+
+# Applies test.deadman with a 1-minute window in the background: apply
+# waits for a confirm, and its exit code lands in /tmp/vr-apply.rc.
 apply_deadman() {
   vm test ! -e "$deadman_file" || die "$deadman_file exists before apply"
-  rc=0; vr apply --yes --module test.deadman --deadman 1m || rc=$?
-  [ "$rc" -eq 4 ] || die "apply exited $rc, expected 4 (pending)"
-  expect_newest pending-confirm
+  vm "rm -f /tmp/vr-apply.rc; setsid -f sh -c 'sudo vps-ready apply --yes --module test.deadman --deadman 1m >/tmp/vr-apply.out 2>&1; echo \$? >/tmp/vr-apply.rc' </dev/null >/dev/null 2>&1"
+  expect_pending
   vm test -e "$deadman_file" || die "$deadman_file is missing after apply"
   [ "$(vm systemctl is-enabled "$hook")" = enabled ] || die "$hook is not enabled"
-  txn=$(jq -r '.[0].id' "$tmp/history.json")
+}
+
+# expect_rc <file> <code>: waits up to 30 s for the exit code in <file>.
+expect_rc() {
+  i=0
+  until rc=$(vm cat "$1" 2>/dev/null) && [ -n "$rc" ]; do
+    i=$((i + 1)); [ "$i" -le 30 ] || die "no exit code in $1 after 30 s"
+    sleep 1
+  done
+  [ "$rc" -eq "$2" ] || { vm cat "${1%.rc}.out" || true; die "$1 is $rc, expected $2"; }
 }
 
 # expect_reverted <reason>: the newest transaction was rolled back for it,
@@ -302,6 +331,8 @@ echo "== $distro: dead-man switch, timeout"
 apply_deadman
 wait_deadman
 expect_reverted deadman-timeout
+# apply saw the rollback while it waited.
+expect_rc /tmp/vr-apply.rc 1
 vm true || die "no login after the dead-man rollback"
 
 echo "== $distro: dead-man switch, edited during the window"
@@ -309,8 +340,85 @@ apply_deadman
 vm "echo edited during the window | sudo tee $deadman_file >/dev/null"
 wait_deadman
 expect_reverted deadman-timeout
+expect_rc /tmp/vr-apply.rc 1
 during=/var/lib/vps-ready/txn/$txn/files/1.during
 [ "$(vm sudo cat "$during")" = "edited during the window" ] || die "$during does not hold the edit"
+
+# Real SSH logins from inside the VM to its own sshd, for the session rules:
+# the connection the cycle drives the VM through may not be one (Lima's
+# shell uses vsock). With a key of the user's own.
+echo "== $distro: SSH logins to localhost"
+user=$(vm id -un)
+vm 'test -f ~/.ssh/vr_local || ssh-keygen -q -t ed25519 -N "" -C vr-local -f ~/.ssh/vr_local'
+# shellcheck disable=SC2016 # expanded in the VM
+vm 'grep -qF "$(cat ~/.ssh/vr_local.pub)" ~/.ssh/authorized_keys || cat ~/.ssh/vr_local.pub >>~/.ssh/authorized_keys'
+vm 'cat >/tmp/vr-ssh' <<'SH'
+#!/bin/sh
+# ssh to this host's own sshd with the cycle's key; arguments as for ssh.
+exec ssh -i "$HOME/.ssh/vr_local" -o BatchMode=yes -o IdentitiesOnly=yes \
+  -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -p 22 "$@"
+SH
+# local_ssh <ssh args...>: ssh from inside the VM to its own sshd.
+local_ssh() { vm sh /tmp/vr-ssh "$@"; }
+[ "$(local_ssh -o ControlPath=none "$user@127.0.0.1" id -un)" = "$user" ] || die "no SSH login to localhost as $user"
+
+echo "== $distro: dead-man switch, confirm only from a new login"
+vm "rm -f /tmp/vr-go /tmp/vr-*.rc /tmp/vr-*.out /tmp/vr-cm"
+# Opened before apply: a ControlMaster connection, and a session that runs
+# confirm once /tmp/vr-go exists.
+vm "sh /tmp/vr-ssh -o ControlMaster=yes -o ControlPath=/tmp/vr-cm -o ControlPersist=600 -fN $user@127.0.0.1 </dev/null >/dev/null 2>&1" ||
+  die "no ControlMaster connection"
+vm 'cat >/tmp/vr-old.sh' <<'SH'
+sh /tmp/vr-ssh -o ControlPath=none "$1@127.0.0.1" \
+  'while [ ! -e /tmp/vr-go ]; do sleep 1; done; sudo vps-ready confirm >/tmp/vr-old.out 2>&1; echo $? >/tmp/vr-old.rc'
+SH
+vm "setsid -f sh /tmp/vr-old.sh $user </dev/null >/dev/null 2>&1"
+# The applying session: apply in the background, then confirm from the same
+# login once it is pending. apply's exit code lands in /tmp/vr-apply.rc.
+vm 'cat >/tmp/vr-apply.sh' <<'SH'
+sh /tmp/vr-ssh -o ControlPath=none "$1@127.0.0.1" '
+  sudo vps-ready apply --yes --module test.deadman --deadman 2m >/tmp/vr-apply.out 2>&1 &
+  until sudo vps-ready history --json | grep -q pending-confirm; do sleep 1; done
+  sudo vps-ready confirm >/tmp/vr-same.out 2>&1; echo $? >/tmp/vr-same.rc
+  wait $!; echo $? >/tmp/vr-apply.rc'
+SH
+vm test ! -e "$deadman_file" || die "$deadman_file exists before apply"
+vm "setsid -f sh /tmp/vr-apply.sh $user </dev/null >/dev/null 2>&1"
+expect_pending
+
+expect_rc /tmp/vr-same.rc 2
+vm cat /tmp/vr-same.out
+vm grep -q "'this is the SSH session that applied the changes'" /tmp/vr-same.out ||
+  die "the applying session was not refused as the same session"
+vm touch /tmp/vr-go
+expect_rc /tmp/vr-old.rc 2
+vm cat /tmp/vr-old.out
+vm grep -q "'started before the changes went live'" /tmp/vr-old.out ||
+  die "the session opened before apply was not refused as old"
+rc=0; local_ssh -o ControlPath=/tmp/vr-cm "$user@127.0.0.1" sudo vps-ready confirm >"$tmp/cm.out" 2>&1 || rc=$?
+cat "$tmp/cm.out"
+[ "$rc" -eq 2 ] || die "confirm through ControlMaster exited $rc, expected 2"
+grep -q 'started before the changes went live' "$tmp/cm.out" ||
+  die "the ControlMaster connection was not refused as old"
+expect_newest pending-confirm
+
+# --extend works from any session.
+rc=0; vr confirm --extend 3m || rc=$?
+[ "$rc" -eq 0 ] || die "confirm --extend exited $rc, expected 0"
+vr history
+
+rc=0; local_ssh -o ControlPath=none "$user@127.0.0.1" sudo vps-ready confirm || rc=$?
+[ "$rc" -eq 0 ] || die "confirm from a new login exited $rc, expected 0"
+expect_newest confirmed
+expect_rc /tmp/vr-apply.rc 0
+vm test -e "$deadman_file" || die "$deadman_file is gone after the confirm"
+[ "$(vm systemctl is-enabled "$hook" || true)" = disabled ] || die "$hook is still enabled after the confirm"
+units=$(vm "systemctl list-units --all --plain --no-legend 'vps-ready-deadman-$txn-*'" | grep -v ' inactive ' || true)
+[ -z "$units" ] || { echo "$units"; die "a dead-man unit is still active after the confirm"; }
+local_ssh -o ControlPath=/tmp/vr-cm -O exit "$user@127.0.0.1" 2>/dev/null || true
+rc=0; vr rollback --last || rc=$?
+[ "$rc" -eq 0 ] || die "rollback of the confirmed transaction exited $rc, expected 0"
+vm test ! -e "$deadman_file" || die "$deadman_file still exists after rollback"
 
 echo "== $distro: dead-man switch, reboot during the window"
 # The hook unit exists from the first apply. No ordering cycle may be found:
@@ -339,29 +447,66 @@ echo "$hook finished at $done_at us, sshd's first unit started at $first us"
 vm sudo journalctl -b -u "$hook" --no-pager | tail -n 20
 
 ssh_dropin=/etc/ssh/sshd_config.d/00-vps-ready.conf
-# Logs in as root over a new connection, with the same key.
-root_login() {
-  ssh -F "$sshcfg" -o BatchMode=yes -o ConnectTimeout=5 -l root vm true 2>/dev/null
+admin=vradmin
+# Root gets the cycle's key, so a new login shows whether sshd reloaded.
+vm 'sudo install -d -m 700 /root/.ssh && sudo install -m 600 ~/.ssh/vr_local.pub /root/.ssh/authorized_keys'
+root_login() { local_ssh -o ControlPath=none root@127.0.0.1 true 2>/dev/null; }
+# A login that offers only passwords; sshd lists the methods it accepts.
+password_methods() {
+  local_ssh -o ControlPath=none -o PubkeyAuthentication=no \
+    -o PreferredAuthentications=password,keyboard-interactive "$user@127.0.0.1" true 2>&1 | tail -n 1 || true
+}
+# apply_session <args>: runs `vps-ready apply --yes <args>` from a new login
+# as the user, in the background; its exit code lands in /tmp/vr-apply.rc.
+apply_session() {
+  vm "rm -f /tmp/vr-apply.rc; setsid -f sh -c 'sh /tmp/vr-ssh -o ControlPath=none $user@127.0.0.1 sudo vps-ready apply --yes $* >/tmp/vr-apply.out 2>&1; echo \$? >/tmp/vr-apply.rc' </dev/null >/dev/null 2>&1"
+  expect_pending
 }
 
-echo "== $distro: ssh.server, edited during the window and not confirmed"
-# Root's key lets a new connection show whether sshd reloaded the drop-in.
-vm "sudo install -d -m 700 /root/.ssh && sudo install -m 600 ~/.ssh/authorized_keys /root/.ssh/authorized_keys"
+echo "== $distro: profile minimal, confirmed by the new admin"
 root_login || die "root cannot log in before apply"
 vm test ! -e "$ssh_dropin" || die "$ssh_dropin exists before apply"
-rc=0; vr apply --yes --module ssh.server --deadman 1m || rc=$?
-[ "$rc" -eq 4 ] || die "apply exited $rc, expected 4 (pending)"
-expect_newest pending-confirm
-txn=$(jq -r '.[0].id' "$tmp/history.json")
+printf 'schema = 1\nextends = "minimal"\n[modules."user.admin"]\nname = "%s"\n' "$admin" | vm 'cat >/tmp/vr-minimal.toml'
+apply_session --profile /tmp/vr-minimal.toml --deadman 2m
+vm cat "$ssh_dropin"
+! root_login || die "root still logs in over a new login during the window"
+password_methods
+! password_methods | grep -q password || die "sshd still offers password logins"
+rc=0; local_ssh -o ControlPath=none "$admin@127.0.0.1" sudo vps-ready confirm || rc=$?
+[ "$rc" -eq 0 ] || die "confirm as $admin exited $rc, expected 0"
+expect_newest confirmed
+expect_rc /tmp/vr-apply.rc 0
+rc=0; vr audit --json >"$tmp/audit.json" || rc=$?
+[ "$rc" -le 1 ] || die "audit exited $rc, expected 0 or 1"
+jq -r '.findings[] | select(.fix == "ssh.server") | "\(.id) \(.status)"' "$tmp/audit.json"
+jq -e '[.findings[] | select(.fix == "ssh.server" and .status != "pass")] | length == 0' \
+  "$tmp/audit.json" >/dev/null || die "an ssh.server control does not pass after the confirm"
+expect_empty_plan ssh.server
+! root_login || die "root logs in after the confirm"
+# `userdel` fails while the admin has processes, e.g. its systemd --user.
+i=0
+while vm pgrep -u "$admin" >/dev/null; do
+  i=$((i + 1)); [ "$i" -le 30 ] || die "$admin still has processes after 30 s"
+  sleep 1
+done
+rc=0; vr rollback --last || rc=$?
+[ "$rc" -eq 0 ] || die "rollback of the confirmed transaction exited $rc, expected 0"
+vm test ! -e "$ssh_dropin" || die "$ssh_dropin still exists after rollback"
+! vm id "$admin" >/dev/null 2>&1 || die "$admin still exists after rollback"
+root_login || die "root cannot log in after the rollback"
+
+echo "== $distro: ssh.server, edited during the window and not confirmed"
+apply_session --module ssh.server --deadman 1m
 vm cat "$ssh_dropin"
 [ "$(vm sudo sshd -T | awk '$1 == "permitrootlogin" { print $2 }')" = no ] ||
   die "sshd -T does not show permitrootlogin no"
-# The reload reaches new connections (with ssh.socket too); this one stays.
-! root_login || die "root still logs in over a new connection"
-vm true || die "the admin cannot log in during the window"
+# The reload reaches new logins (with ssh.socket too); open ones stay.
+! root_login || die "root still logs in over a new login"
+vm true || die "the open connection was cut"
 vm "echo 'PermitRootLogin yes' | sudo tee $ssh_dropin >/dev/null"
 wait_deadman
 expect_reverted deadman-timeout
+expect_rc /tmp/vr-apply.rc 1
 vm test ! -e "$ssh_dropin" || die "$ssh_dropin still exists"
 during=/var/lib/vps-ready/txn/$txn/files/1.during
 [ "$(vm sudo cat "$during")" = "PermitRootLogin yes" ] || die "$during does not hold the edit"

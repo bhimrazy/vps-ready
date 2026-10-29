@@ -60,6 +60,7 @@ impl Module for Demo {
         Ok(ModuleSteps {
             resources: self.resources.clone(),
             reloads: self.reloads.clone(),
+            notes: Vec::new(),
         })
     }
     fn verify(&self, _: &PlanCx, _: Sys) -> Result<(), String> {
@@ -1283,3 +1284,4 @@ fn rollback_checks_and_restores_authorized_keys() {
 }
 
 mod dead_man;
+mod manual;

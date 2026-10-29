@@ -432,7 +432,7 @@ fn refuses_to_lock_out_without_a_keyed_sudo_user() {
     assert!(
         refused(&facts, &[keys], &fs, vec![])
             .unwrap()
-            .contains("(deploy gets SSH keys from this plan but no sudo; there is no SSH session")
+            .ends_with("(deploy gets SSH keys from this plan but no sudo). Set one up with the user.admin module, or log in as such a user and run vps-ready with sudo")
     );
 
     // X11 forwarding alone needs no admin.

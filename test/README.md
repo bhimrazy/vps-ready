@@ -35,6 +35,11 @@ match their state before. It needs network access for `apt-get`.
 `test/container-bruteforce.sh <distro> [binary]` runs the same kind of cycle
 for `ssh.bruteforce`: the jail runs, reads the journal and bans into
 nftables, `SSH-008` passes, and rollback removes the drop-in.
+`test/container-admin.sh <distro> [binary]` runs `user.admin`: apply waits
+for a confirm, a new login as another sudo user cannot confirm, a new login as
+the admin (with the key copied from root) confirms with `sudo vps-ready
+confirm`, and `rollback --last` removes the account; a second apply with
+`--deadman 1m` is rolled back by the timer.
 
 ```sh
 cargo build --release --target aarch64-unknown-linux-musl   # x86_64-... on Intel
@@ -51,20 +56,22 @@ and a throwaway SSH key with cloud-init, and drives the VM over SSH. It runs
 `kernel.sysctl` apply and rollback in the same boot and across a reboot, then
 the `updates.auto` cycle, then the dead-man switch: an unconfirmed apply of
 the test module `test.deadman` reverts at its deadline, also after an edit
-during the window, and at boot after a reboot. That module exists only in a
-binary built with `--features vps-ready/testing`. Last, an unconfirmed
-`ssh.server` apply refuses new root logins during the window (also through
-`ssh.socket`) and reverts at its deadline after an edit. It needs `/dev/kvm`, `qemu-system-x86_64`,
+during the window, and at boot after a reboot; and `confirm` is refused from
+the applying session, an older session and a `ControlMaster` connection, and
+accepted from a new login. Those sessions are real `ssh` logins from inside
+the VM to its own sshd, since the connection that drives the VM may not be
+one (Lima's shell uses vsock). That module exists only in a
+binary built with `--features vps-ready/testing`. Last, `ssh.server`: the
+`minimal` profile confirmed by the admin it creates, then an unconfirmed apply
+that refuses new root logins during the window (also through `ssh.socket`) and
+reverts at its deadline after an edit. It needs `/dev/kvm`, `qemu-system-x86_64`,
 `qemu-img`, `cloud-localds` (cloud-image-utils), `ssh` and `jq`. The `vm`
 workflow pins the images and runs it on four distros.
 
 Without KVM, for example on a Mac, pass `-` as the image and point
 `VM_SSH_CONFIG` at an ssh config whose `Host vm` reaches a user with
 passwordless sudo, such as a Lima VM's. The cycle changes that VM's kernel
-settings and apt configuration, so use a throwaway one. On Debian 13, Lima's
-forwarded port reaches sshd over vsock, so sshd sets `SSH_CONNECTION` to
-`UNKNOWN` and vps-ready finds no SSH session (`ssh.server` then refuses to
-plan). Add a `ProxyJump` through that host to the guest's `127.0.0.1:22`.
+settings and apt configuration, so use a throwaway one.
 
 ```sh
 limactl create --name=vpsr-dev --cpus=1 --memory=1 --disk=10 --mount-none template:ubuntu-24.04

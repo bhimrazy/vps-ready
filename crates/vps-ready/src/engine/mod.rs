@@ -2,6 +2,7 @@
 //! dead-man switch, manual rollback and history, over the state directory,
 //! its lock and the journal that records each transaction.
 
+mod confirm;
 pub mod deadman;
 pub mod id;
 pub mod journal;
@@ -12,6 +13,7 @@ mod state;
 #[cfg(test)]
 mod tests;
 
+pub use confirm::{Extended, Refusal, Watch, watch};
 pub use deadman::Deadman;
 pub use journal::{Deadline, Event, Record, RollbackReason, TxnState};
 pub use plan::{ModulePlan, ModuleStatus, Plan, Selected, Step, plan};
@@ -107,6 +109,9 @@ pub enum EngineError {
         /// What is wrong with it.
         reason: String,
     },
+    /// `confirm` or `confirm --extend` refused.
+    #[error(transparent)]
+    Refused(#[from] Refusal),
     /// The dead-man switch could not be armed, re-armed or read.
     #[error("dead-man switch: {0}")]
     Deadman(String),
@@ -175,6 +180,35 @@ pub enum EngineError {
         /// The failure.
         #[source]
         source: Box<EngineError>,
+    },
+    /// A rollback would remove the account of the user running it.
+    #[error(
+        "refusing to roll back transaction {txn}: it would remove the account {user}, \
+         which this session is logged in as; `userdel` fails while it has processes. \
+         Run the rollback from another account (root on the console, or another sudo \
+         user), or confirm the changes and keep {user}"
+    )]
+    OwnAccount {
+        /// Transaction ID.
+        txn: String,
+        /// The account.
+        user: String,
+    },
+    /// A rollback would remove an account it created while a later
+    /// transaction, which may rely on it as the only way in (e.g. one that
+    /// turned off root and password logins), is still in place.
+    #[error(
+        "refusing to roll back transaction {txn}: it would remove the account {user}, \
+         and the later transaction {later} is still in place and may need it to log in; \
+         roll back {later} first"
+    )]
+    LaterTxn {
+        /// Transaction ID.
+        txn: String,
+        /// The account.
+        user: String,
+        /// The later transaction that is applied, confirmed or pending.
+        later: String,
     },
     /// Two steps of a plan change the same resource.
     #[error("the plan changes {0} twice")]

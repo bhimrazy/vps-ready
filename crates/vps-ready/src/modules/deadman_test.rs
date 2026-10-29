@@ -63,6 +63,7 @@ impl Module for DeadmanTest {
                 validate: None,
             })],
             reloads: vec![Reload::SshdReload],
+            notes: Vec::new(),
         })
     }
 }

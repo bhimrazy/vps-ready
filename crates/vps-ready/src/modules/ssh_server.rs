@@ -13,7 +13,7 @@ use super::{Applicability, Module, ModuleError, ModuleSteps, NoParams, PlanCx};
 use crate::engine::Reload;
 use crate::facts::ssh::FsSource;
 use crate::facts::{Facts, Init, OsFamily, SSHD_CONFIG};
-use crate::resource::{File, Resource, Validate, user};
+use crate::resource::{File, Resource, Validate, keyed_users, user};
 use crate::sys::{Cmd, FileOwner, Sys, SysError};
 
 /// The drop-in. sshd reads `sshd_config.d/*.conf` in lexical order and uses
@@ -165,6 +165,7 @@ impl Module for SshServer {
                 validate: Some(Validate::new("sshd", ["-t", "-f", Validate::PATH])),
             })],
             reloads: vec![Reload::SshdReload],
+            notes: Vec::new(),
         })
     }
 
@@ -286,24 +287,26 @@ fn listed(sys: Sys) -> Result<BTreeSet<&'static str>, ModuleError> {
         .collect())
 }
 
-/// The user the admin logs in as after apply: the one this plan sets up
-/// with keys (`user.admin`), else the user of this SSH session, else root.
+/// The user the admin logs in as after apply, as [`Plan::admins`] picks
+/// it: a user the plan gives keys (`user.admin`), else the non-root user
+/// of this SSH session, else root.
+///
+/// [`Plan::admins`]: crate::engine::Plan::admins
 fn login_user(cx: &PlanCx) -> String {
-    planned_admins(cx.planned)
+    keyed_users(cx.planned)
+        .into_iter()
         .next()
-        .map(str::to_owned)
-        .or_else(|| cx.facts.session.as_ref().and_then(|s| s.user.clone()))
+        .or_else(|| session_user(cx).map(str::to_owned))
         .unwrap_or_else(|| "root".to_owned())
 }
 
-/// Users other than root that this plan gives SSH keys, in plan order.
-fn planned_admins(planned: &[Resource]) -> impl Iterator<Item = &str> {
-    planned.iter().filter_map(|r| match r {
-        Resource::AuthorizedKeys(k) if k.user != "root" && !k.keys.is_empty() => {
-            Some(k.user.as_str())
-        }
-        _ => None,
-    })
+/// The user of this SSH session, unless it is root.
+fn session_user<'a>(cx: &PlanCx<'a>) -> Option<&'a str> {
+    cx.facts
+        .session
+        .as_ref()
+        .filter(|s| s.uid != 0)
+        .and_then(|s| s.user.as_deref())
 }
 
 /// Whether the plan grants `name` sudo: the `sudo` group, or a rule for it
@@ -328,7 +331,10 @@ fn planned_sudo(planned: &[Resource], name: &str) -> bool {
 /// the confirm from a new login is the real proof.
 fn require_admin(cx: &PlanCx, sys: Sys, turned_off: &[&str]) -> Result<(), ModuleError> {
     let mut why_not = Vec::new();
-    for name in planned_admins(cx.planned) {
+    // As in `Plan::admins`, a plan that sets up an admin is confirmed by
+    // that admin, so the session's user does not count then.
+    let keyed = keyed_users(cx.planned);
+    for name in &keyed {
         if planned_sudo(cx.planned, name) || has_sudo(sys, name)? {
             return Ok(());
         }
@@ -340,6 +346,7 @@ fn require_admin(cx: &PlanCx, sys: Sys, turned_off: &[&str]) -> Result<(), Modul
         .as_ref()
         .map(|s| (s.uid, s.user.as_deref()))
     {
+        _ if !keyed.is_empty() => {}
         None => why_not.push("there is no SSH session to take the user from".to_owned()),
         Some((0, _)) => why_not.push("this SSH session is root's".to_owned()),
         Some((uid, None)) => why_not.push(format!("uid {uid} of this SSH session has no name")),

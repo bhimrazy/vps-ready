@@ -17,6 +17,12 @@ pub const MIN_WINDOW: Duration = Duration::from_secs(60);
 /// The longest window `apply --deadman` takes.
 pub const MAX_WINDOW: Duration = Duration::from_secs(30 * 60);
 
+/// The longest `confirm --extend` moves the deadline ahead of now.
+pub const MAX_EXTEND: Duration = MAX_WINDOW;
+/// The longest a transaction waits for a confirm, from when its changes
+/// went live, however often it is extended.
+pub const MAX_PENDING: Duration = Duration::from_secs(2 * 60 * 60);
+
 /// The boot hook's unit file. Engine infrastructure, not a resource: no
 /// transaction backs it up or removes it.
 pub const HOOK: &str = "/etc/systemd/system/vps-ready-deadman.service";
@@ -72,6 +78,24 @@ pub(super) fn last_unit(records: &[Record]) -> Option<(&str, usize)> {
         })
         .collect();
     units.last().map(|u| (*u, units.len()))
+}
+
+/// The units a confirm stops: the one the journal names last and every
+/// retry, so none of them rolls back a confirmed transaction.
+pub(super) fn live_units(records: &[Record]) -> Vec<&str> {
+    let mut units: Vec<&str> = records
+        .iter()
+        .filter_map(|r| match &r.event {
+            Event::Retry { unit, .. } => Some(unit.as_str()),
+            _ => None,
+        })
+        .collect();
+    if let Some((last, _)) = last_unit(records)
+        && !units.contains(&last)
+    {
+        units.push(last);
+    }
+    units
 }
 
 /// The dead-man switch of a transaction, from its journal: the boot of its
