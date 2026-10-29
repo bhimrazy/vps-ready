@@ -14,8 +14,7 @@ use crate::cli::{EXIT_PENDING, EXIT_ROLLED_BACK};
 use crate::engine::{
     self, Deadline, Engine, EngineError, Plan, Progress, Refusal, StateDir, TxnState, Watch,
 };
-use crate::facts::{Facts, NoSession, Session, SshActivation};
-use crate::sys::{Cmd, Runner};
+use crate::facts::{Facts, NoSession, Session};
 
 /// How long `confirm` waits for the lock, which a dead-man rollback may
 /// hold for a moment.
@@ -57,7 +56,7 @@ pub(in crate::cli) fn confirm(
     }
     let (id, admins) = engine.waiting(txn)?;
     let facts = (host.facts)(host.sys)?;
-    let ports = sshd_ports(&facts, host.sys.runner);
+    let ports = facts.ssh.ports();
     let again = |session| again(host, &admins, session, &ports);
     let session = match (host.session)(host.sys) {
         Ok(session) => session,
@@ -104,7 +103,7 @@ pub(super) fn print_pending(
     left: Duration,
     out: &mut dyn Write,
 ) -> std::io::Result<()> {
-    let ports = sshd_ports(facts, host.sys.runner);
+    let ports = facts.ssh.ports();
     let session = facts.session.as_ref();
     writeln!(out, "Changes are live. Open a NEW terminal and run:\n")?;
     writeln!(out, "    {}", ssh_line(host, admins, session, &ports))?;
@@ -230,47 +229,6 @@ fn end_line(err: &mut dyn Write, on_line: &mut bool) -> std::io::Result<()> {
     Ok(())
 }
 
-/// The ports the host's sshd listens on: each `port` of `sshd -T` and,
-/// with socket activation, each stream `Listen` of `ssh.socket`, which
-/// `sshd -T` does not show.
-pub(super) fn sshd_ports(facts: &Facts, runner: &dyn Runner) -> Vec<u16> {
-    let mut ports: Vec<u16> = facts
-        .ssh
-        .effective
-        .iter()
-        .flat_map(|c| c.get_all("port"))
-        .filter_map(|p| p.parse().ok())
-        .collect();
-    if facts.ssh.activation == SshActivation::Socket {
-        let cmd = Cmd::new("systemctl")
-            .args(["show", "--property=Listen", "ssh.socket"])
-            .timeout(Duration::from_secs(10));
-        match runner.run(&cmd) {
-            Ok(out) if out.ok() => {
-                ports.extend(listen_ports(&String::from_utf8_lossy(&out.stdout)))
-            }
-            Ok(out) => tracing::warn!(
-                "`systemctl show ssh.socket` failed: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            ),
-            Err(e) => tracing::warn!("`systemctl show ssh.socket`: {e}"),
-        }
-    }
-    ports.sort_unstable();
-    ports.dedup();
-    ports
-}
-
-/// The ports of `Listen=[::]:22 (Stream)` lines.
-fn listen_ports(text: &str) -> Vec<u16> {
-    text.lines()
-        .filter_map(|line| {
-            let addr = line.strip_prefix("Listen=")?.strip_suffix(" (Stream)")?;
-            addr.rsplit(':').next()?.parse().ok()
-        })
-        .collect()
-}
-
 /// "Open a new terminal and run: `ssh ...`".
 fn again(host: &Host, admins: &[String], session: Option<&Session>, ports: &[u16]) -> String {
     format!(
@@ -332,14 +290,6 @@ pub(super) fn countdown(left: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn reads_the_stream_ports_of_ssh_socket() {
-        let text = "Listen=[::]:22 (Stream)\nListen=0.0.0.0:2222 (Stream)\n\
-                    Listen=[::]:53 (Datagram)\nListen=/run/x.sock (Stream)\n";
-        assert_eq!(listen_ports(text), [22, 2222]);
-        assert_eq!(listen_ports(""), Vec::<u16>::new());
-    }
 
     #[test]
     fn private_addresses_are_not_public() {
