@@ -210,21 +210,35 @@ impl Config {
                 }
                 continue;
             }
-            let Some(pattern) = d.args.iter().find(|p| pattern_covers(p, target)) else {
+            let Some(covering) = d.args.iter().position(|p| pattern_covers(p, target)) else {
                 continue;
             };
             if d.in_match {
                 return self.enclosing_match(i);
             }
-            // The files this Include reads before `target`, and what they include.
-            let before = self.directives[i + 1..]
+            // The files this Include reads before `target`, and what they
+            // include: those of earlier patterns, then those of the covering
+            // pattern that sort before it. Files of later patterns come after.
+            let mut pattern = 0;
+            for e in self.directives[i + 1..]
                 .iter()
                 .take_while(|e| e.depth > d.depth)
-                .take_while(|e| !(pattern_covers(pattern, &e.file) && e.file.as_path() >= target));
-            return before
-                .filter_map(sets_keyword)
-                .next()
-                .unwrap_or(IncludeCheck::Covered);
+            {
+                if e.depth == d.depth + 1 {
+                    if let Some(n) = (pattern..d.args.len())
+                        .find(|&n| d.args.get(n).is_some_and(|p| pattern_covers(p, &e.file)))
+                    {
+                        pattern = n;
+                    }
+                    if pattern > covering || (pattern == covering && e.file.as_path() >= target) {
+                        break;
+                    }
+                }
+                if let Some(found) = sets_keyword(e) {
+                    return found;
+                }
+            }
+            return IncludeCheck::Covered;
         }
         IncludeCheck::Missing
     }

@@ -230,6 +230,8 @@ fn include_check_on_fixtures() {
 
     assert_eq!(check("stock"), IncludeCheck::Covered);
     assert_eq!(check("cloud-init"), IncludeCheck::Covered);
+    // other.d/*.conf is read after the whole of sshd_config.d/*.conf.
+    assert_eq!(check("include-two-patterns"), IncludeCheck::Covered);
     assert_eq!(check("include-missing"), IncludeCheck::Missing);
     assert_eq!(
         check("include-after-match"),
@@ -398,6 +400,30 @@ fn include_check_looks_at_files_read_before_the_target() {
             ("/etc/ssh/sshd_config.d/50-b.conf", "PermitRootLogin yes\n"),
         ]),
         IncludeCheck::Covered
+    );
+    // With two patterns, the files of the first are read before those of
+    // the second, whichever covers the target.
+    let other = (
+        "/etc/ssh/other.d/10-later.conf",
+        "PasswordAuthentication yes\n",
+    );
+    assert_eq!(
+        check(&[
+            (MAIN, "Include sshd_config.d/*.conf other.d/*.conf\n"),
+            other
+        ]),
+        IncludeCheck::Covered
+    );
+    assert_eq!(
+        check(&[
+            (MAIN, "Include other.d/*.conf sshd_config.d/*.conf\n"),
+            other
+        ]),
+        IncludeCheck::AfterKeyword {
+            keyword: "passwordauthentication".to_owned(),
+            file: "/etc/ssh/other.d/10-later.conf".into(),
+            line: 1
+        }
     );
     // An Include inside a Match of an included file is conditional.
     assert_eq!(
