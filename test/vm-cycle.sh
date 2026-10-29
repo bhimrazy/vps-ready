@@ -49,6 +49,8 @@
 #     --module ssh.server, not confirmed: a new root login is refused (the
 #     reload reached new logins, also through ssh.socket); the drop-in is
 #     edited -> at the deadline it is gone and the edit is in files/1.during.
+#     A `Match User <user>` block with `PermitRootLogin yes` read before the
+#     drop-in -> verify (`sshd -T -C`) fails and apply rolls back.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -521,6 +523,19 @@ vm test ! -e "$ssh_dropin" || die "$ssh_dropin still exists"
 during=/var/lib/vps-ready/txn/$txn/files/1.during
 [ "$(vm sudo cat "$during")" = "PermitRootLogin yes" ] || die "$during does not hold the edit"
 root_login || die "root cannot log in after the rollback"
+
+echo "== $distro: ssh.server, a Match block for the admin fails verify"
+# Read before the drop-in, but only for the admin's own connection, which
+# verify checks with `sshd -T -C`.
+match_conf=/etc/ssh/sshd_config.d/01-match.conf
+printf 'Match User %s\n  PermitRootLogin yes\n' "$user" | vm "sudo tee $match_conf >/dev/null"
+rc=0; local_ssh -o ControlPath=none "$user@127.0.0.1" sudo vps-ready apply --yes --module ssh.server --deadman 1m || rc=$?
+[ "$rc" -eq 1 ] || { vm sudo rm -f "$match_conf"; die "apply exited $rc, expected 1 (rolled back)"; }
+vm sudo rm -f "$match_conf"
+expect_newest rolled-back
+jq -e '.[0].reason == "verify-failed"' "$tmp/history.json" >/dev/null ||
+  { vr history; die "rolled back, but not with reason verify-failed"; }
+vm test ! -e "$ssh_dropin" || die "$ssh_dropin still exists"
 vm sudo rm -f /root/.ssh/authorized_keys
 
 echo "== $distro: vps-ready history"
