@@ -29,6 +29,7 @@ owo-colors.workspace = true
 rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+signal-hook.workspace = true
 sshd-config.workspace = true
 similar.workspace = true
 thiserror.workspace = true

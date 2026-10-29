@@ -1,7 +1,7 @@
 //! Command-line interface: argument definitions and command dispatch.
 //!
-//! Today: `version`, `detect`, `audit`, `plan`, `apply`, `rollback` and
-//! `history`. Further commands (`confirm`, ...) are added as their milestones
+//! Today: `version`, `detect`, `audit`, `plan`, `apply`, `rollback`,
+//! `confirm` and `history`. Further commands are added as their milestones
 //! land; see the GitHub milestones.
 
 use std::cmp::Reverse;
@@ -164,6 +164,28 @@ pub enum Command {
         /// Run by the boot hook: rolls back what a reboot left unconfirmed.
         #[arg(long, hide = true, group = "target")]
         deadman_boot: bool,
+    },
+    /// Keep the changes that wait for a confirm. Run it from a NEW SSH login,
+    /// which proves that logging in still works. Needs root.
+    ///
+    /// Exits 0 when confirmed or extended, and 2 when refused (nothing
+    /// pending, deadline passed, not a new SSH login) or on error.
+    Confirm {
+        /// The transaction waiting for a confirm (see `history`). Default:
+        /// the only one.
+        #[arg(long, value_name = "ID")]
+        txn: Option<String>,
+        /// Do not confirm; move the deadline to DUR from now instead (default
+        /// 5m, at most 30m, and at most 2 hours after the changes went live).
+        /// Works from any session.
+        #[arg(
+            long,
+            value_name = "DUR",
+            num_args = 0..=1,
+            default_missing_value = "5m",
+            value_parser = window
+        )]
+        extend: Option<Duration>,
     },
     /// List the transactions, newest first. Needs root.
     History,
@@ -409,6 +431,11 @@ pub fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
             let n = change::rollback(&real_host(cli), target, &mut out, &mut io::stderr())?;
             code = ExitCode::from(n);
         }
+        Command::Confirm { txn, extend } => {
+            no_json(cli, "confirm")?;
+            let n = change::confirm(&real_host(cli), txn.as_deref(), *extend, &mut out)?;
+            code = ExitCode::from(n);
+        }
         Command::History => {
             let n = change::history(&real_host(cli), cli.json, &mut out)?;
             code = ExitCode::from(n);
@@ -448,6 +475,12 @@ fn real_host(cli: &Cli) -> change::Host<'static> {
         color: cli.color_enabled(),
         // An empty path fails the binary check, with the reason.
         binary: std::env::current_exe().unwrap_or_default(),
+        session: |sys| facts::session::detect(sys.fs, std::process::id()),
+        sudo_user: std::env::var("SUDO_USER").ok().filter(|u| !u.is_empty()),
+        stop: std::sync::Arc::new(AtomicBool::new(false)),
+        catch_sigint: true,
+        tty: io::stderr().is_terminal(),
+        poll: Duration::from_secs(1),
     }
 }
 

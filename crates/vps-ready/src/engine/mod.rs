@@ -2,6 +2,7 @@
 //! dead-man switch, manual rollback and history, over the state directory,
 //! its lock and the journal that records each transaction.
 
+mod confirm;
 pub mod deadman;
 pub mod id;
 pub mod journal;
@@ -12,6 +13,7 @@ mod state;
 #[cfg(test)]
 mod tests;
 
+pub use confirm::{Extended, Refusal, Watch, watch};
 pub use deadman::Deadman;
 pub use journal::{Deadline, Event, Record, RollbackReason, TxnState};
 pub use plan::{ModulePlan, ModuleStatus, Plan, Selected, Step, plan};
@@ -107,6 +109,9 @@ pub enum EngineError {
         /// What is wrong with it.
         reason: String,
     },
+    /// `confirm` or `confirm --extend` refused.
+    #[error(transparent)]
+    Refused(#[from] Refusal),
     /// The dead-man switch could not be armed, re-armed or read.
     #[error("dead-man switch: {0}")]
     Deadman(String),
@@ -175,6 +180,19 @@ pub enum EngineError {
         /// The failure.
         #[source]
         source: Box<EngineError>,
+    },
+    /// A rollback would remove the account of the user running it.
+    #[error(
+        "refusing to roll back transaction {txn}: it would remove the account {user}, \
+         which this session is logged in as; `userdel` fails while it has processes. \
+         Run the rollback from another account (root on the console, or another sudo \
+         user), or confirm the changes and keep {user}"
+    )]
+    OwnAccount {
+        /// Transaction ID.
+        txn: String,
+        /// The account.
+        user: String,
     },
     /// Two steps of a plan change the same resource.
     #[error("the plan changes {0} twice")]
