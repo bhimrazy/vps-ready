@@ -15,7 +15,7 @@ const layers = [
     <Fragment slot="title">Tested where lockouts actually happen.</Fragment>
     Unit tests can't prove you can still get in after a reboot. So the risky paths run against real systems.
   </SectionHead>
-  <ul class="m-0 grid max-w-[860px] list-none p-0">
+  <ul class="m-0 grid list-none p-0">
     {
       layers.map(([name, text, when]) => (
         <li class="grid grid-cols-[140px_minmax(0,1fr)_auto] items-baseline gap-[18px] border-t border-line py-4 first:border-t-0 first:pt-0 max-[720px]:grid-cols-1 max-[720px]:gap-1.5">

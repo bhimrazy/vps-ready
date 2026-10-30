@@ -4,26 +4,21 @@ description: Install vps-ready on a Linux server with the install script or from
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
+import Command from '../../../components/docs/Command.astro';
+
+export const script = 'https://github.com/bhimrazy/vps-ready/releases/latest/download/install.sh';
 
 Run these on the server. vps-ready is a static binary for Linux on x86_64 and arm64.
 
 <Tabs syncKey="install">
   <TabItem label="curl">
-    ```sh
-    curl -fsSL https://github.com/bhimrazy/vps-ready/releases/latest/download/install.sh | sudo sh
-    ```
+    <Command lines={[`curl -fsSL ${script} | sudo sh`]} />
   </TabItem>
   <TabItem label="read it first">
-    ```sh
-    curl -fsSLO https://github.com/bhimrazy/vps-ready/releases/latest/download/install.sh
-    less install.sh
-    sudo sh install.sh
-    ```
+    <Command lines={[`curl -fsSLO ${script}`, 'less install.sh', 'sudo sh install.sh']} />
   </TabItem>
   <TabItem label="cargo">
-    ```sh
-    cargo install vps-ready --locked
-    ```
+    <Command lines={['cargo install vps-ready --locked']} />
   </TabItem>
 </Tabs>
 

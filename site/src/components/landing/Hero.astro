@@ -1,5 +1,6 @@
 ---
 import { INSTALL_URL, VERSION } from '../../lib/site';
+import { breakableCommand } from '../../lib/wrap';
 import { frameHtml, SCREEN } from '../../scripts/motion';
 import { heroScenes } from '../../scripts/scenes';
 import Label from './ui/Label.astro';
@@ -14,10 +15,10 @@ const quick = `curl -fsSL ${INSTALL_URL} | sudo sh`;
 
 <header
   id="top"
-  class="border-b border-line bg-bg bg-[linear-gradient(var(--color-grid)_1px,transparent_1px),linear-gradient(90deg,var(--color-grid)_1px,transparent_1px)] bg-size-[32px_32px] bg-position-[-1px_-1px] pt-[72px] pb-20"
+  class="border-b border-line bg-bg bg-[linear-gradient(var(--color-grid)_1px,transparent_1px),linear-gradient(90deg,var(--color-grid)_1px,transparent_1px)] bg-size-[32px_32px] bg-position-[-1px_-1px] pt-28 pb-30 max-[920px]:pt-16 max-[920px]:pb-18"
 >
   <Wrap class="grid grid-cols-[minmax(0,1fr)_minmax(0,580px)] items-center gap-12 max-[920px]:grid-cols-[minmax(0,1fr)]">
-    <div class="grid min-w-0 justify-items-start gap-5">
+    <div class="grid min-w-0 justify-items-start gap-7">
       <Label>Linux VPS hardening &middot; v{VERSION}</Label>
       <h1
         class="max-w-[15ch] font-mono text-[clamp(34px,3.4vw,44px)] leading-[1.15] font-bold tracking-[-0.03em] text-balance max-[920px]:max-w-none"
@@ -27,11 +28,11 @@ const quick = `curl -fsSL ${INSTALL_URL} | sudo sh`;
       <p class="max-w-[44ch] text-lg text-muted">
         SSH keys, a firewall and automatic updates in one run. If an SSH or firewall change locks you out, it rolls back on its own.
       </p>
-      <div class="flex w-full max-w-full items-center overflow-hidden rounded-[10px] border border-line bg-bg">
+      <div class="flex w-full max-w-full items-stretch overflow-hidden rounded-[10px] border border-line bg-bg">
         <code
           id="quick-cmd"
-          class="min-w-0 flex-1 overflow-x-auto px-4 py-3 text-left font-mono text-[12.5px] whitespace-nowrap [mask-image:linear-gradient(to_right,#000_calc(100%-28px),transparent)]"
-          ><span class="text-subtle select-none">$ </span><span data-cmd>{quick}</span></code
+          class="flex min-w-0 flex-1 items-start gap-[1ch] px-4 py-3 text-left font-mono text-[12.5px] leading-[1.6] wrap-normal break-normal whitespace-pre-wrap"
+          ><span class="flex-none text-subtle select-none">$</span><span data-cmd class="min-w-0" set:html={breakableCommand(quick)} /></code
         >
         <button
           type="button"

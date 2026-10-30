@@ -1,0 +1,81 @@
+---
+// Shell commands for the docs that wrap only at spaces and after "/" in
+// URLs (never mid-word), with a Copy button that copies the exact lines.
+// Used where Expressive Code would break a long URL mid-word.
+import { breakableCommand } from '../../lib/wrap';
+
+interface Props {
+  lines: string[];
+}
+const { lines } = Astro.props;
+---
+
+<figure class="not-content command" data-command>
+  <pre>{lines.map((l) => (
+      <span class="line"><span class="prompt" aria-hidden="true">$</span><span data-cmd set:html={breakableCommand(l)} /></span>
+    ))}</pre>
+  <button type="button" data-copy aria-label="Copy commands">Copy</button>
+</figure>
+
+<style>
+  .command {
+    position: relative;
+    margin: 0;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 10px;
+    background: var(--sl-color-gray-7, var(--sl-color-gray-6));
+  }
+  pre {
+    margin: 0;
+    padding: 0.875rem 5rem 0.875rem 1rem;
+    display: grid;
+    gap: 0.125rem;
+    font: 400 0.8125rem/1.7 var(--sl-font-mono);
+    color: var(--sl-color-white);
+    background: transparent;
+    border: 0;
+  }
+  .line {
+    display: flex;
+    align-items: flex-start;
+    gap: 1ch;
+  }
+  .prompt {
+    flex: none;
+    color: var(--sl-color-gray-3);
+    user-select: none;
+  }
+  [data-cmd] {
+    min-width: 0;
+    white-space: pre-wrap;
+    word-break: normal;
+    overflow-wrap: normal;
+  }
+  button {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    font: 500 0.75rem var(--sl-font-mono);
+    color: var(--sl-color-gray-2);
+    background: var(--sl-color-black);
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 6px;
+    padding: 0.25rem 0.625rem;
+    cursor: pointer;
+  }
+  button:hover {
+    color: var(--sl-color-text-accent);
+  }
+</style>
+
+<script>
+  import { copyText } from '../../scripts/copy';
+
+  for (const fig of document.querySelectorAll<HTMLElement>('[data-command]')) {
+    const btn = fig.querySelector<HTMLButtonElement>('[data-copy]')!;
+    btn.addEventListener('click', () => {
+      const text = [...fig.querySelectorAll('[data-cmd]')].map((c) => c.textContent).join('\n');
+      copyText(text, btn, fig.querySelector('pre')!);
+    });
+  }
+</script>

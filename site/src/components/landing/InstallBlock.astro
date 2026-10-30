@@ -2,6 +2,7 @@
 // Install methods as tabs with a Copy button. Used in the hero and the
 // closing call to action; each instance wires itself up.
 import { INSTALL_URL } from '../../lib/site';
+import { breakableCommand } from '../../lib/wrap';
 import Panel from './ui/Panel.astro';
 import Tab from './ui/Tab.astro';
 
@@ -48,8 +49,13 @@ const methods = [
         data-p={m.key}
         role="tabpanel"
         hidden={i !== 0}
-        class="m-0 overflow-x-auto px-4 py-3.5 font-mono text-[13px] leading-[1.75] whitespace-pre text-ink max-[720px]:[mask-image:linear-gradient(to_right,#000_calc(100%-32px),transparent)]"
-        set:html={m.lines.map((l) => `<span class="text-subtle select-none">$</span> <span data-cmd>${l}</span>`).join('\n')}
+        class="m-0 grid gap-0.5 px-4 py-3.5 font-mono text-[13px] leading-[1.75] text-ink"
+        set:html={m.lines
+          .map(
+            (l) =>
+              `<span class="flex items-start gap-[1ch]"><span class="flex-none text-subtle select-none">$</span><span data-cmd class="min-w-0 wrap-normal break-normal whitespace-pre-wrap">${breakableCommand(l)}</span></span>`,
+          )
+          .join('')}
       />
     ))
   }
