@@ -39,50 +39,50 @@ const projectLinks = [
   ['crates.io', LINKS.crates],
 ];
 const row =
-  'group/row -mx-2.5 grid min-w-0 flex-1 grid-cols-[20px_minmax(0,1fr)] items-center gap-3 rounded-md px-2.5 py-[7px] text-ink no-underline hover:bg-surface';
+  'group/row -mx-2.5 grid min-w-0 flex-1 grid-cols-[20px_minmax(0,1fr)] items-center gap-3 rounded-md px-2.5 py-1.5 text-ink no-underline hover:bg-surface';
 ---
 
 {/* Extra bottom padding on phones keeps the last line clear of the Feedback button. */}
 <footer class="bg-bg pt-14 pb-8 text-sm text-muted max-[640px]:pb-24">
   <Wrap class="grid gap-10">
-    <div class="grid grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] items-start gap-4 max-[900px]:grid-cols-1">
-      <div
-        class="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-5 rounded-[10px] border border-line bg-surface px-6 py-5 max-[640px]:grid-cols-[auto_minmax(0,1fr)]"
-      >
-        <img
-          src="/avatar.webp"
-          alt="Bhimraj Yadav"
-          width="64"
-          height="64"
-          loading="lazy"
-          class="block size-16 rounded-full border-2 border-bg shadow-[0_0_0_1px_var(--color-line)]"
-        />
-        <div class="grid min-w-0 gap-1">
-          <Label class="mb-1">Built and maintained by</Label>
-          <a href={AUTHOR.site} class="justify-self-start font-mono text-lg font-bold tracking-[-0.01em] text-ink no-underline hover:text-brand"
-            >{AUTHOR.name}</a
-          >
-          <p class="max-w-[60ch] text-sm text-muted">Software engineer and open-source contributor.</p>
-          <a
-            href={AUTHOR.site}
-            class="inline-flex items-center gap-1.5 justify-self-start font-mono text-[13px] font-medium text-brand no-underline hover:underline"
-          >
-            <svg class="size-4 flex-none" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4"
-              ><circle cx="8" cy="8" r="6.6"></circle><path
-                d="M1.4 8h13.2M8 1.4c1.8 1.9 2.7 4.1 2.7 6.6S9.8 12.7 8 14.6M8 1.4C6.2 3.3 5.3 5.5 5.3 8s.9 4.7 2.7 6.6"></path></svg
-            >bhimraj.com.np<svg
-              class="size-3 flex-none"
-              viewBox="0 0 16 16"
-              aria-hidden="true"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.8"
-              stroke-linecap="round"
-              stroke-linejoin="round"><path d="M5 11l6-6M6 5h5v5"></path></svg
+    <div class="grid grid-cols-2 items-stretch gap-4 max-[900px]:grid-cols-1">
+      <Card bare class="flex flex-col gap-4 p-6">
+        <Label>Built and maintained by</Label>
+        <div class="flex items-center gap-4">
+          <img
+            src="/avatar.webp"
+            alt="Bhimraj Yadav"
+            width="64"
+            height="64"
+            loading="lazy"
+            class="block size-16 flex-none rounded-full border-2 border-bg shadow-[0_0_0_1px_var(--color-line)]"
+          />
+          <div class="grid min-w-0 gap-1">
+            <a href={AUTHOR.site} class="justify-self-start font-mono text-lg font-bold tracking-[-0.01em] text-ink no-underline hover:text-brand"
+              >{AUTHOR.name}</a
             >
-          </a>
+            <p class="text-sm text-muted">Software engineer and open-source contributor.</p>
+            <a
+              href={AUTHOR.site}
+              class="inline-flex items-center gap-1.5 justify-self-start font-mono text-[13px] font-medium text-brand no-underline hover:underline"
+            >
+              <svg class="size-4 flex-none" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4"
+                ><circle cx="8" cy="8" r="6.6"></circle><path
+                  d="M1.4 8h13.2M8 1.4c1.8 1.9 2.7 4.1 2.7 6.6S9.8 12.7 8 14.6M8 1.4C6.2 3.3 5.3 5.5 5.3 8s.9 4.7 2.7 6.6"></path></svg
+              >bhimraj.com.np<svg
+                class="size-3 flex-none"
+                viewBox="0 0 16 16"
+                aria-hidden="true"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+                stroke-linejoin="round"><path d="M5 11l6-6M6 5h5v5"></path></svg
+              >
+            </a>
+          </div>
         </div>
-        <div class="flex flex-wrap gap-2 max-[640px]:col-span-full">
+        <div class="mt-auto flex flex-wrap gap-2 border-t border-grid pt-4">
           {
             social.map((s) => (
               <a
@@ -97,32 +97,32 @@ const row =
             ))
           }
         </div>
-      </div>
+      </Card>
 
-      <Card class="grid content-start gap-0.5 px-5 py-[18px]">
-        <Label class="mb-2">Get in touch</Label>
-        <div class="flex items-center gap-2">
-          <a href={MAILTO} class={row}>
-            <Icon d={mailIcon} small class="stroke-[1.8] text-muted" />
-            <span class="grid min-w-0"
-              ><b class="text-sm font-semibold group-hover/row:text-brand">Email</b><em
-                id="mail"
-                class="font-mono text-xs text-muted not-italic wrap-anywhere">{EMAIL}</em
-              ></span
+      <Card bare class="grid content-start gap-4 p-6">
+        <Label>Get in touch</Label>
+        <div class="grid gap-0.5">
+          <div class="flex items-center gap-2">
+            <a href={MAILTO} class={row}>
+              <Icon d={mailIcon} small class="stroke-[1.8] text-muted" />
+              <span class="grid min-w-0"
+                ><b class="text-sm font-semibold group-hover/row:text-brand">Email</b><em
+                  id="mail"
+                  class="font-mono text-xs text-muted not-italic wrap-anywhere">{EMAIL}</em
+                ></span
+              >
+            </a>
+            <button
+              type="button"
+              id="copy-mail"
+              aria-label="Copy email address"
+              class="min-h-[30px] cursor-pointer rounded-md border border-line bg-bg px-2.5 py-[5px] font-mono text-xs font-medium text-ink hover:border-brand-line hover:text-brand"
             >
-          </a>
-          <button
-            type="button"
-            id="copy-mail"
-            aria-label="Copy email address"
-            class="min-h-[30px] cursor-pointer rounded-md border border-line bg-bg px-2.5 py-[5px] font-mono text-xs font-medium text-ink hover:border-brand-line hover:text-brand"
-          >
-            Copy
-          </button>
-        </div>
-        {
-          contacts.map((c) => (
-            <div class="flex items-center gap-2">
+              Copy
+            </button>
+          </div>
+          {
+            contacts.map((c) => (
               <a href={c.href} class={row}>
                 <Icon d={c.icon} small class="stroke-[1.8] text-muted" />
                 <span class="grid min-w-0">
@@ -130,20 +130,21 @@ const row =
                   <em class="font-mono text-xs text-muted not-italic">{c.note}</em>
                 </span>
               </a>
-            </div>
-          ))
-        }
+            ))
+          }
+        </div>
       </Card>
     </div>
 
-    <div class="flex flex-wrap items-center justify-between gap-x-8 gap-y-4 border-t border-grid pt-6">
+    <div class="grid gap-5 border-t border-grid pt-6">
+    <div class="flex flex-wrap items-center justify-between gap-x-8 gap-y-4">
       <div class="flex flex-wrap items-center gap-3">
         <span class="flex items-center gap-2 font-mono text-[15px] font-bold text-ink">
           <Logo size={22} /><span>vps<b class="text-brand">-</b>ready</span><span class="text-xs font-normal text-muted">v{VERSION}</span>
         </span>
         <span>{TAGLINE}</span>
       </div>
-      <nav class="flex flex-wrap gap-[22px] text-sm" aria-label="Project links">
+      <nav class="flex flex-wrap gap-x-5 gap-y-2 text-sm" aria-label="Project links">
         {
           projectLinks.map(([text, href]) => (
             <a href={href} class="text-muted no-underline hover:text-ink">
@@ -154,6 +155,7 @@ const row =
       </nav>
     </div>
     <div class="font-mono text-xs text-subtle">MIT or Apache-2.0 &middot; Open source on GitHub</div>
+    </div>
   </Wrap>
 </footer>
 
