@@ -1,0 +1,43 @@
+---
+title: Introduction
+description: vps-ready audits a fresh Linux server and hardens it, with a plan you review first, a journal you can undo, and a safety net that rolls back changes that cut off your access.
+---
+
+import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import RunFlow from '../../../components/docs/diagrams/RunFlow.astro';
+
+vps-ready is one static binary that audits a fresh Linux server and hardens it, with a plan you review first and a one-command undo after. Its headline feature is the **safety net**: before it keeps a change to the admin user, the SSH server config or the firewall, it proves you can still log in.
+
+<Aside type="note">
+vps-ready is pre-1.0. `detect` and `audit` (29 controls), and `plan`, `apply`, `confirm` and `rollback` for six modules work today on Debian 12/13 and Ubuntu 22.04/24.04 with systemd. There may be breaking changes before 1.0.
+</Aside>
+
+## Why
+
+You rent a VPS, get `root@ip`, and want to deploy something. Before that there are about fifteen setup steps: an admin user with an SSH key, SSH hardening, a firewall that also covers Docker, automatic security updates, sane kernel settings. In practice people follow an old blog post, run a random script as root, lock themselves out of SSH, or end up with a firewall that silently ignores their containers.
+
+Auditors like Lynis tell you what is wrong but fix nothing. Ansible roles fix things but need a control machine and offer no undo. vps-ready does both, on the server itself, and checks that you can still get in.
+
+## How a run works
+
+<RunFlow />
+
+Every command before `apply` only reads. `apply` shows the plan again and asks before it changes anything, and every change it makes is journaled so `rollback` can undo it later.
+
+## What it promises
+
+- **Never lock you out.** Root and password logins stay on until an admin user with an SSH key and sudo exists. The firewall always allows the SSH port that is actually in use.
+- **Prove it from a new login.** Risky changes roll back on their own unless a new SSH login runs `confirm` in time, even if your terminal is gone or the server reboots.
+- **Show, then do.** Nothing changes without a plan you can read. Every change is labeled reversible or partial.
+- **Your files stay yours.** vps-ready writes its own drop-in files and never rewrites your `sshd_config` in place. No network calls except package installs, no telemetry, no self-update.
+
+Checks read the live state (`sshd -T`, `/proc/sys`, `apt-config`, `nft`, `ss`), not a guess at what a config file means.
+
+## Start here
+
+<CardGrid>
+  <LinkCard title="Install" description="One command on the server, or read the script first." href="/docs/install/" />
+  <LinkCard title="Quick start" description="Audit, plan, apply, confirm, and undo, in five steps." href="/docs/quick-start/" />
+  <LinkCard title="How the safety net works" description="The safety timer, confirm, and rollback across a reboot." href="/docs/guides/safety-net/" />
+  <LinkCard title="Profiles and modules" description="What minimal and web change, and how to undo each part." href="/docs/guides/profiles-and-modules/" />
+</CardGrid>

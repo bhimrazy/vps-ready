@@ -1,0 +1,80 @@
+---
+import Card from './ui/Card.astro';
+import Icon from './ui/Icon.astro';
+import Pill from './ui/Pill.astro';
+import Section from './ui/Section.astro';
+import SectionHead from './ui/SectionHead.astro';
+
+const mods = [
+  {
+    id: 'user.admin',
+    text: 'Creates a non-root admin user with sudo and installs your SSH keys. Refuses system accounts.',
+    profiles: ['minimal', 'web'],
+    icon: '<circle cx="12" cy="8" r="4"/><path d="M4 21c.7-4.5 4-7 8-7s7.3 2.5 8 7"/>',
+  },
+  {
+    id: 'ssh.server',
+    text: "Turns off root and password login, after checking the live SSH server config won't lock you out.",
+    profiles: ['minimal', 'web'],
+    timer: true,
+    icon: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/>',
+  },
+  {
+    id: 'firewall.inbound',
+    text: 'Blocks inbound traffic by default, in its own nftables table, and always allows SSH. Stays out of the way of ufw and firewalld.',
+    profiles: ['minimal', 'web'],
+    timer: true,
+    icon: '<path d="M12 3l8 3v6c0 5-3.4 8-8 9-4.6-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/>',
+  },
+  {
+    id: 'ssh.bruteforce',
+    text: 'Installs fail2ban to ban addresses that keep failing to log in over SSH.',
+    profiles: ['web'],
+    icon: '<circle cx="12" cy="12" r="9"/><path d="M5.6 18.4L18.4 5.6"/>',
+  },
+  {
+    id: 'kernel.sysctl',
+    text: 'Hides kernel pointers, restricts ptrace and BPF, and tightens network defaults.',
+    profiles: ['minimal', 'web'],
+    icon: '<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>',
+  },
+  {
+    id: 'updates.auto',
+    text: 'Turns on unattended security updates so patches land without you.',
+    profiles: ['minimal', 'web'],
+    icon: '<path d="M20 11a8 8 0 00-14.9-3M4 4v4h4M4 13a8 8 0 0014.9 3M20 20v-4h-4"/>',
+  },
+];
+---
+
+<Section id="modules" alt>
+  <SectionHead label="Under the hood">
+    <Fragment slot="title">Six modules, always run in a safe order.</Fragment>
+    The admin user exists before SSH is locked down, and SSH ports are open before the firewall closes everything else. Together the
+    modules cover 29 audited controls.
+  </SectionHead>
+  <div class="grid grid-cols-3 gap-4 max-[920px]:grid-cols-2 max-[600px]:grid-cols-1">
+    {
+      mods.map((m) => (
+        <Card class="grid content-start gap-2.5">
+          <Icon d={m.icon} />
+          <h3 class="mt-1 font-mono text-sm font-bold">{m.id}</h3>
+          <p class="text-sm text-muted">{m.text}</p>
+          <div class="mt-1 flex flex-wrap gap-1.5">
+            {m.profiles.map((p) => (
+              <Pill tone="g">{p}</Pill>
+            ))}
+            {m.timer && <Pill>safety timer</Pill>}
+          </div>
+        </Card>
+      ))
+    }
+  </div>
+  <div class="mt-9 grid max-w-[70ch] gap-2.5 text-sm text-muted *:[&>b]:font-semibold *:[&>b]:text-ink">
+    <p>
+      <b>Profiles.</b> <span class="font-mono">minimal</span> sets up the admin user, SSH, the firewall, kernel settings and automatic
+      updates. <span class="font-mono">web</span> adds ssh.bruteforce (fail2ban). You can also switch modules on one by one.
+    </p>
+    <p><b>Systems.</b> Runs on Linux x86_64 and arm64. Tested nightly in x86_64 VMs on Ubuntu 22.04 and 24.04 and Debian 12 and 13.</p>
+  </div>
+</Section>

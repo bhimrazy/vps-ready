@@ -1,0 +1,91 @@
+---
+// The safety net over time: apply arms the timer, then a confirm, a reboot or
+// the deadline decides. Colors are the docs theme variables, so it follows
+// dark mode. On a phone it scrolls sideways, with an edge shadow and a hint.
+const outcomes = [
+  { x: 430, y: 126, c: 'tip', title: 'A new SSH login runs confirm', text: 'Timer stopped. The changes stay; apply exits 0.' },
+  { x: 540, y: 190, c: 'caution', title: 'The server reboots in the window', text: 'Rolled back at boot, before the SSH server starts.' },
+  { x: 650, y: 254, c: 'danger', title: 'No confirm by the deadline', text: 'Every change rolled back; apply exits 1.' },
+];
+// Full class names, so Tailwind finds them.
+const color = {
+  tip: 'stroke-(--aside-tip-ink) fill-(--aside-tip-ink) [&>rect]:fill-(--aside-tip-bg) [&>rect]:stroke-(--aside-tip-line)',
+  caution: 'stroke-(--aside-caution-ink) fill-(--aside-caution-ink) [&>rect]:fill-(--aside-caution-bg) [&>rect]:stroke-(--aside-caution-line)',
+  danger: 'stroke-(--aside-danger-ink) fill-(--aside-danger-ink) [&>rect]:fill-(--aside-danger-bg) [&>rect]:stroke-(--aside-danger-line)',
+};
+const ticks = [
+  { x: 40, label: 'apply', anchor: 'start' },
+  { x: 150, label: 'timer armed', sub: 'before any change' },
+  { x: 290, label: 'changes live' },
+  { x: 650, label: 'deadline (5:00 by default)' },
+];
+---
+
+<figure class="not-content my-7 rounded-[10px] border border-(--sl-color-gray-5) bg-(--sl-color-black) px-3 pt-4 pb-2">
+  <div class="scroll-x">
+    <svg
+      viewBox="0 0 800 320"
+      role="img"
+      aria-labelledby="tl-title tl-desc"
+      class="block h-auto w-full min-w-[640px] font-mono"
+    >
+      <title id="tl-title">The safety net timeline</title>
+      <desc id="tl-desc">
+        apply arms the safety timer before the first change, then makes the changes. Once they are live, the
+        confirm window starts, 5 minutes by default. A confirm from a new SSH login stops the timer and the
+        changes stay. A reboot during the window rolls everything back before the SSH server starts. With no
+        confirm by the deadline, the timer rolls back every change.
+      </desc>
+
+      <rect x="24" y="44" width="266" height="26" rx="6" class="fill-(--sl-color-gray-6) stroke-(--sl-color-gray-5)"></rect>
+      <text x="157" y="61" text-anchor="middle" class="fill-(--sl-color-gray-2) text-[12px]">apply makes the changes</text>
+      <rect x="290" y="44" width="360" height="26" rx="6" stroke-dasharray="4 3" class="fill-(--sl-color-accent-low) stroke-(--sl-color-accent)"></rect>
+      <text x="470" y="61" text-anchor="middle" class="fill-(--sl-color-accent-high) text-[12px] font-medium">confirm window: 1m to 30m</text>
+
+      <g class="fill-(--sl-color-gray-4) stroke-(--sl-color-gray-4) stroke-[1.25]">
+        <line x1="24" y1="84" x2="780" y2="84"></line>
+        <path d="M780 80 L788 84 L780 88 Z" stroke="none"></path>
+        {ticks.map((t) => <line x1={t.x} y1="78" x2={t.x} y2="90"></line>)}
+      </g>
+      {
+        ticks.map((t) => (
+          <>
+            <text x={t.x} y="30" text-anchor={t.anchor ?? 'middle'} class="fill-(--sl-color-white) text-[12.5px] font-bold">
+              {t.label}
+            </text>
+            {t.sub && (
+              <text x={t.x} y="106" text-anchor="middle" class="fill-(--sl-color-gray-3) text-[11.5px]">
+                {t.sub}
+              </text>
+            )}
+          </>
+        ))
+      }
+
+      {
+        outcomes.map((o) => (
+          <g class={color[o.c as keyof typeof color]}>
+            <path d={`M${o.x} 84 V${o.y + 24} H404`} fill="none" class="stroke-[1.5]"></path>
+            <circle cx={o.x} cy="84" r="4.5" stroke="none"></circle>
+            <rect x="24" y={o.y} width="380" height="48" rx="8"></rect>
+            <text x="40" y={o.y + 20} stroke="none" class="fill-(--sl-color-white) text-[13px] font-bold">
+              {o.title}
+            </text>
+            <text x="40" y={o.y + 38} stroke="none" class="fill-(--sl-color-gray-2) text-[12px]">
+              {o.text}
+            </text>
+          </g>
+        ))
+      }
+
+      <text class="fill-(--sl-color-gray-3) text-[11.5px]">
+        <tspan x="664" y="146">confirm --extend</tspan>
+        <tspan x="664" y="162">moves the deadline,</tspan>
+        <tspan x="664" y="178">at most 2 h after</tspan>
+        <tspan x="664" y="194">the changes went</tspan>
+        <tspan x="664" y="210">live</tspan>
+      </text>
+    </svg>
+  </div>
+  <figcaption class="mt-1 text-xs text-(--sl-color-gray-3) sm:hidden">Scroll sideways to see the deadline.</figcaption>
+</figure>

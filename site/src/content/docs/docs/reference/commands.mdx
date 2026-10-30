@@ -1,0 +1,158 @@
+---
+title: Commands
+description: Every vps-ready command with its flags, whether it needs root, and its exit codes.
+sidebar:
+  order: 1
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The command is installed as `vps-ready` and also as `vpsready`. Run `vps-ready --help` or `vps-ready <command> --help` on the server for the same information.
+
+| Command | What it does | Root | `--json` |
+|---|---|---|---|
+| [`detect`](#detect) | Prints facts about the server | no | yes |
+| [`audit`](#audit) | Checks the server against the controls | for some checks | yes |
+| [`plan`](#plan) | Shows what `apply` would change | for some reads | yes |
+| [`apply`](#apply) | Makes the changes, after asking | yes | no |
+| [`confirm`](#confirm) | Keeps changes that wait for a confirm | yes | no |
+| [`rollback`](#rollback) | Undoes a transaction | yes | no |
+| [`history`](#history) | Lists transactions | yes | yes |
+| `version` | Prints version and build information | no | yes |
+
+## Global flags
+
+These work with every command.
+
+| Flag | What it does |
+|---|---|
+| `--json` | Print JSON instead of text, where the command supports it |
+| `-v`, `--verbose` | More log output on stderr: `-v` info, `-vv` debug, `-vvv` trace. `RUST_LOG` overrides it |
+| `--no-color` | No colors. The `NO_COLOR` environment variable does the same, and colors are off when stdout is not a terminal |
+
+Exit code 2 always means an error, including a usage error.
+
+## detect
+
+```sh
+vps-ready detect [--root PATH]
+```
+
+Read-only facts: distro, init system, virtualization or container, the effective SSH server config, listening ports and their processes, and whether Docker is present.
+
+| Flag | What it does |
+|---|---|
+| `--root PATH` | Read files from a tree mounted at `PATH` instead of `/`. Commands such as `sshd -T` still run on this machine |
+
+## audit
+
+```sh
+sudo vps-ready audit [--all]
+```
+
+Checks the server against every [security control](/docs/reference/security-controls/) and lists the ones that fail or could not be checked, each with the reason and, when a module fixes it, the `fix:` command. Some checks need root, so run it with `sudo`.
+
+| Flag | What it does |
+|---|---|
+| `--all` | Also list the passing and skipped controls |
+
+`--json` always prints the complete result, passing controls included.
+
+| Exit code | Meaning |
+|---|---|
+| 0 | No control failed or is unknown |
+| 1 | A control failed or could not be checked |
+| 2 | Error |
+
+## plan
+
+```sh
+sudo vps-ready plan [--profile NAME|PATH] [--module ID]...
+```
+
+Prints a diff of every file and setting `apply` would change, grouped by module, with the controls each fixes and a reversibility label per change. Writes nothing and takes no lock. It runs without root, but then skips what only root can read.
+
+| Flag | What it does |
+|---|---|
+| `--profile NAME\|PATH` | `minimal`, `web`, or the path of a [profile file](/docs/guides/profiles-and-modules/#write-your-own-profile) |
+| `--module ID` | Only this module; repeat it for more. With a profile, it must be one of the profile's modules |
+
+Without either flag, it plans `kernel.sysctl` and `updates.auto` only. Module IDs: `user.admin`, `ssh.server`, `firewall.inbound`, `ssh.bruteforce`, `kernel.sysctl`, `updates.auto`.
+
+Exits 0, or 2 on error.
+
+## apply
+
+```sh
+sudo vps-ready apply [--profile NAME|PATH] [--module ID]... [--deadman DUR] [--yes | --dry-run]
+```
+
+Plans, shows the plan, asks `Apply N changes? [y/N]`, then snapshots each original, validates, writes atomically and verifies. Any failure restores everything. When the run includes `user.admin`, `ssh.server` or `firewall.inbound`, it arms the [safety timer](/docs/guides/safety-net/) first and waits for a confirm from a new SSH login.
+
+| Flag | What it does |
+|---|---|
+| `--profile NAME\|PATH` | As for `plan` |
+| `--module ID` | As for `plan`. A named module that does not apply to this server is an error |
+| `--deadman DUR` | How long a confirm has: `90s`, `5m`, `2m30s`, from 1m to 30m. Default `5m` |
+| `-y`, `--yes` | Do not ask. Required when stdin is not a terminal |
+| `-n`, `--dry-run` | Show the plan and change nothing, like `plan` |
+
+| Exit code | Meaning |
+|---|---|
+| 0 | Applied, nothing to do, or confirmed while waiting |
+| 1 | Failed and every change was rolled back, or not confirmed in time and rolled back |
+| 2 | Error |
+| 3 | A rollback did not complete |
+| 4 | Stopped waiting, and the change still waits for a confirm: you pressed Ctrl-C, or the deadline passed a minute ago and the timer's rollback has not finished yet. The timer keeps running |
+
+## confirm
+
+```sh
+sudo vps-ready confirm [--txn ID] [--extend [DUR]]
+```
+
+Run it from a **new** SSH login, as the admin user, to keep changes that wait for a confirm. It stops the safety timer. See [what counts as a new login](/docs/guides/safety-net/#what-counts-as-a-new-login).
+
+| Flag | What it does |
+|---|---|
+| `--txn ID` | The transaction to confirm. Default: the only one waiting |
+| `--extend [DUR]` | Do not confirm; move the deadline to `DUR` from now instead (default `5m`, at most `30m`, and at most 2 hours after the changes went live). Works from any session |
+
+| Exit code | Meaning |
+|---|---|
+| 0 | Confirmed, or extended |
+| 2 | Refused (nothing waiting, deadline passed, not a new SSH login, not the admin user) or error |
+
+## rollback
+
+```sh
+sudo vps-ready rollback --last
+sudo vps-ready rollback --txn ID
+```
+
+Undoes the changes of one transaction from the journal. Exactly one of the two flags is required.
+
+| Flag | What it does |
+|---|---|
+| `--last` | An interrupted apply if there is one, then one that waits for a confirm, otherwise the newest applied or confirmed one |
+| `--txn ID` | The transaction with this ID (see `history`) |
+
+If the server rebooted since `apply`, kernel settings keep their running values until the next boot, which reads the restored files.
+
+| Exit code | Meaning |
+|---|---|
+| 0 | Rolled back |
+| 2 | Error, including a refusal because something changed since `apply` |
+| 3 | The rollback did not complete |
+
+## history
+
+```sh
+sudo vps-ready history
+```
+
+Lists every transaction, newest first, with its state, modules and number of changes. Exits 0, or 2 on error.
+
+<Aside type="note">
+The state lives in `/var/lib/vps-ready` (root only): one directory per transaction under `txn/`, named after its UTC start time, such as `20261023T114246Z`.
+</Aside>

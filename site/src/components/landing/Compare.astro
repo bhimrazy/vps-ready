@@ -1,0 +1,60 @@
+---
+import Panel from './ui/Panel.astro';
+import Section from './ui/Section.astro';
+import SectionHead from './ui/SectionHead.astro';
+
+// Cells: [text, yes?]. Plain strings are neutral text.
+type Cell = [string, boolean] | string;
+const rows: [string, Cell, Cell, Cell][] = [
+  ["Checks you won't lock yourself out", ['no', false], ['you write the checks', false], ['yes, before SSH and firewall changes', true]],
+  ['Undoes itself if you lose access', ['no', false], ['no', false], ['yes, even after a reboot', true]],
+  ['Shows the exact changes first', ['no', false], ['yes, in check mode', true], ['yes, as a diff', true]],
+  ['One-command undo later', ['no', false], ['no', false], ['yes, from a journal', true]],
+  ['Setup needed', 'an afternoon of reading', 'a control machine and playbooks', 'one binary on the server'],
+];
+const labels = ['Guide', 'Config tools', 'vps-ready'];
+const th = 'h-11 border-b border-line bg-surface px-[18px] py-2.5 text-left font-mono text-[13px] font-bold';
+// Below 640px each row stacks into a card with a label column.
+const td =
+  'border-t border-grid px-[18px] py-3.5 align-top text-muted max-[640px]:grid max-[640px]:grid-cols-[8.5em_minmax(0,1fr)] max-[640px]:gap-2.5 max-[640px]:border-0 max-[640px]:px-0 max-[640px]:py-[3px] max-[640px]:before:pt-px max-[640px]:before:font-mono max-[640px]:before:text-xs max-[640px]:before:text-muted max-[640px]:before:content-[attr(data-l)]';
+---
+
+<Section id="compare">
+  <SectionHead label="Versus guides">
+    <Fragment slot="title">Guides tell you what to type. <span class="whitespace-nowrap">vps-ready</span> makes it safe to type it.</Fragment>
+    A guide is fine until one wrong SSH line locks you out. <span class="whitespace-nowrap">vps-ready</span> checks before it changes anything,
+    and rolls back on its own if you lose access.
+  </SectionHead>
+  <Panel>
+    <table class="w-full border-collapse text-sm max-[640px]:block">
+      <thead class="max-[640px]:hidden">
+        <tr>
+          <th class={th}><span class="font-mono text-xs font-normal text-muted">Feature</span></th>
+          <th class={th}>Copy-paste guide</th>
+          <th class={th}>Config tools (Ansible and similar)</th>
+          <th class:list={[th, 'text-brand']}>vps-ready</th>
+        </tr>
+      </thead>
+      <tbody class="max-[640px]:block">
+        {
+          rows.map(([feature, ...cells]) => (
+            <tr class="max-[640px]:block max-[640px]:border-t max-[640px]:border-line max-[640px]:px-4 max-[640px]:py-3.5 max-[640px]:first:border-t-0">
+              <td class="border-t border-grid px-[18px] py-3.5 align-top font-semibold text-ink max-[640px]:block max-[640px]:border-0 max-[640px]:px-0 max-[640px]:pt-0 max-[640px]:pb-2">
+                {feature}
+              </td>
+              {cells.map((c, i) => (
+                <td data-l={labels[i]} class:list={[td, i === 2 && 'bg-brand-wash max-[640px]:bg-transparent']}>
+                  {typeof c === 'string' ? (
+                    c
+                  ) : (
+                    <span class:list={['font-mono text-[13px] font-medium', c[1] ? 'text-brand' : 'text-subtle']}>{c[0]}</span>
+                  )}
+                </td>
+              ))}
+            </tr>
+          ))
+        }
+      </tbody>
+    </table>
+  </Panel>
+</Section>

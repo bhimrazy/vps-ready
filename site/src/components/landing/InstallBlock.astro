@@ -1,0 +1,87 @@
+---
+// Install methods with a Copy button, in the closing call to action. The
+// method buttons are toggles (aria-pressed) that show one command block.
+import { INSTALL_URL } from '../../lib/site';
+import { breakableCommand } from '../../lib/wrap';
+import Panel from './ui/Panel.astro';
+import Tab from './ui/Tab.astro';
+
+interface Props {
+  /** Make Copy the green primary action. */
+  primaryCopy?: boolean;
+  class?: string;
+}
+const { primaryCopy, class: cls } = Astro.props;
+// Copy takes only the first line of each method: for "read it first" that is
+// the download, so pasting cannot run the script before it has been read.
+const methods = [
+  { key: 'curl', label: 'curl', lines: [`curl -fsSL ${INSTALL_URL} | sudo sh`] },
+  { key: 'read', label: 'read it first', lines: [`curl -fsSLO ${INSTALL_URL}`, 'less install.sh', 'sudo sh install.sh'] },
+  { key: 'cargo', label: 'cargo', lines: ['cargo install vps-ready --locked'] },
+];
+const line = (l: string, copy: boolean) =>
+  `<span class="flex items-start gap-[1ch]"><span class="flex-none text-muted select-none" aria-hidden="true">$</span><span ${copy ? 'data-cmd ' : ''}class="min-w-0 wrap-normal break-normal whitespace-pre-wrap">${breakableCommand(l)}</span></span>`;
+---
+
+<Panel data-install nowrap class:list={['w-full text-left', cls]}>
+  <div slot="head" class="flex min-w-0 items-stretch self-stretch" role="group" aria-label="Install method">
+    {
+      methods.map((m, i) => (
+        <Tab on={i === 0} data-p={m.key}>
+          {m.label}
+        </Tab>
+      ))
+    }
+  </div>
+  <button
+    slot="head"
+    type="button"
+    data-copy
+    class:list={[
+      'ml-auto min-h-11 flex-none cursor-pointer self-stretch border-0 border-l border-solid px-4 font-mono text-xs font-medium max-[420px]:px-3',
+      primaryCopy
+        ? 'border-brand bg-brand text-on-accent hover:bg-brand-ink'
+        : 'border-line bg-bg text-ink hover:text-brand',
+    ]}
+  >
+    Copy
+  </button>
+  {
+    methods.map((m, i) => (
+      <pre
+        data-p={m.key}
+        hidden={i !== 0}
+        class="m-0 grid gap-0.5 px-4 py-3.5 font-mono text-[13px] leading-[1.75] text-ink"
+        set:html={m.lines.map((l, j) => line(l, j === 0)).join('')}
+      />
+    ))
+  }
+  <div class="flex flex-wrap justify-between gap-x-4 gap-y-1.5 border-t border-grid px-4 py-[9px] font-mono text-xs text-muted">
+    <span>Linux x86_64 and arm64. Checks the SHA-256, and the release signature when gh or cosign is installed.</span>
+    <a class="whitespace-nowrap text-brand no-underline hover:underline" href={INSTALL_URL}>View install script</a>
+  </div>
+</Panel>
+
+<script>
+  import { copyText } from '../../scripts/copy';
+
+  for (const box of document.querySelectorAll<HTMLElement>('[data-install]')) {
+    const buttons = [...box.querySelectorAll<HTMLButtonElement>('button[data-p]')];
+    const panels = [...box.querySelectorAll<HTMLElement>('pre[data-p]')];
+    let cur = panels[0];
+    for (const b of buttons) {
+      b.addEventListener('click', () => {
+        for (const o of buttons) o.setAttribute('aria-pressed', String(o === b));
+        for (const p of panels) {
+          p.hidden = p.dataset.p !== b.dataset.p;
+          if (!p.hidden) cur = p;
+        }
+      });
+    }
+    const copy = box.querySelector<HTMLButtonElement>('[data-copy]')!;
+    copy.addEventListener('click', () => {
+      const text = cur.querySelector('[data-cmd]')!.textContent ?? '';
+      copyText(text, copy, cur);
+    });
+  }
+</script>

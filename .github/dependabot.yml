@@ -20,3 +20,14 @@ updates:
     groups:
       github-actions:
         patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /site
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      site-deps:
+        patterns: ["*"]
+        update-types: [minor, patch]

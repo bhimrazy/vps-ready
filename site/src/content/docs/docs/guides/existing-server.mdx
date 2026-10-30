@@ -1,0 +1,96 @@
+---
+title: Use it on a server that's already running things
+description: Read the plan first, keep your services reachable, and how vps-ready gets along with ufw, firewalld, Docker, fail2ban and your own SSH server config.
+sidebar:
+  label: Use it on a busy server
+  order: 4
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+vps-ready is built for fresh servers, but it is careful on busy ones too: it reads the live state, changes only what fails, writes its own files instead of editing yours, and tells you in the plan what it will leave alone. The rule is simple: **read the plan before you apply.**
+
+<Steps>
+
+1. **See what is running.**
+
+   ```sh
+   sudo vps-ready detect
+   ```
+
+   Note the listening ports and whether Docker is present.
+
+2. **Read the plan, with root.** `plan` works without root but then skips what only root can read, such as the firewall rules.
+
+   ```sh
+   sudo vps-ready plan --profile minimal
+   ```
+
+   Read every `note:` line: that is where vps-ready says what it found and what it will not touch.
+
+3. **Allow the ports your services need.** The firewall drops incoming traffic that no rule allows. `minimal` allows only SSH and `web` adds 80 and 443. If your app listens on another port, list it in your own profile (see below).
+
+4. **Apply, and confirm from a new login** as in the [Quick start](/docs/quick-start/).
+
+</Steps>
+
+## Keep your app reachable
+
+A web app on port 8080, a mail server, a game server: anything the firewall does not allow stops being reachable from outside once the firewall is on. Write a profile that extends a built-in one and lists every port:
+
+```toml title="busy-server.toml"
+schema  = 1
+extends = "web"
+
+[modules."firewall.inbound"]
+allow = ["22/tcp", "80/tcp", "443/tcp", "443/udp", "8080/tcp"]
+```
+
+```sh
+sudo vps-ready plan --profile ./busy-server.toml
+```
+
+Your current SSH ports are always allowed, whatever `allow` says.
+
+## Firewalls
+
+| You already use | What vps-ready does |
+|---|---|
+| **ufw** (enabled) | Leaves the firewall to ufw. `firewall.inbound` is not applicable: "ufw is enabled; vps-ready leaves the firewall to it". The other modules still apply |
+| **firewalld** (running or enabled) | The same: the firewall is left to firewalld |
+| **iptables-legacy** rules | Not applied, since vps-ready cannot read those rules |
+| **nftables** rules of your own | Adds its own table, `inet vps_ready`, next to them. A packet must pass every input chain, so your rules still apply; the plan lists them |
+| `nftables.service` enabled | Works, but restarting that service flushes the whole ruleset, including vps-ready's table, until `systemctl restart vps-ready-firewall`. The plan warns about it |
+| Nothing | Installs `nftables` if needed and adds its table |
+
+vps-ready's rules do not show in `ufw status`. Use `sudo nft list table inet vps_ready`. A rollback deletes only that table.
+
+## Docker
+
+Docker and the firewall get along, with one thing you must know.
+
+- **Containers keep working.** When Docker is installed, traffic from `docker0` and `br-*` to the host is accepted, so containers can still reach services on the host. The plan notes the cost: a compromised container can reach every host service, as with no firewall.
+- **Published ports skip the firewall.** Traffic to a port Docker publishes (`-p 5432:5432`) is forwarded to the container and never passes the input rules of any host firewall, ufw and firewalld included. The plan lists those ports, and the `FW-002` control fails while they are open to the world.
+- **Forwarding stays on.** `kernel.sysctl` never turns off IP forwarding, which Docker needs.
+
+<Aside type="caution" title="Published ports are public">
+`-p 5432:5432` makes a database reachable from anywhere even with the firewall on. Publish on loopback instead (`-p 127.0.0.1:5432:5432`) and put a reverse proxy in front, or filter forwarded traffic yourself in the `DOCKER-USER` chain.
+</Aside>
+
+## Your SSH server config
+
+- vps-ready never edits `sshd_config`. It adds one drop-in, `/etc/ssh/sshd_config.d/00-vps-ready.conf`, with only the settings that fail.
+- It never changes `Port`, `ListenAddress`, `AllowGroups`, `AuthenticationMethods` or the crypto settings.
+- If a file read before its drop-in already sets one of its settings to a failing value, or `sshd_config` does not include the drop-in directory, `ssh.server` is not applied and the plan says why.
+- `Match` blocks are checked for the admin user's own connection only.
+
+## Existing users, sudo and fail2ban
+
+- **An existing admin user** is completed, not replaced: missing keys are added, existing ones never removed, and an account that already has sudo rules keeps them.
+- **Root is never the admin.** If you log in as root today, `user.admin` creates `admin` with root's keys (without lines that carry options such as `command=`).
+- **fail2ban already installed:** `ssh.bruteforce` adds `/etc/fail2ban/jail.d/90-vps-ready.local`, read after the package's defaults, and never bans the address you are applying from.
+- **unattended-upgrades already set up:** `updates.auto` adds a drop-in that turns the daily jobs on; your other apt settings stay.
+
+<Aside type="tip">
+Not sure about one part? Apply it alone, for example `--module kernel.sysctl`, check your services, then continue. Each apply is its own transaction that `rollback` can undo.
+</Aside>

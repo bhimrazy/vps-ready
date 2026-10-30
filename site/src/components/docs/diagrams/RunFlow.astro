@@ -1,0 +1,52 @@
+---
+// The five commands of a run: a row on wide screens, a column on a phone.
+const steps = [
+  { cmd: 'audit', tag: 'read-only', text: 'Checks 29 controls and says why each one matters.' },
+  { cmd: 'plan', tag: 'read-only', text: 'A diff of every file and setting that would change.' },
+  { cmd: 'apply', tag: 'changes', text: 'Snapshot, validate, write, verify. A failure restores everything.' },
+  { cmd: 'confirm', tag: 'safety net', text: 'From a new SSH login. Without it, the safety timer rolls back.' },
+  { cmd: 'rollback', tag: 'any time', text: 'Undoes a transaction from the journal.' },
+];
+---
+
+<figure class="not-content my-7" aria-label="The five commands of a run">
+  <ol class="m-0 flex list-none flex-col gap-1 p-0 lg:flex-row lg:items-stretch">
+    {
+      steps.map((s, i) => (
+        <>
+          {i > 0 && (
+            <li aria-hidden="true" class="m-0 self-start pl-5 font-mono text-xs text-(--sl-color-gray-4) lg:self-center lg:pl-0">
+              <span class="block rotate-90 lg:rotate-0">→</span>
+            </li>
+          )}
+          <li
+            class:list={[
+              'm-0 grid content-start lg:flex-1 lg:basis-0 gap-1.5 rounded-[10px] border p-3 max-lg:grid-cols-[auto_1fr_auto] max-lg:items-center max-lg:gap-x-2.5',
+              s.cmd === 'confirm'
+                ? 'border-(--sl-color-accent) bg-(--sl-color-accent-low)'
+                : 'border-(--sl-color-gray-5) bg-(--sl-color-black)',
+            ]}
+          >
+            <span class="font-mono text-[0.6875rem] font-semibold text-(--sl-color-gray-3)">{i + 1}</span>
+            <span class="font-mono text-[0.9375rem] font-bold text-(--sl-color-white)">{s.cmd}</span>
+            <span
+              class:list={[
+                'justify-self-start rounded-full border px-1.5 py-0.5 font-mono text-[0.6875rem] leading-none max-lg:justify-self-end',
+                s.tag === 'safety net' || s.tag === 'changes'
+                  ? 'border-(--sl-color-accent) text-(--sl-color-accent-high)'
+                  : 'border-(--sl-color-gray-5) text-(--sl-color-gray-3)',
+              ]}
+            >
+              {s.tag}
+            </span>
+            <p class="m-0 text-[0.8125rem] leading-normal text-(--sl-color-gray-2) max-lg:col-span-full">{s.text}</p>
+          </li>
+        </>
+      ))
+    }
+  </ol>
+  <figcaption class="mt-3 text-xs text-(--sl-color-gray-3)">
+    <code>confirm</code> is only asked for when the run changes the admin user, the SSH server config or the
+    firewall.
+  </figcaption>
+</figure>

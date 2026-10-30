@@ -1,0 +1,413 @@
+/* Starlight theme: Tailwind v4 setup from the Starlight docs, then brand tokens. */
+@layer base, starlight, theme, components, utilities;
+
+@import '@astrojs/starlight-tailwind';
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/utilities.css' layer(utilities);
+
+@import './fonts.css';
+
+@import './theme.css';
+
+/* Everything below is unlayered, so it wins over Starlight's layered styles. */
+
+/* Tokens. Dark: GitHub-dark neutrals with a brighter brand green for contrast. */
+:root {
+  --sl-color-white: #f0f6fc;
+  --sl-color-gray-1: #e6edf3;
+  --sl-color-gray-2: #c9d1d9;
+  --sl-color-gray-3: #9198a1;
+  --sl-color-gray-4: #656c76;
+  --sl-color-gray-5: #30363d;
+  --sl-color-gray-6: #161b22;
+  --sl-color-black: #0d1117;
+  --sl-color-accent-low: #0f2d1a;
+  --sl-color-accent: #3fb950;
+  --sl-color-accent-high: #7ee787;
+  --sl-color-text-invert: #0d1117;
+  --sl-color-bg-inline-code: #1c2128;
+
+  --sl-line-height: 1.7;
+  --sl-sidebar-width: 17rem;
+  --sl-content-width: 50rem;
+  --sl-text-h1: 2rem;
+  --sl-text-h2: 1.375rem;
+  --sl-text-h3: 1.125rem;
+  --sl-text-h4: 1rem;
+  /* The right "On this page" column. */
+  --toc-width: 14rem;
+
+  --aside-note-bg: #161b22;
+  --aside-note-line: #3d444d;
+  --aside-note-ink: #c9d1d9;
+  --aside-tip-bg: #0f2d1a;
+  --aside-tip-line: #2ea04366;
+  --aside-tip-ink: #7ee787;
+  --aside-caution-bg: #2e2306;
+  --aside-caution-line: #bb800966;
+  --aside-caution-ink: #e3b341;
+  --aside-danger-bg: #3a1214;
+  --aside-danger-line: #f8514966;
+  --aside-danger-ink: #ff7b72;
+}
+
+:root[data-theme='light'] {
+  --sl-color-white: #1f2328;
+  --sl-color-gray-1: #1f2328;
+  --sl-color-gray-2: #31373d;
+  --sl-color-gray-3: #59636e;
+  --sl-color-gray-4: #8c959f;
+  --sl-color-gray-5: #d0d7de;
+  --sl-color-gray-6: #eef1f4;
+  --sl-color-gray-7: #f6f8fa;
+  --sl-color-black: #ffffff;
+  --sl-color-accent-low: #dafbe1;
+  --sl-color-accent: #1a7f37;
+  --sl-color-accent-high: #116329;
+  --sl-color-text-invert: #ffffff;
+  --sl-color-bg-nav: #ffffff;
+  --sl-color-bg-sidebar: #f6f8fa;
+  --sl-color-bg-inline-code: #f6f8fa;
+  --sl-color-hairline: #d0d7de;
+  --sl-color-hairline-light: #d0d7de;
+
+  --aside-note-bg: #f6f8fa;
+  --aside-note-line: #d0d7de;
+  --aside-note-ink: #1f2328;
+  --aside-tip-bg: #dafbe1;
+  --aside-tip-line: #aceebb;
+  --aside-tip-ink: #116329;
+  --aside-caution-bg: #fff8c5;
+  --aside-caution-line: #eac54f;
+  --aside-caution-ink: #9a6700;
+  --aside-danger-bg: #ffebe9;
+  --aside-danger-line: #ffcecb;
+  --aside-danger-ink: #cf222e;
+}
+
+@media (max-width: 50rem) {
+  :root {
+    --sl-text-h1: 1.625rem;
+    --sl-text-h2: 1.25rem;
+  }
+}
+
+/* Layout, wide screens: a fixed, narrow TOC column and the content centered
+   in the rest, instead of Starlight's split of the leftover width. */
+@media (min-width: 72rem) {
+  .right-sidebar-container {
+    width: var(--toc-width);
+  }
+  [data-has-sidebar][data-has-toc] .main-pane {
+    width: calc(100% - var(--toc-width));
+    --sl-content-margin-inline: auto;
+  }
+  /* The panel is position: fixed, so size its content to the column. */
+  .right-sidebar-panel .sl-container {
+    width: calc(var(--toc-width) - 2.25rem);
+    max-width: none;
+  }
+}
+
+/* Page title: a calm heading, not a band with a divider under it. */
+.content-panel {
+  padding-block: 1.25rem;
+}
+.content-panel + .content-panel {
+  border-top: 0;
+  padding-top: 0;
+}
+h1#_top {
+  margin-top: 1.5rem;
+  font: 700 var(--sl-text-h1) / 1.2 var(--sl-font-mono);
+  letter-spacing: -0.03em;
+  text-wrap: balance;
+}
+
+/* Headings in mono at modest sizes; body text in Public Sans. */
+.sl-markdown-content :is(h2, h3, h4) {
+  font-family: var(--sl-font-mono);
+  letter-spacing: -0.02em;
+  line-height: 1.3;
+}
+.sl-markdown-content h2 {
+  font-weight: 700;
+  margin-top: 2.75rem;
+}
+.sl-markdown-content h3 {
+  font-weight: 700;
+  margin-top: 2rem;
+}
+.sl-markdown-content h4 {
+  font-weight: 600;
+}
+.sl-markdown-content {
+  color: var(--sl-color-gray-2);
+}
+.sl-markdown-content :is(strong, b) {
+  color: var(--sl-color-white);
+}
+.sl-markdown-content a {
+  text-underline-offset: 0.2em;
+  text-decoration-thickness: 1px;
+}
+
+/* Inline code: a subtle chip with a border. */
+.sl-markdown-content :not(pre) > code {
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 4px;
+  padding: 0.0625rem 0.3125rem;
+  font-size: 0.85em;
+  overflow-wrap: anywhere;
+}
+
+/* Sideways scroll with a shadow on each edge that hides more content: the
+   page-colored covers scroll with the content, the shadows stay put. Used by
+   tables, mermaid diagrams and the safety timeline. */
+.scroll-x,
+.sl-markdown-content table,
+.sl-markdown-content pre.mermaid {
+  --fade-bg: var(--sl-color-black);
+  --fade-shadow: color-mix(in srgb, var(--sl-color-gray-4) 35%, transparent);
+  overflow-x: auto;
+  background:
+    linear-gradient(to right, var(--fade-bg) 40%, transparent) left / 2.5rem 100% no-repeat local,
+    linear-gradient(to left, var(--fade-bg) 40%, transparent) right / 2.5rem 100% no-repeat local,
+    linear-gradient(to right, var(--fade-shadow), transparent) left / 0.75rem 100% no-repeat scroll,
+    linear-gradient(to left, var(--fade-shadow), transparent) right / 0.75rem 100% no-repeat scroll,
+    var(--fade-bg);
+}
+
+/* Tables: compact; a wide one scrolls inside the column (Starlight makes the
+   table a block) instead of squeezing its cells into one word per line. */
+.sl-markdown-content table {
+  display: block;
+  max-width: 100%;
+  font-size: 0.875rem;
+  line-height: 1.55;
+}
+.sl-markdown-content :is(th, td) {
+  padding: 0.5rem 0.75rem;
+  min-width: 8rem;
+  vertical-align: top;
+  background: none;
+}
+.sl-markdown-content :is(th, td):first-child {
+  min-width: 0;
+  padding-inline-start: 0;
+}
+.sl-markdown-content th {
+  font: 600 0.75rem/1.4 var(--sl-font-mono);
+  color: var(--sl-color-gray-3);
+  text-align: start;
+}
+.sl-markdown-content td code {
+  overflow-wrap: anywhere;
+}
+/* The first column holds commands and IDs: keep them whole. */
+.sl-markdown-content td:first-child code {
+  white-space: nowrap;
+}
+
+/* Sidebar. */
+.sidebar-content {
+  font-size: 0.875rem;
+}
+.sidebar-content .top-level > li > details > summary .large {
+  font: 600 0.6875rem/1.5 var(--sl-font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sl-color-gray-3);
+}
+.sidebar-content .top-level > li + li {
+  margin-top: 0.5rem;
+}
+.sidebar-content a {
+  border-radius: 6px;
+  color: var(--sl-color-gray-2);
+}
+.sidebar-content a:hover {
+  color: var(--sl-color-white);
+}
+/* Current page: a quiet tint with an accent bar, not a solid block. */
+.sidebar-content a[aria-current='page'],
+.sidebar-content a[aria-current='page']:hover,
+.sidebar-content a[aria-current='page']:focus {
+  background: var(--sl-color-accent-low);
+  color: var(--sl-color-accent-high);
+  font-weight: 600;
+  box-shadow: inset 2px 0 0 var(--sl-color-accent);
+  border-radius: 0 6px 6px 0;
+}
+
+/* Right TOC: small and quiet, with a bar on the current section. */
+.right-sidebar-panel {
+  padding-inline: 1.25rem 1rem;
+}
+.right-sidebar-panel h2 {
+  font: 600 0.6875rem/1.5 var(--sl-font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sl-color-gray-3);
+}
+starlight-toc ul {
+  border-inline-start: 1px solid var(--sl-color-gray-5);
+}
+starlight-toc ul ul {
+  border: 0;
+}
+starlight-toc a {
+  margin-inline-start: -1px;
+  border-inline-start: 2px solid transparent;
+  padding-inline-start: calc(0.75rem + var(--depth) * 0.75rem);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+starlight-toc a[aria-current='true'] {
+  border-color: var(--sl-color-accent);
+  color: var(--sl-color-white);
+  font-weight: 500;
+}
+
+/* Footer: a small edit link, then compact prev/next cards. */
+footer .meta {
+  margin-top: 3.5rem;
+  font-size: 0.8125rem;
+}
+.pagination-links {
+  grid-template-columns: repeat(auto-fit, minmax(min(15rem, 100%), 1fr));
+  gap: 0.75rem;
+}
+.pagination-links a {
+  min-height: 4rem;
+  padding: 0.625rem 1rem;
+  border-radius: 10px;
+  box-shadow: none;
+  color: var(--sl-color-gray-3);
+}
+.pagination-links a > span {
+  font: 500 0.75rem/1.4 var(--sl-font-mono);
+}
+.pagination-links br {
+  display: none;
+}
+.pagination-links .link-title {
+  display: block;
+  margin-top: 0.125rem;
+  font: 600 0.9375rem/1.35 var(--sl-font);
+  color: var(--sl-color-white);
+}
+.pagination-links a:hover {
+  border-color: var(--sl-color-accent);
+}
+.pagination-links a:hover .link-title {
+  color: var(--sl-color-accent-high);
+}
+@media (max-width: 40rem) {
+  .pagination-links {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Link cards: flat, with the brand hover. */
+.sl-link-card {
+  box-shadow: none;
+  border-radius: 10px;
+}
+.sl-link-card:hover {
+  border-color: var(--sl-color-accent);
+}
+
+/* Images and details blocks in prose. */
+.sl-markdown-content img {
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 10px;
+}
+.sl-markdown-content details {
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 10px;
+  padding: 0.625rem 1rem;
+}
+.sl-markdown-content summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--sl-color-white);
+}
+
+/* Mermaid diagrams (internals pages): hidden until rendered, then centered.
+   Head.astro gives each a minimum width, so a phone scrolls it instead of
+   shrinking its text. */
+.sl-markdown-content pre.mermaid {
+  margin-block: 1.5rem;
+  padding: 1rem;
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 10px;
+  text-align: center;
+  font-size: var(--sl-text-xs);
+  white-space: pre;
+}
+.sl-markdown-content pre.mermaid:not([data-rendered]) {
+  color: var(--sl-color-gray-3);
+  text-align: left;
+}
+.sl-markdown-content pre.mermaid svg {
+  display: block;
+  margin-inline: auto;
+  max-width: 100%;
+  height: auto;
+}
+
+/* Header on a phone: 44px touch targets, and a flat menu button instead of
+   Starlight's raised disc. */
+@media (max-width: 50rem) {
+  :root {
+    --sl-menu-button-size: 2.75rem;
+  }
+  .sl-menu-button {
+    box-shadow: none;
+    background: transparent;
+    color: var(--sl-color-white);
+  }
+  .sl-menu-button:has(~ :popover-open) {
+    background: var(--sl-color-gray-6);
+  }
+  site-search button[data-open-modal] {
+    min-width: 2.75rem;
+    height: 2.75rem;
+    justify-content: center;
+  }
+}
+
+/* Asides in the brand palette: a tinted panel with a 1px border instead of
+   Starlight's blue and purple and its heavy bar. */
+.starlight-aside {
+  border: 1px solid var(--aside-line);
+  border-radius: 10px;
+  background-color: var(--aside-bg);
+  --sl-color-asides-border: var(--aside-line);
+  --sl-color-asides-text-accent: var(--aside-ink);
+}
+.starlight-aside__title {
+  font-family: var(--sl-font-mono);
+  font-size: var(--sl-text-sm);
+}
+.starlight-aside--note {
+  --aside-bg: var(--aside-note-bg);
+  --aside-line: var(--aside-note-line);
+  --aside-ink: var(--aside-note-ink);
+}
+.starlight-aside--tip {
+  --aside-bg: var(--aside-tip-bg);
+  --aside-line: var(--aside-tip-line);
+  --aside-ink: var(--aside-tip-ink);
+}
+.starlight-aside--caution {
+  --aside-bg: var(--aside-caution-bg);
+  --aside-line: var(--aside-caution-line);
+  --aside-ink: var(--aside-caution-ink);
+}
+.starlight-aside--danger {
+  --aside-bg: var(--aside-danger-bg);
+  --aside-line: var(--aside-danger-line);
+  --aside-ink: var(--aside-danger-ink);
+}

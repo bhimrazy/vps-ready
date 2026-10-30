@@ -1,0 +1,66 @@
+---
+import { frameHtml, SCREEN } from '../../scripts/motion';
+import { wizardSnippet } from '../../scripts/scenes';
+import Pill from './ui/Pill.astro';
+import Section from './ui/Section.astro';
+import SectionHead from './ui/SectionHead.astro';
+import SubHead from './ui/SubHead.astro';
+import Terminal from './ui/Terminal.astro';
+
+type Stop = { m: string; name: string; text: string; state?: 'done' | 'next'; pill?: string };
+const stops: Stop[] = [
+  { m: 'M0', name: 'Skeleton', text: 'Repo, CI, release pipeline', state: 'done' },
+  { m: 'M1', name: 'Audit', text: 'Detect the host, check controls', state: 'done', pill: 'v0.1.0' },
+  { m: 'M2', name: 'Engine', text: 'Plan, apply, journal, rollback', state: 'done', pill: 'v0.2.0' },
+  { m: 'M3', name: 'Lockout-safe', text: 'SSH, firewall, admin user, safety timer', state: 'done', pill: 'v0.3.0' },
+  { m: 'M4', name: 'Wizard', text: 'Guided setup and module explanations', state: 'next', pill: 'next' },
+  { m: 'M5', name: 'Deploy-ready', text: 'Signed apt, dnf and apk packages' },
+  { m: 'M6', name: 'More distros', text: 'Broader support, deeper checks' },
+];
+const dot = {
+  done: 'border-brand bg-brand text-on-accent',
+  next: 'border-brand bg-bg text-brand shadow-[0_0_0_5px_var(--color-brand-soft)]',
+  none: 'border-line bg-bg text-muted',
+};
+---
+
+<Section id="roadmap" alt>
+  <SectionHead label="Roadmap">
+    <Fragment slot="title">Built in small, safe releases.</Fragment>
+    Each release is tagged and signed. The guided setup is next.
+  </SectionHead>
+
+  <div
+    class="relative grid grid-cols-7 before:absolute before:inset-x-[7%] before:top-[15px] before:h-0.5 before:bg-[linear-gradient(90deg,var(--color-brand)_0_50%,var(--color-line)_50%_100%)] max-[820px]:grid-cols-1 max-[820px]:gap-5 max-[820px]:before:inset-y-0 max-[820px]:before:right-auto max-[820px]:before:left-[15px] max-[820px]:before:h-auto max-[820px]:before:w-0.5 max-[820px]:before:bg-[linear-gradient(var(--color-brand)_0_52%,var(--color-line)_52%_100%)]"
+  >
+    {
+      stops.map((s) => (
+        <div class="relative grid content-start justify-items-center gap-2 px-1.5 text-center max-[820px]:grid-cols-[32px_minmax(0,1fr)] max-[820px]:justify-items-start max-[820px]:gap-x-3.5 max-[820px]:px-0 max-[820px]:text-left">
+          <div
+            class:list={[
+              'z-[1] grid size-8 place-items-center rounded-full border-2 font-mono text-xs font-bold max-[820px]:row-span-3',
+              dot[s.state ?? 'none'],
+            ]}
+          >
+            {s.m}
+          </div>
+          <b class="font-mono text-[13px] font-bold">{s.name}</b>
+          <span class="text-sm leading-[1.45] text-muted">{s.text}</span>
+          {s.pill && <Pill tone={s.state === 'next' ? 'a' : 'g'}>{s.pill}</Pill>}
+        </div>
+      ))
+    }
+  </div>
+
+  <div class="mt-9 grid grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] items-start gap-9 max-[920px]:grid-cols-1 max-[920px]:gap-5">
+    <SubHead flush>
+      <Fragment slot="title">Preview: guided setup (v0.4.0)</Fragment>
+      Run <span class="font-mono">vps-ready</span> on its own: it suggests a profile, asks a few plain questions, then applies the plan
+      behind the same safety timer.
+    </SubHead>
+    <Terminal title="sudo vps-ready">
+      <Pill slot="status">Design preview</Pill>
+      <div class:list={[SCREEN, 'px-[18px] text-[12.5px] max-[600px]:text-[11px]']} set:html={frameHtml(wizardSnippet)} />
+    </Terminal>
+  </div>
+</Section>

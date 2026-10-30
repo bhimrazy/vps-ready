@@ -1,0 +1,14 @@
+---
+import Default from '@astrojs/starlight/components/Sidebar.astro';
+---
+
+<Default />
+
+{/* Starlight restores each group's open state from the previous page, which can
+  leave the current page inside a collapsed group. Reopen its ancestors. */}
+<script is:inline>
+  (() => {
+    const current = document.querySelector('#starlight__sidebar a[aria-current="page"]');
+    for (let d = current?.closest('details'); d; d = d.parentElement?.closest('details')) d.open = true;
+  })();
+</script>
