@@ -90,10 +90,15 @@ const accent =
     <span class="max-[640px]:sr-only">Feedback</span>
   </button>
 </div>
+{/* On phones, extra space at the end of the page so the last lines can scroll clear of the button. */}
+<div data-feedback-spacer aria-hidden="true" class="h-16 sm:hidden"></div>
 
 <script>
   const API = 'https://bhimraj.com.np/api/feedback';
   const root = document.querySelector<HTMLElement>('[data-feedback]')!;
+  // Mount at the end of <body>: inside the docs content the button would sit
+  // under Starlight's right sidebar and could not be clicked.
+  document.body.append(document.querySelector('[data-feedback-spacer]')!, root);
   const panel = root.querySelector<HTMLElement>('#feedback-panel')!;
   const toggle = root.querySelector<HTMLButtonElement>('[data-toggle]')!;
   const form = root.querySelector('form')!;
