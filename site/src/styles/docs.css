@@ -1,0 +1,130 @@
+/* Starlight theme: Tailwind v4 setup from the Starlight docs, then brand tokens. */
+@layer base, starlight, theme, components, utilities;
+
+@import '@astrojs/starlight-tailwind';
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/utilities.css' layer(utilities);
+
+@import './fonts.css';
+
+@import './theme.css';
+
+/* Unlayered, so these win over the plugin's generic accent/gray mapping. */
+:root {
+  /* Dark: GitHub-dark neutrals with a brighter brand green for contrast. */
+  --sl-color-white: #f0f6fc;
+  --sl-color-gray-1: #e6edf3;
+  --sl-color-gray-2: #c9d1d9;
+  --sl-color-gray-3: #9198a1;
+  --sl-color-gray-4: #656c76;
+  --sl-color-gray-5: #30363d;
+  --sl-color-gray-6: #161b22;
+  --sl-color-black: #0d1117;
+  --sl-color-accent-low: #0f2d1a;
+  --sl-color-accent: #3fb950;
+  --sl-color-accent-high: #7ee787;
+  --sl-color-text-invert: #0d1117;
+  --sl-color-bg-inline-code: #1c2128;
+}
+
+:root[data-theme='light'] {
+  --sl-color-white: #1f2328;
+  --sl-color-gray-1: #1f2328;
+  --sl-color-gray-2: #31373d;
+  --sl-color-gray-3: #59636e;
+  --sl-color-gray-4: #8c959f;
+  --sl-color-gray-5: #d0d7de;
+  --sl-color-gray-6: #eef1f4;
+  --sl-color-gray-7: #f6f8fa;
+  --sl-color-black: #ffffff;
+  --sl-color-accent-low: #dafbe1;
+  --sl-color-accent: #1a7f37;
+  --sl-color-accent-high: #116329;
+  --sl-color-text-invert: #ffffff;
+  --sl-color-bg-nav: #ffffff;
+  --sl-color-bg-sidebar: #f6f8fa;
+  --sl-color-bg-inline-code: #f6f8fa;
+  --sl-color-hairline: #d0d7de;
+  --sl-color-hairline-light: #d0d7de;
+}
+
+/* Headings and labels in mono, like the landing page. */
+.sl-markdown-content :is(h1, h2, h3, h4, h5, h6),
+h1#_top,
+.sidebar-content .group-label .large,
+starlight-toc h2,
+starlight-menu-button + * h2 {
+  font-family: var(--sl-font-mono);
+  letter-spacing: -0.02em;
+}
+h1#_top {
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  text-wrap: balance;
+}
+.sl-markdown-content :is(h2, h3) {
+  font-weight: 700;
+}
+.sidebar-content .group-label .large {
+  font-size: var(--sl-text-xs);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--sl-color-gray-3);
+}
+
+/* Inline code: subtle chip with a border. */
+.sl-markdown-content :not(pre) > code {
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 4px;
+  padding: 0.0625rem 0.3125rem;
+  font-size: 0.875em;
+}
+
+/* Wide tables scroll inside the column instead of stretching the page. */
+.sl-markdown-content table {
+  display: block;
+  overflow-x: auto;
+  font-size: var(--sl-text-sm);
+}
+.sl-markdown-content th {
+  font-family: var(--sl-font-mono);
+  font-size: var(--sl-text-xs);
+}
+
+/* Mermaid diagrams: hidden until rendered, then centered and scrollable. */
+.sl-markdown-content pre.mermaid {
+  margin-block: 1.5rem;
+  padding: 1rem;
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 8px;
+  background: var(--sl-color-black);
+  overflow-x: auto;
+  text-align: center;
+  font-size: var(--sl-text-xs);
+  white-space: pre;
+}
+.sl-markdown-content pre.mermaid:not([data-rendered]) {
+  color: var(--sl-color-gray-3);
+  text-align: left;
+}
+.sl-markdown-content pre.mermaid svg {
+  display: block;
+  margin-inline: auto;
+  max-width: 100%;
+  height: auto;
+}
+
+/* Current sidebar page: a quiet tint with an accent bar, not a solid block. */
+.sidebar-content a[aria-current='page'],
+.sidebar-content a[aria-current='page']:hover,
+.sidebar-content a[aria-current='page']:focus {
+  background: var(--sl-color-accent-low);
+  color: var(--sl-color-text-accent);
+  font-weight: 600;
+  box-shadow: inset 2px 0 0 var(--sl-color-accent);
+}
+
+/* Commands and IDs in a table's first column stay on one line. */
+.sl-markdown-content td:first-child code {
+  white-space: nowrap;
+}

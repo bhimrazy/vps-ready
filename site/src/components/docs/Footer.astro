@@ -1,0 +1,62 @@
+---
+import Default from '@astrojs/starlight/components/Footer.astro';
+import { AUTHOR, EMAIL, LINKS, MAILTO, TAGLINE, VERSION } from '../../lib/site';
+---
+
+<Default />
+<div class="site-foot" data-pagefind-ignore>
+  <div class="row">
+    <a href="/" class="brand"><span translate="no">vps<b>-</b>ready</span> v{VERSION}</a>
+    <span>{TAGLINE}</span>
+  </div>
+  <div class="row">
+    <a href={LINKS.bug}>Report a bug</a>
+    <a href={LINKS.lockout}>Got locked out?</a>
+    <a href={LINKS.security}>Security issue</a>
+    <a href={MAILTO}>{EMAIL}</a>
+  </div>
+  <div class="row">
+    <span>Built and maintained by <a href={AUTHOR.site}>{AUTHOR.name}</a></span>
+    <span class="me">
+      <a href={AUTHOR.github}>GitHub</a>
+      <a href={AUTHOR.x}>X</a>
+      <a href={AUTHOR.linkedin}>LinkedIn</a>
+    </span>
+  </div>
+</div>
+
+<style>
+  .site-foot {
+    display: grid;
+    gap: 0.625rem;
+    margin-top: 2.5rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--sl-color-hairline-light);
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+  }
+  .row {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 0.375rem 1.25rem;
+  }
+  a {
+    color: var(--sl-color-gray-2);
+    text-decoration: none;
+  }
+  a:hover {
+    color: var(--sl-color-text-accent);
+  }
+  .brand {
+    font-family: var(--sl-font-mono);
+    font-weight: 700;
+  }
+  .brand b {
+    color: var(--sl-color-accent);
+  }
+  .me {
+    display: flex;
+    gap: 1rem;
+  }
+</style>

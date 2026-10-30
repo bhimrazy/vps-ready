@@ -1,0 +1,69 @@
+/* Brand tokens shared by the landing page and the docs (feedback widget).
+   Colors, fonts and keyframes become Tailwind utilities. */
+@theme {
+  --color-bg: #ffffff;
+  --color-surface: #f6f8fa;
+  --color-line: #d0d7de;
+  --color-grid: #eef1f4;
+  --color-ink: #1f2328;
+  --color-muted: #59636e;
+  --color-subtle: #8c959f;
+  --color-term: #fbfcfd;
+  --color-on-accent: #ffffff;
+  --color-brand: #1a7f37;
+  --color-brand-ink: #116329;
+  --color-brand-soft: #dafbe1;
+  --color-brand-line: #aceebb;
+  --color-brand-wash: #f4fdf6;
+  --color-warn: #9a6700;
+  --color-warn-soft: #fff8c5;
+  --color-warn-line: #eac54f;
+  --color-danger: #cf222e;
+  --color-danger-soft: #ffebe9;
+  --color-danger-line: #ffcecb;
+  --color-link: #0969da;
+
+  --font-sans: 'Public Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --shadow-term: 0 1px 0 var(--color-line), 0 24px 48px -28px rgb(31 35 40 / 0.4);
+  --shadow-lift: 0 14px 30px -20px rgb(26 127 55 / 0.5);
+
+  --animate-blink: blink 1s steps(1) infinite;
+  --animate-flash: flash 1.2s ease-out;
+  --animate-grow: grow 1.1s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  --animate-pulse-ring: pulse-ring 2.4s infinite;
+
+  @keyframes blink {
+    50% {
+      opacity: 0;
+    }
+  }
+  @keyframes flash {
+    from {
+      background: var(--color-danger-soft);
+    }
+    to {
+      background: transparent;
+    }
+  }
+  @keyframes grow {
+    from {
+      transform: scaleX(0);
+    }
+    to {
+      transform: scaleX(1);
+    }
+  }
+  @keyframes pulse-ring {
+    0% {
+      box-shadow: 0 0 0 0 rgb(26 127 55 / 0.45);
+    }
+    70% {
+      box-shadow: 0 0 0 8px rgb(26 127 55 / 0);
+    }
+    100% {
+      box-shadow: 0 0 0 0 rgb(26 127 55 / 0);
+    }
+  }
+}

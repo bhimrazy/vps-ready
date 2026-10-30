@@ -1,0 +1,37 @@
+---
+import Default from '@astrojs/starlight/components/Head.astro';
+---
+
+<Default />
+
+<script>
+  // Renders ```mermaid blocks (turned into <pre class="mermaid"> by sync-docs).
+  // Loaded only on pages that have one, and re-rendered on theme change.
+  const blocks = [...document.querySelectorAll<HTMLElement>('pre.mermaid')];
+  if (blocks.length) {
+    const sources = blocks.map((b) => b.textContent ?? '');
+    const { default: mermaid } = await import('mermaid');
+    let n = 0;
+    const render = async () => {
+      const dark = document.documentElement.dataset.theme === 'dark';
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: 'base',
+        fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+        // Labels carry their own <br/> breaks, so don't wrap them narrower.
+        flowchart: { wrappingWidth: 520 },
+        markdownAutoWrap: false,
+        themeVariables: dark
+          ? { fontSize: '13px', background: '#0d1117', primaryColor: '#161b22', primaryTextColor: '#e6edf3', primaryBorderColor: '#3fb950', lineColor: '#9198a1', secondaryColor: '#21262d', tertiaryColor: '#161b22', noteBkgColor: '#21262d', noteTextColor: '#e6edf3', actorBkg: '#161b22', actorTextColor: '#e6edf3', signalColor: '#c9d1d9', signalTextColor: '#e6edf3' }
+          : { fontSize: '13px', background: '#ffffff', primaryColor: '#f6f8fa', primaryTextColor: '#1f2328', primaryBorderColor: '#1a7f37', lineColor: '#59636e', secondaryColor: '#dafbe1', tertiaryColor: '#ffffff', noteBkgColor: '#fff8c5', noteTextColor: '#1f2328', actorBkg: '#f6f8fa', actorTextColor: '#1f2328', signalColor: '#1f2328', signalTextColor: '#1f2328' },
+      });
+      for (const [i, el] of blocks.entries()) {
+        const { svg } = await mermaid.render(`mermaid-${n++}`, sources[i]);
+        el.innerHTML = svg;
+        el.dataset.rendered = '';
+      }
+    };
+    await render();
+    new MutationObserver(render).observe(document.documentElement, { attributeFilter: ['data-theme'] });
+  }
+</script>
