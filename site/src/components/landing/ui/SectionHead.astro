@@ -1,7 +1,6 @@
 ---
 // Eyebrow, h2 and lede: the head of every section. The title slot allows
 // markup (e.g. a no-wrap "vps-ready").
-import Label from './Label.astro';
 
 interface Props {
   /** Eyebrow; omitted on sections whose title says enough. */
@@ -15,7 +14,7 @@ const { label, center, flush, class: cls } = Astro.props;
 ---
 
 <div class:list={['grid gap-4', center && 'justify-items-center text-center', !flush && 'mb-11', cls]}>
-  {label && <Label>{label}</Label>}
+  {label && <span class="font-mono text-xs leading-none font-medium tracking-[0.1em] text-brand uppercase">{label}</span>}
   <h2 class="font-mono text-[clamp(26px,3.2vw,36px)] leading-[1.15] font-bold tracking-[-0.03em] text-balance"><slot name="title" /></h2>
   <p class:list={['max-w-[60ch] text-lg text-muted', center && 'mx-auto']}><slot /></p>
 </div>

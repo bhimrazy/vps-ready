@@ -4,34 +4,38 @@
 import { EMAIL, LINKS, MAILTO } from '../lib/site';
 
 const field =
-  'block w-full rounded-md border border-line bg-bg px-3 py-2 font-sans text-sm text-ink placeholder:text-subtle focus:border-brand focus:outline-none dark:border-[#30363d] dark:bg-[#0d1117] dark:text-[#e6edf3]';
+  'block w-full rounded-md border border-line bg-bg px-3 py-2 font-sans text-sm text-ink placeholder:text-subtle focus:border-brand focus:outline-none dark:border-(--sl-color-gray-5) dark:bg-(--sl-color-black) dark:text-(--sl-color-white)';
 const quick =
-  'flex-1 rounded-md border border-line px-2 py-1.5 text-center font-mono text-[11px] font-medium text-muted no-underline hover:border-brand-line hover:text-brand dark:border-[#30363d] dark:text-[#9198a1] dark:hover:text-[#7ee787]';
+  'flex-1 rounded-md border border-line px-2 py-1.5 text-center font-mono text-[11px] font-medium text-muted no-underline hover:border-brand-line hover:text-brand dark:border-(--sl-color-gray-5) dark:text-(--sl-color-gray-3) dark:hover:text-(--sl-color-text-accent)';
+// Dark styles use Starlight's theme variables; the landing page is light only.
+const accent =
+  'bg-brand text-on-accent hover:bg-brand-ink dark:bg-(--sl-color-accent) dark:text-(--sl-color-text-invert) dark:hover:bg-(--sl-color-accent-high)';
 ---
 
 <div
   data-feedback
   data-pagefind-ignore
   data-email={EMAIL}
-  class="fixed right-[max(1rem,env(safe-area-inset-right))] bottom-[max(1rem,env(safe-area-inset-bottom))] z-50 font-sans sm:right-[max(1.5rem,env(safe-area-inset-right))] sm:bottom-[max(1.5rem,env(safe-area-inset-bottom))]"
+  data-bug={LINKS.bug}
+  class="fixed right-4 bottom-4 z-50 font-sans sm:right-6 sm:bottom-6"
 >
   <div
     id="feedback-panel"
     role="dialog"
     aria-labelledby="feedback-title"
-    hidden
-    class="w-[min(calc(100vw-2rem),22rem)] overflow-hidden rounded-[10px] border border-line bg-bg text-ink shadow-[0_24px_48px_-20px_rgb(31_35_40/0.35)] dark:border-[#30363d] dark:bg-[#161b22] dark:text-[#e6edf3]"
+    popover="manual"
+    class="inset-auto right-4 bottom-4 m-0 w-[min(calc(100vw-2rem),22rem)] overflow-hidden rounded-[10px] border border-line p-0 sm:right-6 sm:bottom-6 bg-bg text-ink shadow-[0_24px_48px_-20px_rgb(31_35_40/0.35)] dark:border-(--sl-color-gray-5) dark:bg-(--sl-color-gray-6) dark:text-(--sl-color-white)"
   >
-    <div class="flex items-start gap-3 border-b border-line bg-surface px-4 py-3 dark:border-[#30363d] dark:bg-[#0d1117]">
+    <div class="flex items-start gap-3 border-b border-line bg-surface px-4 py-3 dark:border-(--sl-color-gray-5) dark:bg-(--sl-color-black)">
       <div class="min-w-0 flex-1">
         <p id="feedback-title" class="m-0 font-mono text-sm font-bold">Send feedback</p>
-        <p class="m-0 text-xs text-muted dark:text-[#9198a1]">Questions, ideas or problems with vps-ready.</p>
+        <p class="m-0 text-xs text-muted dark:text-(--sl-color-gray-3)">Questions, ideas or problems with vps-ready.</p>
       </div>
       <button
         type="button"
         data-close
         aria-label="Close feedback"
-        class="-mr-1 cursor-pointer rounded-md border-0 bg-transparent p-1 text-muted hover:bg-grid hover:text-ink dark:text-[#9198a1] dark:hover:bg-[#21262d] dark:hover:text-[#e6edf3]"
+        class="-mr-1 cursor-pointer rounded-md border-0 bg-transparent p-1 text-muted hover:bg-grid hover:text-ink dark:text-(--sl-color-gray-3) dark:hover:bg-(--sl-color-gray-5) dark:hover:text-(--sl-color-white)"
       >
         <svg class="block size-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"
           ><path d="M4 4l8 8M12 4l-8 8"></path></svg
@@ -62,11 +66,11 @@ const quick =
       <input name="website" type="text" tabindex="-1" autocomplete="off" aria-hidden="true" class="sr-only" />
       <button
         type="submit"
-        class="flex min-h-10 w-full cursor-pointer items-center justify-center gap-1.5 rounded-md border-0 bg-brand font-mono text-sm font-medium text-on-accent hover:bg-brand-ink disabled:cursor-not-allowed disabled:opacity-60 dark:bg-[#238636] dark:hover:bg-[#2ea043]"
+        class:list={['flex min-h-10 w-full cursor-pointer items-center justify-center rounded-md border-0 font-mono text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60', accent]}
       >
         Send
       </button>
-      <p data-status role="status" class="m-0 text-xs text-muted empty:hidden dark:text-[#9198a1] [&_a]:text-brand dark:[&_a]:text-[#7ee787]"></p>
+      <p data-status role="status" class="m-0 text-xs text-muted empty:hidden dark:text-(--sl-color-gray-3) [&_a]:text-brand dark:[&_a]:text-(--sl-color-text-accent)"></p>
     </form>
   </div>
 
@@ -75,7 +79,10 @@ const quick =
     data-toggle
     aria-expanded="false"
     aria-controls="feedback-panel"
-    class="ml-auto flex min-h-11 min-w-11 cursor-pointer items-center justify-center gap-2 rounded-full border-0 bg-brand px-4 max-[640px]:px-0 font-mono text-[13px] font-medium text-on-accent shadow-[0_8px_24px_-8px_rgb(26_127_55/0.6)] hover:bg-brand-ink aria-expanded:hidden dark:bg-[#238636] dark:hover:bg-[#2ea043]"
+    class:list={[
+      'ml-auto flex min-h-11 min-w-11 cursor-pointer items-center justify-center gap-2 rounded-full border-0 px-4 font-mono text-[13px] font-medium shadow-[0_8px_24px_-8px_rgb(26_127_55/0.6)] aria-expanded:hidden max-[640px]:px-0',
+      accent,
+    ]}
   >
     <svg class="size-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"
       ><path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z"></path></svg
@@ -93,18 +100,17 @@ const quick =
   const message = form.querySelector('textarea')!;
   const send = form.querySelector<HTMLButtonElement>('[type=submit]')!;
   const status = form.querySelector<HTMLElement>('[data-status]')!;
-  const email = root.dataset.email!;
-  const bugUrl = root.querySelector<HTMLAnchorElement>('a')!.href;
+  const { email, bug } = root.dataset;
 
   function setOpen(open: boolean) {
-    panel.hidden = !open;
+    panel.togglePopover(open);
     toggle.setAttribute('aria-expanded', String(open));
     (open ? message : toggle).focus();
   }
   toggle.addEventListener('click', () => setOpen(true));
   root.querySelector('[data-close]')!.addEventListener('click', () => setOpen(false));
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !panel.hidden) setOpen(false);
+    if (e.key === "Escape" && panel.matches(":popover-open")) setOpen(false);
   });
 
   function fallback(text: string) {
@@ -114,7 +120,7 @@ const quick =
       "Couldn't send. ",
       Object.assign(document.createElement('a'), { href, textContent: 'Email me instead' }),
       ', or ',
-      Object.assign(document.createElement('a'), { href: bugUrl, textContent: 'open a GitHub issue' }),
+      Object.assign(document.createElement('a'), { href: bug, textContent: 'open a GitHub issue' }),
       '.',
     );
   }

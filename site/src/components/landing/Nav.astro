@@ -1,9 +1,9 @@
 ---
 import { REPO } from '../../lib/site';
 import Logo from './Logo.astro';
-import Button from './ui/Button.astro';
-import Wrap from './ui/Wrap.astro';
 
+const button =
+  'inline-flex min-h-10 items-center rounded-md border border-line bg-bg px-4 py-2.5 font-mono text-sm font-medium text-ink no-underline motion-safe:transition-colors motion-safe:hover:bg-surface';
 const links = [
   ['#why', 'Why'],
   ['#flow', 'How it works'],
@@ -14,8 +14,8 @@ const links = [
 ];
 ---
 
-<nav class="sticky top-[env(safe-area-inset-top,0px)] z-[5] border-b border-line bg-bg">
-  <Wrap class="flex h-[60px] items-center justify-between gap-4">
+<nav class="sticky top-0 z-[5] border-b border-line bg-bg">
+  <div class="mx-auto w-full max-w-[1160px] px-4 flex h-[60px] items-center justify-between gap-4">
     <a class="flex items-center gap-2.5 font-mono text-lg font-bold no-underline" href="#top" aria-label="vps-ready home">
       <Logo /><span>vps<b class="text-brand">-</b>ready</span>
     </a>
@@ -31,8 +31,8 @@ const links = [
       }
     </ul>
     <div class="flex items-center gap-2">
-      <Button href="/docs/" class="min-[801px]:hidden">Docs</Button>
-      <Button href={REPO}>GitHub</Button>
+      <a href="/docs/" class:list={[button, 'min-[801px]:hidden']}>Docs</a>
+      <a href={REPO} class={button}>GitHub</a>
     </div>
-  </Wrap>
+  </div>
 </nav>

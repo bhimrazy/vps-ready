@@ -62,7 +62,7 @@ export const heroScenes: Record<'audit' | 'plan' | 'apply' | 'confirm', Step[]> 
   confirm: [
     { title: 'admin@vps: ~' },
     { clock: null },
-    { c: 'sudo vps-ready apply --profile minimal', fast: true },
+    { c: 'sudo vps-ready apply --profile minimal' },
     { o: sp('dim', '(plan, prompt and progress as before)'), d: 300 },
     { o: `${sp('b', 'Changes are live.')} Open a NEW terminal and run:`, d: 200 },
     { o: '' },
@@ -77,7 +77,6 @@ export const heroScenes: Record<'audit' | 'plan' | 'apply' | 'confirm', Step[]> 
       c: 'ssh -t -o ControlPath=none -p 22 admin@203.0.113.10 sudo vps-ready confirm',
       p: 'you@laptop $',
       pc: 'promptLaptop',
-      fast: true,
     },
     { w: 500 },
     {

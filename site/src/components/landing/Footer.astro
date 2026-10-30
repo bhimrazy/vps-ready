@@ -3,8 +3,6 @@ import { AUTHOR, EMAIL, LINKS, MAILTO, REPO, TAGLINE, VERSION } from '../../lib/
 import Logo from './Logo.astro';
 import Card from './ui/Card.astro';
 import Icon from './ui/Icon.astro';
-import Label from './ui/Label.astro';
-import Wrap from './ui/Wrap.astro';
 
 const social = [
   {
@@ -44,10 +42,10 @@ const row =
 
 {/* Extra bottom padding on phones keeps the last line clear of the Feedback button. */}
 <footer class="bg-bg pt-14 pb-8 text-sm text-muted max-[640px]:pb-24">
-  <Wrap class="grid gap-10">
+  <div class="mx-auto w-full max-w-[1160px] px-4 grid gap-10">
     <div class="grid grid-cols-2 items-stretch gap-4 max-[900px]:grid-cols-1">
       <Card bare class="flex flex-col gap-4 p-6">
-        <Label>Built and maintained by</Label>
+        <span class="font-mono text-xs leading-none font-medium tracking-[0.1em] text-brand uppercase">Built and maintained by</span>
         <div class="flex items-center gap-4">
           <img
             src="/avatar.webp"
@@ -100,7 +98,7 @@ const row =
       </Card>
 
       <Card bare class="grid content-start gap-4 p-6">
-        <Label>Get in touch</Label>
+        <span class="font-mono text-xs leading-none font-medium tracking-[0.1em] text-brand uppercase">Get in touch</span>
         <div class="grid gap-0.5">
           <div class="flex items-center gap-2">
             <a href={MAILTO} class={row}>
@@ -156,7 +154,7 @@ const row =
     </div>
     <div class="font-mono text-xs text-subtle">MIT or Apache-2.0 &middot; Open source on GitHub</div>
     </div>
-  </Wrap>
+  </div>
 </footer>
 
 <script>

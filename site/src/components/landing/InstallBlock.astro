@@ -7,12 +7,11 @@ import Panel from './ui/Panel.astro';
 import Tab from './ui/Tab.astro';
 
 interface Props {
-  id?: string;
   /** Make Copy the green primary action. */
   primaryCopy?: boolean;
   class?: string;
 }
-const { id, primaryCopy, class: cls } = Astro.props;
+const { primaryCopy, class: cls } = Astro.props;
 const methods = [
   { key: 'curl', label: 'curl', lines: [`curl -fsSL ${INSTALL_URL} | sudo sh`] },
   { key: 'read', label: 'read it first', lines: [`curl -fsSLO ${INSTALL_URL}`, 'less install.sh', 'sudo sh install.sh'] },
@@ -20,7 +19,7 @@ const methods = [
 ];
 ---
 
-<Panel id={id} data-install nowrap class:list={['w-full text-left', cls]}>
+<Panel data-install nowrap class:list={['w-full text-left', cls]}>
   <div slot="head" class="flex min-w-0 items-stretch self-stretch" role="tablist" aria-label="Install method">
     {
       methods.map((m, i) => (
