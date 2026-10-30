@@ -1,21 +1,28 @@
 ---
-// The one terminal: a panel with a 42px title bar (dots, title, optional
-// pill in the "status" slot), optional tabs under it, then the body.
+// The one terminal: a panel with a 42px title bar (title, optional pill in
+// the "status" slot; window dots only for the hero), optional tabs, then the body.
 interface Props {
   title: string;
+  dots?: boolean;
   titleId?: string;
   id?: string;
   class?: string;
 }
-const { title, titleId, id, class: cls } = Astro.props;
+const { title, dots, titleId, id, class: cls } = Astro.props;
 ---
 
 <div id={id} class:list={['flex min-w-0 flex-col overflow-hidden rounded-[10px] border border-line bg-term', cls]}>
   <div class="flex min-h-[42px] flex-none items-center gap-1.5 border-b border-line bg-surface px-3.5 font-mono text-xs text-muted">
-    <i class="size-2.5 flex-none rounded-full bg-line"></i>
-    <i class="size-2.5 flex-none rounded-full bg-line"></i>
-    <i class="size-2.5 flex-none rounded-full bg-line"></i>
-    <span id={titleId} class="ml-2 min-w-0 truncate">{title}</span>
+    {
+      dots && (
+        <>
+          <i class="size-2.5 flex-none rounded-full bg-line" />
+          <i class="size-2.5 flex-none rounded-full bg-line" />
+          <i class="size-2.5 flex-none rounded-full bg-line" />
+        </>
+      )
+    }
+    <span id={titleId} class:list={['min-w-0 truncate', dots && 'ml-2']}>{title}</span>
     <span class="ml-auto"><slot name="status" /></span>
   </div>
   {

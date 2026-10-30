@@ -47,7 +47,7 @@ const mods = [
 ];
 ---
 
-<Section id="modules">
+<Section id="modules" alt>
   <SectionHead label="Under the hood">
     <Fragment slot="title">Six modules, always run in a safe order.</Fragment>
     The admin user exists before SSH is locked down, and SSH ports are open before the firewall closes everything else. Together the
@@ -70,7 +70,7 @@ const mods = [
       ))
     }
   </div>
-  <div class="mt-9 grid gap-2.5 text-sm text-muted *:[&>b]:font-semibold *:[&>b]:text-ink">
+  <div class="mt-9 grid max-w-[70ch] gap-2.5 text-sm text-muted *:[&>b]:font-semibold *:[&>b]:text-ink">
     <p>
       <b>Profiles.</b> <span class="font-mono">minimal</span> sets up the admin user, SSH, the firewall, kernel settings and automatic
       updates. <span class="font-mono">web</span> adds ssh.bruteforce (fail2ban). You can also switch modules on one by one.

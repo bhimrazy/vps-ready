@@ -17,6 +17,9 @@
     color: var(--color-ink);
     font: 400 16px/1.6 var(--font-sans);
   }
+  p {
+    text-wrap: pretty;
+  }
   :focus-visible {
     outline: 2px solid var(--color-link);
     outline-offset: 2px;

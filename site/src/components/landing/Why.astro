@@ -1,6 +1,5 @@
 ---
 import Card from './ui/Card.astro';
-import Icon from './ui/Icon.astro';
 import Panel from './ui/Panel.astro';
 import Pill from './ui/Pill.astro';
 import Section from './ui/Section.astro';
@@ -9,33 +8,6 @@ import SubHead from './ui/SubHead.astro';
 import Tab from './ui/Tab.astro';
 import Terminal from './ui/Terminal.astro';
 import { SCREEN } from '../../scripts/motion';
-
-const risks = [
-  {
-    title: 'Root can log in',
-    text: "One guessed password and the whole machine is someone else's.",
-    href: '#ba-root',
-    icon: '<circle cx="12" cy="8" r="4"/><path d="M4 21c.7-4.5 4-7 8-7s7.3 2.5 8 7"/>',
-  },
-  {
-    title: 'Passwords are allowed',
-    text: 'Bots try thousands of them, all day, from many addresses.',
-    href: '#ba-login',
-    icon: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 017.6-1.7"/>',
-  },
-  {
-    title: 'Every port is reachable',
-    text: 'A database or admin panel left listening is open to anyone.',
-    href: '#ba-fw',
-    icon: '<path d="M12 3l8 3v6c0 5-3.4 8-8 9-4.6-1-8-4-8-9V6z"/><path d="M9.5 9.5l5 5M14.5 9.5l-5 5"/>',
-  },
-  {
-    title: 'Updates wait for you',
-    text: 'Known holes stay open until someone remembers to patch.',
-    href: '#ba-upd',
-    icon: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
-  },
-];
 
 // [id, name, modules, before, after]
 const rows = [
@@ -86,34 +58,19 @@ const event = (k: string) =>
           id="log-screen"
           class:list={[
             SCREEN,
-            'h-[300px] flex-1 text-xs [mask-image:linear-gradient(to_bottom,transparent_0,#000_35%)]',
+            'h-[300px] flex-1 justify-end text-xs max-[600px]:px-3 max-[600px]:text-[11px] [mask-image:linear-gradient(to_bottom,transparent_0,#000_35%)]',
             '*:overflow-hidden *:rounded-[3px] *:text-ellipsis *:whitespace-pre',
           ]}
         >
           {
             seed.map(([ts, k, u, ip]) => (
-              <div set:html={`<span class="text-muted">${ts}</span>  ${event(k)}  ${u.padEnd(9)}<span class="text-muted">from</span> ${ip}`} />
+              <div set:html={`<span class="text-muted max-[600px]:hidden">${ts}  </span>${event(k)}  ${u.padEnd(9)}<span class="text-muted">from</span> ${ip}`} />
             ))
           }
         </div>
       </Terminal>
       <p class="mt-3 font-mono text-xs text-muted">Simulated SSH log of a typical fresh server. Addresses are documentation examples.</p>
     </div>
-  </div>
-
-  <div class="mt-9 grid grid-cols-4 gap-4 max-[920px]:grid-cols-2 max-[600px]:grid-cols-1">
-    {
-      risks.map((r) => (
-        <Card class="grid content-start gap-2.5">
-          <Icon d={r.icon} class="mb-0.5 text-danger" />
-          <h3 class="font-sans text-base leading-[1.3] font-semibold">{r.title}</h3>
-          <p class="text-sm text-muted">{r.text}</p>
-          <a class="mt-1 font-mono text-xs font-medium text-brand no-underline hover:underline" href={r.href}>
-            See the fix
-          </a>
-        </Card>
-      ))
-    }
   </div>
 
   <div class="mt-9">
@@ -162,7 +119,7 @@ const event = (k: string) =>
 </Section>
 
 <script>
-  import { onView, reducedMotion } from '../../scripts/motion';
+  import { reducedMotion } from '../../scripts/motion';
 
   const still = reducedMotion();
 
@@ -172,7 +129,6 @@ const event = (k: string) =>
   const bAfter = document.getElementById('ba-after')!;
   const score = document.getElementById('ba-score')!;
   let baTok = 0;
-  let baAuto = true;
   function setRow(r: HTMLElement, on: boolean) {
     r.querySelector('[data-val]')!.textContent = on ? r.dataset.a! : r.dataset.b!;
     const p = r.querySelector<HTMLElement>('[data-st]')!;
@@ -207,14 +163,8 @@ const event = (k: string) =>
       if (n >= 6) clearInterval(iv);
     }, 160);
   }
-  bBefore.addEventListener('click', () => {
-    baAuto = false;
-    setBA(false, !still);
-  });
-  bAfter.addEventListener('click', () => {
-    baAuto = false;
-    setBA(true, !still);
-  });
+  bBefore.addEventListener('click', () => setBA(false, !still));
+  bAfter.addEventListener('click', () => setBA(true, !still));
 
   // SSH log feed (simulated; RFC 5737 addresses).
   const logS = document.getElementById('log-screen')!;
@@ -253,7 +203,7 @@ const event = (k: string) =>
         : '<span class="text-warn">Invalid user   </span>';
     const d = document.createElement('div');
     if (fresh) d.className = 'motion-safe:animate-flash';
-    d.innerHTML = `<span class="text-muted">${ts}</span>  ${ev}  ${u.padEnd(9)}<span class="text-muted">from</span> ${ip}`;
+    d.innerHTML = `<span class="text-muted max-[600px]:hidden">${ts}  </span>${ev}  ${u.padEnd(9)}<span class="text-muted">from</span> ${ip}`;
     logS.appendChild(d);
     while (logS.children.length > 40) logS.firstChild!.remove();
     fails++;
@@ -281,12 +231,5 @@ const event = (k: string) =>
       buckets.push(0);
       drawStats();
     }, 5000);
-    onView(document.getElementById('ba-rows')!, () => {
-      (function cycle(on: boolean) {
-        if (!baAuto) return;
-        setBA(on, true);
-        setTimeout(() => cycle(!on), on ? 5200 : 2800);
-      })(true);
-    });
   }
 </script>

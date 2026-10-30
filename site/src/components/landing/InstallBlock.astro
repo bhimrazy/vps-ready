@@ -7,9 +7,11 @@ import Tab from './ui/Tab.astro';
 
 interface Props {
   id?: string;
+  /** Make Copy the green primary action. */
+  primaryCopy?: boolean;
   class?: string;
 }
-const { id, class: cls } = Astro.props;
+const { id, primaryCopy, class: cls } = Astro.props;
 const methods = [
   { key: 'curl', label: 'curl', lines: [`curl -fsSL ${INSTALL_URL} | sudo sh`] },
   { key: 'read', label: 'read it first', lines: [`curl -fsSLO ${INSTALL_URL}`, 'less install.sh', 'sudo sh install.sh'] },
@@ -31,7 +33,12 @@ const methods = [
     slot="head"
     type="button"
     data-copy
-    class="ml-auto min-h-11 flex-none cursor-pointer self-stretch border-0 border-l border-solid border-line bg-bg px-4 font-mono text-xs font-medium text-ink hover:text-brand max-[420px]:px-3"
+    class:list={[
+      'ml-auto min-h-11 flex-none cursor-pointer self-stretch border-0 border-l border-solid px-4 font-mono text-xs font-medium max-[420px]:px-3',
+      primaryCopy
+        ? 'border-brand bg-brand text-on-accent hover:bg-brand-ink'
+        : 'border-line bg-bg text-ink hover:text-brand',
+    ]}
   >
     Copy
   </button>
@@ -41,7 +48,7 @@ const methods = [
         data-p={m.key}
         role="tabpanel"
         hidden={i !== 0}
-        class="m-0 px-4 py-3.5 font-mono text-[13px] leading-[1.75] wrap-anywhere whitespace-pre-wrap text-ink"
+        class="m-0 overflow-x-auto px-4 py-3.5 font-mono text-[13px] leading-[1.75] whitespace-pre text-ink max-[720px]:[mask-image:linear-gradient(to_right,#000_calc(100%-32px),transparent)]"
         set:html={m.lines.map((l) => `<span class="text-subtle select-none">$</span> <span data-cmd>${l}</span>`).join('\n')}
       />
     ))

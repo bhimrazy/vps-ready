@@ -1,0 +1,273 @@
+---
+import Code from './ui/Code.astro';
+import Panel from './ui/Panel.astro';
+import Pill from './ui/Pill.astro';
+import Section from './ui/Section.astro';
+import SectionHead from './ui/SectionHead.astro';
+import Tab from './ui/Tab.astro';
+
+// Vertical timeline (narrow screens). Each item: [step, title, note].
+const vtLi =
+  'relative grid justify-items-start gap-1 pb-4 pl-[26px] transition-opacity duration-300 data-off:opacity-30 last:pb-0 before:absolute before:top-1.5 before:left-1 before:size-2.5 before:rounded-full after:absolute after:top-[18px] after:bottom-0 after:left-2 after:w-0.5 after:bg-line last:after:hidden';
+const branches = [
+  {
+    end: 'ok',
+    head: 'You log in again',
+    dot: 'before:bg-brand',
+    last: 'text-brand',
+    items: [
+      ['New SSH login runs vps-ready confirm', ''],
+      ['Safety timer canceled', 'The changes stay.'],
+    ],
+  },
+  {
+    end: 'bad',
+    head: "You're locked out",
+    dot: 'before:bg-danger',
+    last: 'text-danger',
+    items: [
+      ['No confirm in time', ''],
+      ['Everything rolled back', 'Even after a reboot.'],
+    ],
+  },
+];
+const ticks = ['0:00', '1:00', '2:00', '3:00', '4:00', '5:00'];
+---
+<Section id="safety" alt>
+  <SectionHead label="Safety net">
+    <Fragment slot="title">If a change locks you out, it rolls back on its own.</Fragment>
+    Before changing SSH or the firewall, <span class="whitespace-nowrap">vps-ready</span> starts a safety timer (5 minutes by default).
+    Log in again from a new terminal and run <Code>vps-ready confirm</Code> to keep the changes. If you can't get back in, everything
+    rolls back, even if the server reboots.
+  </SectionHead>
+    <Panel id="dm">
+      <div slot="head" class="flex min-w-0 items-stretch self-stretch" role="group" aria-label="Choose what happens">
+        <Tab kind="toggle" id="dm-ok">You log in again</Tab>
+        <Tab kind="toggle" id="dm-bad">You're locked out</Tab>
+      </div>
+      <Pill slot="meta" id="dm-state">Both endings shown</Pill>
+
+      <div class="px-4 pt-2 pb-3 max-[760px]:hidden">
+        <svg
+          viewBox="0 0 960 320"
+          role="img"
+          class="block h-auto w-full fill-ink font-mono"
+          aria-label="Timeline. Apply arms a five minute safety timer. If a new SSH login confirms in time the changes stay. Otherwise everything rolls back, even after a reboot."
+        >
+          <defs>
+            <marker id="ahg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"
+              ><path d="M0 0 L10 5 L0 10 z" fill="#1a7f37"></path></marker
+            >
+            <marker id="ahr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"
+              ><path d="M0 0 L10 5 L0 10 z" fill="#cf222e"></path></marker
+            >
+          </defs>
+          <line x1="60" y1="160" x2="900" y2="160" stroke="#d0d7de" stroke-width="2"></line>
+          <rect x="60" y="151" width="720" height="18" rx="9" fill="#fff8c5" stroke="#eac54f"></rect>
+          <rect id="dm-fill" x="60" y="151" width="720" height="18" rx="9" fill="#eac54f" opacity=".55"></rect>
+          <g font-size="12" text-anchor="middle" fill="#59636e">
+            {ticks.map((t, i) => <text x={60 + i * 144} y="192">{t}</text>)}
+          </g>
+          <circle cx="60" cy="160" r="9" fill="#1a7f37"></circle>
+          <text x="60" y="120" font-size="13" font-weight="700" text-anchor="middle">apply</text>
+          <text x="60" y="136" font-size="12" text-anchor="start" fill="#59636e" dx="-40">safety timer armed first</text>
+
+          <g id="dm-good" class="transition-opacity duration-400" fill="#1a7f37">
+            <path id="dm-pg" d="M276 151 C276 100 276 72 306 64 L606 64" fill="none" stroke="#1a7f37" stroke-width="2.5" marker-end="url(#ahg)"
+            ></path>
+            <text x="290" y="40" font-size="13" font-weight="700">new SSH login runs vps-ready confirm</text>
+            <rect x="622" y="42" width="258" height="46" rx="8" fill="#dafbe1" stroke="#aceebb"></rect>
+            <text x="751" y="62" font-size="13" font-weight="700" text-anchor="middle">Safety timer canceled</text>
+            <text x="751" y="78" font-size="12" text-anchor="middle">the changes stay</text>
+          </g>
+          <g id="dm-bad-g" class="transition-opacity duration-400" fill="#cf222e">
+            <path
+              id="dm-pr"
+              d="M780 169 C780 230 780 258 758 266 L652 266"
+              fill="none"
+              stroke="#cf222e"
+              stroke-width="2.5"
+              stroke-dasharray="6 5"
+              marker-end="url(#ahr)"></path>
+            <text x="800" y="232" font-size="13" font-weight="700">no confirm</text>
+            <text x="800" y="248" font-size="12">in time</text>
+            <rect x="392" y="244" width="258" height="46" rx="8" fill="#ffebe9" stroke="#ffcecb"></rect>
+            <text x="521" y="264" font-size="13" font-weight="700" text-anchor="middle">Everything rolled back</text>
+            <text x="521" y="280" font-size="12" text-anchor="middle">even after a reboot</text>
+          </g>
+
+          <g id="dm-now" transform="translate(780 0)">
+            <line x1="0" y1="140" x2="0" y2="180" stroke="#1f2328" stroke-width="2"></line>
+            <circle cx="0" cy="160" r="7" fill="#ffffff" stroke="#1f2328" stroke-width="3"></circle>
+            <rect x="-38" y="208" width="76" height="22" rx="11" fill="#1f2328"></rect>
+            <text id="dm-clk" x="0" y="223" font-size="12" font-weight="700" text-anchor="middle" fill="#ffffff">5:00</text>
+          </g>
+        </svg>
+      </div>
+
+      <div id="vt" class="hidden gap-3.5 px-4 py-[18px] max-[760px]:grid">
+        <ol class="m-0 grid list-none p-0">
+          <li data-k="0" class:list={[vtLi, 'before:bg-brand']}>
+            <b class="font-mono text-[13px] leading-[1.4] font-bold">apply</b><span class="text-sm text-muted">Safety timer armed first</span>
+          </li>
+          <li data-k="1" class:list={[vtLi, 'before:bg-brand']}>
+            <b class="font-mono text-[13px] leading-[1.4] font-bold">Safety timer running</b><Pill id="vt-clk" tone="a">5:00</Pill>
+          </li>
+        </ol>
+        <div class="grid gap-3">
+          {
+            branches.map((br) => (
+              <div data-end={br.end} class="grid gap-2.5 rounded-[10px] border border-line p-3.5 transition-opacity duration-300 data-off:opacity-30">
+                <h4 class="m-0 font-mono text-xs font-medium tracking-[0.08em] text-muted uppercase">{br.head}</h4>
+                <ol class="m-0 grid list-none p-0">
+                  {br.items.map(([title, note], i) => (
+                    <li data-k={i + 2} class:list={[vtLi, br.dot]}>
+                      <b class:list={['font-mono text-[13px] leading-[1.4] font-bold', i === 1 && br.last]}>{title}</b>
+                      {note && <span class="text-sm text-muted">{note}</span>}
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            ))
+          }
+        </div>
+      </div>
+    </Panel>
+
+    <div class="mt-9 grid grid-cols-2 gap-7 max-[820px]:grid-cols-1 max-[820px]:gap-[18px]">
+      <div class="grid content-start gap-1.5 text-sm text-muted">
+        <b class="font-mono text-sm font-bold text-ink">Only a new login counts.</b>The confirming session must start after the change, on a
+        port the SSH server listens on, as one of the admin users in the plan.
+      </div>
+      <div class="grid content-start gap-1.5 text-sm text-muted">
+        <b class="font-mono text-sm font-bold text-ink">Refuses to lock you out.</b>It won't turn off root or password login unless an admin
+        user with SSH keys and sudo exists, and it checks that user against the live SSH server config.
+      </div>
+    </div>
+</Section>
+
+<script>
+  import { onView, reducedMotion } from '../../scripts/motion';
+
+  const still = reducedMotion();
+  const $ = (id: string) => document.getElementById(id)!;
+  const now = $('dm-now');
+  const clk = $('dm-clk');
+  const fill = $('dm-fill');
+  const vclk = $('vt-clk');
+  const gG = $('dm-good');
+  const gB = $('dm-bad-g');
+  const pg = $('dm-pg') as unknown as SVGPathElement;
+  const pr = $('dm-pr') as unknown as SVGPathElement;
+  const bOk = $('dm-ok');
+  const bBad = $('dm-bad');
+  const state = $('dm-state');
+  const vItems = document.querySelectorAll<HTMLElement>('#vt li');
+  const vBr = document.querySelectorAll<HTMLElement>('#vt [data-end]');
+  const lg = pg.getTotalLength();
+  const lr = pr.getTotalLength();
+  const marks = new Map([
+    [pg, 'url(#ahg)'],
+    [pr, 'url(#ahr)'],
+  ]);
+  let tok = 0;
+  let auto = true;
+
+  const fmt = (left: number) => `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+  function setX(x: number) {
+    now.setAttribute('transform', `translate(${x} 0)`);
+    const left = Math.max(0, 300 - Math.round(((x - 60) / 720) * 300));
+    clk.textContent = vclk.textContent = `${fmt(left)} left`;
+    fill.setAttribute('width', String(Math.max(0, x - 60)));
+  }
+  // n: last lit step; end: "ok", "bad", or null for both.
+  function vt(n: number, end: string | null) {
+    vItems.forEach((li) => li.toggleAttribute('data-off', Number(li.dataset.k) > n));
+    vBr.forEach((b) => b.toggleAttribute('data-off', end != null && b.dataset.end !== end));
+  }
+  // Draws fraction k of a path. The path is hidden until it starts and its
+  // arrowhead appears only once it is fully drawn, so no stub shows early.
+  function draw(p: SVGPathElement, len: number, k: number) {
+    p.style.visibility = k > 0 ? 'visible' : 'hidden';
+    p.style.strokeDasharray = `${len} ${len + 2}`;
+    p.style.strokeDashoffset = String(len * (1 - k));
+    if (k >= 1) p.setAttribute('marker-end', marks.get(p)!);
+    else p.removeAttribute('marker-end');
+  }
+  function tween(ms: number, fn: (k: number) => void, t: number) {
+    return new Promise<void>((res, rej) => {
+      const s0 = performance.now();
+      (function step(n: number) {
+        if (t !== tok) return rej(0);
+        const k = Math.min(1, (n - s0) / ms);
+        fn(k);
+        k < 1 ? requestAnimationFrame(step) : res();
+      })(s0);
+    });
+  }
+  const wait = (ms: number, t: number) => new Promise<void>((res, rej) => setTimeout(() => (t === tok ? res() : rej(0)), ms));
+  function mode(ok: boolean | null) {
+    bOk.setAttribute('aria-pressed', String(ok === true));
+    bBad.setAttribute('aria-pressed', String(ok === false));
+  }
+  function setState(txt: string, tone?: 'g' | 'a' | 'r') {
+    state.textContent = txt;
+    if (tone) state.dataset.tone = tone;
+    else delete state.dataset.tone;
+  }
+  function finalState() {
+    gG.style.opacity = gB.style.opacity = '1';
+    draw(pg, lg, 1);
+    draw(pr, lr, 1);
+    pg.style.strokeDasharray = '';
+    pr.style.strokeDasharray = '6 5';
+    pr.style.strokeDashoffset = '';
+    setX(780);
+    clk.textContent = vclk.textContent = '5:00';
+    vt(3, null);
+    mode(null);
+    setState('Both endings shown');
+  }
+  async function play(ok: boolean) {
+    const t = ++tok;
+    const end = ok ? 'ok' : 'bad';
+    mode(ok);
+    gG.style.opacity = ok ? '1' : '.15';
+    gB.style.opacity = ok ? '.15' : '1';
+    draw(pg, lg, 0);
+    draw(pr, lr, 0);
+    setState('Safety timer running', 'a');
+    vt(1, end);
+    setX(60);
+    await wait(500, t);
+    const x1 = ok ? 276 : 780;
+    await tween(ok ? 1800 : 4200, (k) => setX(60 + (x1 - 60) * k), t);
+    vt(2, end);
+    if (ok) {
+      setState('New login confirmed', 'g');
+      await tween(900, (k) => draw(pg, lg, k), t);
+      vt(3, end);
+      setState('Safety timer canceled: the changes stay', 'g');
+    } else {
+      setState('Time is up', 'r');
+      await tween(900, (k) => draw(pr, lr, k), t);
+      pr.style.strokeDasharray = '6 5';
+      vt(3, end);
+      setState('Rolled back: the old login works again', 'r');
+    }
+    await wait(2600, t);
+    if (auto) play(!ok).catch(() => {});
+  }
+  function choose(ok: boolean) {
+    auto = false;
+    if (!still) return void play(ok).catch(() => {});
+    mode(ok);
+    vt(3, ok ? 'ok' : 'bad');
+  }
+  bOk.addEventListener('click', () => choose(true));
+  bBad.addEventListener('click', () => choose(false));
+
+  // Both endings show at rest until the timeline scrolls into view.
+  finalState();
+  if (!still) onView($('dm'), () => void play(true).catch(() => {}));
+</script>

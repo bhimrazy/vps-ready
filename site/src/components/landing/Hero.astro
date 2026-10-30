@@ -1,8 +1,7 @@
 ---
-import { INSTALL_URL, REPO, VERSION } from '../../lib/site';
+import { INSTALL_URL, VERSION } from '../../lib/site';
 import { frameHtml, SCREEN } from '../../scripts/motion';
 import { heroScenes } from '../../scripts/scenes';
-import Button from './ui/Button.astro';
 import Label from './ui/Label.astro';
 import Pill from './ui/Pill.astro';
 import Tab from './ui/Tab.astro';
@@ -15,19 +14,23 @@ const quick = `curl -fsSL ${INSTALL_URL} | sudo sh`;
 
 <header
   id="top"
-  class="border-b border-line bg-bg bg-[linear-gradient(var(--color-grid)_1px,transparent_1px),linear-gradient(90deg,var(--color-grid)_1px,transparent_1px)] bg-size-[32px_32px] bg-position-[-1px_-1px] pt-20 pb-24"
+  class="border-b border-line bg-bg bg-[linear-gradient(var(--color-grid)_1px,transparent_1px),linear-gradient(90deg,var(--color-grid)_1px,transparent_1px)] bg-size-[32px_32px] bg-position-[-1px_-1px] pt-[72px] pb-20"
 >
-  <Wrap class="grid justify-items-center gap-14">
-    <div class="grid max-w-[1000px] min-w-0 justify-items-center gap-6 text-center">
+  <Wrap class="grid grid-cols-[minmax(0,1fr)_minmax(0,580px)] items-center gap-12 max-[920px]:grid-cols-[minmax(0,1fr)]">
+    <div class="grid min-w-0 justify-items-start gap-5">
       <Label>Linux VPS hardening &middot; v{VERSION}</Label>
-      <h1 class="font-mono text-[clamp(32px,4.6vw,54px)] leading-[1.15] font-bold tracking-[-0.03em] text-balance">
+      <h1
+        class="max-w-[15ch] font-mono text-[clamp(34px,3.4vw,44px)] leading-[1.15] font-bold tracking-[-0.03em] text-balance max-[920px]:max-w-none"
+      >
         Harden a fresh server <em class="block text-brand not-italic">without locking yourself out.</em>
       </h1>
-      <p class="max-w-[54ch] text-lg text-muted">
+      <p class="max-w-[44ch] text-lg text-muted">
         SSH keys, a firewall and automatic updates in one run. If an SSH or firewall change locks you out, it rolls back on its own.
       </p>
-      <div class="flex max-w-full items-center overflow-hidden rounded-[10px] border border-line bg-bg">
-        <code id="quick-cmd" class="min-w-0 overflow-x-auto px-4 py-3 text-left font-mono text-[13px] whitespace-nowrap"
+      <div class="flex w-full max-w-full items-center overflow-hidden rounded-[10px] border border-line bg-bg">
+        <code
+          id="quick-cmd"
+          class="min-w-0 flex-1 overflow-x-auto px-4 py-3 text-left font-mono text-[12.5px] whitespace-nowrap [mask-image:linear-gradient(to_right,#000_calc(100%-28px),transparent)]"
           ><span class="text-subtle select-none">$ </span><span data-cmd>{quick}</span></code
         >
         <button
@@ -38,13 +41,10 @@ const quick = `curl -fsSL ${INSTALL_URL} | sudo sh`;
           Copy
         </button>
       </div>
-      <div class="flex flex-wrap items-center justify-center gap-x-5 gap-y-3">
-        <Button href="#start" primary>Get started</Button>
-        <Button href={REPO}>View on GitHub</Button>
-      </div>
+      <a class="font-mono text-[13px] font-medium text-brand no-underline hover:underline" href="#start">Read the install script first</a>
     </div>
 
-    <Terminal id="demo" title="root@vps: ~" titleId="demo-title" class="w-full max-w-[980px] shadow-term">
+    <Terminal id="demo" title="root@vps: ~" titleId="demo-title" dots class="shadow-term">
       <Pill slot="status" id="demo-clock" tone="a" hidden />
       {
         scenes.map((s, i) => (
@@ -56,7 +56,7 @@ const quick = `curl -fsSL ${INSTALL_URL} | sudo sh`;
       <div
         id="demo-screen"
         aria-live="off"
-        class:list={[SCREEN, 'h-[392px] max-h-none [mask-image:linear-gradient(to_bottom,transparent_0,#000_48px)]']}
+        class:list={[SCREEN, 'h-[360px] max-h-none max-[600px]:h-[300px] max-[600px]:text-[11px]']}
         set:html={frameHtml(heroScenes.audit)}
       />
     </Terminal>

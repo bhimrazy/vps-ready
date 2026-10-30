@@ -5,7 +5,6 @@ import SectionHead from './ui/SectionHead.astro';
 
 const code = (s: string) =>
   `<code class="rounded-md border border-line bg-surface px-1.5 py-px font-mono text-[13px] font-medium wrap-anywhere">${s}</code>`;
-const mono = (s: string) => `<span class="font-mono">${s}</span>`;
 const faqs = [
   [
     'Is it safe on a server that is already running things?',
@@ -24,15 +23,11 @@ const faqs = [
     'What if I lose access after confirming?',
     `Run ${code('sudo vps-ready rollback --last')} from any working session, or from your provider's console.`,
   ],
-  [
-    "What's the difference between minimal and web?",
-    `${mono('minimal')} sets up the admin user, SSH, the firewall, kernel settings and automatic updates. ${mono('web')} adds ssh.bruteforce, which installs fail2ban.`,
-  ],
 ];
 ---
 
 <Section id="faq">
-  <SectionHead label="FAQ">
+  <SectionHead>
     <Fragment slot="title">Questions before you run it.</Fragment>
     The short answers. The <a class="text-brand no-underline hover:underline" href="/docs/">docs</a> have the long ones.
   </SectionHead>

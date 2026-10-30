@@ -41,8 +41,10 @@ export type Tone = keyof typeof tone;
 export const sp = (t: Tone, html: string) => `<span class="${tone[t]}">${html}</span>`;
 
 // Base utilities for a terminal's text area; each terminal adds its height.
+// Once the text overflows, the player keeps the newest line in view and
+// sets data-overflow, which fades the top edge.
 export const SCREEN =
-  'm-0 flex max-h-[360px] flex-col justify-end overflow-hidden px-[18px] py-3.5 font-mono text-[12.5px] leading-[1.7] wrap-anywhere whitespace-pre-wrap text-ink *:min-h-[1.7em] *:shrink-0';
+  'm-0 flex max-h-[360px] flex-col overflow-hidden px-[18px] py-3.5 font-mono text-[12.5px] leading-[1.7] wrap-anywhere whitespace-pre-wrap text-ink *:min-h-[1.7em] *:shrink-0 data-overflow:[mask-image:linear-gradient(to_bottom,transparent_0,#000_48px)]';
 const SEP = 'mt-1.5 border-t border-dashed border-line pt-1.5 text-muted';
 const CURSOR = 'inline-block h-[1.1em] w-[0.6em] bg-ink align-[-0.2em] animate-blink motion-reduce:animate-none';
 
@@ -90,12 +92,19 @@ export class Player {
     return new Promise<void>((res, rej) => setTimeout(() => (t === this.tok ? res() : rej(0)), ms));
   }
 
+  /** Scrolls to the newest line and marks whether the text overflows. */
+  fit() {
+    this.s.scrollTop = this.s.scrollHeight;
+    this.s.toggleAttribute('data-overflow', this.s.scrollHeight > this.s.clientHeight);
+  }
+
   private line(html: string, sep = false) {
     const d = document.createElement('div');
     if (sep) d.className = SEP;
     d.innerHTML = html || ' ';
     this.s.appendChild(d);
     while (this.s.children.length > 60) this.s.firstChild!.remove();
+    this.fit();
     return d;
   }
 
@@ -103,6 +112,7 @@ export class Player {
   render(steps: Step[]) {
     this.tok++;
     this.s.innerHTML = frameHtml(steps);
+    this.fit();
     for (const st of steps) {
       if ('title' in st) this.chrome.title?.(st.title);
       else if ('clock' in st) this.chrome.clock?.(st.clock, st.ok);
@@ -113,6 +123,7 @@ export class Player {
   async play(steps: Step[]) {
     const t = ++this.tok;
     this.s.textContent = '';
+    this.fit();
     for (const st of steps) {
       if ('c' in st || ('a' in st && !st.html)) {
         const text = 'c' in st ? st.c : st.a;
@@ -127,6 +138,7 @@ export class Player {
         el.append(span, cur);
         for (let k = 1; k <= text.length; k++) {
           span.textContent = text.slice(0, k);
+          this.fit();
           await this.sleep(st.fast ? 18 : 34, t);
         }
         await this.sleep(260, t);

@@ -92,28 +92,12 @@ export const heroScenes: Record<'audit' | 'plan' | 'apply' | 'confirm', Step[]> 
   ],
 };
 
-// Design preview of the M4 wizard; not real output yet.
-export const wizardSteps: Step[] = [
-  { c: 'sudo vps-ready', fast: true },
-  { o: sp('dim', 'Ubuntu 24.04 on KVM, Docker running. 6 failed controls, 2 high.'), d: 600 },
-  { o: '' },
-  { o: `${sp('ask', '?')} This server runs: ` },
-  { w: 500 },
-  { a: `${sp('sel', 'web apps (Docker)')} ${sp('dim', 'recommended')}`, html: true },
-  { o: `${sp('ask', '?')} Admin user name: ` },
-  { a: 'admin' },
-  { o: `${sp('ask', '?')} Keys for admin: ` },
-  { a: 'the 2 keys you logged in with', fast: true },
-  { o: `${sp('ask', '?')} Open ports: ` },
-  { a: '22, 80, 443' },
-  { o: `${sp('ask', '?')} Ban repeated failed logins? ` },
-  { a: 'yes' },
-  { o: '' },
-  { o: 'Plan: 5 modules, 9 changes. Apply now? ' },
-  { a: 'y' },
-  { o: 'A new SSH login must confirm within 5 minutes.', d: 600 },
-  { o: '' },
-  { o: sp('dim', 'Next time, without questions:') },
-  { o: sp('b', '  sudo vps-ready apply --profile web') },
-  { w: 3500 },
+// Design preview of the M4 wizard (static, not real output yet).
+export const wizardSnippet: Step[] = [
+  { c: 'sudo vps-ready' },
+  { o: `${sp('ask', '?')} This server runs: ${sp('sel', 'web apps (Docker)')}` },
+  { o: `${sp('ask', '?')} Admin user name: admin` },
+  { o: `${sp('ask', '?')} Open ports: 22, 80, 443` },
+  { o: 'Plan: 5 modules, 9 changes. Apply now? y' },
+  { o: `${sp('dim', 'Next time:')} ${sp('b', 'sudo vps-ready apply --profile web')}` },
 ];
