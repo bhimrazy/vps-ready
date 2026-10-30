@@ -27,7 +27,7 @@ const { title, dots, titleId, id, class: cls } = Astro.props;
   </div>
   {
     Astro.slots.has('tabs') && (
-      <div class="flex min-w-0 items-stretch border-b border-line bg-surface" role="tablist" aria-label="Demo steps">
+      <div class="flex min-w-0 items-stretch border-b border-line bg-surface" role="group" aria-label="Demo steps">
         <slot name="tabs" />
       </div>
     )

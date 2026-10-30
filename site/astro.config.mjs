@@ -33,7 +33,6 @@ export default defineConfig({
         MarkdownContent: './src/components/docs/MarkdownContent.astro',
         Sidebar: './src/components/docs/Sidebar.astro',
         SiteTitle: './src/components/docs/SiteTitle.astro',
-        ThemeProvider: './src/components/docs/ThemeProvider.astro',
       },
       expressiveCode: {
         themes: ['github-dark', 'github-light'],

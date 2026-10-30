@@ -59,6 +59,7 @@ const accent =
         required
         placeholder="What were you looking for, or any feedback?"
         class:list={[field, 'resize-none']}></textarea>
+      <p class="m-0 -mt-1 text-xs text-muted dark:text-(--sl-color-gray-3)">Sent to bhimraj.com.np with this page's address.</p>
       <label class="sr-only" for="feedback-name">Name (optional)</label>
       <input id="feedback-name" name="name" type="text" maxlength="100" autocomplete="name" placeholder="Name (optional)" class={field} />
       <label class="sr-only" for="feedback-email">Email for a reply (optional)</label>
@@ -148,8 +149,7 @@ const accent =
           email: data.get('email'),
           website: data.get('website'),
           reason: 'vps-ready',
-          path: location.href,
-          referrer: document.referrer,
+          path: location.pathname,
         }),
       });
       const json = await res.json().catch(() => ({}));

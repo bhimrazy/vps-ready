@@ -38,6 +38,11 @@ const ogImage = new URL('/og.png', Astro.site);
     <meta name="twitter:image" content={ogImage} />
   </head>
   <body>
+    <a
+      href="#main"
+      class="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:rounded-md focus:border focus:border-line focus:bg-bg focus:px-4 focus:py-2 focus:font-mono focus:text-sm"
+      >Skip to content</a
+    >
     <slot />
     <FeedbackWidget />
   </body>

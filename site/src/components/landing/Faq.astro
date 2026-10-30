@@ -12,13 +12,16 @@ const faqs = [
   ],
   [
     'Which systems does it support?',
-    'Linux on x86_64 and arm64. It is tested nightly on Ubuntu 22.04 and 24.04 and Debian 12 and 13. More distros are on the roadmap.',
+    'Linux on x86_64 and arm64. It is tested nightly in x86_64 VMs on Ubuntu 22.04 and 24.04 and Debian 12 and 13. More distros are on the roadmap.',
   ],
   [
     'Will it fight with ufw, firewalld or Docker?',
     'The firewall module stays out of the way when ufw or firewalld is in use. The audit checks whether container ports bypass the firewall.',
   ],
-  ['Do I need root?', 'Yes. Run it with sudo on the server itself. There is no agent and no control machine.'],
+  [
+    'Do I need root?',
+    'For changes, yes: `apply`, `confirm`, `rollback` and `history` need root, so run them with sudo on the server itself. `detect` and `plan` work without it, and so does `audit`, but some of its checks need root and show as unknown without it. There is no agent and no control machine.',
+  ],
   [
     'What if I lose access after confirming?',
     "Run `sudo vps-ready rollback --last` from any working session, or from your provider's console.",
