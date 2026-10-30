@@ -28,6 +28,7 @@ const quick = `curl -fsSL ${INSTALL_URL} | sudo sh`;
       <p class="max-w-[44ch] text-lg text-muted">
         SSH keys, a firewall and automatic updates in one run. If an SSH or firewall change locks you out, it rolls back on its own.
       </p>
+      <div class="grid w-full gap-2">
       <div class="flex w-full max-w-full items-stretch overflow-hidden rounded-[10px] border border-line bg-bg">
         <code
           id="quick-cmd"
@@ -42,7 +43,22 @@ const quick = `curl -fsSL ${INSTALL_URL} | sudo sh`;
           Copy
         </button>
       </div>
-      <a class="font-mono text-[13px] font-medium text-brand no-underline hover:underline" href="#start">Read the install script first</a>
+      <p class="font-sans text-[13px] text-muted">
+        Linux x86_64 and arm64 &middot;{' '}
+        <a class="inline-flex items-center gap-1 text-muted underline-offset-2 hover:text-ink hover:underline" href={INSTALL_URL}
+          >View the script first<svg
+            class="size-3"
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"><path d="M5 11l6-6M6 5h5v5"></path></svg
+          ></a
+        >
+      </p>
+      </div>
     </div>
 
     <Terminal id="demo" title="root@vps: ~" titleId="demo-title" dots class="shadow-term">
