@@ -1,0 +1,90 @@
+---
+import { frameHtml, SCREEN } from '../../scripts/motion';
+import { wizardSteps } from '../../scripts/scenes';
+import Icon from './ui/Icon.astro';
+import Pill from './ui/Pill.astro';
+import Section from './ui/Section.astro';
+import SectionHead from './ui/SectionHead.astro';
+import SubHead from './ui/SubHead.astro';
+import Terminal from './ui/Terminal.astro';
+
+type Stop = { m: string; name: string; text: string; state?: 'done' | 'next'; pill?: string };
+const stops: Stop[] = [
+  { m: 'M0', name: 'Skeleton', text: 'Repo, CI, release pipeline', state: 'done' },
+  { m: 'M1', name: 'Audit', text: 'Detect the host, check controls', state: 'done', pill: 'v0.1.0' },
+  { m: 'M2', name: 'Engine', text: 'Plan, apply, journal, rollback', state: 'done', pill: 'v0.2.0' },
+  { m: 'M3', name: 'Lockout-safe', text: 'SSH, firewall, admin user, safety timer', state: 'done', pill: 'v0.3.0' },
+  { m: 'M4', name: 'Wizard', text: 'Guided setup and module explanations', state: 'next', pill: 'next' },
+  { m: 'M5', name: 'Deploy-ready', text: 'Signed apt, dnf and apk packages' },
+  { m: 'M6', name: 'More distros', text: 'Broader support, deeper checks' },
+];
+const dot = {
+  done: 'border-brand bg-brand text-on-accent',
+  next: 'border-brand bg-bg text-brand shadow-[0_0_0_5px_var(--color-brand-soft)]',
+  none: 'border-line bg-bg text-muted',
+};
+const check = '<path d="M5 12l4 4 10-10"/>';
+---
+
+<Section id="roadmap" alt>
+  <SectionHead label="Roadmap">
+    <Fragment slot="title">Built in small, safe releases.</Fragment>
+    Each milestone ships as a tagged, signed release. The guided setup is next.
+  </SectionHead>
+
+  <div
+    class="relative grid grid-cols-7 before:absolute before:inset-x-[7%] before:top-[15px] before:h-0.5 before:bg-[linear-gradient(90deg,var(--color-brand)_0_50%,var(--color-line)_50%_100%)] max-[820px]:grid-cols-1 max-[820px]:gap-5 max-[820px]:before:inset-y-0 max-[820px]:before:right-auto max-[820px]:before:left-[15px] max-[820px]:before:h-auto max-[820px]:before:w-0.5 max-[820px]:before:bg-[linear-gradient(var(--color-brand)_0_52%,var(--color-line)_52%_100%)]"
+  >
+    {
+      stops.map((s) => (
+        <div class="relative grid content-start justify-items-center gap-2 px-1.5 text-center max-[820px]:grid-cols-[32px_minmax(0,1fr)] max-[820px]:justify-items-start max-[820px]:gap-x-3.5 max-[820px]:px-0 max-[820px]:text-left">
+          <div
+            class:list={[
+              'z-[1] grid size-8 place-items-center rounded-full border-2 font-mono text-xs font-bold max-[820px]:row-span-3',
+              dot[s.state ?? 'none'],
+            ]}
+          >
+            {s.m}
+          </div>
+          <b class="font-mono text-[13px] font-bold">{s.name}</b>
+          <span class="text-sm leading-[1.45] text-muted">{s.text}</span>
+          {s.pill && <Pill tone={s.state === 'next' ? 'a' : 'g'}>{s.pill}</Pill>}
+        </div>
+      ))
+    }
+  </div>
+
+  <div class="mt-9 grid grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] items-start gap-9 max-[920px]:grid-cols-1 max-[920px]:gap-5">
+    <SubHead flush>
+      <Fragment slot="title">Preview: guided setup (v0.4.0)</Fragment>
+      Run <span class="font-mono">vps-ready</span> on its own. It looks at the server, suggests a profile, asks a few questions, shows the
+      plan and applies it with the same safety timer.
+      <ul slot="after" class="m-0 mt-2 grid list-none gap-2.5 p-0">
+        {
+          ['Three to five plain questions.', 'Ends by printing the one command that repeats it.', 'Same modules, same safety net.'].map((t) => (
+            <li class="grid grid-cols-[24px_minmax(0,1fr)] items-start gap-2.5 text-sm text-muted">
+              <Icon d={check} small class="mt-px text-brand" />
+              <span>{t}</span>
+            </li>
+          ))
+        }
+      </ul>
+    </SubHead>
+    <Terminal title="sudo vps-ready">
+      <Pill slot="status">Design preview</Pill>
+      <div id="wiz-screen" class:list={[SCREEN, 'h-[258px]']} set:html={frameHtml(wizardSteps)} />
+    </Terminal>
+  </div>
+</Section>
+
+<script>
+  import { onView, Player, reducedMotion } from '../../scripts/motion';
+  import { wizardSteps } from '../../scripts/scenes';
+
+  // Shows its finished frame (rendered at build) until it scrolls into view.
+  const screen = document.getElementById('wiz-screen')!;
+  const wiz = new Player(screen);
+  const loop = () =>
+    void wiz.play(wizardSteps).then(loop, () => {});
+  if (!reducedMotion()) onView(screen, loop);
+</script>

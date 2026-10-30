@@ -1,0 +1,29 @@
+---
+// The one terminal: a panel with a 42px title bar (dots, title, optional
+// pill in the "status" slot), optional tabs under it, then the body.
+interface Props {
+  title: string;
+  titleId?: string;
+  id?: string;
+  class?: string;
+}
+const { title, titleId, id, class: cls } = Astro.props;
+---
+
+<div id={id} class:list={['flex min-w-0 flex-col overflow-hidden rounded-[10px] border border-line bg-term', cls]}>
+  <div class="flex min-h-[42px] flex-none items-center gap-1.5 border-b border-line bg-surface px-3.5 font-mono text-xs text-muted">
+    <i class="size-2.5 flex-none rounded-full bg-line"></i>
+    <i class="size-2.5 flex-none rounded-full bg-line"></i>
+    <i class="size-2.5 flex-none rounded-full bg-line"></i>
+    <span id={titleId} class="ml-2 min-w-0 truncate">{title}</span>
+    <span class="ml-auto"><slot name="status" /></span>
+  </div>
+  {
+    Astro.slots.has('tabs') && (
+      <div class="flex min-w-0 items-stretch border-b border-line bg-surface" role="tablist" aria-label="Demo steps">
+        <slot name="tabs" />
+      </div>
+    )
+  }
+  <slot />
+</div>

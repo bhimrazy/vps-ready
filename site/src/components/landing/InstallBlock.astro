@@ -1,0 +1,77 @@
+---
+// Install methods as tabs with a Copy button. Used in the hero and the
+// closing call to action; each instance wires itself up.
+import { INSTALL_URL } from '../../lib/site';
+import Panel from './ui/Panel.astro';
+import Tab from './ui/Tab.astro';
+
+interface Props {
+  id?: string;
+  class?: string;
+}
+const { id, class: cls } = Astro.props;
+const methods = [
+  { key: 'curl', label: 'curl', lines: [`curl -fsSL ${INSTALL_URL} | sudo sh`] },
+  { key: 'read', label: 'read it first', lines: [`curl -fsSLO ${INSTALL_URL}`, 'less install.sh', 'sudo sh install.sh'] },
+  { key: 'cargo', label: 'cargo', lines: ['cargo install vps-ready --locked'] },
+];
+---
+
+<Panel id={id} data-install nowrap class:list={['w-full text-left', cls]}>
+  <div slot="head" class="flex min-w-0 items-stretch self-stretch" role="tablist" aria-label="Install method">
+    {
+      methods.map((m, i) => (
+        <Tab on={i === 0} data-p={m.key}>
+          {m.label}
+        </Tab>
+      ))
+    }
+  </div>
+  <button
+    slot="head"
+    type="button"
+    data-copy
+    class="ml-auto min-h-11 flex-none cursor-pointer self-stretch border-0 border-l border-solid border-line bg-bg px-4 font-mono text-xs font-medium text-ink hover:text-brand max-[420px]:px-3"
+  >
+    Copy
+  </button>
+  {
+    methods.map((m, i) => (
+      <pre
+        data-p={m.key}
+        role="tabpanel"
+        hidden={i !== 0}
+        class="m-0 px-4 py-3.5 font-mono text-[13px] leading-[1.75] wrap-anywhere whitespace-pre-wrap text-ink"
+        set:html={m.lines.map((l) => `<span class="text-subtle select-none">$</span> <span data-cmd>${l}</span>`).join('\n')}
+      />
+    ))
+  }
+  <div class="flex flex-wrap justify-between gap-x-4 gap-y-1.5 border-t border-grid px-4 py-[9px] font-mono text-xs text-muted">
+    <span>Linux x86_64 and arm64. Checks the SHA-256 and the release signature.</span>
+    <a class="whitespace-nowrap text-brand no-underline hover:underline" href={INSTALL_URL}>View install script</a>
+  </div>
+</Panel>
+
+<script>
+  import { copyText } from '../../scripts/copy';
+
+  for (const box of document.querySelectorAll<HTMLElement>('[data-install]')) {
+    const tabs = [...box.querySelectorAll<HTMLButtonElement>('[role=tab]')];
+    const panels = [...box.querySelectorAll<HTMLElement>('[role=tabpanel]')];
+    let cur = panels[0];
+    for (const b of tabs) {
+      b.addEventListener('click', () => {
+        for (const o of tabs) o.setAttribute('aria-selected', String(o === b));
+        for (const p of panels) {
+          p.hidden = p.dataset.p !== b.dataset.p;
+          if (!p.hidden) cur = p;
+        }
+      });
+    }
+    const copy = box.querySelector<HTMLButtonElement>('[data-copy]')!;
+    copy.addEventListener('click', () => {
+      const text = [...cur.querySelectorAll('[data-cmd]')].map((c) => c.textContent).join('\n');
+      copyText(text, copy, cur);
+    });
+  }
+</script>

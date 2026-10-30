@@ -1,0 +1,109 @@
+---
+import { INSTALL_URL, REPO, VERSION } from '../../lib/site';
+import { frameHtml, SCREEN } from '../../scripts/motion';
+import { heroScenes } from '../../scripts/scenes';
+import Button from './ui/Button.astro';
+import Label from './ui/Label.astro';
+import Pill from './ui/Pill.astro';
+import Tab from './ui/Tab.astro';
+import Terminal from './ui/Terminal.astro';
+import Wrap from './ui/Wrap.astro';
+
+const scenes = Object.keys(heroScenes);
+const quick = `curl -fsSL ${INSTALL_URL} | sudo sh`;
+---
+
+<header
+  id="top"
+  class="border-b border-line bg-bg bg-[linear-gradient(var(--color-grid)_1px,transparent_1px),linear-gradient(90deg,var(--color-grid)_1px,transparent_1px)] bg-size-[32px_32px] bg-position-[-1px_-1px] pt-20 pb-24"
+>
+  <Wrap class="grid justify-items-center gap-14">
+    <div class="grid max-w-[1000px] min-w-0 justify-items-center gap-6 text-center">
+      <Label>Linux VPS hardening &middot; v{VERSION}</Label>
+      <h1 class="font-mono text-[clamp(32px,4.6vw,54px)] leading-[1.15] font-bold tracking-[-0.03em] text-balance">
+        Harden a fresh server <em class="block text-brand not-italic">without locking yourself out.</em>
+      </h1>
+      <p class="max-w-[54ch] text-lg text-muted">
+        SSH keys, a firewall and automatic updates in one run. If an SSH or firewall change locks you out, it rolls back on its own.
+      </p>
+      <div class="flex max-w-full items-center overflow-hidden rounded-[10px] border border-line bg-bg">
+        <code id="quick-cmd" class="min-w-0 overflow-x-auto px-4 py-3 text-left font-mono text-[13px] whitespace-nowrap"
+          ><span class="text-subtle select-none">$ </span><span data-cmd>{quick}</span></code
+        >
+        <button
+          type="button"
+          id="quick-copy"
+          class="min-h-11 flex-none cursor-pointer self-stretch border-0 border-l border-solid border-line bg-surface px-4 font-mono text-xs font-medium text-ink hover:text-brand"
+        >
+          Copy
+        </button>
+      </div>
+      <div class="flex flex-wrap items-center justify-center gap-x-5 gap-y-3">
+        <Button href="#start" primary>Get started</Button>
+        <Button href={REPO}>View on GitHub</Button>
+      </div>
+    </div>
+
+    <Terminal id="demo" title="root@vps: ~" titleId="demo-title" class="w-full max-w-[980px] shadow-term">
+      <Pill slot="status" id="demo-clock" tone="a" hidden />
+      {
+        scenes.map((s, i) => (
+          <Tab slot="tabs" on={i === 0} data-scene={s} class="flex-1 px-1.5 last:border-r-0">
+            {s}
+          </Tab>
+        ))
+      }
+      <div
+        id="demo-screen"
+        aria-live="off"
+        class:list={[SCREEN, 'h-[392px] max-h-none [mask-image:linear-gradient(to_bottom,transparent_0,#000_48px)]']}
+        set:html={frameHtml(heroScenes.audit)}
+      />
+    </Terminal>
+  </Wrap>
+</header>
+
+<script>
+  import { copyText } from '../../scripts/copy';
+  import { Player, reducedMotion } from '../../scripts/motion';
+  import { heroScenes } from '../../scripts/scenes';
+
+  const quick = document.getElementById('quick-cmd')!;
+  const quickBtn = document.getElementById('quick-copy')!;
+  quickBtn.addEventListener('click', () => copyText(quick.querySelector('[data-cmd]')!.textContent ?? '', quickBtn, quick));
+
+  type Scene = keyof typeof heroScenes;
+  const still = reducedMotion();
+  const clock = document.getElementById('demo-clock')!;
+  const title = document.getElementById('demo-title')!;
+  const hero = new Player(document.getElementById('demo-screen')!, {
+    title: (t) => (title.textContent = t),
+    clock: (t, ok) => {
+      clock.hidden = t == null;
+      if (t == null) return;
+      clock.textContent = t;
+      clock.dataset.tone = ok ? 'g' : 'a';
+    },
+  });
+  const order = Object.keys(heroScenes) as Scene[];
+  const tabs = document.querySelectorAll<HTMLButtonElement>('#demo [role=tab]');
+  const select = (name: Scene) => tabs.forEach((b) => b.setAttribute('aria-selected', String(b.dataset.scene === name)));
+
+  function run(i: number) {
+    const name = order[i % order.length];
+    select(name);
+    if (still) return hero.render(heroScenes[name]);
+    hero.play(heroScenes[name]).then(
+      () => run(i + 1),
+      () => {},
+    );
+  }
+  tabs.forEach((b) => b.addEventListener('click', () => run(order.indexOf(b.dataset.scene as Scene))));
+
+  // Open on the audit's finished frame (rendered at build), hold it, then play on from plan.
+  if (!still)
+    hero.sleep(3200, hero.tok).then(
+      () => run(1),
+      () => {},
+    );
+</script>

@@ -1,0 +1,14 @@
+---
+// Heading of a secondary block inside a section.
+interface Props {
+  /** No bottom margin (when it sits in a grid column). */
+  flush?: boolean;
+}
+const { flush } = Astro.props;
+---
+
+<div class:list={['grid gap-2', !flush && 'mb-5']}>
+  <h3 class="font-mono text-xl leading-[1.15] font-bold tracking-[-0.02em] text-balance"><slot name="title" /></h3>
+  <p class="max-w-[70ch] text-muted"><slot /></p>
+  <slot name="after" />
+</div>

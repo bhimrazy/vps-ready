@@ -1,0 +1,166 @@
+---
+import { AUTHOR, EMAIL, LINKS, MAILTO, REPO, TAGLINE, VERSION } from '../../lib/site';
+import Logo from './Logo.astro';
+import Card from './ui/Card.astro';
+import Icon from './ui/Icon.astro';
+import Label from './ui/Label.astro';
+import Wrap from './ui/Wrap.astro';
+
+const social = [
+  {
+    href: AUTHOR.github,
+    label: 'Bhimraj Yadav on GitHub',
+    d: 'M8 0a8 8 0 00-2.53 15.59c.4.07.55-.17.55-.38v-1.33c-2.23.48-2.7-1.07-2.7-1.07-.36-.92-.89-1.17-.89-1.17-.73-.5.06-.49.06-.49.8.06 1.23.83 1.23.83.72 1.22 1.87.87 2.33.67.07-.52.28-.87.5-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 014 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.28.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48v2.2c0 .21.15.46.55.38A8 8 0 008 0z',
+  },
+  {
+    href: AUTHOR.linkedin,
+    label: 'Bhimraj Yadav on LinkedIn',
+    d: 'M13.6 0H2.4A2.4 2.4 0 000 2.4v11.2A2.4 2.4 0 002.4 16h11.2a2.4 2.4 0 002.4-2.4V2.4A2.4 2.4 0 0013.6 0zM4.9 13.4H2.6V6h2.3v7.4zM3.7 5a1.33 1.33 0 110-2.66A1.33 1.33 0 013.7 5zm9.7 8.4h-2.3V9.8c0-.86-.02-1.97-1.2-1.97-1.2 0-1.38.94-1.38 1.9v3.67H6.2V6h2.2v1h.03c.31-.58 1.06-1.2 2.18-1.2 2.33 0 2.76 1.53 2.76 3.53v4.07z',
+  },
+  {
+    href: AUTHOR.x,
+    label: 'Bhimraj Yadav on X',
+    d: 'M12.27 1h2.25L9.6 6.62 15.38 15h-4.53L7.3 10.36 3.25 15H1l5.27-6.02L.72 1h4.65l3.2 4.24L12.27 1zm-.79 12.6h1.25L4.7 2.33H3.36l8.12 11.27z',
+  },
+];
+
+const contacts = [
+  { href: LINKS.bug, title: 'Report a bug', note: 'Open a GitHub issue', icon: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="1.5"/>' },
+  { href: LINKS.lockout, title: 'Got locked out?', note: 'File a lockout report', icon: '<circle cx="8" cy="15" r="4.5"/><path d="M11.5 12L20 3.5M16.5 7l3 3"/>' },
+  { href: LINKS.security, title: 'Security issue', note: 'Report privately', icon: '<path d="M12 3l8 3v6c0 5-3.4 8-8 9-4.6-1-8-4-8-9V6z"/>' },
+];
+const mailIcon = '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3.5 6.5L12 13l8.5-6.5"/>';
+
+const projectLinks = [
+  ['GitHub', REPO],
+  ['Issues', LINKS.issues],
+  ['Releases', LINKS.releases],
+  ['Security', `${REPO}/blob/main/SECURITY.md`],
+  ['crates.io', LINKS.crates],
+];
+const row =
+  'group/row -mx-2.5 grid min-w-0 flex-1 grid-cols-[20px_minmax(0,1fr)] items-center gap-3 rounded-md px-2.5 py-[7px] text-ink no-underline hover:bg-surface';
+---
+
+{/* Extra bottom padding on phones keeps the last line clear of the Feedback button. */}
+<footer class="border-t border-line bg-bg pt-14 pb-8 text-sm text-muted max-[640px]:pb-24">
+  <Wrap class="grid gap-10">
+    <div class="grid grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] items-stretch gap-4 max-[900px]:grid-cols-1">
+      <div
+        class="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-5 rounded-[10px] border border-line bg-surface px-6 py-5 max-[640px]:grid-cols-[auto_minmax(0,1fr)]"
+      >
+        <img
+          src="/avatar.webp"
+          alt="Bhimraj Yadav"
+          width="64"
+          height="64"
+          loading="lazy"
+          class="block size-16 rounded-full border-2 border-bg shadow-[0_0_0_1px_var(--color-line)]"
+        />
+        <div class="grid min-w-0 gap-1">
+          <Label class="mb-1">Built and maintained by</Label>
+          <a href={AUTHOR.site} class="justify-self-start font-mono text-lg font-bold tracking-[-0.01em] text-ink no-underline hover:text-brand"
+            >{AUTHOR.name}</a
+          >
+          <p class="max-w-[60ch] text-sm text-muted">Software engineer and open-source contributor.</p>
+          <a
+            href={AUTHOR.site}
+            class="inline-flex items-center gap-1.5 justify-self-start font-mono text-[13px] font-medium text-brand no-underline hover:underline"
+          >
+            <svg class="size-4 flex-none" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4"
+              ><circle cx="8" cy="8" r="6.6"></circle><path
+                d="M1.4 8h13.2M8 1.4c1.8 1.9 2.7 4.1 2.7 6.6S9.8 12.7 8 14.6M8 1.4C6.2 3.3 5.3 5.5 5.3 8s.9 4.7 2.7 6.6"></path></svg
+            >bhimraj.com.np<svg
+              class="size-3 flex-none"
+              viewBox="0 0 16 16"
+              aria-hidden="true"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+              stroke-linejoin="round"><path d="M5 11l6-6M6 5h5v5"></path></svg
+            >
+          </a>
+        </div>
+        <div class="flex flex-wrap gap-2 max-[640px]:col-span-full">
+          {
+            social.map((s) => (
+              <a
+                href={s.href}
+                aria-label={s.label}
+                class="grid size-10 place-items-center rounded-md border border-line bg-bg text-muted hover:border-brand-line hover:text-brand"
+              >
+                <svg class="size-[17px]" viewBox="0 0 16 16" aria-hidden="true">
+                  <path fill="currentColor" d={s.d} />
+                </svg>
+              </a>
+            ))
+          }
+        </div>
+      </div>
+
+      <Card class="grid content-start gap-0.5 px-5 py-[18px]">
+        <Label class="mb-2">Get in touch</Label>
+        <div class="flex items-center gap-2">
+          <a href={MAILTO} class={row}>
+            <Icon d={mailIcon} small class="stroke-[1.8] text-muted" />
+            <span class="grid min-w-0"
+              ><b class="text-sm font-semibold group-hover/row:text-brand">Email</b><em
+                id="mail"
+                class="font-mono text-xs text-muted not-italic wrap-anywhere">{EMAIL}</em
+              ></span
+            >
+          </a>
+          <button
+            type="button"
+            id="copy-mail"
+            aria-label="Copy email address"
+            class="min-h-[30px] cursor-pointer rounded-md border border-line bg-bg px-2.5 py-[5px] font-mono text-xs font-medium text-ink hover:border-brand-line hover:text-brand"
+          >
+            Copy
+          </button>
+        </div>
+        {
+          contacts.map((c) => (
+            <div class="flex items-center gap-2">
+              <a href={c.href} class={row}>
+                <Icon d={c.icon} small class="stroke-[1.8] text-muted" />
+                <span class="grid min-w-0">
+                  <b class="text-sm font-semibold group-hover/row:text-brand">{c.title}</b>
+                  <em class="font-mono text-xs text-muted not-italic">{c.note}</em>
+                </span>
+              </a>
+            </div>
+          ))
+        }
+      </Card>
+    </div>
+
+    <div class="flex flex-wrap items-center justify-between gap-x-8 gap-y-4 border-t border-grid pt-6">
+      <div class="flex flex-wrap items-center gap-3">
+        <span class="flex items-center gap-2 font-mono text-[15px] font-bold text-ink">
+          <Logo size={22} /><span>vps<b class="text-brand">-</b>ready</span><span class="text-xs font-normal text-muted">v{VERSION}</span>
+        </span>
+        <span>{TAGLINE}</span>
+      </div>
+      <nav class="flex flex-wrap gap-[22px] text-sm" aria-label="Project links">
+        {
+          projectLinks.map(([text, href]) => (
+            <a href={href} class="text-muted no-underline hover:text-ink">
+              {text}
+            </a>
+          ))
+        }
+      </nav>
+    </div>
+    <div class="font-mono text-xs text-subtle">MIT or Apache-2.0 &middot; Open source on GitHub</div>
+  </Wrap>
+</footer>
+
+<script>
+  import { copyText } from '../../scripts/copy';
+
+  const btn = document.getElementById('copy-mail')!;
+  const mail = document.getElementById('mail')!;
+  btn.addEventListener('click', () => copyText(mail.textContent ?? '', btn, mail));
+</script>

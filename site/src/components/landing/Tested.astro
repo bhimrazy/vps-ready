@@ -1,0 +1,38 @@
+---
+import Card from './ui/Card.astro';
+import Pill from './ui/Pill.astro';
+import Section from './ui/Section.astro';
+import SectionHead from './ui/SectionHead.astro';
+
+const layers = [
+  ['Unit', 'Every module planned and verified against a fake filesystem.', 'every change', ''],
+  ['Containers', 'Full apply, confirm and rollback cycles for user.admin and ssh.bruteforce.', 'every change', '[animation-delay:.8s]'],
+  ['Real VMs', 'x86_64 VMs on QEMU/KVM: a real SSH server, real reboots and real second SSH logins.', 'nightly', '[animation-delay:1.6s]'],
+];
+---
+
+<Section id="tested" alt>
+  <SectionHead label="Testing">
+    <Fragment slot="title">Tested where lockouts actually happen.</Fragment>
+    Unit tests can't prove you can still get in after a reboot. So the risky paths run against real systems.
+  </SectionHead>
+  <div class="grid gap-3">
+    {
+      layers.map(([name, text, when, delay]) => (
+        <Card bare class="grid grid-cols-[140px_minmax(0,1fr)_auto] items-center gap-[18px] px-5 py-4 max-[720px]:grid-cols-1 max-[720px]:gap-1.5">
+          <b class="flex items-center gap-2.5 font-mono text-sm font-bold">
+            <i class:list={['size-2.5 rounded-full bg-brand motion-safe:animate-pulse-ring', delay]} />
+            {name}
+          </b>
+          <span class="text-sm text-muted">{text}</span>
+          <Pill tone="g" class="max-[720px]:justify-self-start">
+            {when}
+          </Pill>
+        </Card>
+      ))
+    }
+  </div>
+  <div class="mt-4 flex flex-wrap gap-1.5">
+    {['Ubuntu 22.04', 'Ubuntu 24.04', 'Debian 12', 'Debian 13'].map((d) => <Pill>{d}</Pill>)}
+  </div>
+</Section>

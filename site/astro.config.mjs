@@ -17,6 +17,11 @@ export default defineConfig({
         alt: '',
       },
       favicon: '/favicon.svg',
+      head: [
+        { tag: 'meta', attrs: { property: 'og:image', content: 'https://vps-ready.bhimraj.com.np/og.png' } },
+        { tag: 'meta', attrs: { property: 'og:image:alt', content: 'vps-ready: Make a fresh VPS ready and secure, safely.' } },
+        { tag: 'meta', attrs: { name: 'twitter:image', content: 'https://vps-ready.bhimraj.com.np/og.png' } },
+      ],
       // Replaced by src/pages/404.astro, which also covers the landing page.
       disable404Route: true,
       social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/bhimrazy/vps-ready' }],

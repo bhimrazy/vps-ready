@@ -1,0 +1,20 @@
+---
+import { REPO } from '../../lib/site';
+import InstallBlock from './InstallBlock.astro';
+import Button from './ui/Button.astro';
+import Code from './ui/Code.astro';
+import Section from './ui/Section.astro';
+import SectionHead from './ui/SectionHead.astro';
+---
+
+<Section id="start" wrapClass="grid justify-items-center gap-[22px] text-center">
+  <SectionHead label="Get started" center>
+    <Fragment slot="title">Audit first. It changes nothing.</Fragment>
+    Install it, run <Code>sudo vps-ready audit</Code>, and read the result. Then decide.
+  </SectionHead>
+  <InstallBlock class="max-w-[820px]" />
+  <div class="flex flex-wrap justify-center gap-3">
+    <Button href={REPO} primary>View on GitHub</Button>
+    <Button href="/docs/">Read the docs</Button>
+  </div>
+</Section>

@@ -1,0 +1,25 @@
+---
+// The one tab style, for tab lists (aria-selected) and scenario toggles
+// (aria-pressed). Selected is neutral: white, ink text, green underline.
+import type { HTMLAttributes } from 'astro/types';
+
+interface Props extends HTMLAttributes<'button'> {
+  /** "tab" sets role=tab and aria-selected; "toggle" sets aria-pressed. */
+  kind?: 'tab' | 'toggle';
+  on?: boolean;
+}
+const { kind = 'tab', on = false, class: cls, ...rest } = Astro.props;
+const state = kind === 'tab' ? { role: 'tab', 'aria-selected': String(on) } : { 'aria-pressed': String(on) };
+---
+
+<button
+  type="button"
+  {...state}
+  class:list={[
+    'relative min-h-11 cursor-pointer border-0 border-r border-solid border-line bg-transparent px-3.5 font-mono text-xs font-medium whitespace-nowrap text-muted hover:text-ink max-[420px]:px-2.5',
+    'aria-pressed:bg-bg aria-pressed:text-ink aria-selected:bg-bg aria-selected:text-ink',
+    'after:absolute after:inset-x-0 after:-bottom-px after:hidden after:h-0.5 after:bg-brand aria-pressed:after:block aria-selected:after:block',
+    cls,
+  ]}
+  {...rest}><slot /></button
+>

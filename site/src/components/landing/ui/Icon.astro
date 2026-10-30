@@ -1,0 +1,22 @@
+---
+// A bare stroke icon (24px by default). `d` is the SVG body; color comes
+// from a text-* class (brand green by default).
+interface Props {
+  d: string;
+  small?: boolean;
+  class?: string;
+}
+const { d, small, class: cls } = Astro.props;
+---
+
+<svg
+  viewBox="0 0 24 24"
+  aria-hidden="true"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+  class:list={['block flex-none', small ? 'size-5' : 'size-6', cls ?? 'text-brand']}
+  set:html={d}
+/>

@@ -1,0 +1,24 @@
+/* Landing page: brand tokens for Tailwind. Light only by design.
+   Everything else is utility classes in the components. */
+@import 'tailwindcss';
+@import './fonts.css';
+@import './theme.css';
+
+/* The landing page is light only; `dark:` follows Starlight's data-theme,
+   which this page never sets. */
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+  body {
+    background: var(--color-bg);
+    color: var(--color-ink);
+    font: 400 16px/1.6 var(--font-sans);
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-link);
+    outline-offset: 2px;
+  }
+}

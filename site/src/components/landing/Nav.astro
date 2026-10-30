@@ -1,0 +1,38 @@
+---
+import { REPO } from '../../lib/site';
+import Logo from './Logo.astro';
+import Button from './ui/Button.astro';
+import Wrap from './ui/Wrap.astro';
+
+const links = [
+  ['#why', 'Why'],
+  ['#flow', 'How it works'],
+  ['#modules', 'Under the hood'],
+  ['#faq', 'FAQ'],
+  ['#roadmap', 'Roadmap'],
+  ['/docs/', 'Docs'],
+];
+---
+
+<nav class="sticky top-[env(safe-area-inset-top,0px)] z-[5] border-b border-line bg-bg">
+  <Wrap class="flex h-[60px] items-center justify-between gap-4">
+    <a class="flex items-center gap-2.5 font-mono text-lg font-bold no-underline" href="#top" aria-label="vps-ready home">
+      <Logo /><span>vps<b class="text-brand">-</b>ready</span>
+    </a>
+    <ul class="m-0 hidden list-none gap-6 p-0 text-sm min-[801px]:flex">
+      {
+        links.map(([href, text]) => (
+          <li>
+            <a class="text-muted no-underline hover:text-ink" href={href}>
+              {text}
+            </a>
+          </li>
+        ))
+      }
+    </ul>
+    <div class="flex items-center gap-2">
+      <Button href="/docs/" class="min-[801px]:hidden">Docs</Button>
+      <Button href={REPO}>GitHub</Button>
+    </div>
+  </Wrap>
+</nav>

@@ -1,0 +1,32 @@
+---
+// The one panel: a card without padding and with a 44px surface header
+// strip (the "head" slot; tabs on the left, "meta" slot on the right).
+import type { HTMLAttributes } from 'astro/types';
+
+interface Props extends HTMLAttributes<'div'> {
+  /** Keep header items on one line (install block). */
+  nowrap?: boolean;
+}
+const { nowrap, class: cls, ...rest } = Astro.props;
+---
+
+<div class:list={['min-w-0 overflow-hidden rounded-[10px] border border-line bg-bg', cls]} {...rest}>
+  {
+    (Astro.slots.has('head') || Astro.slots.has('meta')) && (
+      <div
+        class:list={[
+          'flex min-h-11 items-center justify-between gap-x-3 gap-y-2 border-b border-line bg-surface',
+          nowrap ? 'flex-nowrap' : 'flex-wrap',
+        ]}
+      >
+        <slot name="head" />
+        {Astro.slots.has('meta') && (
+          <div class="flex flex-wrap items-center gap-2.5 px-3.5 py-2">
+            <slot name="meta" />
+          </div>
+        )}
+      </div>
+    )
+  }
+  <slot />
+</div>

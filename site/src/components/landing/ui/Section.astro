@@ -1,0 +1,16 @@
+---
+import Wrap from './Wrap.astro';
+
+interface Props {
+  id: string;
+  /** Gray band with top and bottom rules. */
+  alt?: boolean;
+  class?: string;
+  wrapClass?: string;
+}
+const { id, alt, class: cls, wrapClass } = Astro.props;
+---
+
+<section id={id} class:list={['scroll-mt-[60px] py-[88px]', alt && 'border-y border-line bg-surface', cls]}>
+  <Wrap class={wrapClass}><slot /></Wrap>
+</section>
