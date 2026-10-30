@@ -31,7 +31,7 @@ const quick = `curl -fsSL ${INSTALL_URL} | sudo sh`;
         <code
           id="quick-cmd"
           class="flex min-w-0 flex-1 items-start gap-[1ch] px-4 py-3 text-left font-mono text-[12.5px] leading-[1.6] wrap-normal break-normal whitespace-pre-wrap"
-          ><span class="flex-none text-subtle select-none">$</span><span data-cmd class="min-w-0" set:html={breakableCommand(quick)} /></code
+          ><span class="flex-none text-muted select-none" aria-hidden="true">$</span><span data-cmd class="min-w-0" set:html={breakableCommand(quick)} /></code
         >
         <button
           type="button"
@@ -43,7 +43,7 @@ const quick = `curl -fsSL ${INSTALL_URL} | sudo sh`;
       </div>
       <p class="font-sans text-[13px] text-muted">
         Linux x86_64 and arm64 &middot;{' '}
-        <a class="inline-flex items-center gap-1 text-muted underline-offset-2 hover:text-ink hover:underline" href={INSTALL_URL}
+        <a class="inline-flex items-center gap-1 text-muted underline-offset-2 hover:text-ink hover:underline max-sm:-my-3 max-sm:py-3" href={INSTALL_URL}
           >View the script first<svg
             class="size-3"
             viewBox="0 0 16 16"
@@ -71,7 +71,7 @@ const quick = `curl -fsSL ${INSTALL_URL} | sudo sh`;
       <div
         id="demo-screen"
         aria-live="off"
-        class:list={[SCREEN, 'h-[360px] max-h-none max-[600px]:h-[300px] max-[600px]:text-[11px]']}
+        class:list={[SCREEN, 'h-[360px] max-h-none max-[600px]:h-[300px] max-[600px]:text-[11px] max-sm:overflow-x-auto max-sm:whitespace-pre']}
         set:html={frameHtml(heroScenes.audit)}
       />
     </Terminal>

@@ -66,7 +66,8 @@ const ticks = ['0:00', '1:00', '2:00', '3:00', '4:00', '5:00'];
           <rect x="60" y="151" width="720" height="18" rx="9" fill="#fff8c5" stroke="#eac54f"></rect>
           <rect id="dm-fill" x="60" y="151" width="720" height="18" rx="9" fill="#eac54f" opacity=".55"></rect>
           <g font-size="12" text-anchor="middle" fill="#59636e">
-            {ticks.map((t, i) => <text x={60 + i * 144} y="192">{t}</text>)}
+            {/* The 5:00 label sits left of the deadline, clear of the rollback path below it. */}
+            {ticks.map((t, i) => (i < 5 ? <text x={60 + i * 144} y="192">{t}</text> : <text x="772" y="192" text-anchor="end">{t}</text>))}
           </g>
           <circle cx="60" cy="160" r="9" fill="#1a7f37"></circle>
           <text x="60" y="120" font-size="13" font-weight="700" text-anchor="middle">apply</text>
@@ -89,8 +90,8 @@ const ticks = ['0:00', '1:00', '2:00', '3:00', '4:00', '5:00'];
               stroke-width="2.5"
               stroke-dasharray="6 5"
               marker-end="url(#ahr)"></path>
-            <text x="800" y="232" font-size="13" font-weight="700">no confirm</text>
-            <text x="800" y="248" font-size="12">in time</text>
+            <text x="830" y="232" font-size="13" font-weight="700">no confirm</text>
+            <text x="830" y="248" font-size="12">in time</text>
             <rect x="392" y="244" width="258" height="46" rx="8" fill="#ffebe9" stroke="#ffcecb"></rect>
             <text x="521" y="264" font-size="13" font-weight="700" text-anchor="middle">Everything rolled back</text>
             <text x="521" y="280" font-size="12" text-anchor="middle">even after a reboot</text>
@@ -223,6 +224,8 @@ const ticks = ['0:00', '1:00', '2:00', '3:00', '4:00', '5:00'];
     pr.style.strokeDasharray = '6 5';
     pr.style.strokeDashoffset = '';
     setX(780);
+    // No "now" marker when both endings are shown; it would cover the labels.
+    now.style.opacity = '0';
     clk.textContent = vclk.textContent = '5:00';
     vt(3, null);
     mode(null);
@@ -238,6 +241,7 @@ const ticks = ['0:00', '1:00', '2:00', '3:00', '4:00', '5:00'];
     draw(pr, lr, 0);
     setState('Safety timer running', 'a');
     vt(1, end);
+    now.style.opacity = '1';
     setX(60);
     await wait(500, t);
     const x1 = ok ? 276 : 780;

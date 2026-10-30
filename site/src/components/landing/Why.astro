@@ -29,7 +29,7 @@ const seed = [
   ['14:04:09', 'bad', 'root', '192.0.2.150'],
 ];
 const event = (k: string) =>
-  k === 'bad' ? '<span class="text-danger">Failed password</span>' : '<span class="text-warn">Invalid user   </span>';
+  k === 'bad' ? '<span class="text-danger">Failed password</span>' : '<span class="text-warn-ink">Invalid user   </span>';
 ---
 
 <Section id="why" alt>
@@ -200,7 +200,7 @@ const event = (k: string) =>
     const ev =
       u === 'root' || Math.random() < 0.45
         ? '<span class="text-danger">Failed password</span>'
-        : '<span class="text-warn">Invalid user   </span>';
+        : '<span class="text-warn-ink">Invalid user   </span>';
     const d = document.createElement('div');
     if (fresh) d.className = 'motion-safe:animate-flash';
     d.innerHTML = `<span class="text-muted max-[600px]:hidden">${ts}  </span>${ev}  ${u.padEnd(9)}<span class="text-muted">from</span> ${ip}`;
