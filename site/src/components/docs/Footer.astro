@@ -1,5 +1,6 @@
 ---
 import Default from '@astrojs/starlight/components/Footer.astro';
+import FeedbackWidget from '../FeedbackWidget.astro';
 import { AUTHOR, EMAIL, LINKS, MAILTO, TAGLINE, VERSION } from '../../lib/site';
 ---
 
@@ -24,6 +25,7 @@ import { AUTHOR, EMAIL, LINKS, MAILTO, TAGLINE, VERSION } from '../../lib/site';
     </span>
   </div>
 </div>
+<FeedbackWidget />
 
 <style>
   .site-foot {
