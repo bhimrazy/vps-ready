@@ -53,6 +53,18 @@ tried them on a throwaway VM.
 - Unit tests and, where output is rendered, an `insta` snapshot.
 - Container tests run in CI on every PR, and VM tests on PRs that touch the engine or modules (see [docs/testing.md](docs/testing.md)). Say in the PR how you tried a change that touches the system.
 
+## Working on the site
+
+The website (landing page and docs) lives in `site/` and needs Node 22.22 or later (CI uses 24):
+
+```sh
+cd site
+npm ci
+npm run dev    # or `npm run build`, which also checks internal links
+```
+
+Most docs pages are generated from `docs/*.md` (and the controls catalog) by `site/scripts/sync-docs.mjs` before every dev or build run. Edit the source in `docs/`, never the generated files under `site/src/content/docs/docs/` (they are listed in `site/.gitignore`). A new `docs/*.md` needs an entry in the script's page map, or the build fails.
+
 ## Lint policy
 
 No `unwrap`, `expect` or `panic!` outside tests (enforced by clippy, see

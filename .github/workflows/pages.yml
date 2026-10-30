@@ -11,7 +11,8 @@ on:
       - "docs/**"
       - "README.md"
       - "assets/logo*.svg"
-      - "Cargo.toml" # the site shows the workspace version
+      - "assets/demo.png"
+      - "crates/vps-ready/src/audit/controls/**" # the controls reference page
       - ".github/workflows/pages.yml"
   pull_request:
     paths:
@@ -19,7 +20,8 @@ on:
       - "docs/**"
       - "README.md"
       - "assets/logo*.svg"
-      - "Cargo.toml"
+      - "assets/demo.png"
+      - "crates/vps-ready/src/audit/controls/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -42,6 +44,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # With tags: the site shows the latest release tag (src/lib/site.ts).
+          fetch-depth: 0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"

@@ -1,12 +1,11 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
 
-// The release version, read at build time from the workspace Cargo.toml
-// (the build runs in site/).
-const cargo = readFileSync(join(process.cwd(), '..', 'Cargo.toml'), 'utf8');
-const match = cargo.match(/^\[workspace\.package\][^[]*?^version\s*=\s*"([^"]+)"/m);
-if (!match) throw new Error('version not found in [workspace.package] of Cargo.toml');
-export const VERSION = match[1];
+// The latest release tag reachable from this commit, not Cargo.toml: main can
+// carry a version bump before that release is tagged and published, and the
+// site must not advertise a version that cannot be downloaded yet.
+export const VERSION = execFileSync('git', ['describe', '--tags', '--abbrev=0', '--match', 'v*'], { encoding: 'utf8' })
+  .trim()
+  .replace(/^v/, '');
 
 export const REPO = 'https://github.com/bhimrazy/vps-ready';
 export const INSTALL_URL = `${REPO}/releases/latest/download/install.sh`;
