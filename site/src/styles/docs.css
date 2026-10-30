@@ -163,10 +163,9 @@ h1#_top {
 
 /* Sideways scroll with a shadow on each edge that hides more content: the
    page-colored covers scroll with the content, the shadows stay put. Used by
-   tables (wrapped by rehypeTableScroll in astro.config.mjs), mermaid
-   diagrams and the safety timeline. */
+   tables, mermaid diagrams and the safety timeline. */
 .scroll-x,
-.sl-markdown-content .table-wrap,
+.sl-markdown-content table,
 .sl-markdown-content pre.mermaid {
   --fade-bg: var(--sl-color-black);
   --fade-shadow: color-mix(in srgb, var(--sl-color-gray-4) 35%, transparent);
@@ -179,12 +178,11 @@ h1#_top {
     var(--fade-bg);
 }
 
-/* Tables: compact and full width; a wide one scrolls in its wrapper instead
-   of squeezing its cells into one word per line. */
-.sl-markdown-content .table-wrap > table {
-  display: table;
-  width: 100%;
-  overflow: visible;
+/* Tables: compact; a wide one scrolls inside the column (Starlight makes the
+   table a block) instead of squeezing its cells into one word per line. */
+.sl-markdown-content table {
+  display: block;
+  max-width: 100%;
   font-size: 0.875rem;
   line-height: 1.55;
 }

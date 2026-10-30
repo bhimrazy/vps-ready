@@ -103,7 +103,7 @@ Plans, shows the plan, asks `Apply N changes? [y/N]`, then snapshots each origin
 | 1 | Failed and every change was rolled back, or not confirmed in time and rolled back |
 | 2 | Error |
 | 3 | A rollback did not complete |
-| 4 | Stopped waiting (Ctrl-C); the change still waits for a confirm and the timer keeps running |
+| 4 | Stopped waiting, and the change still waits for a confirm: you pressed Ctrl-C, or the deadline passed a minute ago and the timer's rollback has not finished yet. The timer keeps running |
 
 ## confirm
 

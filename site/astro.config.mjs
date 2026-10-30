@@ -1,24 +1,8 @@
 // @ts-check
 import starlight from '@astrojs/starlight';
 import tailwindcss from '@tailwindcss/vite';
-import { satteri } from '@astrojs/markdown-satteri';
 import { defineConfig } from 'astro/config';
 import starlightLinksValidator from 'starlight-links-validator';
-
-// Wraps each markdown table in a `.table-wrap` box (styled in docs.css), so a
-// wide table scrolls with an edge shadow instead of overflowing on a phone.
-const tableScroll = {
-  name: 'table-scroll',
-  element: [
-    {
-      filter: ['table'],
-      /** @param {any} node @param {any} ctx */
-      visit(node, ctx) {
-        ctx.wrapNode(node, { type: 'element', tagName: 'div', properties: { className: ['table-wrap'] }, children: [] });
-      },
-    },
-  ],
-};
 
 export default defineConfig({
   site: 'https://vps-ready.bhimraj.com.np',
@@ -92,7 +76,6 @@ export default defineConfig({
       plugins: [starlightLinksValidator({ errorOnLocalLinks: true })],
     }),
   ],
-  markdown: { processor: satteri({ hastPlugins: [tableScroll] }) },
   vite: {
     plugins: [tailwindcss()],
     // Mermaid's diagram chunks are large but load lazily, only on pages with a diagram.

@@ -5,6 +5,7 @@ description: Install vps-ready on a Linux server with the install script or from
 
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 import Command from '../../../components/docs/Command.astro';
+import { VERSION } from '../../../lib/site';
 
 export const script = 'https://github.com/bhimrazy/vps-ready/releases/latest/download/install.sh';
 
@@ -55,7 +56,7 @@ vps-ready never updates itself: it makes no network calls except package install
 
 Check with `vps-ready --version`, and see the [releases](https://github.com/bhimrazy/vps-ready/releases) for what changed. The installer only replaces the binary; your journal in `/var/lib/vps-ready` stays, so `history` and `rollback --last` keep working.
 
-To pin a version or read the script first, download the versioned installer from its release instead of `latest`, for example `https://github.com/bhimrazy/vps-ready/releases/download/v0.3.0/install.sh`.
+To pin a version or read the script first, download the versioned installer from its release instead of `latest`, for example <code>{`https://github.com/bhimrazy/vps-ready/releases/download/v${VERSION}/install.sh`}</code>.
 
 ## Verify a release by hand
 
