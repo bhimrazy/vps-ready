@@ -23,7 +23,7 @@ export const heroScenes: Record<'audit' | 'plan' | 'apply' | 'confirm', Step[]> 
     { o: '' },
     { o: sp('b', '21 passed, 5 failed, 1 unknown, 1 skipped'), d: 200 },
     { o: '2 failed controls have an automatic fix. Run `vps-ready plan` to see what it would change.' },
-    { w: 2600 },
+    { w: 4000 },
   ],
   plan: [
     ...root,
@@ -42,7 +42,7 @@ export const heroScenes: Record<'audit' | 'plan' | 'apply' | 'confirm', Step[]> 
     { o: '' },
     { o: '4 changes in 2 modules: 2 files, 2 kernel settings.' },
     { o: 'Run `sudo vps-ready apply` to make them.' },
-    { w: 2600 },
+    { w: 4000 },
   ],
   apply: [
     ...root,
@@ -57,7 +57,7 @@ export const heroScenes: Record<'audit' | 'plan' | 'apply' | 'confirm', Step[]> 
     { o: '[4/4] create /etc/apt/apt.conf.d/52vps-ready (mode 0644, root:root)', d: 500 },
     { o: `verify: ${sp('addb', 'ok')}`, d: 400 },
     { o: 'Applied 4 changes (transaction 20261023T190556Z). Undo with `sudo vps-ready rollback --last`.', d: 500 },
-    { w: 2600 },
+    { w: 4000 },
   ],
   confirm: [
     { title: 'admin@vps: ~' },
@@ -88,7 +88,7 @@ export const heroScenes: Record<'audit' | 'plan' | 'apply' | 'confirm', Step[]> 
     { title: 'admin@vps: ~' },
     { o: '── back in the first terminal ──', sep: true },
     { o: `${sp('addb', 'Confirmed:')} the changes of transaction ${TX} stay. Undo them with \`sudo vps-ready rollback --last\`.` },
-    { w: 3200 },
+    { w: 4500 },
   ],
 };
 

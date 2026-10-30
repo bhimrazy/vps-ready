@@ -46,6 +46,15 @@ export const sp = (t: Tone, html: string) => `<span class="${tone[t]}">${html}</
 export const SCREEN =
   'm-0 flex max-h-[360px] flex-col overflow-hidden px-[18px] py-3.5 font-mono text-[12.5px] leading-[1.7] wrap-anywhere whitespace-pre-wrap text-ink *:min-h-[1.7em] *:shrink-0 data-overflow:[mask-image:linear-gradient(to_bottom,transparent_0,#000_48px)]';
 const SEP = 'mt-1.5 border-t border-dashed border-line pt-1.5 text-muted';
+// Pacing, in ms: per typed character, around a typed command, and per output
+// line (a step's own `d` is stretched by OUT_SCALE so heavier blocks linger).
+const TYPE = 50;
+const TYPE_FAST = 45;
+const BEFORE_TYPE = 350;
+const AFTER_TYPE = 400;
+const OUT = 150;
+const OUT_SCALE = 1.5;
+
 const CURSOR = 'inline-block h-[1.1em] w-[0.6em] bg-ink align-[-0.2em] animate-blink motion-reduce:animate-none';
 
 // One terminal step. c: type a command. o: print a line (html). a: type an
@@ -88,6 +97,11 @@ export class Player {
     private chrome: Chrome = {},
   ) {}
 
+  /** Stops the current run; its pending waits reject and it writes nothing more. */
+  cancel() {
+    this.tok++;
+  }
+
   sleep(ms: number, t: number) {
     return new Promise<void>((res, rej) => setTimeout(() => (t === this.tok ? res() : rej(0)), ms));
   }
@@ -121,9 +135,9 @@ export class Player {
   }
 
   /**
-   * Types the scene's commands and prints its output. With keep, the previous
-   * output stays above (like a real terminal), so the screen is never empty
-   * while a command is being typed.
+   * Types the scene's commands and prints its output. Starting a run cancels
+   * any earlier one. With keep, the previous output stays above (like a real
+   * terminal), so the screen is never empty while a command is being typed.
    */
   async play(steps: Step[], { keep = false } = {}) {
     const t = ++this.tok;
@@ -131,12 +145,13 @@ export class Player {
     else this.s.textContent = '';
     this.fit();
     for (const st of steps) {
+      if (t !== this.tok) return;
       if ('c' in st || ('a' in st && !st.html)) {
         const text = 'c' in st ? st.c : st.a;
         let el: Element;
         if ('c' in st) {
           el = this.line(promptHtml(st));
-          await this.sleep(350, t);
+          await this.sleep(BEFORE_TYPE, t);
         } else el = this.s.lastElementChild!;
         const span = document.createElement('span');
         const cur = document.createElement('span');
@@ -145,14 +160,14 @@ export class Player {
         for (let k = 1; k <= text.length; k++) {
           span.textContent = text.slice(0, k);
           this.fit();
-          await this.sleep(st.fast ? 18 : 34, t);
+          await this.sleep(st.fast ? TYPE_FAST : TYPE, t);
         }
-        await this.sleep(260, t);
+        await this.sleep(AFTER_TYPE, t);
         cur.remove();
       } else if ('a' in st) this.s.lastElementChild!.insertAdjacentHTML('beforeend', st.a);
       else if ('o' in st) {
         this.line(st.o, st.sep);
-        await this.sleep(st.d ?? 70, t);
+        await this.sleep(st.d ? Math.max(OUT, Math.round(st.d * OUT_SCALE)) : OUT, t);
       } else if ('w' in st) await this.sleep(st.w, t);
       else if ('title' in st) this.chrome.title?.(st.title);
       else if ('clock' in st) this.chrome.clock?.(st.clock, st.ok);

@@ -105,22 +105,35 @@ const quick = `curl -fsSL ${INSTALL_URL} | sudo sh`;
   const order = Object.keys(heroScenes) as Scene[];
   const tabs = document.querySelectorAll<HTMLButtonElement>('#demo [role=tab]');
   const select = (name: Scene) => tabs.forEach((b) => b.setAttribute('aria-selected', String(b.dataset.scene === name)));
+  // Auto-advance through the scenes until the user picks one.
+  let picked = false;
 
-  function run(i: number) {
+  function run(i: number, keep: boolean) {
     const name = order[i % order.length];
     select(name);
     if (still) return hero.render(heroScenes[name]);
-    hero.play(heroScenes[name], { keep: true }).then(
-      () => run(i + 1),
+    hero.play(heroScenes[name], { keep }).then(
+      () => {
+        if (!picked) run(i + 1, true);
+      },
       () => {},
     );
   }
-  tabs.forEach((b) => b.addEventListener('click', () => run(order.indexOf(b.dataset.scene as Scene))));
+  tabs.forEach((b) =>
+    b.addEventListener('click', () => {
+      picked = true;
+      hero.cancel();
+      hero.s.textContent = '';
+      title.textContent = 'root@vps: ~';
+      clock.hidden = true;
+      run(order.indexOf(b.dataset.scene as Scene), false);
+    }),
+  );
 
   // Open on the audit's finished frame (rendered at build), hold it, then play on from plan.
   if (!still)
-    hero.sleep(3200, hero.tok).then(
-      () => run(1),
+    hero.sleep(4000, hero.tok).then(
+      () => run(1, true),
       () => {},
     );
 </script>
