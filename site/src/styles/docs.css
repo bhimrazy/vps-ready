@@ -161,11 +161,30 @@ h1#_top {
   overflow-wrap: anywhere;
 }
 
-/* Tables: compact; a wide table scrolls inside the column instead of
-   squeezing its cells into one word per line. */
-.sl-markdown-content table {
-  display: block;
+/* Sideways scroll with a shadow on each edge that hides more content: the
+   page-colored covers scroll with the content, the shadows stay put. Used by
+   tables (wrapped by rehypeTableScroll in astro.config.mjs), mermaid
+   diagrams and the safety timeline. */
+.scroll-x,
+.sl-markdown-content .table-wrap,
+.sl-markdown-content pre.mermaid {
+  --fade-bg: var(--sl-color-black);
+  --fade-shadow: color-mix(in srgb, var(--sl-color-gray-4) 35%, transparent);
   overflow-x: auto;
+  background:
+    linear-gradient(to right, var(--fade-bg) 40%, transparent) left / 2.5rem 100% no-repeat local,
+    linear-gradient(to left, var(--fade-bg) 40%, transparent) right / 2.5rem 100% no-repeat local,
+    linear-gradient(to right, var(--fade-shadow), transparent) left / 0.75rem 100% no-repeat scroll,
+    linear-gradient(to left, var(--fade-shadow), transparent) right / 0.75rem 100% no-repeat scroll,
+    var(--fade-bg);
+}
+
+/* Tables: compact and full width; a wide one scrolls in its wrapper instead
+   of squeezing its cells into one word per line. */
+.sl-markdown-content .table-wrap > table {
+  display: table;
+  width: 100%;
+  overflow: visible;
   font-size: 0.875rem;
   line-height: 1.55;
 }
@@ -173,6 +192,7 @@ h1#_top {
   padding: 0.5rem 0.75rem;
   min-width: 8rem;
   vertical-align: top;
+  background: none;
 }
 .sl-markdown-content :is(th, td):first-child {
   min-width: 0;
@@ -184,8 +204,11 @@ h1#_top {
   text-align: start;
 }
 .sl-markdown-content td code {
+  overflow-wrap: anywhere;
+}
+/* The first column holds commands and IDs: keep them whole. */
+.sl-markdown-content td:first-child code {
   white-space: nowrap;
-  overflow-wrap: normal;
 }
 
 /* Sidebar. */
@@ -313,15 +336,14 @@ footer .meta {
   color: var(--sl-color-white);
 }
 
-/* Mermaid diagrams (internals pages): hidden until rendered, then centered
-   and scrollable. */
+/* Mermaid diagrams (internals pages): hidden until rendered, then centered.
+   Head.astro gives each a minimum width, so a phone scrolls it instead of
+   shrinking its text. */
 .sl-markdown-content pre.mermaid {
   margin-block: 1.5rem;
   padding: 1rem;
   border: 1px solid var(--sl-color-gray-5);
   border-radius: 10px;
-  background: var(--sl-color-black);
-  overflow-x: auto;
   text-align: center;
   font-size: var(--sl-text-xs);
   white-space: pre;
@@ -335,6 +357,27 @@ footer .meta {
   margin-inline: auto;
   max-width: 100%;
   height: auto;
+}
+
+/* Header on a phone: 44px touch targets, and a flat menu button instead of
+   Starlight's raised disc. */
+@media (max-width: 50rem) {
+  :root {
+    --sl-menu-button-size: 2.75rem;
+  }
+  .sl-menu-button {
+    box-shadow: none;
+    background: transparent;
+    color: var(--sl-color-white);
+  }
+  .sl-menu-button:has(~ :popover-open) {
+    background: var(--sl-color-gray-6);
+  }
+  site-search button[data-open-modal] {
+    min-width: 2.75rem;
+    height: 2.75rem;
+    justify-content: center;
+  }
 }
 
 /* Asides in the brand palette: a tinted panel with a 1px border instead of

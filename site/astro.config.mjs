@@ -1,8 +1,24 @@
 // @ts-check
 import starlight from '@astrojs/starlight';
 import tailwindcss from '@tailwindcss/vite';
+import { satteri } from '@astrojs/markdown-satteri';
 import { defineConfig } from 'astro/config';
 import starlightLinksValidator from 'starlight-links-validator';
+
+// Wraps each markdown table in a `.table-wrap` box (styled in docs.css), so a
+// wide table scrolls with an edge shadow instead of overflowing on a phone.
+const tableScroll = {
+  name: 'table-scroll',
+  element: [
+    {
+      filter: ['table'],
+      /** @param {any} node @param {any} ctx */
+      visit(node, ctx) {
+        ctx.wrapNode(node, { type: 'element', tagName: 'div', properties: { className: ['table-wrap'] }, children: [] });
+      },
+    },
+  ],
+};
 
 export default defineConfig({
   site: 'https://vps-ready.bhimraj.com.np',
@@ -30,6 +46,7 @@ export default defineConfig({
       components: {
         Footer: './src/components/docs/Footer.astro',
         Head: './src/components/docs/Head.astro',
+        MarkdownContent: './src/components/docs/MarkdownContent.astro',
         Sidebar: './src/components/docs/Sidebar.astro',
         SiteTitle: './src/components/docs/SiteTitle.astro',
         ThemeProvider: './src/components/docs/ThemeProvider.astro',
@@ -37,6 +54,18 @@ export default defineConfig({
       expressiveCode: {
         themes: ['github-dark', 'github-light'],
         defaultProps: { wrap: true },
+        // A one-line command without a title gets no terminal window frame;
+        // multi-line sessions keep it.
+        plugins: [
+          {
+            name: 'one-liners-unframed',
+            hooks: {
+              preprocessMetadata: ({ codeBlock }) => {
+                if (codeBlock.getLines().length === 1 && !codeBlock.props.title) codeBlock.props.frame = 'none';
+              },
+            },
+          },
+        ],
         styleOverrides: {
           borderRadius: '10px',
           frames: { frameBoxShadowCssValue: 'none' },
@@ -63,6 +92,7 @@ export default defineConfig({
       plugins: [starlightLinksValidator({ errorOnLocalLinks: true })],
     }),
   ],
+  markdown: { processor: satteri({ hastPlugins: [tableScroll] }) },
   vite: {
     plugins: [tailwindcss()],
     // Mermaid's diagram chunks are large but load lazily, only on pages with a diagram.

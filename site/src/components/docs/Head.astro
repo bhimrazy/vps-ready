@@ -28,6 +28,11 @@ import Default from '@astrojs/starlight/components/Head.astro';
       for (const [i, el] of blocks.entries()) {
         const { svg } = await mermaid.render(`mermaid-${n++}`, sources[i]);
         el.innerHTML = svg;
+        // Never narrower than its natural width or 640px, whichever is less, so
+        // a phone scrolls the diagram instead of shrinking its text.
+        const out = el.querySelector('svg');
+        const natural = out?.viewBox.baseVal.width;
+        if (out && natural) out.style.minWidth = `${Math.min(natural, 640)}px`;
         el.dataset.rendered = '';
       }
     };

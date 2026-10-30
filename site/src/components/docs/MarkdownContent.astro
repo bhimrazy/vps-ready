@@ -1,0 +1,14 @@
+---
+// Weights search results: the user guides and reference above the
+// maintainers' design notes, which repeat command names far more often.
+import Default from '@astrojs/starlight/components/MarkdownContent.astro';
+
+const { id } = Astro.locals.starlightRoute;
+const weight = id.startsWith('docs/project/')
+  ? '0.2'
+  : id.startsWith('docs/guides/') || id.startsWith('docs/reference/')
+    ? '2'
+    : undefined;
+---
+
+<div data-pagefind-weight={weight}><Default><slot /></Default></div>
