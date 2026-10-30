@@ -120,9 +120,15 @@ export class Player {
     }
   }
 
-  async play(steps: Step[]) {
+  /**
+   * Types the scene's commands and prints its output. With keep, the previous
+   * output stays above (like a real terminal), so the screen is never empty
+   * while a command is being typed.
+   */
+  async play(steps: Step[], { keep = false } = {}) {
     const t = ++this.tok;
-    this.s.textContent = '';
+    if (keep && this.s.childElementCount) this.line('');
+    else this.s.textContent = '';
     this.fit();
     for (const st of steps) {
       if ('c' in st || ('a' in st && !st.html)) {

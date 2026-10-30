@@ -128,3 +128,65 @@ h1#_top {
 .sl-markdown-content td:first-child code {
   white-space: nowrap;
 }
+
+/* Asides in the brand palette: a tinted panel with a 1px border, like the
+   landing page's pills, instead of Starlight's blue/purple and heavy bar. */
+.starlight-aside {
+  border: 1px solid var(--aside-line);
+  border-radius: 10px;
+  background-color: var(--aside-bg);
+  --sl-color-asides-border: var(--aside-line);
+  --sl-color-asides-text-accent: var(--aside-ink);
+}
+.starlight-aside__title {
+  font-family: var(--sl-font-mono);
+  font-size: var(--sl-text-sm);
+}
+:root {
+  --aside-note-bg: #161b22;
+  --aside-note-line: #3d444d;
+  --aside-note-ink: #c9d1d9;
+  --aside-tip-bg: #0f2d1a;
+  --aside-tip-line: #2ea04366;
+  --aside-tip-ink: #7ee787;
+  --aside-caution-bg: #2e2306;
+  --aside-caution-line: #bb800966;
+  --aside-caution-ink: #e3b341;
+  --aside-danger-bg: #3a1214;
+  --aside-danger-line: #f8514966;
+  --aside-danger-ink: #ff7b72;
+}
+:root[data-theme='light'] {
+  --aside-note-bg: #f6f8fa;
+  --aside-note-line: #d0d7de;
+  --aside-note-ink: #1f2328;
+  --aside-tip-bg: #dafbe1;
+  --aside-tip-line: #aceebb;
+  --aside-tip-ink: #116329;
+  --aside-caution-bg: #fff8c5;
+  --aside-caution-line: #eac54f;
+  --aside-caution-ink: #9a6700;
+  --aside-danger-bg: #ffebe9;
+  --aside-danger-line: #ffcecb;
+  --aside-danger-ink: #cf222e;
+}
+.starlight-aside--note {
+  --aside-bg: var(--aside-note-bg);
+  --aside-line: var(--aside-note-line);
+  --aside-ink: var(--aside-note-ink);
+}
+.starlight-aside--tip {
+  --aside-bg: var(--aside-tip-bg);
+  --aside-line: var(--aside-tip-line);
+  --aside-ink: var(--aside-tip-ink);
+}
+.starlight-aside--caution {
+  --aside-bg: var(--aside-caution-bg);
+  --aside-line: var(--aside-caution-line);
+  --aside-ink: var(--aside-caution-ink);
+}
+.starlight-aside--danger {
+  --aside-bg: var(--aside-danger-bg);
+  --aside-line: var(--aside-danger-line);
+  --aside-ink: var(--aside-danger-ink);
+}

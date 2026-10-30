@@ -93,7 +93,7 @@ const quick = `curl -fsSL ${INSTALL_URL} | sudo sh`;
     const name = order[i % order.length];
     select(name);
     if (still) return hero.render(heroScenes[name]);
-    hero.play(heroScenes[name]).then(
+    hero.play(heroScenes[name], { keep: true }).then(
       () => run(i + 1),
       () => {},
     );
