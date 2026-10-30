@@ -1,0 +1,6 @@
+target/
+corpus/
+artifacts/
+coverage/
+# Resolved fresh on each run, so fuzzing uses the latest compatible deps.
+Cargo.lock
