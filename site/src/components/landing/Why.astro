@@ -46,7 +46,7 @@ const event = (k: string) =>
       >
       <div>
         <div id="guess-big" class="font-mono text-[clamp(44px,5.6vw,64px)] leading-none font-bold tracking-[-0.04em] tabular-nums">120</div>
-        <p class="mt-2 max-w-[34ch] text-sm text-muted">failed logins on a typical fresh server, and counting</p>
+        <p class="mt-2 max-w-[34ch] text-sm text-muted">failed logins in this simulation, the kind a fresh server sees all day</p>
       </div>
       <div id="spark" aria-hidden="true" class="flex min-h-[72px] items-end gap-[3px] border-b border-line"></div>
       <div class="-mt-2.5 flex justify-between font-mono text-xs text-subtle"><span>2 min ago</span><span>now</span></div>
@@ -58,7 +58,7 @@ const event = (k: string) =>
           id="log-screen"
           class:list={[
             SCREEN,
-            'h-[300px] flex-1 justify-end text-xs max-[600px]:px-3 max-[600px]:text-[11px] [mask-image:linear-gradient(to_bottom,transparent_0,#000_35%)]',
+            'h-[300px] flex-1 justify-end px-[18px] text-xs max-[600px]:px-3 max-[600px]:text-[11px] [mask-image:linear-gradient(to_bottom,transparent_0,#000_35%)]',
             '*:overflow-hidden *:rounded-[3px] *:text-ellipsis *:whitespace-pre',
           ]}
         >
@@ -81,8 +81,8 @@ const event = (k: string) =>
     </SubHead>
     <Panel>
       <div slot="head" id="ba-switch" class="flex min-w-0 items-stretch self-stretch" role="group" aria-label="Show server state">
-        <Tab kind="toggle" on id="ba-before">Fresh VPS</Tab>
-        <Tab kind="toggle" id="ba-after">After vps-ready</Tab>
+        <Tab on id="ba-before">Fresh VPS</Tab>
+        <Tab id="ba-after">After vps-ready</Tab>
       </div>
       <Fragment slot="meta">
         <span class="font-mono text-xs text-muted">Shown for the web profile</span>
@@ -220,13 +220,19 @@ const event = (k: string) =>
   }
   drawStats();
 
+  // The feed runs only while the log is on screen.
+  let visible = false;
+  new IntersectionObserver((es) => (visible = es.some((e) => e.isIntersecting))).observe(logS);
   if (!still) {
     (function feed() {
-      logLine(true);
-      drawStats();
+      if (visible) {
+        logLine(true);
+        drawStats();
+      }
       setTimeout(feed, 350 + Math.random() * 900);
     })();
     setInterval(() => {
+      if (!visible) return;
       buckets.shift();
       buckets.push(0);
       drawStats();

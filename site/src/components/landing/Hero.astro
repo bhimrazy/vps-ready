@@ -71,7 +71,7 @@ const quick = `curl -fsSL ${INSTALL_URL} | sudo sh`;
       <div
         id="demo-screen"
         aria-live="off"
-        class:list={[SCREEN, 'h-[360px] max-h-none max-[600px]:h-[300px] max-[600px]:text-[11px] max-sm:overflow-x-auto max-sm:whitespace-pre']}
+        class:list={[SCREEN, 'h-[360px] max-h-none px-[11px] text-[11px] max-[600px]:h-[300px] max-sm:overflow-x-auto max-sm:whitespace-pre']}
         set:html={frameHtml(heroScenes.audit)}
       />
     </Terminal>
@@ -101,8 +101,8 @@ const quick = `curl -fsSL ${INSTALL_URL} | sudo sh`;
     },
   });
   const order = Object.keys(heroScenes) as Scene[];
-  const tabs = document.querySelectorAll<HTMLButtonElement>('#demo [role=tab]');
-  const select = (name: Scene) => tabs.forEach((b) => b.setAttribute('aria-selected', String(b.dataset.scene === name)));
+  const tabs = document.querySelectorAll<HTMLButtonElement>('#demo [data-scene]');
+  const select = (name: Scene) => tabs.forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.scene === name)));
   // Auto-advance through the scenes until the user picks one.
   let picked = false;
 

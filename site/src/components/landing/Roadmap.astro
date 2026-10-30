@@ -27,7 +27,7 @@ const dot = {
 <Section id="roadmap" alt>
   <SectionHead label="Roadmap">
     <Fragment slot="title">Built in small, safe releases.</Fragment>
-    Each milestone ships as a tagged, signed release. The guided setup is next.
+    Each release is tagged and signed. The guided setup is next.
   </SectionHead>
 
   <div
@@ -60,7 +60,7 @@ const dot = {
     </SubHead>
     <Terminal title="sudo vps-ready">
       <Pill slot="status">Design preview</Pill>
-      <div class:list={[SCREEN, 'max-[600px]:text-[11px]']} set:html={frameHtml(wizardSnippet)} />
+      <div class:list={[SCREEN, 'px-[18px] text-[12.5px] max-[600px]:text-[11px]']} set:html={frameHtml(wizardSnippet)} />
     </Terminal>
   </div>
 </Section>
