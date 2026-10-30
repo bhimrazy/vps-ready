@@ -1,14 +1,14 @@
 ---
 title: Install
-description: Install vps-ready on a Linux server with the install script or from crates.io.
+description: Install vps-ready on a Linux server with the install script or from crates.io, check the install, and upgrade later.
 ---
 
-import { Tabs, TabItem } from '@astrojs/starlight/components';
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 import Command from '../../../components/docs/Command.astro';
 
 export const script = 'https://github.com/bhimrazy/vps-ready/releases/latest/download/install.sh';
 
-Run these on the server. vps-ready is a static binary for Linux on x86_64 and arm64.
+Run these on the server. vps-ready is one static binary for Linux on x86_64 and arm64, with nothing else to install.
 
 <Tabs syncKey="install">
   <TabItem label="curl">
@@ -24,15 +24,19 @@ Run these on the server. vps-ready is a static binary for Linux on x86_64 and ar
 
 The install script downloads the release tarball for the machine, checks it against the SHA-256 embedded in the script, verifies the release signature when `gh` or `cosign` is installed, and copies the binary to `/usr/local/bin`. [View the install script](https://github.com/bhimrazy/vps-ready/releases/latest/download/install.sh).
 
-The script takes a few options:
-
 | Option | What it does |
 |---|---|
 | `--dry-run` | Show what would be done, change nothing |
 | `--prefix DIR` | Install directory (default: `/usr/local/bin`) |
 | `--version` | Print the version the script installs and exit |
 
-The command is also installed as `vpsready`, without the hyphen. Building from source with `cargo` needs a Rust toolchain on the server. Signed packages for apt, dnf and apk are planned for v0.5.
+The command is also installed as `vpsready`, without the hyphen.
+
+<Aside type="caution" title="Where the binary lives matters">
+The safety timer runs the binary as root later, so `apply` refuses the admin user, SSH server config and firewall modules when the binary is under `/home`, `/tmp`, `/var/tmp` or `/dev/shm`, or when it or a parent directory is writable by anyone but root. The install script's `/usr/local/bin` is fine. A `cargo install` as a normal user lands in `~/.cargo/bin`, so copy the binary to `/usr/local/bin` before you use a profile.
+</Aside>
+
+Building with `cargo` needs a Rust toolchain on the server. Signed packages for apt, dnf and apk are planned for v0.5.
 
 ## Check the install
 
@@ -41,7 +45,17 @@ vps-ready --version
 sudo vps-ready detect
 ```
 
-`detect` only reads: it prints the distro, init system, virtualization, effective SSH config and listening ports.
+`detect` only reads: it prints the distro, init system, virtualization, effective SSH server config and listening ports. Next, run the [Quick start](/docs/quick-start/).
+
+## Upgrade
+
+vps-ready never updates itself: it makes no network calls except package installs. To upgrade, run the same installer again. It writes the new binary next to the old one and renames it into place, so the swap is atomic.
+
+<Command lines={[`curl -fsSL ${script} | sudo sh`]} />
+
+Check with `vps-ready --version`, and see the [releases](https://github.com/bhimrazy/vps-ready/releases) for what changed. The installer only replaces the binary; your journal in `/var/lib/vps-ready` stays, so `history` and `rollback --last` keep working.
+
+To pin a version or read the script first, download the versioned installer from its release instead of `latest`, for example `https://github.com/bhimrazy/vps-ready/releases/download/v0.3.0/install.sh`.
 
 ## Verify a release by hand
 
@@ -62,8 +76,4 @@ cosign verify-blob \
 gh attestation verify vps-ready-<version>-<target>.tar.gz --repo bhimrazy/vps-ready
 ```
 
-The trust model of each install channel is in [Supply chain and release](/docs/guides/release/).
-
-## Next
-
-Run the [Quick start](/docs/quick-start/).
+The trust model of each install channel is in [Supply chain and release](/docs/project/release/).

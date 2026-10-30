@@ -1,0 +1,94 @@
+---
+title: Undo changes and recover from a lockout
+description: Undo any apply with rollback, read the history, and get back into a server you can no longer log in to.
+sidebar:
+  label: Undo and recover
+  order: 3
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+Every `apply` is one **transaction**, journaled in `/var/lib/vps-ready`. You can undo it at any time, whether or not the safety timer is still running.
+
+## Undo the last apply
+
+```sh
+sudo vps-ready rollback --last
+```
+
+`--last` picks, in this order: an apply that was interrupted part way, then one that is waiting for a confirm, then the newest one that was applied or confirmed. The rollback prints each step and a summary:
+
+```text
+remove /etc/apt/apt.conf.d/52vps-ready
+restore net.ipv4.conf.all.accept_source_route = 1
+restore fs.protected_regular = 0
+restore fs.protected_fifos = 0
+restore kernel.unprivileged_bpf_disabled = 0
+restore kernel.dmesg_restrict = 0
+restore kernel.kptr_restrict = 0
+remove /etc/sysctl.d/90-vps-ready.conf
+Rolled back transaction 20261023T190556Z: restored 8 changes.
+```
+
+Rolling back a transaction that waits for a confirm also stops its safety timer.
+
+## Undo an older apply
+
+List the transactions, newest first, then pick one by ID:
+
+```sh
+sudo vps-ready history
+```
+
+```text
+20261024T081500Z      applied                        kernel.sysctl,updates.auto  8 changes
+20261023T190556Z      rolled-back (manual)           kernel.sysctl,updates.auto  8 changes
+```
+
+```sh
+sudo vps-ready rollback --txn 20261024T081500Z
+```
+
+`history --json` prints the same list for scripts.
+
+## When rollback refuses
+
+A manual rollback is all or nothing, so it refuses (exit code 2) rather than undo half a transaction:
+
+- **A file changed since `apply`.** vps-ready will not overwrite an edit you made after it. Put the file back, or undo your edit, and run it again.
+- **It would remove your own account.** You cannot roll back the admin user while you are logged in as that user. Log in as another user with sudo.
+- **A later apply depends on it.** An admin user cannot be removed while a later transaction is applied, confirmed or waiting, since that one may have turned off root and password logins. Roll back the later one first.
+
+If a rollback starts but cannot finish, it exits 3 and says what is left to do by hand, for example when `userdel` fails because the admin user still has processes running.
+
+<Aside type="note">
+Some things a rollback leaves on purpose: installed packages (`nftables`, `fail2ban`, `unattended-upgrades`) stay installed, and a created admin user's home directory stays, in case it holds your files. The plan labels these changes `partial`.
+</Aside>
+
+## Locked out?
+
+First, breathe: if you just ran `apply` with a profile and have not confirmed yet, the safety net is still armed. Work down this list.
+
+<Steps>
+
+1. **Wait for the timer.** If the change is still waiting for a confirm, it rolls back on its own at the deadline (5 minutes by default). Then log in the way you did before.
+
+2. **Use a session that is still open.** The terminal you ran `apply` in keeps working after the change. From there:
+
+   ```sh
+   sudo vps-ready rollback --last
+   ```
+
+3. **Reboot from your provider's control panel.** If the change has not been confirmed, a reboot rolls it back before the SSH server starts. After a confirm, a reboot changes nothing: the changes are kept.
+
+4. **Use your provider's web console** (or serial console). It logs in locally, without SSH or the firewall. Run `sudo vps-ready rollback --last` there. The console cannot confirm a change, but it can always roll one back.
+
+5. **Last resort: the provider's rescue system.** Each transaction keeps what it wrote and the original files in `/var/lib/vps-ready/txn/<id>/`: `journal.jsonl` lists every change, and `files/<n>.before` holds the original bytes, so you can put files back by hand from a mounted disk.
+
+</Steps>
+
+<Aside type="tip" title="Before your first profile apply">
+Check that your provider's web console works and that you can log in there, and take a provider snapshot. Neither is needed if all goes well; both turn a bad day into a short one.
+</Aside>
+
+If vps-ready ever leaves you locked out, that is a security bug. Please [report the lockout](https://github.com/bhimrazy/vps-ready/issues/new?template=lockout_report.yml), or for anything sensitive use [private vulnerability reporting](https://github.com/bhimrazy/vps-ready/security/advisories/new).

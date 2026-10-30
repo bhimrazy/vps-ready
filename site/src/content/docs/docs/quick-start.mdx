@@ -1,0 +1,89 @@
+---
+title: Quick start
+description: Audit a server, read the plan, apply it behind the safety net, confirm from a new login, and undo it.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+Run these on the server, as root or with `sudo`. The first two steps change nothing, so you can stop after either one.
+
+<Steps>
+
+1. **Audit: see what fails.**
+
+   ```sh
+   sudo vps-ready audit
+   ```
+
+   It lists the controls that fail or could not be checked, each with the reason it matters and, when a module can fix it, the command that does. `--all` also lists the passing ones, and `--json` prints everything for CI. The end of a real run:
+
+   ```text
+   5 passed, 5 failed (1 high, 3 medium, 1 low), 0 unknown, 19 skipped
+   Skipped: kernel settings are not checked inside a container.
+   Skipped: Docker is not installed.
+   vps-ready can fix all 5 (SSH-002, FW-001, SSH-001, UPD-001, SSH-005): run `sudo
+   vps-ready plan --module ssh.server --module firewall.inbound --module
+   updates.auto`.
+   ```
+
+2. **Plan: read what would change.**
+
+   ```sh
+   sudo vps-ready plan --profile minimal
+   ```
+
+   A diff of every file and setting, grouped by module, with the controls each module fixes and a reversibility label per change. Nothing is written. Without `--profile`, `plan` and `apply` cover only kernel settings and automatic updates, which cannot lock you out.
+
+3. **Apply: make the changes.**
+
+   ```sh
+   sudo vps-ready apply --profile minimal
+   ```
+
+   `apply` prints the plan again and asks before it changes anything (`Apply 16 changes? [y/N]`). With `minimal` or `web` it arms the safety timer before the first change, makes the changes, and then ends like this, with your own admin user, address and port:
+
+   ```text
+   Changes are live. Open a NEW terminal and run:
+
+       ssh -t -o ControlPath=none -p 22 admin@203.0.113.10 sudo vps-ready confirm
+
+   If no new session confirms by 14:07:30 UTC (5:00 left), every change is rolled back.
+   More time: sudo vps-ready confirm --extend
+   Do not edit files vps-ready manages until you confirm: an unconfirmed change reverts them.
+   Ctrl-C stops waiting here, not the timer.
+   ```
+
+4. **Confirm: prove a new login works.**
+
+   Copy that `ssh` line into a **new** terminal on your own computer. If the login works, `confirm` succeeds, the first terminal prints `Confirmed: the changes of transaction ... stay` and `apply` exits 0.
+
+   If the new login fails, do nothing: when the timer runs out (or at the next boot) every change is rolled back and your old login works again.
+
+   <Aside type="tip">
+   Your open terminal proves nothing: SSH server reloads and connection tracking keep existing sessions alive. That is why only a new login counts. See [How the safety net works](/docs/guides/safety-net/).
+   </Aside>
+
+5. **Undo: whenever you want.**
+
+   ```sh
+   sudo vps-ready history          # list transactions, newest first
+   sudo vps-ready rollback --last  # undo the last one
+   ```
+
+   Every change is journaled, so you can undo a transaction at any time, not only while the safety timer runs.
+
+</Steps>
+
+<details>
+<summary>See a real session: audit, plan and apply on Debian 13</summary>
+
+![A real session in a Debian 13 VM, in three terminal windows. The end of sudo vps-ready audit; sudo vps-ready plan with a kernel.sysctl drop-in and an updates.auto drop-in, each labeled reversible; sudo vps-ready apply, answered y, with four progress lines, verify ok, the transaction ID and an audit after apply where all 15 controls pass.](/docs/demo.png)
+
+This run used a plain `apply` (kernel settings and automatic updates), so no confirm was needed.
+</details>
+
+## Next
+
+- What each profile changes, module by module: [Profiles and modules](/docs/guides/profiles-and-modules/).
+- Every flag and exit code: [Commands](/docs/reference/commands/).
+- Upgrading later is the same install command again: see [Install](/docs/install/#upgrade).

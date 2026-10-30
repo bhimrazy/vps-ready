@@ -1,0 +1,164 @@
+---
+// The safety net over time: apply arms the timer, then a confirm, a reboot or
+// the deadline decides. Colors come from the docs theme, so it follows dark mode.
+---
+
+<figure class="not-content timeline">
+  <div class="scroll">
+    <svg viewBox="0 0 800 320" role="img" aria-labelledby="tl-title tl-desc">
+      <title id="tl-title">The safety net timeline</title>
+      <desc id="tl-desc">
+        apply arms the safety timer before the first change, then makes the changes. Once they are live, the
+        confirm window starts, 5 minutes by default. A confirm from a new SSH login stops the timer and the
+        changes stay. A reboot during the window rolls everything back before the SSH server starts. With no
+        confirm by the deadline, the timer rolls back every change.
+      </desc>
+
+      <!-- Phases on the time axis -->
+      <rect class="phase" x="24" y="44" width="266" height="26" rx="6"></rect>
+      <text class="phase-t" x="157" y="61" text-anchor="middle">apply makes the changes</text>
+      <rect class="window" x="290" y="44" width="360" height="26" rx="6"></rect>
+      <text class="window-t" x="470" y="61" text-anchor="middle">confirm window: 1m to 30m</text>
+      <line class="axis" x1="24" y1="84" x2="780" y2="84"></line>
+      <path class="axis-head" d="M780 80 L788 84 L780 88 Z"></path>
+
+      <!-- Moments -->
+      <g class="tick"><line x1="40" y1="78" x2="40" y2="90"></line></g>
+      <text class="label" x="40" y="30">apply</text>
+
+      <g class="tick"><line x1="150" y1="78" x2="150" y2="90"></line></g>
+      <text class="label" x="150" y="30" text-anchor="middle">timer armed</text>
+      <text class="sub" x="150" y="106" text-anchor="middle">before any change</text>
+
+      <g class="tick"><line x1="290" y1="78" x2="290" y2="90"></line></g>
+      <text class="label" x="290" y="30" text-anchor="middle">changes live</text>
+
+      <g class="tick"><line x1="650" y1="78" x2="650" y2="90"></line></g>
+      <text class="label" x="650" y="30" text-anchor="middle">deadline (5:00 by default)</text>
+
+      <!-- Outcome 1: confirmed -->
+      <path class="lane ok" d="M430 84 V150 H404"></path>
+      <circle class="dot ok" cx="430" cy="84" r="4.5"></circle>
+      <rect class="box ok" x="24" y="126" width="380" height="48" rx="8"></rect>
+      <text class="box-t" x="40" y="146">A new SSH login runs confirm</text>
+      <text class="box-s" x="40" y="164">Timer stopped. The changes stay; apply exits 0.</text>
+
+      <!-- Outcome 2: reboot -->
+      <path class="lane warn" d="M540 84 V214 H404"></path>
+      <circle class="dot warn" cx="540" cy="84" r="4.5"></circle>
+      <rect class="box warn" x="24" y="190" width="380" height="48" rx="8"></rect>
+      <text class="box-t" x="40" y="210">The server reboots in the window</text>
+      <text class="box-s" x="40" y="228">Rolled back at boot, before the SSH server starts.</text>
+
+      <!-- Outcome 3: deadline -->
+      <path class="lane bad" d="M650 84 V278 H404"></path>
+      <circle class="dot bad" cx="650" cy="84" r="4.5"></circle>
+      <rect class="box bad" x="24" y="254" width="380" height="48" rx="8"></rect>
+      <text class="box-t" x="40" y="274">No confirm by the deadline</text>
+      <text class="box-s" x="40" y="292">Every change rolled back; apply exits 1.</text>
+
+      <text class="note" x="664" y="146">confirm --extend</text>
+      <text class="note" x="664" y="162">moves the deadline,</text>
+      <text class="note" x="664" y="178">at most 2 h after</text>
+      <text class="note" x="664" y="194">the changes went</text>
+      <text class="note" x="664" y="210">live</text>
+    </svg>
+  </div>
+</figure>
+
+<style>
+  .timeline {
+    margin: 1.75rem 0;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 10px;
+    background: var(--sl-color-black);
+    padding: 1rem 0.75rem 0.5rem;
+  }
+  .scroll {
+    overflow-x: auto;
+  }
+  svg {
+    display: block;
+    width: 100%;
+    min-width: 640px;
+    height: auto;
+    font-family: var(--sl-font-mono);
+  }
+  .phase {
+    fill: var(--sl-color-gray-6);
+    stroke: var(--sl-color-gray-5);
+  }
+  .window {
+    fill: var(--sl-color-accent-low);
+    stroke: var(--sl-color-accent);
+    stroke-dasharray: 4 3;
+  }
+  .phase-t,
+  .window-t {
+    font-size: 12px;
+    fill: var(--sl-color-gray-2);
+  }
+  .window-t {
+    fill: var(--sl-color-accent-high);
+    font-weight: 500;
+  }
+  .axis,
+  .tick line {
+    stroke: var(--sl-color-gray-4);
+    stroke-width: 1.25;
+  }
+  .axis-head {
+    fill: var(--sl-color-gray-4);
+  }
+  .label {
+    font-size: 12.5px;
+    font-weight: 700;
+    fill: var(--sl-color-white);
+  }
+  .sub,
+  .note {
+    font-size: 11.5px;
+    fill: var(--sl-color-gray-3);
+  }
+  .lane {
+    fill: none;
+    stroke-width: 1.5;
+  }
+  .box {
+    stroke-width: 1;
+  }
+  .box-t {
+    font-size: 13px;
+    font-weight: 700;
+    fill: var(--sl-color-white);
+  }
+  .box-s {
+    font-size: 12px;
+    fill: var(--sl-color-gray-2);
+  }
+  .ok {
+    --c: var(--aside-tip-ink);
+    --bg: var(--aside-tip-bg);
+    --line: var(--aside-tip-line);
+  }
+  .warn {
+    --c: var(--aside-caution-ink);
+    --bg: var(--aside-caution-bg);
+    --line: var(--aside-caution-line);
+  }
+  .bad {
+    --c: var(--aside-danger-ink);
+    --bg: var(--aside-danger-bg);
+    --line: var(--aside-danger-line);
+  }
+  .lane {
+    stroke: var(--c);
+  }
+  .dot {
+    fill: var(--c);
+  }
+  .box {
+    fill: var(--bg);
+    stroke: var(--line);
+  }
+</style>

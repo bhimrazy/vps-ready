@@ -1,0 +1,118 @@
+---
+title: How the safety net works
+description: The safety timer, confirm from a new login, automatic rollback even across a reboot, extending the timer, and what counts as a new login.
+sidebar:
+  order: 1
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+import SafetyTimeline from '../../../../components/docs/diagrams/SafetyTimeline.astro';
+
+Three modules can cut you off from your own server: `user.admin` (the admin user), `ssh.server` (the SSH server config) and `firewall.inbound` (the firewall). When an `apply` includes any of them, the safety net is on. vps-ready keeps the changes only after a **new** SSH login proves they work. If that proof never comes, it puts everything back on its own.
+
+## The short version
+
+1. `apply` arms a **safety timer** before it changes anything.
+2. It makes the changes, then prints an `ssh` command for you to run from a new terminal.
+3. That new login runs `sudo vps-ready confirm`. The timer stops and the changes stay.
+4. If no new login confirms in time (5 minutes by default), the timer rolls back every change. The same happens if the server reboots first.
+
+<SafetyTimeline />
+
+## Why a new login, not your open terminal
+
+Your open terminal proves nothing. When the SSH server reloads its config, sessions that are already open keep running, and the firewall lets connections that are already established through. So a change that blocks every new login can look perfectly fine from the terminal you ran `apply` in. The only real test is the thing you will do tomorrow: open a new connection and log in.
+
+That one login also checks everything at once: the admin user exists, your key works, `sudo` works, the SSH server accepts the new config and the firewall lets you in.
+
+## Step by step
+
+<Steps>
+
+1. **The timer is armed first.** Before the first change, `apply` hands a timer to systemd, so it runs even if `apply`, your terminal or your SSH connection disappears. It also turns on a small boot hook for the reboot case. If `apply` is cut off part way, the timer still rolls back what it did.
+
+2. **The changes are made and checked.** Each file is validated before it is written (`sshd -t`, `nft -c`, `visudo -c`), the SSH server is reloaded rather than restarted, and the result is verified. Any failure here rolls back at once, before you are asked to confirm.
+
+3. **The confirm window starts** once the changes are live. `apply` prints the command to run, with your admin user, the server address and the SSH port filled in:
+
+   ```text
+   Changes are live. Open a NEW terminal and run:
+
+       ssh -t -o ControlPath=none -p 22 admin@203.0.113.10 sudo vps-ready confirm
+
+   If no new session confirms by 14:07:30 UTC (5:00 left), every change is rolled back.
+   More time: sudo vps-ready confirm --extend
+   Do not edit files vps-ready manages until you confirm: an unconfirmed change reverts them.
+   Ctrl-C stops waiting here, not the timer.
+   ```
+
+   Then it counts down: `Waiting for a confirm: 4:12 left`.
+
+4. **You confirm from a new terminal.** On success the new terminal prints:
+
+   ```text
+   Confirmed transaction 20261025T120000Z from a new SSH login (admin from 198.51.100.7). The changes stay; undo them with `sudo vps-ready rollback --last`.
+   ```
+
+   and the first terminal ends with `Confirmed: the changes of transaction ... stay.`, an audit of what was fixed, and exit code 0.
+
+</Steps>
+
+## What counts as a new login
+
+`confirm` looks at the SSH connection it runs in. It accepts it only when all of these hold:
+
+| Check | Why |
+|---|---|
+| It is a different SSH session from the one that ran `apply` | The old one survives the change, so it proves nothing |
+| It started after the changes went live | A second terminal opened earlier also survived the reload |
+| It came in on a port the SSH server listens on | A login through another SSH server proves nothing about this one |
+| It is logged in as the admin user of the plan | That is the account you will use from now on |
+
+These do **not** count as new: tmux, screen and mosh sessions, the provider's web console, and `ssh` connections shared through `ControlMaster`. The printed command sets `-o ControlPath=none` so your `ssh` opens a fresh connection even if your config shares them. A login through a jump host does count.
+
+When `confirm` refuses, it says why and prints the command to run again, for example:
+
+```text
+error: this SSH session started before the changes went live. This is not a new SSH login: tmux, screen and mosh sessions, the console, and ssh connections shared through ControlMaster all count as old. Open a new terminal and run: `ssh -t -o ControlPath=none -p 22 admin@203.0.113.10 sudo vps-ready confirm`
+```
+
+## Need more time
+
+```sh
+sudo vps-ready confirm --extend        # 5 more minutes from now
+sudo vps-ready confirm --extend 15m    # or any time from 1m to 30m
+```
+
+`--extend` does not confirm anything, so it works from any session, including the old one. It moves the deadline to that long from now, at most 30 minutes ahead and at most 2 hours after the changes went live. To start with a longer window, pass it to `apply`:
+
+```sh
+sudo vps-ready apply --profile minimal --deadman 10m   # from 1m to 30m, default 5m
+```
+
+## If nobody confirms
+
+When the deadline passes, the timer runs the rollback. It works even when `apply` and your terminal are long gone. The SSH server config and the firewall are always restored, even if you edited those files during the window; your edit is kept next to the journal so it is not lost. The first terminal, if it is still open, ends with:
+
+```text
+error: no new SSH login confirmed the changes, so every change was restored; transaction 20261025T120000Z is rolled-back (deadman-timeout).
+```
+
+and `apply` exits 1. Your old login (for example as root, or with a password) works again.
+
+## If the server reboots
+
+A reboot during the window counts as "not confirmed", since you may have rebooted because you were locked out. The boot hook runs before the SSH server starts, rolls the transaction back, and the SSH server comes up with the old config. You can log in the way you did before `apply`.
+
+<Aside type="caution" title="Pressing Ctrl-C does not cancel">
+Ctrl-C while `apply` waits only stops the countdown in that terminal (exit code 4). The timer keeps running: confirm from a new login, or let it roll back. To undo right away, run `sudo vps-ready rollback --last`.
+</Aside>
+
+## What the safety net does not cover
+
+- It needs systemd. On other init systems the three guarded modules are not offered.
+- Only one change can wait for a confirm at a time; `apply` refuses to start another until it is confirmed or rolled back.
+- The other modules (`ssh.bruteforce`, `kernel.sysctl`, `updates.auto`) cannot lock you out, so they apply without a confirm. You can still undo them with `rollback`.
+- A firewall at your cloud provider is outside the server; vps-ready cannot see or change it.
+
+Related: [Undo changes and recover from a lockout](/docs/guides/undo-and-recover/).
