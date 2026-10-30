@@ -10,63 +10,21 @@ interface Props {
 const { lines } = Astro.props;
 ---
 
-<figure class="not-content command" data-command>
-  <pre>{lines.map((l) => (
-      <span class="line"><span class="prompt" aria-hidden="true">$</span><span data-cmd set:html={breakableCommand(l)} /></span>
+<figure
+  class="not-content relative m-0 rounded-[10px] border border-(--sl-color-gray-5) bg-(--sl-color-gray-7,var(--sl-color-gray-6))"
+  data-command
+>
+  <pre
+    class="m-0 grid gap-0.5 border-0 bg-transparent py-3.5 pr-20 pl-4 font-mono text-[0.8125rem] leading-[1.7] text-(--sl-color-white)">{lines.map((l) => (
+      <span class="flex items-start gap-[1ch]"><span class="flex-none text-(--sl-color-gray-3) select-none" aria-hidden="true">$</span><span class="min-w-0 break-normal whitespace-pre-wrap" data-cmd set:html={breakableCommand(l)} /></span>
     ))}</pre>
-  <button type="button" data-copy aria-label="Copy commands">Copy</button>
+  <button
+    type="button"
+    data-copy
+    aria-label="Copy commands"
+    class="absolute top-2 right-2 cursor-pointer rounded-md border border-(--sl-color-gray-5) bg-(--sl-color-black) px-2.5 py-1 font-mono text-xs font-medium text-(--sl-color-gray-2) hover:text-(--sl-color-text-accent)"
+  >Copy</button>
 </figure>
-
-<style>
-  .command {
-    position: relative;
-    margin: 0;
-    border: 1px solid var(--sl-color-gray-5);
-    border-radius: 10px;
-    background: var(--sl-color-gray-7, var(--sl-color-gray-6));
-  }
-  pre {
-    margin: 0;
-    padding: 0.875rem 5rem 0.875rem 1rem;
-    display: grid;
-    gap: 0.125rem;
-    font: 400 0.8125rem/1.7 var(--sl-font-mono);
-    color: var(--sl-color-white);
-    background: transparent;
-    border: 0;
-  }
-  .line {
-    display: flex;
-    align-items: flex-start;
-    gap: 1ch;
-  }
-  .prompt {
-    flex: none;
-    color: var(--sl-color-gray-3);
-    user-select: none;
-  }
-  [data-cmd] {
-    min-width: 0;
-    white-space: pre-wrap;
-    word-break: normal;
-    overflow-wrap: normal;
-  }
-  button {
-    position: absolute;
-    top: 0.5rem;
-    right: 0.5rem;
-    font: 500 0.75rem var(--sl-font-mono);
-    color: var(--sl-color-gray-2);
-    background: var(--sl-color-black);
-    border: 1px solid var(--sl-color-gray-5);
-    border-radius: 6px;
-    padding: 0.25rem 0.625rem;
-    cursor: pointer;
-  }
-  button:hover {
-    color: var(--sl-color-text-accent);
-  }
-</style>
 
 <script>
   import { copyText } from '../../scripts/copy';
