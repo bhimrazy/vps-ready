@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::sys::{Cmd, FileKind, FileOwner, Output, Sys, SysError};
 use authorized_keys::gives_a_shell;
 
+mod apt_source;
 pub(crate) mod authorized_keys;
 pub(crate) mod directory;
 mod file;
@@ -22,6 +23,10 @@ pub(crate) mod service;
 pub(crate) mod sysctl;
 pub(crate) mod user;
 
+pub use apt_source::{
+    AptSource, CADDY_FINGERPRINT, CADDY_KEY, DOCKER_FINGERPRINT, DOCKER_KEY, apt_source,
+    architecture,
+};
 pub use authorized_keys::AuthorizedKeys;
 pub use directory::Directory;
 pub use file::{File, Validate};
