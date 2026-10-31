@@ -26,6 +26,7 @@ testing = []
 anyhow.workspace = true
 askama.workspace = true
 clap.workspace = true
+dialoguer.workspace = true
 owo-colors.workspace = true
 rustix.workspace = true
 serde.workspace = true

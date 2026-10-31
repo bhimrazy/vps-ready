@@ -51,6 +51,14 @@
 #     edited -> at the deadline it is gone and the edit is in files/1.during.
 #     A `Match User <user>` block with `PermitRootLogin yes` read before the
 #     drop-in -> verify (`sshd -T -C`) fails and apply rolls back.
+#   The wizard, `sudo vps-ready` on a terminal over a real login, driven by
+#   test/vm-wizard.exp (expect is installed in the VM): Enter at every
+#   question, `y` to apply, confirmed from a new login; the wizard exits 0
+#   and the `--profile` of its "Next time" line plans no changes.
+#     as the cycle's user: the session user is the admin -> rollback.
+#     as root with a key: a new admin with root's key (`admin`, or
+#     `sysadmin` where an `admin` group exists, as on Ubuntu); root no
+#     longer logs in -> rollback removes the admin, and root logs in again.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -536,6 +544,92 @@ expect_newest rolled-back
 jq -e '.[0].reason == "verify-failed"' "$tmp/history.json" >/dev/null ||
   { vr history; die "rolled back, but not with reason verify-failed"; }
 vm test ! -e "$ssh_dropin" || die "$ssh_dropin still exists"
+
+# expect drives the wizard; the VM gets it, the runner does not need it.
+vm 'sudo apt-get -qq -o DPkg::Lock::Timeout=120 update && sudo DEBIAN_FRONTEND=noninteractive apt-get -qq -o DPkg::Lock::Timeout=120 install expect >/dev/null' ||
+  die "cannot install expect"
+vm 'cat >/tmp/vr-wizard.exp' <test/vm-wizard.exp
+wizard_fail() { vm cat /tmp/vr-wizard.out || true; die "$1"; }
+# wizard <login> <admin>: `sudo vps-ready` over a new login as <login>,
+# under expect: every default, `y` to apply. In the background, since apply
+# waits for a confirm; returns soon after it is pending. The transcript lands in
+# /tmp/vr-wizard.out and the exit code in /tmp/vr-wizard.rc.
+wizard() {
+  vm "rm -f /tmp/vr-wizard.rc; setsid -f sh -c 'expect /tmp/vr-wizard.exp $2 sh /tmp/vr-ssh -tt -o ControlPath=none $1@127.0.0.1 sudo NO_COLOR=1 vps-ready >/tmp/vr-wizard.out 2>&1; echo \$? >/tmp/vr-wizard.rc' </dev/null >/dev/null 2>&1"
+  i=0
+  until vr history --json >"$tmp/history.json" && jq -e '.[0].state == "pending-confirm"' "$tmp/history.json" >/dev/null; do
+    vm test ! -e /tmp/vr-wizard.rc || wizard_fail "the wizard ended before its changes were pending"
+    i=$((i + 1)); [ "$i" -le 120 ] || wizard_fail "not pending within 120 s"
+    sleep 1
+  done
+  # A login in the second the changes went live counts as old.
+  sleep 2
+}
+# wizard_done <admin>: confirms as <admin> from a new login; the wizard
+# exits 0 and printed the ssh line for <admin>. Sets $profile to what its
+# "Next time" line passes to --profile.
+wizard_done() {
+  rc=0; local_ssh -o ControlPath=none "$1@127.0.0.1" sudo vps-ready confirm || rc=$?
+  [ "$rc" -eq 0 ] || wizard_fail "confirm as $1 exited $rc, expected 0"
+  expect_newest confirmed
+  expect_rc /tmp/vr-wizard.rc 0
+  vm cat /tmp/vr-wizard.out | tr -d '\r' >"$tmp/wizard.out"
+  cat "$tmp/wizard.out"
+  grep -qF -- "-p 22 $1@127.0.0.1 sudo vps-ready confirm" "$tmp/wizard.out" ||
+    die "the wizard's ssh line does not log in as $1"
+  profile=$(sed -n 's/^  sudo vps-ready apply --profile //p' "$tmp/wizard.out")
+  [ -n "$profile" ] || die "no \"Next time\" command"
+}
+# expect_no_changes <user>: the "Next time" profile, planned from a new
+# login as <user>, has nothing to do.
+expect_no_changes() {
+  rc=0; local_ssh -o ControlPath=none "$1@127.0.0.1" sudo vps-ready plan --json --profile "$profile" >"$tmp/plan.json" || rc=$?
+  [ "$rc" -eq 0 ] || die "plan --profile $profile exited $rc, expected 0"
+  jq -e '[.modules[].changes | length] | add == 0' "$tmp/plan.json" >/dev/null ||
+    { cat "$tmp/plan.json"; die "plan --profile $profile still has changes"; }
+}
+
+echo "== $distro: the wizard, as $user"
+wizard "$user" "$user"
+wizard_done "$user"
+grep -q "existing account (the one you logged in as)" "$tmp/wizard.out" ||
+  die "the wizard did not make $user, the session user, the admin"
+expect_no_changes "$user"
+rc=0; vr rollback --last || rc=$?
+[ "$rc" -eq 0 ] || die "rollback of the wizard's transaction exited $rc, expected 0"
+vm test ! -e "$ssh_dropin" || die "$ssh_dropin still exists after rollback"
+# A saved profile is root's; vps-ready.toml would be asked about next time.
+case $profile in /*) vm sudo rm -f "$profile" ;; esac
+root_login || die "root cannot log in after the rollback"
+
+# Ubuntu's images have an `admin` group and no such user, so the wizard
+# offers `sysadmin` there.
+case $distro in ubuntu-*) new="sysadmin" ;; *) new="admin" ;; esac
+echo "== $distro: the wizard, as root (new admin $new)"
+! vm id "$new" >/dev/null 2>&1 || die "$new exists before the wizard"
+wizard root "$new"
+wizard_done "$new"
+grep -q "new account: logs in with 1 key copied from /root/.ssh/authorized_keys" "$tmp/wizard.out" ||
+  die "the wizard did not offer a new admin with root's key"
+[ "$(vm sudo cat "/home/$new/.ssh/authorized_keys")" = "$(vm cat .ssh/vr_local.pub)" ] ||
+  die "$new does not have root's key"
+# A name other than the built-in default is saved to a file.
+case $new:$profile in
+  admin:minimal | sysadmin:/root/vps-ready.toml) ;;
+  *) die "the \"Next time\" line has --profile $profile, not the one for $new" ;;
+esac
+expect_no_changes "$new"
+! root_login || die "root logs in after the confirm"
+i=0
+while vm pgrep -u "$new" >/dev/null; do
+  i=$((i + 1)); [ "$i" -le 30 ] || die "$new still has processes after 30 s"
+  sleep 1
+done
+rc=0; vr rollback --last || rc=$?
+[ "$rc" -eq 0 ] || die "rollback of the wizard's transaction exited $rc, expected 0"
+! vm id "$new" >/dev/null 2>&1 || die "$new still exists after rollback"
+root_login || die "root cannot log in after the rollback"
+case $profile in /*) vm sudo rm -f "$profile" ;; esac
 vm sudo rm -f /root/.ssh/authorized_keys
 
 echo "== $distro: vps-ready history"

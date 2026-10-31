@@ -2,11 +2,11 @@
 //! and sudo, which `ssh.server` needs before it turns off root and password
 //! logins.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use super::{Applicability, Module, ModuleError, ModuleSteps, PlanCx};
+use super::{Applicability, Module, ModuleError, ModuleSteps, ParamDoc, PlanCx};
 use crate::facts::{Facts, Init, OsFamily};
 use crate::resource::user::{Entry, lookup};
 use crate::resource::{AuthorizedKeys, File, Password, Resource, User, Validate};
@@ -45,8 +45,11 @@ struct Params {
     sudo: Sudo,
 }
 
+/// The admin's name when `name` is not given.
+pub(crate) const DEFAULT_NAME: &str = "admin";
+
 fn default_name() -> String {
-    "admin".to_owned()
+    DEFAULT_NAME.to_owned()
 }
 
 /// How an admin without sudo rules gets them.
@@ -82,6 +85,26 @@ impl Module for UserAdmin {
          without locking you out."
     }
 
+    fn params_doc(&self) -> &'static [ParamDoc] {
+        &[
+            ParamDoc {
+                name: "name",
+                default: "\"admin\"",
+                help: "Login name of the admin account.",
+            },
+            ParamDoc {
+                name: "authorized_keys",
+                default: "[]",
+                help: "Public keys the account accepts; empty uses the keys of the user this session logged in as.",
+            },
+            ParamDoc {
+                name: "sudo",
+                default: "\"nopasswd\"",
+                help: "\"nopasswd\" or \"password\" (the sudo group, for an account with a password).",
+            },
+        ]
+    }
+
     fn needs_deadman(&self) -> bool {
         true
     }
@@ -108,21 +131,7 @@ impl Module for UserAdmin {
         let params: Params = cx.params()?;
         let name = params.name.as_str();
         let mut notes = Vec::new();
-        if name == "root" {
-            return refuse("`name` is root; the admin must be another account");
-        }
-        let existing = lookup(sys, name)?;
-        if let Some(entry) = &existing {
-            check_login_account(sys, name, entry)?;
-        }
-        if existing.is_none() && group_exists(sys, name)? {
-            // `useradd --user-group` fails then; joining that group instead
-            // could grant what it grants, e.g. Ubuntu's `%admin ALL=(ALL) ALL`.
-            return refuse(&format!(
-                "a group named {name} exists, but no user, so `useradd --user-group` \
-                 cannot create {name}; set `name` to another user"
-            ));
-        }
+        let existing = check_name(sys, name)?;
         if !sys.fs.exists(Path::new(SUDOERS_DIR)) {
             return refuse(&format!(
                 "sudo is not installed ({SUDOERS_DIR} is missing); \
@@ -262,15 +271,24 @@ fn read_if_exists(sys: Sys, path: &Path) -> Result<Option<Vec<u8>>, ModuleError>
     }
 }
 
+/// The keys `user.admin` copies when `authorized_keys` is not given.
+#[derive(Debug)]
+pub(crate) struct SessionKeys {
+    /// The `authorized_keys` file read; it may not exist.
+    pub path: PathBuf,
+    /// Its plain key lines.
+    pub keys: Vec<String>,
+    /// Lines with options, left out.
+    pub skipped: usize,
+}
+
 /// The key lines of the user this SSH session logged in as, else of root,
 /// who just logged in with one of them. Lines with options are skipped:
 /// Ubuntu and AWS images put `command="echo 'Please login as ...'"` on
 /// root's keys, which would make the admin unusable.
-fn copied_keys(
-    facts: &Facts,
-    sys: Sys,
-    notes: &mut Vec<String>,
-) -> Result<Vec<String>, ModuleError> {
+///
+/// Refuses when that user has no passwd entry.
+pub(crate) fn session_keys(facts: &Facts, sys: Sys) -> Result<SessionKeys, ModuleError> {
     let source = facts
         .session
         .as_ref()
@@ -296,6 +314,25 @@ fn copied_keys(
             skipped += 1;
         }
     }
+    Ok(SessionKeys {
+        path,
+        keys,
+        skipped,
+    })
+}
+
+/// [`session_keys`], with a note saying where they come from; refuses when
+/// there is none.
+fn copied_keys(
+    facts: &Facts,
+    sys: Sys,
+    notes: &mut Vec<String>,
+) -> Result<Vec<String>, ModuleError> {
+    let SessionKeys {
+        path,
+        keys,
+        skipped,
+    } = session_keys(facts, sys)?;
     let path = path.display();
     let lines = |n: usize| if n == 1 { "line" } else { "lines" };
     if keys.is_empty() {
@@ -324,16 +361,36 @@ fn copied_keys(
     Ok(keys)
 }
 
-/// Whether `line` starts with a key type rather than options.
 /// Whether `line` starts with a key type rather than options, and has a key
 /// after it.
-fn is_plain_key(line: &str) -> bool {
+pub(crate) fn is_plain_key(line: &str) -> bool {
     let mut fields = line.split_whitespace();
     fields.next().is_some_and(|kind| {
         ["ssh-", "ecdsa-", "sk-"]
             .iter()
             .any(|p| kind.starts_with(p))
     }) && fields.next().is_some()
+}
+
+/// The account `name`, if it exists. Refuses root, a group of that name
+/// without a user, and an existing account that is not a login user.
+pub(crate) fn check_name(sys: Sys, name: &str) -> Result<Option<Entry>, ModuleError> {
+    if name == "root" {
+        return refuse("`name` is root; the admin must be another account");
+    }
+    let existing = lookup(sys, name)?;
+    if let Some(entry) = &existing {
+        check_login_account(sys, name, entry)?;
+    }
+    if existing.is_none() && group_exists(sys, name)? {
+        // `useradd --user-group` fails then; joining that group instead
+        // could grant what it grants, e.g. Ubuntu's `%admin ALL=(ALL) ALL`.
+        return refuse(&format!(
+            "a group named {name} exists, but no user, so `useradd --user-group` \
+             cannot create {name}; set `name` to another user"
+        ));
+    }
+    Ok(existing)
 }
 
 /// Refuses an existing account that is not a login user: a system account,
@@ -389,7 +446,7 @@ fn group_exists(sys: Sys, name: &str) -> Result<bool, ModuleError> {
 }
 
 /// Whether `sudo -l -U <name>` lists rules for the existing account `name`.
-fn has_sudo_rules(sys: Sys, name: &str) -> Result<bool, ModuleError> {
+pub(crate) fn has_sudo_rules(sys: Sys, name: &str) -> Result<bool, ModuleError> {
     let cmd = Cmd::new("sudo")
         .args(["-n", "-l", "-U", name])
         .env("LC_ALL", "C");

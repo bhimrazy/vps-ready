@@ -1,7 +1,7 @@
 ---
 import Default from '@astrojs/starlight/components/Footer.astro';
 import FeedbackWidget from '../FeedbackWidget.astro';
-import { AUTHOR, EMAIL, LINKS, MAILTO, TAGLINE, VERSION } from '../../lib/site';
+import { AUTHOR, CONTACTS, EMAIL, MAILTO, TAGLINE, VERSION } from '../../lib/site';
 ---
 
 <Default />
@@ -14,9 +14,7 @@ import { AUTHOR, EMAIL, LINKS, MAILTO, TAGLINE, VERSION } from '../../lib/site';
     <span>{TAGLINE}</span>
   </div>
   <div class="flex flex-wrap justify-between gap-x-5 gap-y-1.5">
-    <a href={LINKS.bug}>Report a bug</a>
-    <a href={LINKS.lockout}>Got locked out?</a>
-    <a href={LINKS.security}>Security issue</a>
+    {CONTACTS.map((c) => <a href={c.href}>{c.title}</a>)}
     <a href={MAILTO}>{EMAIL}</a>
   </div>
   <div class="flex flex-wrap justify-between gap-x-5 gap-y-1.5">

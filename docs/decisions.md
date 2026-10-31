@@ -33,7 +33,7 @@
 
 ## Open questions
 
-1. **How opinionated is the default?** One recommended profile ("just make it safe") vs always showing the module picker. *Suggestion:* recommended by default, with "Customize" one keypress away.
+1. **How opinionated is the default?** Decided (2026-10-31, M4): the wizard recommends a profile (`web` when Docker or a public web listener is found, else `minimal`) and the module list is not shown unless you answer yes to "Pick which modules to run yourself?", one keypress away. See [the M4 plan](m4-plan.md).
 2. **Brute-force default for the web profile:** decided, see D19.
 3. **Should we bundle or call out to ssh-audit/Lynis?** *Suggestion:* port the essential SSH checks natively, and call Lynis only if it's installed.
 4. **Is Tailscale a first-class module** (third-party control plane), or do we offer only WireGuard? *Suggestion:* both, with Tailscale as the easy path.

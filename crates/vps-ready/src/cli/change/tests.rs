@@ -13,7 +13,7 @@ use crate::facts::{AptUpdates, Virt, sysctl};
 use crate::sys::fake::{FakeFs, FakeRunner, Op};
 use crate::sys::{Cmd, FileKind, Fs, Output, Runner, SysError};
 
-const STATE: &str = "/var/lib/vps-ready";
+pub(in crate::cli) const STATE: &str = "/var/lib/vps-ready";
 const DROP_IN: &str = crate::modules::kernel_sysctl::DROP_IN;
 const APT_DROP_IN: &str = "/etc/apt/apt.conf.d/52vps-ready";
 
@@ -37,7 +37,7 @@ const START: [(&str, &str); 13] = [
 
 /// Kernel defaults as `/proc/sys`, apt with `unattended-upgrades`
 /// installed but without vps-ready's drop-in, sudo, and root with a key.
-fn fixture() -> FakeFs {
+pub(in crate::cli) fn fixture() -> FakeFs {
     START.iter().fold(
         FakeFs::new()
             .with_file("/etc/sysctl.d/README.sysctl", "distro\n")
@@ -54,7 +54,7 @@ fn fixture() -> FakeFs {
 /// A captured Debian 13 host as a VM, with the sysctl values of the tree
 /// and, as `apt-config dump` would report it, the `APT::Periodic` settings
 /// of the apt drop-in.
-fn vm(sys: Sys) -> anyhow::Result<Facts> {
+pub(in crate::cli) fn vm(sys: Sys) -> anyhow::Result<Facts> {
     let mut facts = crate::facts::fixtures::host("debian-13", &[]);
     facts.virtualization.container = Virt::None;
     facts.sysctl = Some(sysctl::detect(sys.fs, &mut Vec::new()));
@@ -75,11 +75,11 @@ fn vm(sys: Sys) -> anyhow::Result<Facts> {
 }
 
 /// The captured Debian 13 container.
-fn container(_: Sys) -> anyhow::Result<Facts> {
+pub(in crate::cli) fn container(_: Sys) -> anyhow::Result<Facts> {
     Ok(crate::facts::fixtures::host("debian-13", &[]))
 }
 
-fn host(fs: &FakeFs) -> Host<'_> {
+pub(in crate::cli) fn host(fs: &FakeFs) -> Host<'_> {
     // `apt-config -c` validates a path on the fake fs, so it is answered
     // here rather than run.
     static RUNNER: std::sync::LazyLock<FakeRunner> = std::sync::LazyLock::new(|| {
@@ -119,12 +119,13 @@ fn host(fs: &FakeFs) -> Host<'_> {
         sudo_user: Some("admin".into()),
         stop: Arc::new(AtomicBool::new(false)),
         catch_sigint: false,
+        sigint_ends: None,
         tty: false,
         poll: std::time::Duration::ZERO,
     }
 }
 
-const BINARY: &str = "/usr/local/bin/vps-ready";
+pub(in crate::cli) const BINARY: &str = "/usr/local/bin/vps-ready";
 const WINDOW: std::time::Duration = crate::engine::deadman::DEFAULT_WINDOW;
 
 /// Exit code, stdout and stderr, with an error printed as `main` does.
@@ -985,6 +986,30 @@ fn module_narrows_a_profile() {
         out.contains("apply --profile web --module updates.auto"),
         "{out}"
     );
+}
+
+/// An empty plan of a whole profile says the server matches it; one
+/// narrowed by `--module` does not.
+#[test]
+fn an_empty_profile_plan_says_the_server_matches() {
+    let fs = fixture();
+    // No module of `minimal` applies outside the Debian family.
+    let host = Host {
+        facts: |sys| {
+            let mut facts = container(sys)?;
+            facts.os.family = crate::facts::OsFamily::Unknown;
+            Ok(facts)
+        },
+        ..host(&fs)
+    };
+    let (code, out, _) = plan_with(&host, &with_profile("minimal", &[]));
+    assert_eq!(code, 0);
+    assert!(
+        out.ends_with(")\n\nNothing to do: this server already matches.\n"),
+        "{out}"
+    );
+    let (_, out, _) = plan_with(&host, &with_profile("minimal", &["kernel.sysctl"]));
+    assert!(out.ends_with(")\n\nNothing to do.\n"), "{out}");
 }
 
 #[test]

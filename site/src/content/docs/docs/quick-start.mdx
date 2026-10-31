@@ -1,11 +1,44 @@
 ---
 title: Quick start
-description: Audit a server, read the plan, apply it behind the safety net, confirm from a new login, and undo it.
+description: Run the guided setup, or audit, plan, apply, confirm and undo step by step, behind the safety net.
 ---
 
 import { Aside, Steps } from '@astrojs/starlight/components';
 
-Run these on the server, as root or with `sudo`. The first two steps change nothing, so you can stop after either one.
+Run these on the server, as root or with `sudo`.
+
+## The guided way
+
+```sh
+sudo vps-ready
+```
+
+With no arguments on a terminal, vps-ready starts a short setup. It checks that you are root and that the binary can run from the safety timer, then looks at the server and asks:
+
+```text
+? What will this server run?
+  > Web apps or Docker: opens ports 80 and 443 (recommended: Docker is installed)
+    Something else: only SSH is open
+? Admin user for logging in: admin
+? Open ports besides SSH (22, always open) (Space toggles, Enter continues)
+  [x] 80/tcp
+  [x] 443/tcp
+  [x] 443/udp
+? Pick which modules to run yourself? (y/N) no
+```
+
+- The recommended answer comes first and says why.
+- The admin line says whether the name is a new or an existing account, and which SSH keys it gets.
+- Ports that something listens on are offered unchecked; unchecked ports are blocked.
+- `y` to the last question lets you pick modules one by one.
+
+Then it shows the same plan as `apply`, asks `Apply N changes? [y/N]` and applies behind the safety timer; confirm from a new login as described below. It ends with the `sudo vps-ready apply --profile ...` command that repeats the setup without questions, and offers to save your answers to `vps-ready.toml` when they differ from a built-in profile.
+
+Ctrl-C at a question stops with `Nothing was changed.` To read what a module does first, run `vps-ready modules ssh.server` ([reference](/docs/reference/commands/#modules)).
+
+## Step by step
+
+Prefer to run each stage yourself? This is the same flow without the questions. The first two steps change nothing, so you can stop after either one.
 
 <Steps>
 
@@ -43,7 +76,8 @@ Run these on the server, as root or with `sudo`. The first two steps change noth
    `apply` prints the plan again and asks before it changes anything (`Apply 16 changes? [y/N]`). With `minimal` or `web` it arms the safety timer before the first change, makes the changes, and then ends like this, with your own admin user, address and port:
 
    ```text
-   Changes are live. Open a NEW terminal and run:
+   Changes are live. To keep them, open a NEW terminal on your computer and run
+   this to show you can still log in:
 
        ssh -t -o ControlPath=none -p 22 admin@203.0.113.10 sudo vps-ready confirm
 

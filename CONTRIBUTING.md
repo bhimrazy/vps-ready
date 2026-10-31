@@ -52,6 +52,9 @@ tried them on a throwaway VM.
 
 - Unit tests and, where output is rendered, an `insta` snapshot.
 - Container tests run in CI on every PR, and VM tests on PRs that touch the engine or modules (see [docs/testing.md](docs/testing.md)). Say in the PR how you tried a change that touches the system.
+- Fuzz targets for the parsers live in `fuzz/` and need nightly and
+  [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz):
+  `cargo +nightly fuzz run -O facts -- -max_total_time=60`. `cargo +nightly fuzz list` shows the targets. CI runs each weekly.
 
 ## Working on the site
 
@@ -64,6 +67,13 @@ npm run dev    # or `npm run build`, which also checks internal links
 ```
 
 Most docs pages are generated from `docs/*.md` (and the controls catalog) by `site/scripts/sync-docs.mjs` before every dev or build run. Edit the source in `docs/`, never the generated files under `site/src/content/docs/docs/` (they are listed in `site/.gitignore`). A new `docs/*.md` needs an entry in the script's page map, or the build fails.
+
+A pull request that touches the site uploads the built site as a `site-preview` artifact, kept for 7 days. To view it, download it from the `pages` run's summary page and serve it with any static server:
+
+```sh
+unzip site-preview.zip -d site-preview
+python3 -m http.server -d site-preview   # http://localhost:8000
+```
 
 ## Lint policy
 

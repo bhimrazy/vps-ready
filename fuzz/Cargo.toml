@@ -1,0 +1,44 @@
+[package]
+name = "vps-ready-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+sshd-config = { path = "../crates/sshd-config" }
+vps-ready = { path = "../crates/vps-ready", features = ["testing"] }
+
+# Its own workspace, so the main workspace never builds it on stable.
+[workspace]
+
+[[bin]]
+name = "sshd_config"
+path = "fuzz_targets/sshd_config.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "facts"
+path = "fuzz_targets/facts.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "nft_ruleset"
+path = "fuzz_targets/nft_ruleset.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "journal"
+path = "fuzz_targets/journal.rs"
+test = false
+doc = false
+bench = false

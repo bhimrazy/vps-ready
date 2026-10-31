@@ -38,10 +38,10 @@ type Tone = keyof typeof tone;
 export const sp = (t: Tone, html: string) => `<span class="${tone[t]}">${html}</span>`;
 
 // A terminal's text area; each terminal adds its height, font size and side padding. Once the text
-// overflows, the player keeps the newest line in view and sets
-// data-overflow, which fades the top edge.
+// overflows, the player keeps the newest line in view (scrolling smoothly
+// unless reduced motion is set) and sets data-overflow, which fades the top edge.
 export const SCREEN =
-  'm-0 flex max-h-[360px] flex-col overflow-hidden py-3.5 font-mono leading-[1.7] wrap-anywhere whitespace-pre-wrap text-ink *:min-h-[1.7em] *:shrink-0 data-overflow:[mask-image:linear-gradient(to_bottom,transparent_0,#000_48px)]';
+  'm-0 flex max-h-[360px] motion-safe:scroll-smooth flex-col overflow-hidden py-3.5 font-mono leading-[1.7] wrap-anywhere whitespace-pre-wrap text-ink *:min-h-[1.7em] *:shrink-0 data-overflow:[mask-image:linear-gradient(to_bottom,transparent_0,#000_48px)]';
 const SEP = 'mt-1.5 border-t border-dashed border-line pt-1.5 text-muted';
 const CURSOR = 'inline-block h-[1.1em] w-[0.6em] bg-ink align-[-0.2em] animate-blink motion-reduce:animate-none';
 
