@@ -549,6 +549,7 @@ mod tests {
                 name: "nokeys".into(),
                 groups: Vec::new(),
                 password: Password::Locked,
+                comment: None,
             }),
             keys("root", &["ssh-ed25519 AAAA root"]),
             keys("empty", &[]),

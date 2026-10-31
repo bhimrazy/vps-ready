@@ -39,5 +39,11 @@ expression: out
     "title": "Install security updates automatically",
     "applies": true,
     "arms_safety_timer": false
+  },
+  {
+    "id": "deploy.user",
+    "title": "Set up a deploy account whose SSH keys are restricted",
+    "applies": true,
+    "arms_safety_timer": false
   }
 ]

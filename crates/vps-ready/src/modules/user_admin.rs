@@ -231,6 +231,7 @@ impl Module for UserAdmin {
                 name: name.to_owned(),
                 groups,
                 password,
+                comment: None,
             }),
             Resource::AuthorizedKeys(AuthorizedKeys {
                 user: name.to_owned(),
@@ -259,7 +260,7 @@ impl Module for UserAdmin {
     }
 }
 
-fn refuse<T>(reason: &str) -> Result<T, ModuleError> {
+pub(crate) fn refuse<T>(reason: &str) -> Result<T, ModuleError> {
     Err(ModuleError::Refused(reason.to_owned()))
 }
 
@@ -433,7 +434,7 @@ fn sudoers_user(content: &[u8]) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn group_exists(sys: Sys, name: &str) -> Result<bool, ModuleError> {
+pub(crate) fn group_exists(sys: Sys, name: &str) -> Result<bool, ModuleError> {
     let out = sys.runner.run(&Cmd::new("getent").args(["group", name]))?;
     match out.status {
         0 => Ok(true),

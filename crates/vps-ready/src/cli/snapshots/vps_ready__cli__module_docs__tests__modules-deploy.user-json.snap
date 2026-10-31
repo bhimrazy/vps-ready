@@ -1,0 +1,34 @@
+---
+source: crates/vps-ready/src/cli/module_docs.rs
+expression: out
+---
+{
+  "id": "deploy.user",
+  "title": "Set up a deploy account whose SSH keys are restricted",
+  "applies": true,
+  "arms_safety_timer": false,
+  "why": "CI that deploys with the admin's key can do anything the admin can. A separate account whose keys cannot forward ports or open a terminal, and with `command` can run only that program, limits what a leaked CI key gives away.",
+  "params": [
+    {
+      "name": "name",
+      "default": "\"deploy\"",
+      "help": "Login name of the deploy account; not user.admin's, and not an existing account vps-ready did not create."
+    },
+    {
+      "name": "keys",
+      "default": "[]",
+      "help": "Required: public keys without options, written with `restrict` (and `command=` when set)."
+    },
+    {
+      "name": "command",
+      "default": "\"\"",
+      "help": "Absolute path of a root-owned program that the keys can only run, and that the account may run as root with sudo, without arguments. Empty: no forced command and no sudo."
+    },
+    {
+      "name": "docker",
+      "default": "false",
+      "help": "Add the account to the docker group, which is root access on this host."
+    }
+  ],
+  "controls": []
+}

@@ -60,7 +60,8 @@ pub struct ModulePlan<'a> {
     /// [`PlanCx::planned`] when it was planned, for verify.
     #[serde(skip)]
     pub(super) planned: Vec<Resource>,
-    /// [`keyed_users`] of all its desired resources, changed or not.
+    /// [`keyed_users`] of all its desired resources, changed or not; empty
+    /// for a module whose keyed users are not admins.
     #[serde(skip)]
     pub(super) keyed: Vec<String>,
 }
@@ -114,7 +115,7 @@ impl Plan<'_> {
     }
 
     /// Who must log in to confirm it: the users other than root that its
-    /// modules give SSH keys, whether or not those keys change now (an
+    /// modules give SSH keys as admins, whether or not those keys change now (an
     /// admin set up by an earlier apply still counts). If there are none
     /// and it needs the dead-man switch, the user of the session applying
     /// it, unless that is root. Empty means any user.
@@ -235,7 +236,9 @@ pub fn plan<'a>(
                     error,
                 })?;
                 notes.extend(found);
-                keyed = keyed_users(&resources);
+                if module.keys_admins() {
+                    keyed = keyed_users(&resources);
+                }
                 planned.extend(resources.iter().cloned());
                 let mut changes = Vec::new();
                 for resource in resources {

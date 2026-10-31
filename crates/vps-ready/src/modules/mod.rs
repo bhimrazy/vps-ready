@@ -13,6 +13,7 @@ use crate::sys::{Cmd, Sys, SysError};
 
 #[cfg(feature = "testing")]
 mod deadman_test;
+pub mod deploy_user;
 pub mod firewall_inbound;
 pub mod kernel_sysctl;
 pub mod ssh_bruteforce;
@@ -22,6 +23,7 @@ pub mod user_admin;
 
 #[cfg(feature = "testing")]
 pub use deadman_test::DeadmanTest;
+pub use deploy_user::DeployUser;
 pub use firewall_inbound::FirewallInbound;
 pub use kernel_sysctl::KernelSysctl;
 pub use ssh_bruteforce::SshBruteforce;
@@ -162,6 +164,11 @@ pub trait Module {
     fn force_restore(&self) -> bool {
         false
     }
+    /// Whether the users it gives SSH keys are admins, one of whom must log
+    /// in to confirm an apply. Not for an account whose keys are restricted.
+    fn keys_admins(&self) -> bool {
+        true
+    }
     /// The params its profile table accepts; empty for a module with none.
     fn params_doc(&self) -> &'static [ParamDoc] {
         &[]
@@ -210,6 +217,8 @@ pub trait Module {
 }
 
 /// Every module, in the order the plan lists and applies them.
+/// `deploy.user` comes after `ssh.server`, whose admin check reads the
+/// resources planned before it and must not take the deploy user for one.
 #[must_use]
 pub fn all() -> &'static [&'static dyn Module] {
     &[
@@ -219,6 +228,7 @@ pub fn all() -> &'static [&'static dyn Module] {
         &SshBruteforce::ROOT,
         &KernelSysctl::ROOT,
         &UpdatesAuto::ROOT,
+        &DeployUser,
     ]
 }
 
@@ -234,6 +244,7 @@ pub fn with_test() -> &'static [&'static dyn Module] {
         &SshBruteforce::ROOT,
         &KernelSysctl::ROOT,
         &UpdatesAuto::ROOT,
+        &DeployUser,
         &DeadmanTest,
     ]
 }
