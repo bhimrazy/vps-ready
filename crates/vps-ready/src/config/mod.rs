@@ -199,6 +199,8 @@ impl ProfileBuilder {
     /// and enables it if the base lacks it or it was taken out.
     pub fn set_params(&mut self, id: &str, params: toml::Table) -> &mut Self {
         let table = self.modules.entry(id.to_owned()).or_default();
+        // Only `remove` sets `enabled`: no built-in does, so `to_toml` never
+        // needs to write `enabled = true`.
         table.remove("enabled");
         table.extend(params);
         self

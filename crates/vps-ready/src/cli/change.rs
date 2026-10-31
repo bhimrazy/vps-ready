@@ -201,7 +201,8 @@ pub(super) fn apply(
     apply_profile(host, profile, sel, yes, window, input, out, err)
 }
 
-/// [`apply`] with `profile` loaded; `sel` picks its modules.
+/// [`apply`] with `profile` loaded; `sel` picks its modules. Checks root
+/// itself too, for callers that did not load a profile first.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn apply_profile(
     host: &Host,

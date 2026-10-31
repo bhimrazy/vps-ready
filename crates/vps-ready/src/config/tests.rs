@@ -220,6 +220,17 @@ fn a_builder_writes_only_what_differs() {
 }
 
 #[test]
+fn removing_a_module_with_params_writes_only_enabled() {
+    let mut b = builder("minimal");
+    b.remove("firewall.inbound");
+    assert_eq!(
+        b.to_toml(),
+        "schema = 1\nextends = \"minimal\"\n\n\
+         [modules.\"firewall.inbound\"]\nenabled = false\n"
+    );
+}
+
+#[test]
 fn a_built_profile_parses_back_the_same() {
     type Change = fn(&mut ProfileBuilder);
     let cases: [(&str, Change); 7] = [
