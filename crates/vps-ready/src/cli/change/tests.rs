@@ -391,6 +391,14 @@ fn plan_summary_counts_kinds() {
         ),
         "{out}"
     );
+    // ssh.bruteforce installs three packages in one step.
+    let (_, out, _) = plan_cmd(&apt_host(&fs, &apt), &["ssh.bruteforce", "updates.auto"]);
+    assert!(
+        out.contains(
+            "\n5 changes in 2 modules: 2 files, 2 apt installs of 4 packages, 1 service.\n"
+        ),
+        "{out}"
+    );
 
     let host = Host {
         facts: container,

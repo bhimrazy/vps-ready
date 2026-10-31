@@ -652,37 +652,43 @@ fn print_plan(
     }
 }
 
-/// The steps by kind, e.g. `2 files, 6 kernel settings, 1 package`. A
-/// package step counts each package it installs.
+/// The steps by kind, e.g. `2 files, 6 kernel settings, 1 package`, so
+/// the parts add up to the number of changes. Package steps that name
+/// several packages read `1 apt install of 5 packages`.
 fn kinds(plan: &Plan) -> String {
     let count = |f: fn(&Resource) -> bool| plan.steps().filter(|s| f(&s.resource)).count();
-    let packages = plan
+    let word = |n: usize, word: &str| (n > 0).then(|| format!("{n} {}", plural(n, word)));
+    let (installs, packages) = plan
         .steps()
-        .filter(|s| matches!(s.resource, Resource::Package(_)))
-        .map(|s| {
-            s.change
-                .summary
-                .strip_prefix("install ")
-                .map_or(1, |names| names.split(", ").count())
+        .filter_map(|s| match &s.resource {
+            Resource::Package(p) => Some(p.names.len()),
+            _ => None,
         })
-        .sum();
+        .fold((0, 0), |(steps, names), n| (steps + 1, names + n));
+    let packages = if packages == installs {
+        word(installs, "package")
+    } else {
+        Some(format!(
+            "{installs} apt {} of {packages} packages",
+            plural(installs, "install")
+        ))
+    };
     [
-        (
+        word(
             count(|r| matches!(r, Resource::File(_) | Resource::AuthorizedKeys(_))),
             "file",
         ),
-        (count(|r| matches!(r, Resource::Directory(_))), "directory"),
-        (
+        word(count(|r| matches!(r, Resource::Directory(_))), "directory"),
+        word(
             count(|r| matches!(r, Resource::Sysctl(_))),
             "kernel setting",
         ),
-        (packages, "package"),
-        (count(|r| matches!(r, Resource::Service(_))), "service"),
-        (count(|r| matches!(r, Resource::User(_))), "user"),
+        packages,
+        word(count(|r| matches!(r, Resource::Service(_))), "service"),
+        word(count(|r| matches!(r, Resource::User(_))), "user"),
     ]
     .into_iter()
-    .filter(|(n, _)| *n > 0)
-    .map(|(n, word)| format!("{n} {}", plural(n, word)))
+    .flatten()
     .collect::<Vec<_>>()
     .join(", ")
 }
