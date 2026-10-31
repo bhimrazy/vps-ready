@@ -197,6 +197,59 @@ fn include_inside_match_is_conditional() {
 }
 
 #[test]
+fn in_match_blocks_names_the_block_of_each_line() {
+    let source = Mem::new(&[
+        (
+            MAIN,
+            "PasswordAuthentication no\nInclude /etc/ssh/d/*.conf\n\
+             Match Address 192.0.2.0/24\nInclude /etc/ssh/m.conf\n",
+        ),
+        // A Match block in a drop-in ends with the file.
+        (
+            "/etc/ssh/d/50-a.conf",
+            "Match User bob\n  passwordauthentication yes\n",
+        ),
+        ("/etc/ssh/d/60-b.conf", "PasswordAuthentication no\n"),
+        // Nested includes inherit the Match block of the first Include.
+        ("/etc/ssh/m.conf", "Include /etc/ssh/n.conf\n"),
+        ("/etc/ssh/n.conf", "PASSWORDAUTHENTICATION=yes\n"),
+    ]);
+    let config = read(&source);
+    let found: Vec<(&str, usize, &str, usize, Vec<String>)> = config
+        .in_match_blocks("PasswordAuthentication")
+        .map(|(d, m)| {
+            (
+                d.file.to_str().unwrap(),
+                d.line,
+                m.file.to_str().unwrap(),
+                m.line,
+                m.args.clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        found,
+        [
+            (
+                "/etc/ssh/d/50-a.conf",
+                2,
+                "/etc/ssh/d/50-a.conf",
+                1,
+                vec!["User".to_owned(), "bob".to_owned()]
+            ),
+            (
+                "/etc/ssh/n.conf",
+                1,
+                MAIN,
+                3,
+                vec!["Address".to_owned(), "192.0.2.0/24".to_owned()]
+            ),
+        ]
+    );
+    assert_eq!(config.in_match_blocks("x11forwarding").count(), 0);
+}
+
+#[test]
 fn missing_includes_are_skipped_but_a_missing_main_file_is_an_error() {
     let source = Mem::new(&[(
         MAIN,

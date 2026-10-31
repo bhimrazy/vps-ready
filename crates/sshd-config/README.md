@@ -3,7 +3,7 @@
 Read OpenSSH server configuration: `sshd_config` with its `Include` files, and the output of `sshd -T`.
 
 - `effective::SshdConfig` parses `sshd -T`, the settings sshd actually uses.
-- `files::Config` reads `sshd_config` and every file it includes, in the order sshd reads them. It answers which file sets a keyword first, and whether a drop-in such as `/etc/ssh/sshd_config.d/00-local.conf` is read before any `Match` block and before any line that would override it.
+- `files::Config` reads `sshd_config` and every file it includes, in the order sshd reads them. It answers which file sets a keyword first, and whether a drop-in such as `/etc/ssh/sshd_config.d/00-local.conf` is read before any `Match` block and before any line that would override it. `in_match_blocks` lists the lines inside `Match` blocks that set a keyword, each with its `Match` line, following `Include` as sshd does.
 
 ```rust
 use std::path::Path;

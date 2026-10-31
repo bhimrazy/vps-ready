@@ -1,6 +1,8 @@
 # SSH controls. Checks read the effective config from `sshd -T`, so sshd's own
-# rules (drop-ins, first value wins) are already applied. SSH-008 also asks
-# `fail2ban-client` whether the sshd jail runs.
+# rules (drop-ins, first value wins) are already applied, and fail when a
+# `Match` block in `sshd_config` or a file it includes sets another value. No
+# module edits `Match` blocks, so such a failure names no fix. SSH-008 also
+# asks `fail2ban-client` whether the sshd jail runs.
 
 [[control]]
 id = "SSH-001"
