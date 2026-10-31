@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use super::file::{fmt_owner, unified};
 use super::user::lookup;
 use super::{Backup, FileCopy, ResourceError, after_path, before_path, file};
-use crate::sys::{FileKind, FileOwner, Sys, SysError};
+use crate::sys::{FileKind, FileMeta, FileOwner, Sys, SysError};
 
 /// Public key lines that `~/.ssh/authorized_keys` of `user` must contain.
 /// Missing lines are appended; no line is ever removed.
@@ -15,7 +15,9 @@ use crate::sys::{FileKind, FileOwner, Sys, SysError};
 /// so the user may be created earlier in the same transaction. `~/.ssh`
 /// (`0700`) and the file (`0600`) are created owned by the user and their
 /// primary group. A symlink anywhere on the path is refused, and so is an
-/// existing `~/.ssh` that sshd's `StrictModes` would reject.
+/// existing `~/.ssh` that sshd's `StrictModes` would reject, or an existing
+/// file owned by another user, with more than one link or with a setuid,
+/// setgid or sticky bit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthorizedKeys {
     /// User name.
@@ -184,15 +186,23 @@ impl AuthorizedKeys {
             }
             Err(e) => return Err(e.into()),
         };
-        let current = match sys.fs.metadata(&path) {
-            Ok(meta) if meta.kind == FileKind::File => Some((sys.fs.read(&path)?, meta.owner())),
-            Ok(meta) => {
-                return Err(ResourceError::NotRegularFile {
-                    path,
-                    kind: meta.kind,
-                });
+        // The owner's swap of the file after the checks above cannot make
+        // root read another file: the metadata checked is the fd's.
+        let current = match sys.fs.read_nofollow(&path) {
+            Ok((bytes, meta)) => {
+                check_file(&path, &meta, entry.uid)?;
+                Some((bytes, meta.owner()))
             }
             Err(SysError::NotFound(_)) => None,
+            Err(SysError::NotRegular { kind, .. }) => {
+                return Err(ResourceError::NotRegularFile { path, kind });
+            }
+            Err(SysError::Symlink(_)) => {
+                return Err(ResourceError::Unsafe {
+                    path,
+                    reason: "it is a symlink".to_owned(),
+                });
+            }
             Err(e) => return Err(e.into()),
         };
         Ok(Some(Target {
@@ -251,6 +261,24 @@ fn identity(line: &str) -> String {
     }
 }
 
+/// Refuses an existing file that root should not copy or rewrite for `uid`.
+/// A hard link may be another file's other name, e.g. `/etc/shadow`'s.
+fn check_file(path: &Path, meta: &FileMeta, uid: u32) -> Result<(), ResourceError> {
+    let reason = if meta.uid != uid && meta.uid != 0 {
+        format!("it is owned by uid {}, not {uid} or root", meta.uid)
+    } else if meta.nlink > 1 {
+        format!("it has {} hard links", meta.nlink)
+    } else if meta.mode & 0o7000 != 0 {
+        format!("mode {:04o} has a setuid, setgid or sticky bit", meta.mode)
+    } else {
+        return Ok(());
+    };
+    Err(ResourceError::Unsafe {
+        path: path.to_path_buf(),
+        reason,
+    })
+}
+
 /// Fails if `path` or any of its parents is a symlink. Parents below the
 /// first missing one do not exist either, so they are not checked.
 fn refuse_symlinks(sys: Sys, path: &Path) -> Result<(), ResourceError> {
@@ -277,12 +305,14 @@ fn refuse_symlinks(sys: Sys, path: &Path) -> Result<(), ResourceError> {
 pub(super) fn restore(
     sys: Sys,
     txn_dir: &Path,
+    user: &str,
     path: &Path,
     n: u32,
     original: Option<FileCopy>,
     created_dir: bool,
 ) -> Result<(), ResourceError> {
     refuse_symlinks(sys, path)?;
+    let original = original.map(|copy| restored(sys, user, copy)).transpose()?;
     file::restore(sys, txn_dir, path, n, original)?;
     let Some(dir) = path.parent().filter(|_| created_dir) else {
         return Ok(());
@@ -303,6 +333,21 @@ pub(super) fn restore(
     }
 }
 
+/// The mode and owner a restored file gets: never more than `0644`, and
+/// root's or else the user's from passwd, whatever the journal records.
+fn restored(sys: Sys, user: &str, copy: FileCopy) -> Result<FileCopy, ResourceError> {
+    let mode = copy.mode & 0o644;
+    if copy.uid == 0 {
+        return Ok(FileCopy { mode, ..copy });
+    }
+    let entry = lookup(sys, user)?.ok_or_else(|| ResourceError::NoSuchUser(user.to_owned()))?;
+    Ok(FileCopy {
+        mode,
+        uid: entry.uid,
+        gid: entry.gid,
+    })
+}
+
 /// The safety check: whether the file equals `.after` or `.before` (absent
 /// counts as `.before` if it did not exist). A symlink on its path counts
 /// as changed.
@@ -318,10 +363,10 @@ pub(crate) fn unchanged(sys: Sys, txn_dir: &Path, backup: &Backup) -> Result<boo
         Err(ResourceError::Unsafe { .. }) => return Ok(false),
         Err(e) => return Err(e),
     }
-    let current = match sys.fs.metadata(path) {
-        Ok(meta) if meta.kind == FileKind::File => sys.fs.read(path)?,
-        Ok(_) => return Ok(false),
+    let current = match sys.fs.read_nofollow(path) {
+        Ok((bytes, _)) => bytes,
         Err(SysError::NotFound(_)) => return Ok(original.is_none()),
+        Err(SysError::Symlink(_) | SysError::NotRegular { .. }) => return Ok(false),
         Err(e) => return Err(e.into()),
     };
     if current == sys.fs.read(&after_path(txn_dir, *n))? {
@@ -333,24 +378,30 @@ pub(crate) fn unchanged(sys: Sys, txn_dir: &Path, backup: &Backup) -> Result<boo
 /// How to restore `backup` by hand.
 pub(crate) fn by_hand(txn_dir: &Path, backup: &Backup) -> Option<String> {
     let Backup::AuthorizedKeys {
+        user,
         path,
         n,
         original,
         created_dir,
-        ..
     } = backup
     else {
         return None;
     };
     Some(match original {
-        Some(copy) => format!(
-            "copy {} to {} (mode {:04o}, owner {}:{})",
-            before_path(txn_dir, *n).display(),
-            path.display(),
-            copy.mode,
-            copy.uid,
-            copy.gid
-        ),
+        Some(copy) => {
+            // The owner `restore` sets.
+            let owner = if copy.uid == 0 {
+                format!("0:{}", copy.gid)
+            } else {
+                format!("{user} and their primary group")
+            };
+            format!(
+                "copy {} to {} (mode {:04o}, owner {owner})",
+                before_path(txn_dir, *n).display(),
+                path.display(),
+                copy.mode & 0o644,
+            )
+        }
         None => match path.parent().filter(|_| *created_dir) {
             Some(dir) => format!("remove {}, then rmdir {}", path.display(), dir.display()),
             None => format!("remove {}", path.display()),
@@ -642,6 +693,257 @@ mod tests {
         assert!(fs.exists(Path::new("/etc/ssh/authorized_keys")));
     }
 
+    /// A tempdir with `/home/admin/.ssh` (`0700`), where `make` creates
+    /// `authorized_keys` from its host path.
+    fn real_ssh(make: impl FnOnce(&Path)) -> (tempfile::TempDir, RealFs, FakeRunner) {
+        let (dir, uid, gid) = real_home();
+        let ssh = dir.path().join("home/admin/.ssh");
+        std::fs::create_dir(&ssh).unwrap();
+        std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o700)).unwrap();
+        make(&ssh.join("authorized_keys"));
+        let fs = RealFs::new(dir.path());
+        (dir, fs, runner(uid, gid))
+    }
+
+    #[test]
+    fn a_hard_linked_file_is_refused() {
+        let (dir, fs, runner) = real_ssh(|keys| {
+            let shadow = keys.ancestors().nth(4).unwrap().join("etc/shadow");
+            std::fs::create_dir_all(shadow.parent().unwrap()).unwrap();
+            std::fs::write(&shadow, "secret\n").unwrap();
+            std::fs::hard_link(&shadow, keys).unwrap();
+        });
+        let sys = Sys {
+            fs: &fs,
+            runner: &runner,
+        };
+        let txn = Path::new(TXN);
+        for result in [
+            keys(&[KEY]).diff(sys).map(|_| ()),
+            keys(&[KEY]).snapshot(sys, txn, 1).map(|_| ()),
+            keys(&[KEY]).apply(sys).map(|_| ()),
+        ] {
+            let (path, reason) = unsafe_path(result.unwrap_err());
+            assert_eq!(path, Path::new("/home/admin/.ssh/authorized_keys"));
+            assert_eq!(reason, "it has 2 hard links");
+        }
+        assert_eq!(
+            std::fs::read(dir.path().join("etc/shadow")).unwrap(),
+            b"secret\n"
+        );
+    }
+
+    #[test]
+    fn a_fifo_is_refused_without_waiting() {
+        let (_dir, fs, runner) = real_ssh(|keys| {
+            let out = std::process::Command::new("mkfifo")
+                .arg(keys)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{out:?}");
+        });
+        let sys = Sys {
+            fs: &fs,
+            runner: &runner,
+        };
+        let err = keys(&[KEY]).diff(sys).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ResourceError::NotRegularFile {
+                    kind: FileKind::Other,
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+        let backup = Backup::AuthorizedKeys {
+            user: "admin".into(),
+            path: "/home/admin/.ssh/authorized_keys".into(),
+            n: 1,
+            original: None,
+            created_dir: false,
+        };
+        assert!(!unchanged(sys, Path::new(TXN), &backup).unwrap());
+    }
+
+    #[test]
+    fn a_file_of_another_user_or_with_a_setuid_bit_is_refused() {
+        let path = Path::new("/home/admin/.ssh/authorized_keys");
+        let runner = runner(1001, 1001);
+        let reason = |mode, uid| {
+            let fs = FakeFs::new().with_dir(
+                "/home/admin/.ssh",
+                FileOwner {
+                    mode: 0o700,
+                    uid: 1001,
+                    gid: 1001,
+                },
+            );
+            let owner = FileOwner {
+                mode,
+                uid,
+                gid: 1001,
+            };
+            fs.write_atomic(path, format!("{KEY}\n").as_bytes(), owner)
+                .unwrap();
+            let sys = Sys {
+                fs: &fs,
+                runner: &runner,
+            };
+            unsafe_path(keys(&[KEY]).diff(sys).unwrap_err()).1
+        };
+        assert_eq!(
+            reason(0o600, 1002),
+            "it is owned by uid 1002, not 1001 or root"
+        );
+        assert_eq!(
+            reason(0o4600, 1001),
+            "mode 4600 has a setuid, setgid or sticky bit"
+        );
+    }
+
+    /// Reads like `FakeFs`, but its `metadata` of `swapped` answers as for
+    /// a regular file of the user's: what a check saw before the user put
+    /// a symlink in its place.
+    struct Swapped {
+        inner: FakeFs,
+        swapped: &'static str,
+    }
+
+    impl Fs for Swapped {
+        fn read(&self, path: &Path) -> Result<Vec<u8>, SysError> {
+            self.inner.read(path)
+        }
+        fn read_nofollow(&self, path: &Path) -> Result<(Vec<u8>, FileMeta), SysError> {
+            self.inner.read_nofollow(path)
+        }
+        fn exists(&self, path: &Path) -> bool {
+            self.inner.exists(path)
+        }
+        fn read_dir(&self, path: &Path) -> Result<Vec<PathBuf>, SysError> {
+            self.inner.read_dir(path)
+        }
+        fn metadata(&self, path: &Path) -> Result<FileMeta, SysError> {
+            if path != Path::new(self.swapped) {
+                return self.inner.metadata(path);
+            }
+            Ok(FileMeta {
+                kind: FileKind::File,
+                len: 0,
+                mode: 0o600,
+                uid: 1001,
+                gid: 1001,
+                nlink: 1,
+            })
+        }
+        fn write_atomic(
+            &self,
+            path: &Path,
+            bytes: &[u8],
+            owner: FileOwner,
+        ) -> Result<(), SysError> {
+            self.inner.write_atomic(path, bytes, owner)
+        }
+        fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), SysError> {
+            self.inner.write(path, bytes)
+        }
+        fn append_sync(&self, path: &Path, bytes: &[u8]) -> Result<(), SysError> {
+            self.inner.append_sync(path, bytes)
+        }
+        fn remove(&self, path: &Path) -> Result<(), SysError> {
+            self.inner.remove(path)
+        }
+        fn create_dir_all(&self, path: &Path, mode: u32) -> Result<(), SysError> {
+            self.inner.create_dir_all(path, mode)
+        }
+        fn create_dir(&self, path: &Path, owner: FileOwner) -> Result<(), SysError> {
+            self.inner.create_dir(path, owner)
+        }
+        fn remove_dir(&self, path: &Path) -> Result<(), SysError> {
+            self.inner.remove_dir(path)
+        }
+        fn sync_dir(&self, path: &Path) -> Result<(), SysError> {
+            self.inner.sync_dir(path)
+        }
+        fn try_lock(&self, path: &Path) -> Result<crate::sys::FsLock, SysError> {
+            self.inner.try_lock(path)
+        }
+    }
+
+    #[test]
+    fn a_swap_after_the_checks_cannot_change_what_is_read() {
+        let txn = Path::new(TXN);
+        let path = "/home/admin/.ssh/authorized_keys";
+        let fs = Swapped {
+            inner: FakeFs::new()
+                .with_dir(
+                    "/home/admin/.ssh",
+                    FileOwner {
+                        mode: 0o700,
+                        uid: 1001,
+                        gid: 1001,
+                    },
+                )
+                .with_file("/etc/shadow", "secret\n")
+                .with_file(after_path(txn, 1), "secret\n")
+                .with_symlink(path, "/etc/shadow"),
+            swapped: path,
+        };
+        let runner = runner(1001, 1001);
+        let sys = Sys {
+            fs: &fs,
+            runner: &runner,
+        };
+        let (at, reason) = unsafe_path(keys(&[KEY]).diff(sys).unwrap_err());
+        assert_eq!(at, Path::new(path));
+        assert_eq!(reason, "it is a symlink");
+        let backup = Backup::AuthorizedKeys {
+            user: "admin".into(),
+            path: path.into(),
+            n: 1,
+            original: None,
+            created_dir: false,
+        };
+        assert!(!unchanged(sys, txn, &backup).unwrap());
+    }
+
+    #[test]
+    fn restore_sets_no_special_bits_and_the_passwd_owner() {
+        let txn = Path::new(TXN);
+        let path = Path::new("/home/admin/.ssh/authorized_keys");
+        let fs = FakeFs::new()
+            .with_file(before_path(txn, 1), format!("{OTHER}\n"))
+            .with_file(path, format!("{OTHER}\n{KEY}\n"));
+        let runner = runner(1001, 1001);
+        let sys = Sys {
+            fs: &fs,
+            runner: &runner,
+        };
+        let backup = |mode, uid| Backup::AuthorizedKeys {
+            user: "admin".into(),
+            path: path.into(),
+            n: 1,
+            original: Some(FileCopy { mode, uid, gid: 42 }),
+            created_dir: false,
+        };
+        let restored = |b: &Backup| {
+            restore(sys, txn, b).unwrap();
+            let meta = fs.metadata(path).unwrap();
+            (meta.mode, meta.uid, meta.gid)
+        };
+        assert_eq!(restored(&backup(0o6755, 1002)), (0o644, 1001, 1001));
+        assert_eq!(restored(&backup(0o4600, 0)), (0o600, 0, 42));
+        assert_eq!(fs.read(path).unwrap(), format!("{OTHER}\n").as_bytes());
+        let step = by_hand(txn, &backup(0o6755, 1001)).unwrap();
+        assert!(
+            step.ends_with("(mode 0644, owner admin and their primary group)"),
+            "{step}"
+        );
+        let step = by_hand(txn, &backup(0o4600, 0)).unwrap();
+        assert!(step.ends_with("(mode 0600, owner 0:42)"), "{step}");
+    }
+
     #[test]
     fn an_ssh_dir_sshd_would_ignore_is_refused() {
         let owner = |mode, uid| FileOwner {
@@ -738,7 +1040,7 @@ mod tests {
         assert_eq!(
             by_hand(txn, &existed).unwrap(),
             format!(
-                "copy {} to {path} (mode 0600, owner 1001:1001)",
+                "copy {} to {path} (mode 0600, owner admin and their primary group)",
                 before_path(txn, 1).display()
             )
         );
