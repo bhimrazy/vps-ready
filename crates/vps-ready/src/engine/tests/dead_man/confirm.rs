@@ -482,6 +482,69 @@ fn several_pending_transactions_need_txn() {
     assert_eq!(confirm(&fs, &dm_runner(), Some(&txn), &new).unwrap(), txn);
 }
 
+/// The caller's binary is not the one re-armed: the copy that applied is,
+/// even when the installed binary moved.
+#[test]
+fn extend_keeps_the_copy() {
+    let fs = armable();
+    let txn = applied(&fs);
+    set_uptime(&fs, 1100);
+    let run = dm_runner();
+    extend(&fs, &run, 600).unwrap();
+    let timer = calls(&run).remove(0);
+    assert!(
+        timer.contains(&format!("{COPY} rollback --txn {txn}")),
+        "{timer}"
+    );
+}
+
+#[test]
+fn extend_makes_a_missing_copy_again() {
+    let fs = armable();
+    let txn = applied(&fs);
+    fs.remove(Path::new(COPY)).unwrap();
+    set_uptime(&fs, 1100);
+    let run = dm_runner();
+    extend(&fs, &run, 600).unwrap();
+    assert!(fs.exists(Path::new(COPY)));
+    let calls = calls(&run);
+    assert_eq!(calls[0], format!("{COPY} version"));
+    assert!(
+        calls[1].contains(&format!("{COPY} rollback --txn {txn}")),
+        "{calls:?}"
+    );
+}
+
+/// A transaction armed by v0.4.0 has a hook that names the installed
+/// binary. Extending it moves the hook and the timer onto a copy, so a
+/// reboot in the extended window still rolls back.
+#[test]
+fn extend_moves_a_pre_copy_hook_onto_the_copy() {
+    let fs = armable();
+    let txn = applied(&fs);
+    fs.remove(Path::new(COPY)).unwrap();
+    fs.write(
+        Path::new(deadman::HOOK),
+        deadman::hook_unit(Path::new(BIN)).as_bytes(),
+    )
+    .unwrap();
+    set_uptime(&fs, 1100);
+    let run = dm_runner();
+    extend(&fs, &run, 600).unwrap();
+    let calls = calls(&run);
+    assert_eq!(calls[0], format!("{COPY} version"));
+    assert_eq!(calls[1], "systemctl daemon-reload");
+    assert!(
+        calls[3].contains(&format!("{COPY} rollback --txn {txn}")),
+        "{calls:?}"
+    );
+    assert_eq!(
+        fs.read(Path::new(deadman::HOOK)).unwrap(),
+        deadman::hook_unit(Path::new(COPY)).as_bytes()
+    );
+    assert!(fs.exists(Path::new(COPY)));
+}
+
 #[test]
 fn extend_re_arms_under_a_new_unit_within_both_caps() {
     let fs = armable();
@@ -605,7 +668,7 @@ fn an_incomplete_boot_rollback_is_retried_by_a_timer() {
         &format!(
             "systemd-run --unit={retry} --on-active=60s --timer-property=AccuracySec=1s \
              --description=vps-ready: retry the rollback of transaction {txn} \
-             {BIN} rollback --txn {txn} --deadman --attempt 1"
+             {COPY} rollback --txn {txn} --deadman --attempt 1"
         )
     );
     // Still enabled: the next boot tries again too.
@@ -624,7 +687,7 @@ fn an_incomplete_boot_rollback_is_retried_by_a_timer() {
         },
     )
     .unwrap()
-    .deadman(&txn, Path::new(BIN), 1, &mut |_| {})
+    .deadman(&txn, Path::new(COPY), 1, &mut |_| {})
     .unwrap();
     assert!(
         matches!(outcome, DeadmanOutcome::RolledBack(_)),

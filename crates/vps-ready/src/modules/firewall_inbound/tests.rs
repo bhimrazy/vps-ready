@@ -499,6 +499,9 @@ impl Runner for Host<'_> {
                 None => fail("Error: No such file or directory"),
             },
             ("systemd-run", _) => Output::success(""),
+            (p, ["version"]) if p.ends_with("/bin/vps-ready") => {
+                Output::success(format!("{}\n", crate::VERSION_INFO))
+            }
             ("systemctl", ["show", _, unit]) if *unit == UNIT => {
                 let load = if self.fs.exists(Path::new(UNIT_FILE)) {
                     "loaded"

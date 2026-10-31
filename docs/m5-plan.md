@@ -116,8 +116,8 @@ The release builds `vps-ready_<ver>_amd64.deb` and `_arm64.deb` with nFPM from t
 - The binary goes to `/usr/bin/vps-ready`, with the `vpsready` link. No maintainer scripts; installing the package changes nothing on the system.
 - The `.deb` is a release asset, listed in `checksums.txt`, covered by the cosign signature and the provenance attestation. There is no apt repository and no embedded deb signature (apt does not check those; it checks repository signatures). Install with `apt install ./vps-ready_0.5.0_amd64.deb` after the usual checksum step.
 - nFPM is installed in CI from a pinned release binary, checked against that release's `checksums.txt`.
-- **Moving from `install.sh` to the package.** `/usr/local/bin` comes first on `PATH`, so an old `install.sh` binary would shadow the package. The install page says to remove `/usr/local/bin/vps-ready` and `vpsready` first, and `vps-ready version` warns when another `vps-ready` comes earlier on `PATH`.
-- **Fix `#75` first.** The safety timer's boot hook names the binary's path, so switching between the two paths while a transaction is pending would break the hook. `apply` and `rollback` refuse when a pending transaction's hook names a different binary path, and say which. Looking in both places would weaken the binary check.
+- **Moving from `install.sh` to the package.** `/usr/local/bin` comes first on `PATH`, so an old `install.sh` binary would shadow the package. The install page says to remove `/usr/local/bin/vps-ready` and `vpsready` first, and `vps-ready version` warns when another `vps-ready` is on `PATH`.
+- **Fix `#75` first.** The safety timer's boot hook names the binary's path, so switching between the two paths while a transaction is pending would break the hook. When the switch is armed, `apply` now copies the running binary (after the usual checks) to `/var/lib/vps-ready/bin/vps-ready` and points the timer and the hook at that copy, so moving or upgrading the installed binary cannot break an unattended rollback, and nothing looks in several places. A transaction armed by v0.4.0 keeps its old hook.
 
 ### SBOM
 
@@ -187,7 +187,7 @@ A WireGuard module would generate keys, manage peers and print a client config: 
 3. **`feat(modules): deploy.docker`** (needs 2): the module, `DockerRestart`, the `daemon.json` merge, the `FW-002` hint, `firewall.inbound` planning for a Docker in the same profile, the `web` profile.
 4. **`feat(modules): deploy.proxy`** (needs 2 and 3): the module, `CaddyReload`, the wizard's domain question.
 5. **`feat(modules): deploy.user`**: the module and the sudoers drop-in.
-6. **`fix(deadman): refuse a binary path change while pending`** (`#75`), then **`ci(release): .deb and SBOM`**, with the `PATH` warning in `version`.
+6. **`fix(deadman): run the timer and boot hook from a private copy of the binary`** (`#75`), then **`ci(release): .deb and SBOM`**, with the `PATH` warning in `version`.
 7. **`test(vm): deploy cycle`** (needs 3 to 5): cycle 8.
 8. **`docs(site): deployment modules`** (needs 3 to 6): guides, `modules` reference, the install page with the `.deb`, and the doc changes listed above.
 9. **`chore: release v0.5.0`**.
