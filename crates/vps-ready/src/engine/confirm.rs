@@ -299,7 +299,9 @@ impl Engine<'_> {
     /// Moves the deadline of the pending transaction `id` (or the only one)
     /// to `by` from now, at most 30 minutes and at most 2 hours after its
     /// changes went live, from any session. Arms a timer for it with
-    /// `binary`, journals `extended`, then stops the previous timer.
+    /// the private copy of the binary that applied (`binary` if the
+    /// transaction predates the copy), journals `extended`, then stops the
+    /// previous timer.
     ///
     /// # Errors
     ///
@@ -314,10 +316,7 @@ impl Engine<'_> {
     ) -> Result<Extended, EngineError> {
         let fs = self.sys.fs;
         let w = self.waiting_txn(id)?;
-        deadman::check_binary(fs, binary).map_err(|reason| EngineError::UnsafeBinary {
-            path: binary.display().to_string(),
-            reason,
-        })?;
+        let binary = &deadman::prepare_rearm(self.sys, self.state.root(), binary)?;
         let txn = w.txn.id().to_owned();
         let now = deadman::boottime(fs)?;
         let limit = w.live_since + MAX_PENDING.as_secs();

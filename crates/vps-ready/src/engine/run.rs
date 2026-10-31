@@ -302,9 +302,11 @@ impl<'a> Engine<'a> {
     /// Applies `plan`, the plan shown to the user. Each change is re-diffed
     /// first, and nothing happens if one differs. Resources that had no
     /// change are not re-diffed: if they drifted since, the next plan shows
-    /// it. If a module needs the dead-man switch, the binary is checked
-    /// before anything else, and the boot hook and a timer that rolls the
-    /// transaction back are set up before the first `backup` line. Then, for
+    /// it. If a module needs the dead-man switch, the binary is checked,
+    /// copied to a private path and run once (`version`) to prove the copy
+    /// works, before anything else; the timer and the boot hook run that
+    /// copy. The boot hook and the first timer are set up before the first
+    /// `backup` line. Then, for
     /// each resource: snapshot, `backup` line, apply, `applied` line; after
     /// a module's resources, each of its reloads: check, `reloaded` line,
     /// reload. Then every resource is verified, and each module with a
@@ -347,6 +349,8 @@ impl<'a> Engine<'a> {
             }
         }
         let armed = plan.needs_deadman();
+        let copy;
+        let mut deadman = deadman;
         if armed {
             deadman::check_binary(self.sys.fs, &deadman.binary).map_err(|reason| {
                 EngineError::UnsafeBinary {
@@ -357,6 +361,14 @@ impl<'a> Engine<'a> {
             // The deadlines need both.
             deadman::boottime(self.sys.fs)?;
             current_boot(self.sys.fs)?;
+            // The timer and the boot hook run the copy, so moving or
+            // upgrading the installed binary cannot break them, and the
+            // rollback is the version that applied.
+            copy = Deadman {
+                binary: deadman::make_copy(self.sys, self.state.root(), &deadman.binary)?,
+                ..deadman.clone()
+            };
+            deadman = &copy;
         }
 
         let txn = self.state.create_txn(self.sys.fs, id::now())?;
