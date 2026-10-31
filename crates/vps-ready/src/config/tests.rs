@@ -183,3 +183,111 @@ fn modules_without_params_reject_any() {
     let err = parse("schema = 1\n[modules.\"kernel.sysctl\"]\ntypo = 1\n").unwrap_err();
     assert!(err.to_string().contains("unknown field `typo`"), "{err}");
 }
+
+fn builder(base: &str) -> ProfileBuilder {
+    ProfileBuilder::new(base).unwrap()
+}
+
+#[test]
+fn a_builder_without_changes_writes_the_built_in() {
+    for (name, _) in BUILT_IN {
+        let b = builder(name);
+        assert_eq!(b.to_toml(), format!("schema = 1\nextends = \"{name}\"\n"));
+        let built_in = Profile::built_in(name, all()).unwrap().unwrap();
+        assert_eq!(parse(&b.to_toml()).unwrap(), built_in);
+        assert_eq!(b.build(&registry()).unwrap(), built_in);
+    }
+}
+
+#[test]
+fn a_builder_writes_only_what_differs() {
+    let mut b = builder("web");
+    b.set_params(
+        "firewall.inbound",
+        table("allow = [\"22/tcp\", \"80/tcp\", \"443/tcp\", \"443/udp\", \"5432/tcp\"]"),
+    )
+    .remove("ssh.bruteforce")
+    .set_params("user.admin", table("name = \"alice\""))
+    .set_params("kernel.sysctl", toml::Table::new());
+    assert_eq!(
+        b.to_toml(),
+        "schema = 1\nextends = \"web\"\n\n\
+         [modules.\"firewall.inbound\"]\n\
+         allow = [\"22/tcp\", \"80/tcp\", \"443/tcp\", \"443/udp\", \"5432/tcp\"]\n\n\
+         [modules.\"ssh.bruteforce\"]\nenabled = false\n\n\
+         [modules.\"user.admin\"]\nname = \"alice\"\n"
+    );
+}
+
+#[test]
+fn removing_a_module_with_params_writes_only_enabled() {
+    let mut b = builder("minimal");
+    b.remove("firewall.inbound");
+    assert_eq!(
+        b.to_toml(),
+        "schema = 1\nextends = \"minimal\"\n\n\
+         [modules.\"firewall.inbound\"]\nenabled = false\n"
+    );
+}
+
+#[test]
+fn a_built_profile_parses_back_the_same() {
+    type Change = fn(&mut ProfileBuilder);
+    let cases: [(&str, Change); 7] = [
+        ("web", |b| {
+            b.set_params(
+                "firewall.inbound",
+                table("allow = [\"22/tcp\", \"5432/tcp\"]"),
+            );
+        }),
+        ("web", |b| {
+            b.remove("ssh.bruteforce").remove("user.admin");
+        }),
+        ("minimal", |b| {
+            b.set_params("ssh.bruteforce", toml::Table::new());
+        }),
+        ("minimal", |b| {
+            b.set_params("user.admin", table("name = \"alice\""))
+                .set_params("user.admin", table("sudo = \"password\""));
+        }),
+        // Taken out, then back: `enabled = false` goes with the removal.
+        ("web", |b| {
+            b.remove("updates.auto")
+                .set_params("test.takes", table("name = \"a\""))
+                .remove("test.takes")
+                .remove("kernel.sysctl")
+                .set_params("kernel.sysctl", toml::Table::new());
+        }),
+        ("web", |b| {
+            b.set_params("test.takes", table("allow = [\"x\"]"));
+        }),
+        ("minimal", |b| {
+            b.remove("firewall.inbound")
+                .set_params("firewall.inbound", table("allow = [\"22/tcp\"]"));
+        }),
+    ];
+    for (base, change) in cases {
+        let mut b = builder(base);
+        change(&mut b);
+        let text = b.to_toml();
+        assert_eq!(
+            parse(&text).unwrap(),
+            b.build(&registry()).unwrap(),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn a_builder_checks_what_it_builds() {
+    assert!(matches!(
+        ProfileBuilder::new("paranoid").unwrap_err(),
+        ProfileError::UnknownBase(_)
+    ));
+    let mut b = builder("web");
+    b.set_params("kernel.sysctl", table("typo = 1"));
+    assert!(matches!(
+        b.build(&registry()).unwrap_err(),
+        ProfileError::Params { .. }
+    ));
+}

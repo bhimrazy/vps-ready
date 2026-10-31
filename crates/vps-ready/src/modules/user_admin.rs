@@ -2,7 +2,7 @@
 //! and sudo, which `ssh.server` needs before it turns off root and password
 //! logins.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -282,15 +282,24 @@ fn read_if_exists(sys: Sys, path: &Path) -> Result<Option<Vec<u8>>, ModuleError>
     }
 }
 
+/// The keys `user.admin` copies when `authorized_keys` is not given.
+#[derive(Debug)]
+pub(crate) struct SessionKeys {
+    /// The `authorized_keys` file read; it may not exist.
+    pub path: PathBuf,
+    /// Its plain key lines.
+    pub keys: Vec<String>,
+    /// Lines with options, left out.
+    pub skipped: usize,
+}
+
 /// The key lines of the user this SSH session logged in as, else of root,
 /// who just logged in with one of them. Lines with options are skipped:
 /// Ubuntu and AWS images put `command="echo 'Please login as ...'"` on
 /// root's keys, which would make the admin unusable.
-fn copied_keys(
-    facts: &Facts,
-    sys: Sys,
-    notes: &mut Vec<String>,
-) -> Result<Vec<String>, ModuleError> {
+///
+/// Refuses when that user has no passwd entry.
+pub(crate) fn session_keys(facts: &Facts, sys: Sys) -> Result<SessionKeys, ModuleError> {
     let source = facts
         .session
         .as_ref()
@@ -316,6 +325,25 @@ fn copied_keys(
             skipped += 1;
         }
     }
+    Ok(SessionKeys {
+        path,
+        keys,
+        skipped,
+    })
+}
+
+/// [`session_keys`], with a note saying where they come from; refuses when
+/// there is none.
+fn copied_keys(
+    facts: &Facts,
+    sys: Sys,
+    notes: &mut Vec<String>,
+) -> Result<Vec<String>, ModuleError> {
+    let SessionKeys {
+        path,
+        keys,
+        skipped,
+    } = session_keys(facts, sys)?;
     let path = path.display();
     let lines = |n: usize| if n == 1 { "line" } else { "lines" };
     if keys.is_empty() {
@@ -344,10 +372,9 @@ fn copied_keys(
     Ok(keys)
 }
 
-/// Whether `line` starts with a key type rather than options.
 /// Whether `line` starts with a key type rather than options, and has a key
 /// after it.
-fn is_plain_key(line: &str) -> bool {
+pub(crate) fn is_plain_key(line: &str) -> bool {
     let mut fields = line.split_whitespace();
     fields.next().is_some_and(|kind| {
         ["ssh-", "ecdsa-", "sk-"]

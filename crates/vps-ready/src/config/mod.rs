@@ -102,15 +102,10 @@ impl Profile {
         if raw.schema != SCHEMA {
             return Err(ProfileError::Schema(raw.schema));
         }
-        let mut merged = BTreeMap::new();
-        if let Some(name) = &raw.extends {
-            let (_, base) = built_in
-                .iter()
-                .find(|(n, _)| n == name)
-                .ok_or_else(|| ProfileError::UnknownBase(name.clone()))?;
-            let base: Raw = toml::from_str(base).map_err(|e| ProfileError::Parse(Box::new(e)))?;
-            merged = base.modules;
-        }
+        let mut merged = match &raw.extends {
+            Some(name) => base_modules(name, built_in)?.1,
+            None => BTreeMap::new(),
+        };
         // One level deep: a key of the module's table replaces the base's.
         for (id, table) in raw.modules {
             merged
@@ -118,7 +113,15 @@ impl Profile {
                 .or_insert_with(toml::Table::new)
                 .extend(table);
         }
+        Self::resolve(merged, registry)
+    }
 
+    /// Checks the merged sections against `registry` and keeps the enabled
+    /// ones.
+    fn resolve(
+        merged: BTreeMap<String, toml::Table>,
+        registry: &[&dyn Module],
+    ) -> Result<Self, ProfileError> {
         let mut modules = BTreeMap::new();
         for (id, mut table) in merged {
             let Some(module) = registry.iter().find(|m| m.id() == id) else {
@@ -150,6 +153,111 @@ impl Profile {
     #[must_use]
     pub fn params(&self, id: &str) -> Option<&toml::Table> {
         self.modules.get(id)
+    }
+}
+
+/// The name and sections of the built-in profile `name` in `built_in`.
+fn base_modules<'a>(
+    name: &str,
+    built_in: &[(&'a str, &str)],
+) -> Result<(&'a str, BTreeMap<String, toml::Table>), ProfileError> {
+    let (name, text) = built_in
+        .iter()
+        .find(|(n, _)| *n == name)
+        .ok_or_else(|| ProfileError::UnknownBase(name.to_owned()))?;
+    let raw: Raw = toml::from_str(text).map_err(|e| ProfileError::Parse(Box::new(e)))?;
+    Ok((name, raw.modules))
+}
+
+/// A built-in profile with changes: builds the [`Profile`] and writes the
+/// profile file that gives the same one.
+#[derive(Debug, Clone)]
+pub struct ProfileBuilder {
+    base: &'static str,
+    /// The base's sections.
+    base_modules: BTreeMap<String, toml::Table>,
+    /// The sections with the changes, merged as `extends` merges them.
+    modules: BTreeMap<String, toml::Table>,
+}
+
+impl ProfileBuilder {
+    /// Starts from the built-in profile `base`.
+    ///
+    /// # Errors
+    ///
+    /// [`ProfileError::UnknownBase`] if there is no built-in `base`.
+    pub fn new(base: &str) -> Result<Self, ProfileError> {
+        let (base, base_modules) = base_modules(base, &BUILT_IN)?;
+        Ok(Self {
+            base,
+            modules: base_modules.clone(),
+            base_modules,
+        })
+    }
+
+    /// Sets keys of module `id`'s params, one level deep as `extends` does,
+    /// and enables it if the base lacks it or it was taken out.
+    pub fn set_params(&mut self, id: &str, params: toml::Table) -> &mut Self {
+        let table = self.modules.entry(id.to_owned()).or_default();
+        // Only `remove` sets `enabled`: no built-in does, so `to_toml` never
+        // needs to write `enabled = true`.
+        table.remove("enabled");
+        table.extend(params);
+        self
+    }
+
+    /// Takes module `id` out, dropping params set for it.
+    pub fn remove(&mut self, id: &str) -> &mut Self {
+        match self.base_modules.get(id) {
+            Some(base) => {
+                let mut table = base.clone();
+                table.insert("enabled".to_owned(), toml::Value::Boolean(false));
+                self.modules.insert(id.to_owned(), table);
+            }
+            None => {
+                self.modules.remove(id);
+            }
+        }
+        self
+    }
+
+    /// The profile, as [`Profile::parse`] gives it for [`Self::to_toml`].
+    ///
+    /// # Errors
+    ///
+    /// [`ProfileError`] if a module or its params are invalid for `registry`.
+    pub fn build(&self, registry: &[&dyn Module]) -> Result<Profile, ProfileError> {
+        Profile::resolve(self.modules.clone(), registry)
+    }
+
+    /// The profile file: `schema`, `extends` and the keys that differ from
+    /// the base, with `enabled = false` for a module taken out.
+    #[must_use]
+    pub fn to_toml(&self) -> String {
+        let mut modules = toml::Table::new();
+        for (id, table) in &self.modules {
+            let base = self.base_modules.get(id);
+            if base == Some(table) {
+                continue;
+            }
+            let changed: toml::Table = table
+                .iter()
+                .filter(|&(k, v)| base.and_then(|b| b.get(k)) != Some(v))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            modules.insert(id.clone(), toml::Value::Table(changed));
+        }
+        let mut text = format!(
+            "schema = {SCHEMA}\nextends = {}\n",
+            toml::Value::String(self.base.to_owned())
+        );
+        if !modules.is_empty() {
+            let mut doc = toml::Table::new();
+            doc.insert("modules".to_owned(), toml::Value::Table(modules));
+            text.push('\n');
+            text.push_str(&doc.to_string());
+        }
+        text
     }
 }
 
