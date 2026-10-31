@@ -1,7 +1,7 @@
 //! Command-line interface: argument definitions and command dispatch.
 //!
 //! Today: `version`, `detect`, `audit`, `plan`, `apply`, `rollback`,
-//! `confirm` and `history`. Further commands are added as their milestones
+//! `confirm`, `history` and `modules`. Further commands are added as their milestones
 //! land; see the GitHub milestones.
 
 use std::cmp::Reverse;
@@ -25,6 +25,7 @@ use crate::modules;
 use crate::sys::{RealFs, RealRunner, Sys};
 
 mod change;
+mod module_docs;
 
 /// Exit code of `audit` when a control failed or could not be checked.
 pub const EXIT_AUDIT_FAILED: u8 = 1;
@@ -189,6 +190,13 @@ pub enum Command {
     },
     /// List the transactions, newest first. Needs root.
     History,
+    /// List the modules, or describe one: why it matters, its params and the
+    /// audit controls it fixes. Does not need root.
+    Modules {
+        /// The module to describe. Default: list them all.
+        #[arg(value_name = "ID", value_parser = module_ids())]
+        id: Option<String>,
+    },
 }
 
 /// `--module` accepts the IDs of the registry.
@@ -439,6 +447,20 @@ pub fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
         Command::History => {
             let n = change::history(&real_host(cli), cli.json, &mut out)?;
             code = ExitCode::from(n);
+        }
+        Command::Modules { id } => {
+            let facts = collect_facts(Path::new("/"), &[facts::session::NOTICE])?;
+            match id {
+                None => module_docs::list(registry(), &facts, cli.json, &mut out)?,
+                Some(id) => {
+                    let module = registry()
+                        .iter()
+                        .find(|m| m.id() == id)
+                        .context("module not in the registry")?;
+                    let controls = audit::catalog()?;
+                    module_docs::show(*module, &facts, &controls, cli.json, &mut out)?;
+                }
+            }
         }
     }
     out.flush()?;

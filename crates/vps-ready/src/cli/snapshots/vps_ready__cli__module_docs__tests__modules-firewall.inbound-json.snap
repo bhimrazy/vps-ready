@@ -1,0 +1,25 @@
+---
+source: crates/vps-ready/src/cli/module_docs.rs
+expression: out
+---
+{
+  "id": "firewall.inbound",
+  "title": "Drop incoming traffic that no rule allows",
+  "applies": true,
+  "arms_safety_timer": true,
+  "why": "Without a firewall, any service listening on all addresses, such as a database left at its defaults, is reachable from the internet. This one accepts SSH, the ports the profile allows and replies to the server's own connections, and drops the rest.",
+  "params": [
+    {
+      "name": "allow",
+      "default": "[]",
+      "help": "Ports to accept from anywhere, e.g. [\"443/tcp\", \"443/udp\"]; the SSH ports are always accepted."
+    }
+  ],
+  "controls": [
+    {
+      "id": "FW-001",
+      "severity": "medium",
+      "title": "Incoming traffic denied by default"
+    }
+  ]
+}

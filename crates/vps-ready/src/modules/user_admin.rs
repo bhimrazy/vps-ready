@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use super::{Applicability, Module, ModuleError, ModuleSteps, PlanCx};
+use super::{Applicability, Module, ModuleError, ModuleSteps, ParamDoc, PlanCx};
 use crate::facts::{Facts, Init, OsFamily};
 use crate::resource::user::{Entry, lookup};
 use crate::resource::{AuthorizedKeys, File, Password, Resource, User, Validate};
@@ -80,6 +80,26 @@ impl Module for UserAdmin {
         "Root and password logins are what attacks on SSH try first. A named \
          account with a key and sudo is what lets ssh.server turn both off \
          without locking you out."
+    }
+
+    fn params_doc(&self) -> &'static [ParamDoc] {
+        &[
+            ParamDoc {
+                name: "name",
+                default: "\"admin\"",
+                help: "Login name of the admin account.",
+            },
+            ParamDoc {
+                name: "authorized_keys",
+                default: "[]",
+                help: "Public keys the account accepts; empty uses the keys of the user this session logged in as.",
+            },
+            ParamDoc {
+                name: "sudo",
+                default: "\"nopasswd\"",
+                help: "\"nopasswd\" or \"password\" (the sudo group, for an account with a password).",
+            },
+        ]
     }
 
     fn needs_deadman(&self) -> bool {

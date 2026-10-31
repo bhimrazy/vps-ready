@@ -306,7 +306,7 @@ vps-ready confirm [--txn ID] [--extend [DUR]]
 vps-ready rollback [--last | --txn ID]
 vps-ready history | drift
 vps-ready export cloud-init --profile X > user-data.yaml
-vps-ready modules [--explain ssh]       learn-mode: what and why for each module
+vps-ready modules [ID]                  list modules; with an ID, what and why, params, controls fixed
 vps-ready version
 ```
 
