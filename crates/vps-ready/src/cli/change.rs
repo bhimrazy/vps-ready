@@ -652,9 +652,20 @@ fn print_plan(
     }
 }
 
-/// The steps by kind, e.g. `2 files, 6 kernel settings, 1 package`.
+/// The steps by kind, e.g. `2 files, 6 kernel settings, 1 package`. A
+/// package step counts each package it installs.
 fn kinds(plan: &Plan) -> String {
     let count = |f: fn(&Resource) -> bool| plan.steps().filter(|s| f(&s.resource)).count();
+    let packages = plan
+        .steps()
+        .filter(|s| matches!(s.resource, Resource::Package(_)))
+        .map(|s| {
+            s.change
+                .summary
+                .strip_prefix("install ")
+                .map_or(1, |names| names.split(", ").count())
+        })
+        .sum();
     [
         (
             count(|r| matches!(r, Resource::File(_) | Resource::AuthorizedKeys(_))),
@@ -665,7 +676,7 @@ fn kinds(plan: &Plan) -> String {
             count(|r| matches!(r, Resource::Sysctl(_))),
             "kernel setting",
         ),
-        (count(|r| matches!(r, Resource::Package(_))), "package"),
+        (packages, "package"),
         (count(|r| matches!(r, Resource::Service(_))), "service"),
         (count(|r| matches!(r, Resource::User(_))), "user"),
     ]
@@ -677,12 +688,13 @@ fn kinds(plan: &Plan) -> String {
 }
 
 /// Spells out the owner of a file summary: `(0644 0:0)` becomes
-/// `(mode 0644, root:root)`; other owners keep their numbers.
+/// `(mode 0644, root:root)`; other owners keep their numbers. Text after
+/// the owner, such as a file's `describe` line, is kept.
 fn show_owner(summary: &str) -> String {
     let Some((head, tail)) = summary.split_once(" (") else {
         return summary.to_owned();
     };
-    let Some(owners) = tail.strip_suffix(')') else {
+    let Some((owners, rest)) = tail.split_once(')') else {
         return summary.to_owned();
     };
     let spelled: Vec<String> = owners
@@ -693,7 +705,7 @@ fn show_owner(summary: &str) -> String {
             None => o.to_owned(),
         })
         .collect();
-    format!("{head} ({})", spelled.join(" -> "))
+    format!("{head} ({}){rest}", spelled.join(" -> "))
 }
 
 /// One line of progress, e.g. `[2/8] set kernel.kptr_restrict 0 -> 1`.
@@ -730,7 +742,8 @@ fn print_progress(err: &mut dyn Write, progress: &Progress) {
             Backup::Directory { path, .. } => format!("leave {} as it is", path.display()),
             Backup::Sysctl { key, value, .. } => format!("restore {key} = {value}"),
             Backup::Package { name, .. } => {
-                format!("leave {name} as it is (rollback does not remove packages)")
+                let names = name.split(' ').collect::<Vec<_>>().join(", ");
+                format!("leave {names} as it is (rollback does not remove packages)")
             }
             Backup::Service {
                 unit,

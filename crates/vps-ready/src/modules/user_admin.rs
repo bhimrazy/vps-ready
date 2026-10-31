@@ -166,6 +166,7 @@ impl Module for UserAdmin {
                 gid: 0,
             },
             validate: Some(Validate::new("visudo", ["-cf", Validate::PATH])),
+            describe: None,
         };
         let mut groups = Vec::new();
         let mut drop_in = None;

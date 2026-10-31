@@ -151,7 +151,7 @@ impl Module for DeployUser {
             let planned = cx
                 .planned
                 .iter()
-                .any(|r| matches!(r, Resource::Package(p) if p.name == DOCKER_PACKAGE));
+                .any(|r| matches!(r, Resource::Package(p) if p.names.iter().any(|n| n == DOCKER_PACKAGE)));
             if !planned && !group_exists(sys, "docker")? {
                 return refuse(
                     "`docker = true`, but there is no docker group; install Docker first",
@@ -240,6 +240,7 @@ impl Module for DeployUser {
                     gid: 0,
                 },
                 validate: Some(Validate::new("visudo", ["-cf", Validate::PATH])),
+                describe: None,
             }));
         }
         Ok(ModuleSteps {

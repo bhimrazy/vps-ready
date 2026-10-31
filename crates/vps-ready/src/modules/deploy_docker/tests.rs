@@ -65,8 +65,11 @@ impl Runner for Apt {
             }),
             ("dpkg", ["--print-architecture"]) => Output::success("arm64\n"),
             ("apt-get", [.., "update"]) => Output::success(""),
-            ("apt-get", [.., name]) => {
-                installed.insert((*name).to_owned());
+            ("apt-get", _) => {
+                // The names follow the last option.
+                let options = args.iter().rposition(|a| a.starts_with("Dpkg::Options"));
+                let names = &args[options.map_or(args.len(), |i| i + 1)..];
+                installed.extend(names.iter().map(|n| (*n).to_owned()));
                 Output::success("")
             }
             ("dockerd", ["--validate", ..]) | ("systemctl", ["try-restart", "docker.service"]) => {
@@ -311,6 +314,10 @@ fn not_applicable_in_a_swarm_on_a_snap_or_an_unknown_release() {
     assert_eq!(DeployDocker.applicable(&facts), Applicability::Applicable);
 }
 
+/// The resource that installs the five packages.
+const PACKAGE_ID: &str =
+    "package:docker-ce,docker-ce-cli,containerd.io,docker-buildx-plugin,docker-compose-plugin";
+
 /// The vendor source, the five packages, then the directory and
 /// `daemon.json`, checked by dockerd; Docker restarts after them.
 #[test]
@@ -324,11 +331,7 @@ fn a_fresh_host_gets_docker_from_its_repository() {
             "directory:/etc/apt/keyrings",
             "file:/etc/apt/keyrings/docker.asc",
             "file:/etc/apt/sources.list.d/docker.sources",
-            "package:docker-ce",
-            "package:docker-ce-cli",
-            "package:containerd.io",
-            "package:docker-buildx-plugin",
-            "package:docker-compose-plugin",
+            PACKAGE_ID,
             "directory:/etc/docker",
             "file:/etc/docker/daemon.json",
         ]
@@ -392,7 +395,7 @@ fn applies_then_plans_nothing_and_rolls_back() {
     let facts = facts();
     let before = etc(&fs);
     let first = plan(&fs, &runner, &facts);
-    assert_eq!(first.steps().count(), 10);
+    assert_eq!(first.steps().count(), 6);
     apply_and_roll_back(&fs, &runner, &facts, &first);
 
     assert_eq!(etc(&fs), before);
@@ -409,6 +412,14 @@ fn applies_then_plans_nothing_and_rolls_back() {
         .collect();
     // Once after apply, once after rollback.
     assert_eq!(restarts.len(), 4, "{lines:?}");
+    // One update and one install for the five packages.
+    let apt = |verb: &str| {
+        lines
+            .iter()
+            .filter(|l| l.starts_with("apt-get ") && l.contains(verb))
+            .count()
+    };
+    assert_eq!((apt(" update"), apt(" install ")), (1, 1), "{lines:?}");
     // The packages are installed before daemon.json is checked.
     let install = lines.iter().rposition(|l| l.contains(" install ")).unwrap();
     let validate = lines.iter().position(|l| l == after).unwrap();
@@ -422,9 +433,9 @@ fn docker_ce_installed_without_daemon_json() {
     let (fs, runner) = (docker_fs(), Apt::with_docker());
     let facts = with_docker(Some(daemon(true, &[], &[])));
     let steps = steps(&facts, &fs, &runner);
-    assert_eq!(steps.resources.len(), 10, "{:?}", ids(&steps));
+    assert_eq!(steps.resources.len(), 6, "{:?}", ids(&steps));
     assert!(steps.resources.contains(&Resource::Package(Package {
-        name: DOCKER_PACKAGE.to_owned()
+        names: PACKAGES.iter().map(|name| (*name).to_owned()).collect()
     })));
     assert_eq!(steps.notes, [PORTS_NOTE]);
     let first = plan(&fs, &runner, &facts);
@@ -474,10 +485,7 @@ fn docker_ce_with_its_repository_in_another_file() {
     let runner = Apt::with_docker();
     let facts = with_docker(Some(daemon(true, &[], &[])));
     let steps = steps(&facts, &fs, &runner);
-    assert_eq!(
-        ids(&steps)[..2],
-        ["package:docker-ce", "package:docker-ce-cli"]
-    );
+    assert_eq!(ids(&steps)[..2], [PACKAGE_ID, "directory:/etc/docker"]);
     assert_eq!(steps.notes, [PORTS_NOTE]);
 }
 
@@ -642,7 +650,7 @@ fn plans_docker_ce_for_the_modules_after_it() {
     let facts = facts();
     let steps = steps(&facts, &fs, &runner);
     assert!(steps.resources.contains(&Resource::Package(Package {
-        name: DOCKER_PACKAGE.to_owned()
+        names: PACKAGES.iter().map(|name| (*name).to_owned()).collect()
     })));
 }
 
