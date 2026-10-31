@@ -223,7 +223,7 @@ pub fn check_binary(fs: &dyn Fs, path: &Path) -> Result<(), String> {
 /// chance for a cycle, which systemd breaks by dropping a unit, perhaps
 /// `ssh.socket`. `DefaultDependencies=no` avoids the default
 /// `After=basic.target`, which with `Before=ssh.socket` is such a cycle.
-/// sshd and Docker start after it, so they read the restored config.
+/// sshd, Docker and Caddy start after it, so they read the restored config.
 /// `TimeoutStartSec` bounds a hung rollback, after which sshd starts anyway.
 #[must_use]
 pub fn hook_unit(binary: &Path) -> String {
@@ -232,7 +232,7 @@ pub fn hook_unit(binary: &Path) -> String {
 Description=vps-ready: roll back an unconfirmed change after a reboot
 DefaultDependencies=no
 After=local-fs.target vps-ready-firewall.service
-Before=ssh.service ssh.socket docker.service shutdown.target
+Before=ssh.service ssh.socket docker.service caddy.service shutdown.target
 Conflicts=shutdown.target
 [Service]
 Type=oneshot

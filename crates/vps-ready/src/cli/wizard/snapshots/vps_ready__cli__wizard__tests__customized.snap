@@ -23,6 +23,7 @@ All other incoming ports are blocked.
   [ ] ssh.bruteforce: Ban addresses that keep failing to log in over SSH
   [x] kernel.sysctl: Harden kernel settings
   [ ] updates.auto: Install security updates automatically
+  [ ] deploy.proxy: Serve sites over HTTPS with Caddy, proxied to their upstreams
   [ ] deploy.user: Set up a deploy account whose SSH keys are restricted
   ssh.server: refusing to turn off root login and password login: no user other
   than root has an SSH key and sudo to log in with afterwards (there is no SSH
@@ -37,6 +38,7 @@ All other incoming ports are blocked.
   [x] ssh.bruteforce: Ban addresses that keep failing to log in over SSH
   [x] kernel.sysctl: Harden kernel settings
   [ ] updates.auto: Install security updates automatically
+  [ ] deploy.proxy: Serve sites over HTTPS with Caddy, proxied to their upstreams
   [ ] deploy.user: Set up a deploy account whose SSH keys are restricted
 
 After you apply, you have 5 minutes to log in from a new terminal and confirm.

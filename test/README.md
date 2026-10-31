@@ -49,6 +49,12 @@ the account.
 is on, `docker run -p 8080:80` publishes on 127.0.0.1 only, and `rollback
 --last` removes the source, the key and `daemon.json`, keeps the packages and
 restarts Docker with its defaults. It needs network access.
+`test/container-proxy.sh <distro> [binary]` installs Caddy with
+`deploy.proxy` from Caddy's repository for one site, `app.localhost`, which
+Caddy serves from its own CA: the next plan is empty, the package kept our
+Caddyfile, HTTPS through Caddy reaches an upstream on 127.0.0.1, and
+`rollback --last` removes the source, the key and the Caddyfile, keeps the
+package and stops Caddy. It needs network access.
 
 ```sh
 cargo build --release --target aarch64-unknown-linux-musl   # x86_64-... on Intel

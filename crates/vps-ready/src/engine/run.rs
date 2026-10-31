@@ -1226,7 +1226,7 @@ impl<'a> Engine<'a> {
             left.append(&mut held);
             left.extend(failed.iter().map(|(reload, _)| ByHand {
                 resource: reload.name().to_owned(),
-                step: reload::line(&reload.command()),
+                step: reload::line(&reload.rollback_steps(self.sys).1),
             }));
             let source = match unrestored.into_iter().next() {
                 Some((_, e)) => e,
@@ -1264,7 +1264,8 @@ impl<'a> Engine<'a> {
         first
     }
 
-    /// Runs a reload that apply journaled, check first. A failed check skips
+    /// Runs a reload that apply journaled, with the check and command of
+    /// [`Reload::rollback_steps`], check first. A failed check skips
     /// it, so a running daemon keeps its config instead of loading a broken
     /// one (e.g. an `sshd_config` edited since apply); that gets a
     /// `reload-skipped` line. A resumed rollback runs every such reload
@@ -1279,14 +1280,20 @@ impl<'a> Engine<'a> {
         progress: &mut dyn FnMut(Progress),
     ) -> Result<(), EngineError> {
         let best_effort = mode.best_effort();
-        // The hook runs before sshd and Docker start, which then read the
-        // restored config; `sshd -t` fails there on Ubuntu (no /run/sshd
-        // yet).
-        if mode == Mode::Boot && matches!(reload, Reload::SshdReload | Reload::DockerRestart) {
+        // The hook runs before sshd, Docker and Caddy start, which then read
+        // the restored config; `sshd -t` fails there on Ubuntu (no
+        // /run/sshd yet).
+        if mode == Mode::Boot
+            && matches!(
+                reload,
+                Reload::SshdReload | Reload::DockerRestart | Reload::CaddyReload
+            )
+        {
             return Ok(());
         }
         progress(Progress::Reload(reload));
-        if let Some(check) = reload.check()
+        let (check, command) = reload.rollback_steps(self.sys);
+        if let Some(check) = check
             && let Err(reason) = reload::run(self.sys, &check)
         {
             tracing::warn!("not running {reload}, so the daemon keeps its config: {reason}");
@@ -1296,7 +1303,7 @@ impl<'a> Engine<'a> {
             });
             return note(open, Event::ReloadSkipped { reload, reason }, best_effort);
         }
-        if let Err(reason) = reload::run(self.sys, &reload.command()) {
+        if let Err(reason) = reload::run(self.sys, &command) {
             failed.push((reload, reason));
             return Ok(());
         }

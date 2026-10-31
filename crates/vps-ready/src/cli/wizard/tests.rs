@@ -164,7 +164,7 @@ fn a_docker_host_gets_web_without_its_published_ports() {
         },
         ..on(&fs, &runner)
     };
-    let (text, profile) = scenario("docker", &host, vec![Enter, Enter, Enter, Enter, Enter]);
+    let (text, profile) = scenario("docker", &host, vec![Enter; 6]);
     assert!(
         text.contains("(recommended: Docker is installed)"),
         "{text}"
@@ -175,6 +175,57 @@ fn a_docker_host_gets_web_without_its_published_ports() {
         "{text}"
     );
     assert_eq!(profile, "schema = 1\nextends = \"web\"\n");
+}
+
+/// With `deploy.docker` in the profile, the domains Caddy serves: a bad
+/// domain or upstream is asked again, and one site adds `deploy.proxy`.
+#[test]
+fn a_docker_host_adds_a_domain_for_caddy() {
+    let fs = fs();
+    let runner = runner(|r| r);
+    let host = Host {
+        facts: |sys| {
+            let mut facts = vm(sys)?;
+            facts.docker = true;
+            if let Some(engine) = facts.docker_engine.as_mut() {
+                engine.dockerd = true;
+            }
+            Ok(facts)
+        },
+        ..on(&fs, &runner)
+    };
+    let questions = vec![
+        Enter,
+        Enter,
+        Enter,
+        Enter,
+        Type("App.example.com".into()),
+        Type("app.example.com".into()),
+        Type("localhost:8080".into()),
+        Type("127.0.0.1:8080".into()),
+        Type("app.example.com".into()),
+        Enter,
+        Enter,
+    ];
+    let (text, profile) = scenario("domain", &host, questions);
+    assert!(
+        text.contains("  \"App.example.com\" is not a domain name"),
+        "{text}"
+    );
+    assert!(
+        text.contains("  \"localhost:8080\": write 127.0.0.1:8080 instead"),
+        "{text}"
+    );
+    assert!(
+        text.contains("  app.example.com is already listed\n"),
+        "{text}"
+    );
+    assert!(text.contains("+app.example.com {\n"), "{text}");
+    let parsed = Profile::parse(&profile, host.modules).unwrap();
+    let want: toml::Table =
+        toml::from_str(r#"sites = [{ domain = "app.example.com", upstream = "127.0.0.1:8080" }]"#)
+            .unwrap();
+    assert_eq!(parsed.params("deploy.proxy"), Some(&want), "{profile}");
 }
 
 #[test]
@@ -428,6 +479,8 @@ fn public_listeners_are_offered_unchecked_and_ports_can_be_typed() {
             Enter,
             Type("8080".into()),
             Type("8080/tcp, 51820/udp".into()),
+            // No domain for Caddy.
+            Enter,
             Enter,
         ],
     );
@@ -618,7 +671,7 @@ fn the_other_profile_can_be_picked() {
     let fs = fs();
     let runner = runner(|r| r);
     let host = on(&fs, &runner);
-    let questions = vec![Pick(1), Enter, Enter, Enter, Enter];
+    let questions = vec![Pick(1), Enter, Enter, Enter, Enter, Enter];
     let (code, _) = wizard(&host, questions.clone(), "n\n");
     assert_eq!(code, 0);
     assert_eq!(round_trip(&host, questions).base(), "web");

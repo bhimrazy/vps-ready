@@ -15,6 +15,7 @@ use crate::audit::{self, Outcome, Severity};
 use crate::config::{Profile, ProfileBuilder};
 use crate::engine::{self, Engine, EngineError, StateDir};
 use crate::facts::{Facts, OsFamily, Proto, Virt};
+use crate::modules::deploy_proxy::{Domain, Upstream};
 use crate::modules::firewall_inbound::{self, Allow};
 use crate::modules::user_admin::{self, SessionKeys};
 use crate::modules::{Applicability, Module, ModuleError};
@@ -185,6 +186,7 @@ fn ask(
     let mut builder = ask_profile(facts, prompt)?;
     ask_admin(host, facts, prompt, out, &mut builder)?;
     ask_ports(host, facts, prompt, out, &mut builder)?;
+    ask_sites(host, facts, prompt, out, &mut builder)?;
     let picked = prompt.confirm("Pick which modules to run yourself?", false)?
         && ask_modules(host, facts, prompt, out, &mut builder)?;
     Ok((builder, picked))
@@ -500,6 +502,86 @@ fn ask_ports(
     builder.set_params(
         "firewall.inbound",
         toml::Table::from_iter([("allow".to_owned(), allow)]),
+    );
+    Ok(())
+}
+
+/// With `deploy.docker` in the profile, the sites `deploy.proxy` serves:
+/// none is fine, and at least one adds the module.
+fn ask_sites(
+    host: &Host,
+    facts: &Facts,
+    prompt: &mut dyn Prompt,
+    out: &mut dyn Write,
+    builder: &mut ProfileBuilder,
+) -> anyhow::Result<()> {
+    if builder
+        .build(host.modules)?
+        .params("deploy.docker")
+        .is_none()
+    {
+        return Ok(());
+    }
+    let Some(module) = find(host, "deploy.proxy") else {
+        return Ok(());
+    };
+    if let Applicability::NotApplicable { reason } = module.applicable(facts) {
+        writeln!(out, "HTTPS sites: skipped, {reason}.")?;
+        return Ok(());
+    }
+    say(
+        out,
+        "",
+        "Caddy can serve your apps over HTTPS and get their certificates. Each domain \
+         needs a DNS record for this server.",
+    )?;
+    let mut sites: Vec<(String, String)> = Vec::new();
+    loop {
+        let question = if sites.is_empty() {
+            "Domain to serve, e.g. app.example.com (Enter for none)"
+        } else {
+            "Another domain (Enter for no more)"
+        };
+        let domain = prompt.input(question, "")?.trim().to_owned();
+        if domain.is_empty() {
+            break;
+        }
+        if let Err(why) = Domain::try_from(domain.clone()) {
+            say(out, "  ", &why)?;
+            continue;
+        }
+        if sites.iter().any(|(d, _)| *d == domain) {
+            say(out, "  ", &format!("{domain} is already listed"))?;
+            continue;
+        }
+        let upstream = loop {
+            let text = prompt.input(
+                &format!("Address of the app behind {domain}, e.g. 127.0.0.1:8080"),
+                "",
+            )?;
+            let text = text.trim().to_owned();
+            match Upstream::try_from(text.clone()) {
+                Ok(_) => break text,
+                Err(why) => say(out, "  ", &why)?,
+            }
+        };
+        sites.push((domain, upstream));
+    }
+    if sites.is_empty() {
+        return Ok(());
+    }
+    let sites = sites
+        .into_iter()
+        .map(|(domain, upstream)| {
+            toml::Value::Table(toml::Table::from_iter([
+                ("domain".to_owned(), domain.into()),
+                ("upstream".to_owned(), upstream.into()),
+            ]))
+        })
+        .collect();
+    builder.set_params(
+        "deploy.proxy",
+        toml::Table::from_iter([("sites".to_owned(), toml::Value::Array(sites))]),
     );
     Ok(())
 }
