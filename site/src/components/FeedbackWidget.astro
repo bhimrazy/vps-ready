@@ -18,7 +18,7 @@ const accent =
     id="feedback-panel"
     role="dialog"
     aria-labelledby="feedback-title"
-    popover="manual"
+    popover
     class="inset-auto right-4 bottom-4 m-0 w-[min(calc(100vw-2rem),20rem)] overflow-hidden rounded-[10px] border border-line p-0 sm:right-6 sm:bottom-6 bg-bg text-ink shadow-[0_24px_48px_-20px_rgb(31_35_40/0.35)] dark:border-(--sl-color-gray-5) dark:bg-(--sl-color-gray-6) dark:text-(--sl-color-white)"
   >
     <div class="flex items-start gap-3 border-b border-line bg-surface px-4 py-3 dark:border-(--sl-color-gray-5) dark:bg-(--sl-color-black)">
@@ -28,9 +28,10 @@ const accent =
       </div>
       <button
         type="button"
-        data-close
+        popovertarget="feedback-panel"
+        popovertargetaction="hide"
         aria-label="Close feedback"
-        class="-mr-1 cursor-pointer rounded-md border-0 bg-transparent p-1 text-muted hover:bg-grid hover:text-ink dark:text-(--sl-color-gray-3) dark:hover:bg-(--sl-color-gray-5) dark:hover:text-(--sl-color-white)"
+        class="-mt-2 -mr-2.5 cursor-pointer rounded-md border-0 bg-transparent p-2.5 text-muted hover:bg-grid hover:text-ink dark:text-(--sl-color-gray-3) dark:hover:bg-(--sl-color-gray-5) dark:hover:text-(--sl-color-white)"
       >
         <svg class="block size-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"
           ><path d="M4 4l8 8M12 4l-8 8"></path></svg
@@ -40,13 +41,13 @@ const accent =
 
     <ul class="m-0 grid list-none gap-0.5 p-2">
       {
-        rows.map((r) => (
+        rows.map((r, i) => (
           <li class="m-0">
-            <a href={r.href} class={row}>
+            <a href={r.href} class={row} autofocus={i === 0}>
               <Icon d={r.icon} small class:list={['stroke-[1.8]', muted]} />
               <span class="grid min-w-0">
-                <b class="text-sm font-semibold group-hover/row:text-brand dark:group-hover/row:text-(--sl-color-text-accent)">{r.title}</b>
-                <em class:list={['font-mono text-xs not-italic wrap-anywhere', muted]}>{r.note}</em>
+                <span class="text-sm font-semibold group-hover/row:text-brand dark:group-hover/row:text-(--sl-color-text-accent)">{r.title}</span>
+                <span class:list={['font-mono text-xs wrap-anywhere', muted]}>{r.note}</span>
               </span>
             </a>
           </li>
@@ -55,13 +56,12 @@ const accent =
     </ul>
   </div>
 
+  {/* The open panel sits on top of this button, so it needs no hiding. */}
   <button
     type="button"
-    data-toggle
-    aria-expanded="false"
-    aria-controls="feedback-panel"
+    popovertarget="feedback-panel"
     class:list={[
-      'ml-auto flex min-h-11 min-w-11 cursor-pointer items-center justify-center gap-2 rounded-full border-0 px-4 font-mono text-[13px] font-medium shadow-[0_8px_24px_-8px_rgb(26_127_55/0.6)] aria-expanded:hidden max-[640px]:px-0',
+      'ml-auto flex min-h-11 min-w-11 cursor-pointer items-center justify-center gap-2 rounded-full border-0 px-4 font-mono text-[13px] font-medium shadow-[0_8px_24px_-8px_rgb(26_127_55/0.6)] max-[640px]:px-0',
       accent,
     ]}
   >
@@ -75,21 +75,8 @@ const accent =
 <div data-feedback-spacer aria-hidden="true" class="h-16 sm:hidden"></div>
 
 <script>
-  const root = document.querySelector<HTMLElement>('[data-feedback]')!;
-  // Mount at the end of <body>: inside the docs content the button would sit
-  // under Starlight's right sidebar and could not be clicked.
-  document.body.append(document.querySelector('[data-feedback-spacer]')!, root);
-  const panel = root.querySelector<HTMLElement>('#feedback-panel')!;
-  const toggle = root.querySelector<HTMLButtonElement>('[data-toggle]')!;
-
-  function setOpen(open: boolean) {
-    panel.togglePopover(open);
-    toggle.setAttribute('aria-expanded', String(open));
-    (open ? panel.querySelector('a')! : toggle).focus();
-  }
-  toggle.addEventListener('click', () => setOpen(true));
-  root.querySelector('[data-close]')!.addEventListener('click', () => setOpen(false));
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && panel.matches(':popover-open')) setOpen(false);
-  });
+  // Opening, closing (button, Escape, a click outside) and focus come from the
+  // popover attributes. Mount at the end of <body>: inside the docs content the
+  // button would sit under Starlight's right sidebar and could not be clicked.
+  document.body.append(document.querySelector('[data-feedback-spacer]')!, document.querySelector('[data-feedback]')!);
 </script>
