@@ -23,7 +23,7 @@ pub mod sysctl;
 pub mod updates;
 pub mod virt;
 
-pub use bridges::{Bridge, Network};
+pub use bridges::Bridge;
 pub use firewall::{Firewall, FirewallTools, InputChain, Ports, PublishedPort};
 pub use listeners::{Listener, Proto};
 pub use os_release::{OsFamily, OsRelease};

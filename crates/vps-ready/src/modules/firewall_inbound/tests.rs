@@ -209,7 +209,6 @@ fn ruleset_snapshots() {
         .map(|name| crate::facts::Bridge {
             name: (*name).to_owned(),
             docker: !name.ends_with("an"),
-            networks: Vec::new(),
         })
         .collect();
     insta::assert_snapshot!(
@@ -285,7 +284,7 @@ fn rendered_tcp(text: &str) -> BTreeSet<u16> {
 
 proptest! {
     /// Whatever the profile allows, every current SSH port is accepted:
-    /// the session's, sshd's listeners', the socket's and `sshd -T`'s.
+    /// the session's, root's sshd listeners', the socket's and `sshd -T`'s.
     #[test]
     fn always_accepts_the_ssh_ports(
         session_port in 1..=u16::MAX,
@@ -331,7 +330,7 @@ fn notes_what_it_leaves_alone() {
     assert_eq!(
         notes,
         [
-            "always accepts TCP 22, the current SSH ports (this session's, sshd's listeners \
+            "always accepts TCP 22, the current SSH ports (this session's, root's sshd listeners \
           and `Port`), whatever `allow` says"
         ]
     );
@@ -382,7 +381,6 @@ fn notes_what_it_leaves_alone() {
     facts.bridges.push(crate::facts::Bridge {
         name: "br-lan".into(),
         docker: false,
-        networks: Vec::new(),
     });
     insta::assert_yaml_snapshot!(FirewallInbound.notes(&facts));
     // Over IPv6 only 5432/tcp is proxied, and only until `allow` has it.

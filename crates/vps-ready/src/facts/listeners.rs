@@ -93,7 +93,8 @@ fn sshd_ports(fs: &dyn Fs, lines: &[(Listener, Vec<u32>)]) -> Vec<u16> {
 }
 
 /// Whether process `pid` runs [`SSHD`] with every uid of its `Uid:` line 0.
-/// Reading `/proc/<pid>/exe` needs root.
+/// After an upgrade that has not restarted sshd, its `exe` link ends in
+/// ` (deleted)`. Reading `/proc/<pid>/exe` needs root.
 fn is_sshd(fs: &dyn Fs, pid: u32) -> bool {
     let status = fs
         .read(Path::new(&format!("/proc/{pid}/status")))
@@ -107,7 +108,10 @@ fn is_sshd(fs: &dyn Fs, pid: u32) -> bool {
         });
     root && fs
         .read_link(Path::new(&format!("/proc/{pid}/exe")))
-        .is_ok_and(|exe| exe == Path::new(SSHD))
+        .is_ok_and(|exe| {
+            let exe = exe.as_os_str().to_string_lossy();
+            exe.strip_suffix(" (deleted)").unwrap_or(&exe) == SSHD
+        })
 }
 
 /// Parses `ss -tulnpH` output. Columns: netid, state, recv-q, send-q, local
@@ -237,6 +241,8 @@ tcp LISTEN 0 128 0.0.0.0:2222 0.0.0.0:* users:((\"sshd\",pid=700,fd=3))
 tcp LISTEN 0 128 0.0.0.0:2200 0.0.0.0:* users:((\"sshd\",pid=701,fd=3))
 tcp LISTEN 0 128 0.0.0.0:2022 0.0.0.0:* users:((\"sshd\",pid=702,fd=3))
 tcp LISTEN 0 128 0.0.0.0:2023 0.0.0.0:* users:((\"sshd\",pid=703,fd=3))
+tcp LISTEN 0 128 0.0.0.0:2024 0.0.0.0:* users:((\"sshd\",pid=704,fd=3))
+tcp LISTEN 0 128 0.0.0.0:2025 0.0.0.0:* users:((\"sshd\",pid=705,fd=3))
 udp UNCONN 0 0 0.0.0.0:22 0.0.0.0:* users:((\"sshd\",pid=59,fd=5))
 ";
         let fs = process(FakeFs::new(), 59, "0\t0\t0\t0", SSHD);
@@ -246,7 +252,11 @@ udp UNCONN 0 0 0.0.0.0:22 0.0.0.0:* users:((\"sshd\",pid=59,fd=5))
         let fs = process(fs, 701, "1000\t1000\t1000\t1000", SSHD);
         let fs = process(fs, 702, "0\t0\t0\t0", "/usr/bin/python3");
         let fs = process(fs, 703, "0\t0\t1000\t0", SSHD);
-        assert_eq!(sshd_ports(&fs, &parse_lines(text)), [22]);
+        // Upgraded but not restarted: root still counts, a user does not.
+        let deleted = "/usr/sbin/sshd (deleted)";
+        let fs = process(fs, 704, "0\t0\t0\t0", deleted);
+        let fs = process(fs, 705, "1000\t1000\t1000\t1000", deleted);
+        assert_eq!(sshd_ports(&fs, &parse_lines(text)), [22, 2024]);
         // Without /proc (or root), none.
         assert!(sshd_ports(&FakeFs::new(), &parse_lines(text)).is_empty());
     }

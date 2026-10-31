@@ -244,41 +244,9 @@ fn confirm_needs_a_new_ssh_login() {
     assert_eq!(code, 2);
     assert_eq!(
         err,
-        "error: this SSH login comes from 127.0.0.1, on this server or one of its Docker \
-         networks, so it does not show that the server can still be reached from outside. \
-         Confirm from your own computer. Open a new terminal and run: `ssh -t -o \
+        "error: this SSH login comes from 127.0.0.1, on this server itself, so it does not \
+         show that the server can still be reached from outside. Confirm from your own computer. Open a new terminal and run: `ssh -t -o \
          ControlPath=none -p 22 admin@<server address> sudo vps-ready confirm`\n"
-    );
-    // From a container, through docker0.
-    let container = Host {
-        facts: |sys| {
-            let mut facts = vm_in_session(sys)?;
-            facts.bridges.push(crate::facts::Bridge {
-                name: "docker0".into(),
-                docker: true,
-                networks: vec![crate::facts::Network {
-                    addr: "172.17.0.0".parse().unwrap(),
-                    prefix: 16,
-                }],
-            });
-            Ok(facts)
-        },
-        session: |_| {
-            Ok(Session {
-                client: "172.17.0.2:50022".parse().unwrap(),
-                ..new_login(Sys {
-                    fs: &FakeFs::new(),
-                    runner: &FakeRunner::new(),
-                })?
-            })
-        },
-        ..lockout_host(&fs, &runner)
-    };
-    let (code, _, err) = confirm_cmd(&container, None);
-    assert_eq!(code, 2);
-    assert!(
-        err.starts_with("error: this SSH login comes from 172.17.0.2"),
-        "{err}"
     );
     assert!(history_text(&host).contains("pending-confirm"));
 

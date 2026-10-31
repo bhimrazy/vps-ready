@@ -224,7 +224,7 @@ impl Module for FirewallInbound {
             .collect::<Vec<_>>()
             .join(", ");
         let mut notes = vec![format!(
-            "always accepts TCP {ports}, the current SSH ports (this session's, sshd's \
+            "always accepts TCP {ports}, the current SSH ports (this session's, root's sshd \
              listeners and `Port`), whatever `allow` says"
         )];
         if facts.docker {

@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 
 use super::*;
 use crate::engine::{Extended, Refusal, Watch, watch};
-use crate::facts::{Network, Session};
+use crate::facts::Session;
 
 /// The session of the apply; [`armable`] goes live at 1000 s since boot.
 const APPLY: SessionId = SessionId {
@@ -45,7 +45,7 @@ fn confirm(
     session: &Session,
 ) -> Result<String, EngineError> {
     let state = state(fs);
-    Engine::lock(&state, Sys { fs, runner })?.confirm(id, session, &[22], &[])
+    Engine::lock(&state, Sys { fs, runner })?.confirm(id, session, &[22])
 }
 
 fn extend(fs: &dyn Fs, runner: &FakeRunner, by: u64) -> Result<Extended, EngineError> {
@@ -144,7 +144,7 @@ fn only_a_new_login_through_the_hosts_sshd_confirms() {
     ];
     for (session, expected) in cases {
         assert_eq!(
-            refusal(engine.confirm(None, &session, &[22], &[])),
+            refusal(engine.confirm(None, &session, &[22])),
             expected,
             "{session:?}"
         );
@@ -154,7 +154,7 @@ fn only_a_new_login_through_the_hosts_sshd_confirms() {
         server: SocketAddr::from(([203, 0, 113, 10], 2222)),
         ..login(903, 1050)
     };
-    let err = refusal(engine.confirm(None, &rescue, &[], &[]));
+    let err = refusal(engine.confirm(None, &rescue, &[]));
     assert_eq!(
         err.to_string(),
         "this SSH login came in on port 2222, which the host's sshd does not listen on \
@@ -167,14 +167,14 @@ fn only_a_new_login_through_the_hosts_sshd_confirms() {
     ));
     // PID reuse: the same PID, started later, is a new login.
     engine
-        .confirm(None, &login(812, 1050), &[22, 2222], &[])
+        .confirm(None, &login(812, 1050), &[22, 2222])
         .unwrap();
 }
 
-/// The firewall accepts loopback and Docker's bridges whatever its rules,
-/// so a login from there proves nothing about one from outside.
+/// The firewall accepts all of loopback whatever its rules, so a login from
+/// there proves nothing about one from outside.
 #[test]
-fn a_login_from_loopback_or_docker_does_not_confirm() {
+fn a_login_from_loopback_does_not_confirm() {
     let fs = armable();
     let txn = applied(&fs);
     set_uptime(&fs, 1100);
@@ -188,16 +188,6 @@ fn a_login_from_loopback_or_docker_does_not_confirm() {
         },
     )
     .unwrap();
-    let docker = [
-        Network {
-            addr: "172.17.0.0".parse().unwrap(),
-            prefix: 16,
-        },
-        Network {
-            addr: "fd00::".parse().unwrap(),
-            prefix: 64,
-        },
-    ];
     let from = |client: &str| Session {
         client: SocketAddr::new(client.parse().unwrap(), 50022),
         ..login(951, 1050)
@@ -207,26 +197,18 @@ fn a_login_from_loopback_or_docker_does_not_confirm() {
         ("127.1.2.3", "127.1.2.3"),
         ("::1", "::1"),
         ("::ffff:127.0.0.1", "127.0.0.1"),
-        ("172.17.0.2", "172.17.0.2"),
-        ("::ffff:172.17.0.2", "172.17.0.2"),
-        ("fd00::2", "fd00::2"),
     ] {
-        let err = refusal(engine.confirm(None, &from(client), &[22], &docker));
+        let err = refusal(engine.confirm(None, &from(client), &[22]));
         assert_eq!(err, Refusal::Local(shown.parse().unwrap()), "{client}");
     }
     assert_eq!(
         Refusal::Local("127.0.0.1".parse().unwrap()).to_string(),
-        "this SSH login comes from 127.0.0.1, on this server or one of its Docker networks, \
-         so it does not show that the server can still be reached from outside"
+        "this SSH login comes from 127.0.0.1, on this server itself, so it does not show \
+         that the server can still be reached from outside"
     );
     assert!(calls(&run).is_empty());
     // QEMU's user networking: logins come from its gateway, 10.0.2.2.
-    assert_eq!(
-        engine
-            .confirm(None, &from("10.0.2.2"), &[22], &docker)
-            .unwrap(),
-        txn
-    );
+    assert_eq!(engine.confirm(None, &from("10.0.2.2"), &[22]).unwrap(), txn);
 }
 
 /// Rewrites the admins of the `state pending-confirm` record of `txn`,
@@ -281,7 +263,7 @@ fn only_the_admins_the_plan_gave_keys_confirm() {
         user: Some("deploy".into()),
         ..login(952, 1050)
     };
-    assert_eq!(engine.confirm(None, &deploy, &[22], &[]).unwrap(), txn);
+    assert_eq!(engine.confirm(None, &deploy, &[22]).unwrap(), txn);
 }
 
 #[test]
@@ -410,7 +392,7 @@ fn admins_are_the_keyed_users_else_the_applying_user() {
 fn confirm_ports(fs: &FakeFs, session: &Session, ports: &[u16]) -> Result<String, EngineError> {
     let state = state(fs);
     let run = dm_runner();
-    Engine::lock(&state, Sys { fs, runner: &run })?.confirm(None, session, ports, &[])
+    Engine::lock(&state, Sys { fs, runner: &run })?.confirm(None, session, ports)
 }
 
 #[test]

@@ -10,8 +10,9 @@
 # images; a user `other` has the same key and sudo. Cycle 1: apply --module
 # user.admin waits for a confirm -> the admin exists with only the plain key,
 # the sudoers drop-in is 0440 and valid, and the printed ssh line names the
-# admin -> confirm over a new SSH login as `other` is refused (not the admin)
-# -> `sudo vps-ready confirm` over a new login as the admin succeeds and apply
+# admin -> confirm over a new SSH login as `other` is refused (not the admin),
+# and over one to 127.0.0.1 (loopback) -> `sudo vps-ready confirm` over a new
+# login as the admin to the container's own address succeeds and apply
 # exits 0 -> rollback --last removes the account, its keys and the drop-in,
 # and keeps its home directory. Cycle 2: apply --deadman 1m, no confirm -> the
 # timer rolls it back (deadman-timeout) and apply exits 1.
@@ -53,11 +54,16 @@ docker exec "$name" chmod 755 /usr/local/bin/vps-ready
 vr() { docker exec "$name" vps-ready "$@"; }
 die() { echo "FAIL [$distro]: $*" >&2; exit 1; }
 newest() { vr history --json | jq -r "$1"; }
-# A new SSH login to the container's own sshd as user $1, running the rest.
+# confirm refuses a client on loopback, so logins go to the container's own
+# address on its default route instead.
+self_ip=$(docker exec "$name" ip -4 -o route get 192.0.2.1 | sed -n 's/.* src \([0-9.]*\).*/\1/p')
+[ -n "$self_ip" ] || die "no IPv4 address on the container's default route"
+# A new SSH login to the container's own sshd as user $1 at $host (default
+# $self_ip), running the rest.
 login() {
   user=$1; shift
   docker exec "$name" ssh -i /root/test_key -o BatchMode=yes -o StrictHostKeyChecking=no \
-    -o UserKnownHostsFile=/dev/null -o LogLevel=QUIET -o ControlPath=none "$user@127.0.0.1" "$@"
+    -o UserKnownHostsFile=/dev/null -o LogLevel=QUIET -o ControlPath=none "$user@${host:-$self_ip}" "$@"
 }
 # Starts apply in the background; its output and exit code land in
 # /tmp/apply.out and /tmp/apply.rc. Waits until it is pending-confirm.
@@ -133,7 +139,14 @@ cat "$tmp/other.out"
 grep -q "the changes give SSH keys to admin" "$tmp/other.out" || die "the refusal does not name the admin"
 [ "$(newest '.[0].state')" = pending-confirm ] || die "the refusal changed the transaction"
 
-echo "== $distro: ssh admin@127.0.0.1 sudo vps-ready confirm"
+echo "== $distro: confirm from a new login to 127.0.0.1 is refused"
+rc=0; host=127.0.0.1 login admin sudo vps-ready confirm >"$tmp/lo.out" 2>&1 || rc=$?
+cat "$tmp/lo.out"
+[ "$rc" -eq 2 ] || die "confirm over loopback exited $rc, expected 2"
+grep -q "this SSH login comes from 127.0.0.1" "$tmp/lo.out" || die "the loopback login was not refused as local"
+[ "$(newest '.[0].state')" = pending-confirm ] || die "the refusal changed the transaction"
+
+echo "== $distro: ssh admin@$self_ip sudo vps-ready confirm"
 rc=0; login admin sudo vps-ready confirm || rc=$?
 [ "$rc" -eq 0 ] || die "confirm as admin exited $rc, expected 0"
 apply_rc 0
