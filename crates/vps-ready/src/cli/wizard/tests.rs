@@ -205,15 +205,20 @@ fn a_docker_host_adds_a_domain_for_caddy() {
         Enter,
         Enter,
         Enter,
+        // The module list first, then the domains.
+        Enter,
         Type("App.example.com".into()),
         Type("app.example.com".into()),
         Type("localhost:8080".into()),
         Type("127.0.0.1:8080".into()),
         Type("app.example.com".into()),
         Enter,
-        Enter,
     ];
     let (text, profile) = scenario("domain", &host, questions);
+    assert!(
+        text.contains("? Pick which modules to run yourself? (y/N) no\nCaddy can serve"),
+        "{text}"
+    );
     assert!(
         text.contains("  \"App.example.com\" is not a domain name"),
         "{text}"
@@ -232,6 +237,88 @@ fn a_docker_host_adds_a_domain_for_caddy() {
         toml::from_str(r#"sites = [{ domain = "app.example.com", upstream = "127.0.0.1:8080" }]"#)
             .unwrap();
     assert_eq!(parsed.params("deploy.proxy"), Some(&want), "{profile}");
+}
+
+/// `deploy.proxy` picked in the module list gets its domains next; with
+/// none it is left out again.
+#[test]
+fn deploy_proxy_picked_in_the_module_list_asks_for_domains() {
+    let fs = fs();
+    let runner = runner(|r| r);
+    let host = on(&fs, &runner);
+    let minimal = [
+        "user.admin",
+        "ssh.server",
+        "firewall.inbound",
+        "kernel.sysctl",
+        "updates.auto",
+        "deploy.proxy",
+    ];
+    let pick = |more: Vec<Answer>| {
+        [
+            vec![Enter, Enter, Enter, Say(true), modules(&host, &minimal)],
+            more,
+        ]
+        .concat()
+    };
+    let questions = pick(vec![
+        Type("app.example.com".into()),
+        Type("127.0.0.1:8080".into()),
+        Enter,
+    ]);
+    let profile = round_trip(&host, questions).to_toml();
+    assert!(
+        profile.contains("[[modules.\"deploy.proxy\".sites]]"),
+        "{profile}"
+    );
+    assert!(profile.contains("app.example.com"), "{profile}");
+
+    let facts = (host.facts)(host.sys).unwrap();
+    let log = Transcript::default();
+    let mut script = Script::new(pick(vec![Enter]), &log);
+    let (builder, _) = ask(&host, &facts, &mut script, &mut log.clone()).unwrap();
+    assert!(script.done());
+    assert!(
+        log.text()
+            .contains("  deploy.proxy is left out: it needs a domain.\n"),
+        "{}",
+        log.text()
+    );
+    assert!(
+        builder
+            .build(host.modules)
+            .unwrap()
+            .params("deploy.proxy")
+            .is_none()
+    );
+}
+
+/// A Caddyfile vps-ready did not write is named before the question.
+#[test]
+fn a_hand_written_caddyfile_is_named_before_the_domains() {
+    let fs = fs().with_file("/etc/caddy/Caddyfile", "app.example.com {\n}\n");
+    let runner = runner(|r| r);
+    let host = Host {
+        facts: |sys| {
+            let mut facts = vm(sys)?;
+            facts.docker = true;
+            Ok(facts)
+        },
+        ..on(&fs, &runner)
+    };
+    let facts = (host.facts)(host.sys).unwrap();
+    let log = Transcript::default();
+    let mut script = Script::new(vec![Enter; 6], &log);
+    ask(&host, &facts, &mut script, &mut log.clone()).unwrap();
+    assert!(script.done());
+    assert!(
+        log.text().contains(
+            "  /etc/caddy/Caddyfile was not written by vps-ready, so these domains are not\n  \
+             used unless you move it away first.\n"
+        ),
+        "{}",
+        log.text()
+    );
 }
 
 #[test]

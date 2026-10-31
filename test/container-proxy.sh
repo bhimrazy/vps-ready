@@ -7,9 +7,10 @@
 #   test installs curl, so the container needs network access.
 #
 # Cycle: apply --yes with one site -> plan has no changes -> the installed
-# package kept our Caddyfile -> HTTPS through Caddy reaches an upstream on
-# 127.0.0.1 -> rollback --last -> Caddy's source, key and Caddyfile are gone,
-# the package stays and Caddy is stopped.
+# package kept our Caddyfile (its own is Caddyfile.dpkg-dist) -> HTTPS through
+# Caddy reaches an upstream on 127.0.0.1 -> rollback --last -> Caddy's source,
+# key and Caddyfile are gone, the package stays and Caddy is stopped and
+# disabled -> apply again starts Caddy -> rollback --last again.
 # The site is app.localhost, for which Caddy uses its own CA (as `tls internal`
 # would), so no ACME CA is involved. The container is capped at 1 GB and 1 CPU
 # and is removed afterwards.
@@ -82,6 +83,9 @@ case $first in
   *) die "the package replaced the Caddyfile: $first" ;;
 esac
 [ "$(ct systemctl is-active caddy.service)" = active ] || die "Caddy is not running"
+# dpkg kept our Caddyfile and put the package's beside it.
+etc=$(ct ls /etc/caddy | tr '\n' ' ')
+[ "$etc" = "Caddyfile Caddyfile.dpkg-dist " ] || die "/etc/caddy holds: $etc"
 
 # The upstream: a second Caddy without an admin endpoint, answering on
 # 127.0.0.1:8080 as a container published by deploy.docker would.
@@ -107,5 +111,26 @@ ct dpkg-query -W -f '${Status}\n' caddy | grep -q 'install ok installed' ||
   die "caddy should stay installed"
 state=$(ct systemctl is-active caddy.service || true)
 [ "$state" = inactive ] || die "Caddy is $state after rollback, expected inactive"
+state=$(ct systemctl is-enabled caddy.service || true)
+[ "$state" = disabled ] || die "Caddy is $state after rollback, expected disabled"
+etc=$(ct ls /etc/caddy | tr '\n' ' ')
+[ "$etc" = "Caddyfile.dpkg-dist " ] || die "/etc/caddy holds after rollback: $etc"
+
+# Caddy is installed and stopped now: apply must start it, not only reload a
+# running one.
+echo "== $distro: vps-ready apply --yes --profile proxy.toml, after the rollback"
+rc=0; vr apply --yes --profile /root/proxy.toml || rc=$?
+[ "$rc" -eq 0 ] || die "second apply exited $rc, expected 0"
+[ "$(ct systemctl is-active caddy.service)" = active ] ||
+  die "Caddy is not running after the second apply"
+body=$(ct curl -fsS -k --retry 10 --retry-delay 1 --retry-all-errors \
+  --resolve app.localhost:443:127.0.0.1 https://app.localhost/) ||
+  die "HTTPS through Caddy failed after the second apply"
+[ "$body" = "hello from upstream" ] || die "unexpected answer: $body"
+
+echo "== $distro: vps-ready rollback --last, again"
+rc=0; vr rollback --last || rc=$?
+[ "$rc" -eq 0 ] || die "second rollback exited $rc, expected 0"
+for f in $managed; do ct test ! -e "$f" || die "$f is left after the second rollback"; done
 
 echo "OK [$distro]"

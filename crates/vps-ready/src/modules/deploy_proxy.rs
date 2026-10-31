@@ -14,8 +14,9 @@ use super::{
     Applicability, Module, ModuleError, ModuleSteps, ParamDoc, PlanCx, parse_params, refuse,
 };
 use crate::engine::{CADDYFILE, Reload};
-use crate::facts::{Facts, Init, OsFamily};
+use crate::facts::{Facts, Init, OsFamily, Proto};
 use crate::resource::{AptSource, Directory, File, Package, Resource, apt_source, architecture};
+use crate::sys::Output;
 use crate::sys::{Cmd, FileOwner, Sys, SysError};
 
 /// Caddy's package, from Caddy's repository.
@@ -23,17 +24,9 @@ pub const PACKAGE: &str = "caddy";
 
 const CADDY_DIR: &str = "/etc/caddy";
 
-/// Where apt reads its sources.
-const SOURCES: &str = "/etc/apt/sources.list.d";
-
-/// The source `apt_source` writes for Caddy.
-const CADDY_SOURCES: &str = "/etc/apt/sources.list.d/caddy.sources";
-
-/// Caddy's repository, as any apt source names it.
-const CADDY_REPO: &str = "dl.cloudsmith.io/public/caddy/stable";
-
 /// The first line of a Caddyfile this module wrote. A Caddyfile that does
-/// not start with it is someone else's, and is never overwritten.
+/// not start with it, and is not the package's own, is someone else's, and
+/// is never overwritten.
 const MARKER: &str = "# Written by vps-ready (deploy.proxy).";
 
 const HEADER: &str = "\
@@ -43,6 +36,9 @@ const HEADER: &str = "\
 
 /// Kill timeout of each DNS lookup at plan time.
 const LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Kill timeout of `systemctl is-active` in [`Module::verify`].
+const VERIFY_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The ports Caddy needs: 80 for the HTTP challenge and redirects, 443 to
 /// serve.
@@ -150,7 +146,8 @@ impl TryFrom<String> for Upstream {
 
 /// Installs Caddy from its repository and writes a Caddyfile that proxies
 /// each site to its upstream. Debian family with systemd only. A Caddyfile
-/// it did not write is left alone.
+/// it did not write is left alone, unless it is the package's unmodified
+/// default.
 #[derive(Debug, Clone, Copy)]
 pub struct DeployProxy;
 
@@ -209,28 +206,30 @@ impl Module for DeployProxy {
             name: PACKAGE.to_owned(),
         });
         let installed = package.diff(sys)?.is_none();
-        let current = match sys.fs.read(Path::new(CADDYFILE)) {
-            Ok(bytes) => Some(bytes),
-            Err(SysError::NotFound(_)) => None,
-            Err(e) => return Err(e.into()),
-        };
-        let ours = current
-            .as_ref()
-            .is_none_or(|c| c.starts_with(MARKER.as_bytes()));
+        let current = caddyfile_state(sys)?;
+        let ours = current != Caddyfile::Other;
 
         let mut resources = Vec::new();
         let mut notes = Vec::new();
         // Planned for an installed Caddy too, where they have no change, so
         // that it keeps a repository to get updates from.
-        if !configured_elsewhere(sys)? {
-            if installed && !sys.fs.exists(Path::new(CADDY_SOURCES)) {
+        let source = AptSource::caddy();
+        if !source.configured_elsewhere(sys)? {
+            if installed && !sys.fs.exists(&source.path()) {
                 notes.push(
                     "caddy is installed without Caddy's repository; this adds it, so apt \
-                     updates Caddy from there"
+                     updates Caddy from there, and the next `apt upgrade` replaces a distro's \
+                     Caddy with Caddy's own build"
                         .to_owned(),
                 );
             }
-            resources.extend(apt_source(&AptSource::caddy(), &architecture(sys)?));
+            resources.extend(apt_source(&source, &architecture(sys)?));
+        }
+        if current == Caddyfile::PackageDefault {
+            notes.push(format!(
+                "{CADDYFILE} is the package's unmodified default, so it is replaced; rollback \
+                 restores it"
+            ));
         }
         if ours {
             resources.extend([
@@ -262,9 +261,18 @@ impl Module for DeployProxy {
                 notes,
             });
         }
-        if current.is_none() {
-            notes.push("rollback removes the Caddyfile and stops Caddy".to_owned());
+        if current == Caddyfile::Missing {
+            let dist = if installed {
+                ""
+            } else {
+                " (with its default Caddyfile as Caddyfile.dpkg-dist)"
+            };
+            notes.push(format!(
+                "rollback removes the Caddyfile, and stops and disables Caddy; the package \
+                 stays{dist}"
+            ));
         }
+        notes.extend(listener_note(cx.facts));
         notes.extend(firewall_note(cx, sys)?);
         notes.extend(dns_notes(sys, &params.sites));
         Ok(ModuleSteps {
@@ -273,29 +281,124 @@ impl Module for DeployProxy {
             notes,
         })
     }
+
+    /// With a Caddyfile of its own, Caddy runs: a reload of a stopped Caddy
+    /// that fails to start, e.g. on a port in use, is not an error to
+    /// systemd's reload, so this catches it, and the apply rolls back.
+    fn verify(&self, _cx: &PlanCx, sys: Sys) -> Result<(), String> {
+        match sys.fs.read(Path::new(CADDYFILE)) {
+            Ok(text) if text.starts_with(MARKER.as_bytes()) => {}
+            _ => return Ok(()),
+        }
+        let cmd = Cmd::new("systemctl")
+            .args(["is-active", "caddy.service"])
+            .timeout(VERIFY_TIMEOUT);
+        let out = sys
+            .runner
+            .run(&cmd)
+            .map_err(|e| format!("`systemctl is-active caddy.service`: {e}"))?;
+        if out.ok() {
+            return Ok(());
+        }
+        let state = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+        Err(format!(
+            "caddy.service is {state}, not active; `journalctl -u caddy.service` says why \
+             (another program on port 80 or 443?)"
+        ))
+    }
+
+    fn verify_timeout(&self) -> Duration {
+        VERIFY_TIMEOUT
+    }
 }
 
-/// Whether an apt source other than [`CADDY_SOURCES`] already names Caddy's
-/// repository, e.g. `caddy-stable.list` from Caddy's install docs. A second
-/// one with another `Signed-By` makes `apt-get update` fail.
-fn configured_elsewhere(sys: Sys) -> Result<bool, ModuleError> {
-    let mut files = vec![Path::new("/etc/apt/sources.list").to_path_buf()];
-    match sys.fs.read_dir(Path::new(SOURCES)) {
-        Ok(paths) => files.extend(paths),
-        Err(SysError::NotFound(_)) => {}
+/// What `/etc/caddy/Caddyfile` is now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Caddyfile {
+    /// There is none.
+    Missing,
+    /// This module wrote it.
+    Ours,
+    /// The package's own, unmodified, by the hash dpkg recorded.
+    PackageDefault,
+    /// Anything else, e.g. written by hand: left alone.
+    Other,
+}
+
+/// Reads [`CADDYFILE`] and, without our header, compares its MD5 with the
+/// conffile hash dpkg recorded for the package. Read-only.
+///
+/// # Errors
+///
+/// Reading the file, or running `dpkg-query` or `md5sum`.
+pub(crate) fn caddyfile_state(sys: Sys) -> Result<Caddyfile, ModuleError> {
+    match sys.fs.read(Path::new(CADDYFILE)) {
+        Ok(text) if text.starts_with(MARKER.as_bytes()) => return Ok(Caddyfile::Ours),
+        Ok(_) => {}
+        Err(SysError::NotFound(_)) => return Ok(Caddyfile::Missing),
         Err(e) => return Err(e.into()),
     }
-    for path in files
+    let first = |out: &Output, path: &str| -> Option<String> {
+        String::from_utf8_lossy(&out.stdout).lines().find_map(|l| {
+            let mut words = l.split_whitespace();
+            (words.next()? == path).then(|| words.next().map(str::to_owned))?
+        })
+    };
+    let conffiles = sys.runner.run(&Cmd::new("dpkg-query").args([
+        "-W",
+        "--showformat=${Conffiles}",
+        PACKAGE,
+    ]))?;
+    let recorded = conffiles
+        .ok()
+        .then(|| first(&conffiles, CADDYFILE))
+        .flatten();
+    let Some(recorded) = recorded else {
+        return Ok(Caddyfile::Other);
+    };
+    let sum = sys
+        .runner
+        .run(&Cmd::new("md5sum").args(["--", CADDYFILE]))?;
+    // md5sum prints `<hash>  <path>`.
+    let actual = sum
+        .ok()
+        .then(|| {
+            String::from_utf8_lossy(&sum.stdout)
+                .split_whitespace()
+                .next()
+                .map(str::to_owned)
+        })
+        .flatten();
+    Ok(if actual.as_deref() == Some(recorded.as_str()) {
+        Caddyfile::PackageDefault
+    } else {
+        Caddyfile::Other
+    })
+}
+
+/// Another program on port 80 or 443, which Caddy then cannot bind.
+fn listener_note(facts: &Facts) -> Option<String> {
+    let mut taken: Vec<String> = facts
+        .listeners
         .iter()
-        .filter(|p| p.as_path() != Path::new(CADDY_SOURCES))
-    {
-        match sys.fs.read(path) {
-            Ok(bytes) if String::from_utf8_lossy(&bytes).contains(CADDY_REPO) => return Ok(true),
-            Ok(_) | Err(SysError::NotFound(_)) => {}
-            Err(e) => return Err(e.into()),
-        }
-    }
-    Ok(false)
+        .filter(|l| l.proto == Proto::Tcp && PORTS.contains(&l.port))
+        .filter(|l| !l.processes.iter().any(|p| p == PACKAGE))
+        .map(|l| {
+            if l.processes.is_empty() {
+                l.port.to_string()
+            } else {
+                format!("{} ({})", l.port, l.processes.join(", "))
+            }
+        })
+        .collect();
+    taken.dedup();
+    (!taken.is_empty()).then(|| {
+        format!(
+            "something else listens on port {}: Caddy cannot start while it does, and the \
+             apply then rolls back",
+            taken.join(" and ")
+        )
+    })
 }
 
 /// One block per site, after the header.
@@ -365,7 +468,7 @@ fn dns_notes(sys: Sys, sites: &[Site]) -> Vec<String> {
             return notes;
         }
     };
-    for domain in public {
+    for (i, domain) in public.iter().enumerate() {
         match lookup(sys, domain) {
             Lookup::Found(found) if found.iter().any(|a| here.contains(a)) => {}
             Lookup::Found(found) => {
@@ -385,6 +488,23 @@ fn dns_notes(sys: Sys, sites: &[Site]) -> Vec<String> {
                 "the DNS lookup of {domain} failed ({why}), so whether it points here was not \
                  checked"
             )),
+            // A resolver that does not answer one name will not answer the
+            // next either: one wait is enough.
+            Lookup::TimedOut => {
+                let secs = LOOKUP_TIMEOUT.as_secs();
+                notes.push(match public.len() - i - 1 {
+                    0 => format!(
+                        "the resolver did not answer within {secs} s, so whether {domain} points \
+                         here was not checked"
+                    ),
+                    n => format!(
+                        "the resolver did not answer within {secs} s, so whether {domain} and {n} \
+                         other {} point here was not checked",
+                        if n == 1 { "domain" } else { "domains" }
+                    ),
+                });
+                break;
+            }
         }
     }
     notes
@@ -393,6 +513,7 @@ fn dns_notes(sys: Sys, sites: &[Site]) -> Vec<String> {
 enum Lookup {
     Found(BTreeSet<IpAddr>),
     NotFound,
+    TimedOut,
     Failed(String),
 }
 
@@ -416,6 +537,7 @@ fn lookup(sys: Sys, domain: &str) -> Lookup {
         }
         Ok(out) if out.status == 2 => Lookup::NotFound,
         Ok(out) => Lookup::Failed(format!("`getent` exited with status {}", out.status)),
+        Err(SysError::Timeout { .. }) => Lookup::TimedOut,
         Err(e) => Lookup::Failed(e.to_string()),
     }
 }

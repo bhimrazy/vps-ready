@@ -13,9 +13,10 @@ use super::{EXIT_INTERRUPTED, wrap};
 use crate::VERSION_INFO;
 use crate::audit::{self, Outcome, Severity};
 use crate::config::{Profile, ProfileBuilder};
+use crate::engine::CADDYFILE;
 use crate::engine::{self, Engine, EngineError, StateDir};
 use crate::facts::{Facts, OsFamily, Proto, Virt};
-use crate::modules::deploy_proxy::{Domain, Upstream};
+use crate::modules::deploy_proxy::{self, Caddyfile, Domain, Upstream};
 use crate::modules::firewall_inbound::{self, Allow};
 use crate::modules::user_admin::{self, SessionKeys};
 use crate::modules::{Applicability, Module, ModuleError};
@@ -186,9 +187,9 @@ fn ask(
     let mut builder = ask_profile(facts, prompt)?;
     ask_admin(host, facts, prompt, out, &mut builder)?;
     ask_ports(host, facts, prompt, out, &mut builder)?;
-    ask_sites(host, facts, prompt, out, &mut builder)?;
     let picked = prompt.confirm("Pick which modules to run yourself?", false)?
         && ask_modules(host, facts, prompt, out, &mut builder)?;
+    ask_sites(host, facts, prompt, out, &mut builder)?;
     Ok((builder, picked))
 }
 
@@ -506,8 +507,19 @@ fn ask_ports(
     Ok(())
 }
 
-/// With `deploy.docker` in the profile, the sites `deploy.proxy` serves:
-/// none is fine, and at least one adds the module.
+/// Whether `profile` runs `deploy.proxy` with no sites yet: picked in the
+/// module list, for [`ask_sites`] to fill in.
+fn proxy_without_sites(profile: &Profile) -> bool {
+    profile.params("deploy.proxy").is_some_and(|p| {
+        p.get("sites")
+            .and_then(toml::Value::as_array)
+            .is_none_or(Vec::is_empty)
+    })
+}
+
+/// With `deploy.docker` still in the profile after the module list, or
+/// `deploy.proxy` picked there, the sites `deploy.proxy` serves: none is
+/// fine, and at least one adds the module.
 fn ask_sites(
     host: &Host,
     facts: &Facts,
@@ -515,11 +527,9 @@ fn ask_sites(
     out: &mut dyn Write,
     builder: &mut ProfileBuilder,
 ) -> anyhow::Result<()> {
-    if builder
-        .build(host.modules)?
-        .params("deploy.docker")
-        .is_none()
-    {
+    let profile = builder.build(host.modules)?;
+    let picked = proxy_without_sites(&profile);
+    if profile.params("deploy.docker").is_none() && !picked {
         return Ok(());
     }
     let Some(module) = find(host, "deploy.proxy") else {
@@ -535,6 +545,16 @@ fn ask_sites(
         "Caddy can serve your apps over HTTPS and get their certificates. Each domain \
          needs a DNS record for this server.",
     )?;
+    if deploy_proxy::caddyfile_state(host.sys)? == Caddyfile::Other {
+        say(
+            out,
+            "  ",
+            &format!(
+                "{CADDYFILE} was not written by vps-ready, so these domains are not used \
+                 unless you move it away first."
+            ),
+        )?;
+    }
     let mut sites: Vec<(String, String)> = Vec::new();
     loop {
         let question = if sites.is_empty() {
@@ -568,6 +588,10 @@ fn ask_sites(
         sites.push((domain, upstream));
     }
     if sites.is_empty() {
+        if picked {
+            builder.remove("deploy.proxy");
+            writeln!(out, "  deploy.proxy is left out: it needs a domain.")?;
+        }
         return Ok(());
     }
     let sites = sites
@@ -631,7 +655,12 @@ fn ask_modules(
             };
             any = true;
         }
-        let profile = changed.build(host.modules)?;
+        // `deploy.proxy` picked here gets its sites from the next question.
+        let mut checked_builder = changed.clone();
+        if proxy_without_sites(&changed.build(host.modules)?) {
+            checked_builder.remove("deploy.proxy");
+        }
+        let profile = checked_builder.build(host.modules)?;
         let selected = Selection::default().select(host.modules, Some(&profile))?;
         match engine::plan(&selected, facts, host.sys) {
             Ok(_) => {

@@ -19,6 +19,7 @@ Unchecked ports will be blocked.
   [x] 443/tcp
   [x] 443/udp
 ? More ports to open, e.g. 8080/tcp or 53/udp (Enter for none): 
+? Pick which modules to run yourself? (y/N) no
 Caddy can serve your apps over HTTPS and get their certificates. Each domain
 needs a DNS record for this server.
 ? Domain to serve, e.g. app.example.com (Enter for none): App.example.com
@@ -33,7 +34,6 @@ needs a DNS record for this server.
 ? Another domain (Enter for no more): app.example.com
   app.example.com is already listed
 ? Another domain (Enter for no more): 
-? Pick which modules to run yourself? (y/N) no
 
 After you apply, you have 5 minutes to log in from a new terminal and confirm.
 If you don't, every change is undone.
@@ -178,8 +178,8 @@ updates.auto: Install security updates automatically (fixes UPD-001)
       +APT::Periodic::Update-Package-Lists "1";
       +APT::Periodic::Unattended-Upgrade "1";
 deploy.proxy: Serve sites over HTTPS with Caddy, proxied to their upstreams
-  note: caddy is installed without Caddy's repository; this adds it, so apt updates Caddy from there
-  note: rollback removes the Caddyfile and stops Caddy
+  note: caddy is installed without Caddy's repository; this adds it, so apt updates Caddy from there, and the next `apt upgrade` replaces a distro's Caddy with Caddy's own build
+  note: rollback removes the Caddyfile, and stops and disables Caddy; the package stays
   note: this host's addresses are unknown (not found: /proc/net/fib_trie), so the domains' DNS records were not checked
   + directory /etc/apt/keyrings (mode 0755, root:root)                    reversible
   + /etc/apt/keyrings/caddy.asc (mode 0644, root:root)                    reversible

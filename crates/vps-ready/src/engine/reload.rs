@@ -30,9 +30,10 @@ pub enum Reload {
     /// and also passes when there is none, as after a rollback that removed
     /// it; with `--config-file` it would fail then and skip the restart.
     DockerRestart,
-    /// `caddy validate`, then `systemctl try-reload-or-restart
-    /// caddy.service`. A rollback that removed the Caddyfile stops Caddy
-    /// instead (see [`Reload::rollback_steps`]).
+    /// `caddy validate`, then `systemctl reload-or-restart caddy.service`:
+    /// also a stopped Caddy, e.g. after a rollback, so that apply leaves it
+    /// serving. A rollback that removed the Caddyfile stops and disables
+    /// Caddy instead (see [`Reload::rollback_steps`]).
     CaddyReload,
 }
 
@@ -88,7 +89,7 @@ impl Reload {
             Self::Fail2banRestart => &["try-restart", "fail2ban.service"],
             Self::DaemonReload => &["daemon-reload"],
             Self::DockerRestart => &["try-restart", "docker.service"],
-            Self::CaddyReload => &["try-reload-or-restart", "caddy.service"],
+            Self::CaddyReload => &["reload-or-restart", "caddy.service"],
         };
         Cmd::new("systemctl")
             .args(args.iter().copied())
@@ -98,13 +99,14 @@ impl Reload {
     /// The check and the command a rollback runs. Caddy cannot start or
     /// reload without its Caddyfile, and the check would fail and leave it
     /// serving the removed one, so once a rollback removed the file,
-    /// `systemctl stop caddy.service` runs instead, with no check. Others
-    /// are [`Reload::check`] and [`Reload::command`].
+    /// `systemctl disable --now caddy.service` runs instead, with no check,
+    /// and the next boot does not try to start it either. Others are
+    /// [`Reload::check`] and [`Reload::command`].
     #[must_use]
     pub fn rollback_steps(self, sys: Sys) -> (Option<Cmd>, Cmd) {
         if self == Self::CaddyReload && !sys.fs.exists(Path::new(CADDYFILE)) {
             let stop = Cmd::new("systemctl")
-                .args(["stop", "caddy.service"])
+                .args(["disable", "--now", "caddy.service"])
                 .timeout(SYSTEMCTL_TIMEOUT);
             return (None, stop);
         }
@@ -231,14 +233,14 @@ mod tests {
                 ),
                 (
                     Some("caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile".into()),
-                    "systemctl try-reload-or-restart caddy.service".into()
+                    "systemctl reload-or-restart caddy.service".into()
                 ),
             ]
         );
     }
 
-    /// Without its Caddyfile, a rollback stops Caddy; with one, it checks
-    /// and reloads as apply does.
+    /// Without its Caddyfile, a rollback stops and disables Caddy; with one,
+    /// it checks and reloads as apply does.
     #[test]
     fn caddy_rollback_stops_caddy_without_its_caddyfile() {
         let runner = FakeRunner::new();
@@ -251,7 +253,7 @@ mod tests {
         };
         assert_eq!(
             steps(&FakeFs::new()),
-            (None, "systemctl stop caddy.service".into())
+            (None, "systemctl disable --now caddy.service".into())
         );
         let fs = FakeFs::new().with_file(CADDYFILE, "app.example.com {\n}\n");
         assert_eq!(

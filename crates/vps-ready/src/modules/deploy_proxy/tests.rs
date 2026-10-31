@@ -45,28 +45,44 @@ const IF_INET6: &str = "\
 20010db8000000000000000000000010 02 40 00 80     eth0
 ";
 
+/// The MD5 that dpkg records for the package's Caddyfile, and the one
+/// `md5sum` prints for [`PACKAGE_DEFAULT`].
+const DEFAULT_MD5: &str = "6dd1d4d9b0bb1e1a7b8e0e5a1d1d9f3c";
+
+/// The package's Caddyfile, shortened.
+const PACKAGE_DEFAULT: &str = ":80 {\n\troot * /usr/share/caddy\n\tfile_server\n}\n";
+
 /// Packages dpkg reports installed, what `getent ahosts` answers, whether
-/// `caddy validate` passes, and every command run.
-struct Host {
+/// `caddy validate` passes, whether caddy.service runs and starts, and
+/// every command run. `md5sum` hashes only [`PACKAGE_DEFAULT`] to
+/// [`DEFAULT_MD5`].
+struct Host<'a> {
+    fs: Option<&'a FakeFs>,
     installed: Mutex<BTreeSet<String>>,
     /// `Err`: the lookup times out.
     dns: BTreeMap<String, Result<Output, ()>>,
     valid: bool,
+    /// Whether caddy.service starts, e.g. not with port 80 taken.
+    starts: bool,
+    active: Mutex<bool>,
     calls: Mutex<Vec<String>>,
 }
 
-impl Default for Host {
+impl Default for Host<'_> {
     fn default() -> Self {
         Self {
+            fs: None,
             installed: Mutex::default(),
             dns: BTreeMap::new(),
             valid: true,
+            starts: true,
+            active: Mutex::new(false),
             calls: Mutex::default(),
         }
     }
 }
 
-impl Host {
+impl<'a> Host<'a> {
     /// Every domain answers with `addrs`, as `getent ahosts` prints them.
     fn resolving(domains: &[&str], addrs: &[&str]) -> Self {
         let mut host = Self::default();
@@ -79,6 +95,12 @@ impl Host {
 
     fn with_caddy(self) -> Self {
         self.installed.lock().unwrap().insert(PACKAGE.to_owned());
+        self
+    }
+
+    /// `md5sum` reads the Caddyfile from `fs`.
+    fn on(mut self, fs: &'a FakeFs) -> Self {
+        self.fs = Some(fs);
         self
     }
 
@@ -107,7 +129,7 @@ fn exit(status: i32) -> Output {
     }
 }
 
-impl Runner for Host {
+impl Runner for Host<'_> {
     fn run(&self, cmd: &Cmd) -> Result<Output, SysError> {
         let line = std::iter::once(cmd.program.as_str())
             .chain(cmd.args.iter().map(String::as_str))
@@ -116,7 +138,24 @@ impl Runner for Host {
         self.calls.lock().unwrap().push(line);
         let args: Vec<&str> = cmd.args.iter().map(String::as_str).collect();
         let mut installed = self.installed.lock().unwrap();
+        let mut active = self.active.lock().unwrap();
         let out = match (cmd.program.as_str(), &args[..]) {
+            ("dpkg-query", ["-W", "--showformat=${Conffiles}", name]) => {
+                if installed.contains(*name) {
+                    Output::success(format!(" {CADDYFILE} {DEFAULT_MD5}\n"))
+                } else {
+                    exit(1)
+                }
+            }
+            ("md5sum", ["--", path]) => {
+                let text = self.fs.and_then(|fs| fs.read(Path::new(path)).ok());
+                let sum = if text.as_deref() == Some(PACKAGE_DEFAULT.as_bytes()) {
+                    DEFAULT_MD5
+                } else {
+                    "0123456789abcdef0123456789abcdef"
+                };
+                Output::success(format!("{sum}  {path}\n"))
+            }
             ("dpkg-query", [.., name]) => Output::success(if installed.contains(*name) {
                 "installed"
             } else {
@@ -147,6 +186,20 @@ impl Runner for Host {
             ("systemctl", ["show", ..]) => {
                 Output::success("LoadState=loaded\nActiveState=inactive\nUnitFileState=disabled\n")
             }
+            ("systemctl", ["reload-or-restart", "caddy.service"]) => {
+                *active = self.starts;
+                Output::success("")
+            }
+            ("systemctl", ["disable", "--now", "caddy.service"]) => {
+                *active = false;
+                Output::success("")
+            }
+            ("systemctl", ["is-active", "caddy.service"]) if *active => Output::success("active\n"),
+            ("systemctl", ["is-active", "caddy.service"]) => Output {
+                status: 3,
+                stdout: b"failed\n".to_vec(),
+                ..Output::default()
+            },
             ("systemctl", _) => Output::success(""),
             ("nft", _) => Output::success(""),
             (other, _) => return Err(SysError::NotFound(other.to_owned())),
@@ -310,7 +363,8 @@ fn a_fresh_host_gets_caddy_and_one_site() {
         steps.notes,
         [
             "rollback leaves Caddy installed",
-            "rollback removes the Caddyfile and stops Caddy",
+            "rollback removes the Caddyfile, and stops and disables Caddy; the package \
+             stays (with its default Caddyfile as Caddyfile.dpkg-dist)",
         ]
     );
     let Some(Resource::File(source)) = steps.resources.get(2) else {
@@ -488,7 +542,8 @@ fn keeps_caddys_repository_for_an_installed_caddy() {
     assert_eq!(
         steps.notes[0],
         "caddy is installed without Caddy's repository; this adds it, so apt updates Caddy \
-         from there"
+         from there, and the next `apt upgrade` replaces a distro's Caddy with Caddy's own \
+         build"
     );
 
     // Caddy's install docs write `caddy-stable.list`.
@@ -508,7 +563,7 @@ fn keeps_caddys_repository_for_an_installed_caddy() {
     );
     assert_eq!(
         steps.notes[0],
-        "rollback removes the Caddyfile and stops Caddy"
+        "rollback removes the Caddyfile, and stops and disables Caddy; the package stays"
     );
 }
 
@@ -552,7 +607,7 @@ fn notes_domains_that_do_not_point_here() {
             "api.example.com".to_owned(),
             Ok(ahosts("api.example.com", &["198.51.100.7", "2001:db8::7"])),
         ),
-        ("www.example.com".to_owned(), Err(())),
+        ("www.example.com".to_owned(), Ok(exit(1))),
     ]);
     let notes = |runner: &Host, fs: &FakeFs, text: &str| {
         steps(&params(text), fs, runner).notes[2..].to_vec()
@@ -564,8 +619,8 @@ fn notes_domains_that_do_not_point_here() {
             "api.example.com resolves to 198.51.100.7, 2001:db8::7, not to an address of this \
              host, so Caddy cannot get its certificate until it does (unless the provider \
              forwards that address here)",
-            "the DNS lookup of www.example.com failed (`getent` timed out after 5s), so whether \
-             it points here was not checked",
+            "the DNS lookup of www.example.com failed (`getent` exited with status 1), so \
+             whether it points here was not checked",
         ]
     );
     // The lookups run with a short timeout.
@@ -593,12 +648,12 @@ fn notes_domains_that_do_not_point_here() {
              get its certificate until it points here"
         ]
     );
-    runner.dns.insert("app.example.com".to_owned(), Ok(exit(1)));
+    runner.dns.insert("app.example.com".to_owned(), Err(()));
     assert_eq!(
         notes(&runner, &fs, ONE),
         [
-            "the DNS lookup of app.example.com failed (`getent` exited with status 1), so \
-             whether it points here was not checked"
+            "the resolver did not answer within 5 s, so whether app.example.com points here \
+             was not checked"
         ]
     );
 
@@ -799,15 +854,13 @@ fn applies_then_plans_nothing_and_rolls_back() {
     let validate = "caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile";
     let checked = applied.iter().position(|l| l == validate).unwrap();
     assert!(install < checked, "{applied:?}");
-    assert!(
-        applied[checked..].contains(&"systemctl try-reload-or-restart caddy.service".to_owned())
-    );
+    assert!(applied[checked..].contains(&"systemctl reload-or-restart caddy.service".to_owned()));
 
     engine.rollback(Target::Last, &mut |_| {}).unwrap();
     assert_eq!(etc(&fs), before);
     assert!(runner.installed.lock().unwrap().contains(PACKAGE));
     let rolled_back = &runner.lines()[applied.len()..];
-    assert_eq!(rolled_back, ["systemctl stop caddy.service"]);
+    assert_eq!(rolled_back, ["systemctl disable --now caddy.service"]);
 }
 
 /// Rolling back a change to its own Caddyfile restores the old one and
@@ -839,7 +892,7 @@ fn rollback_of_a_rewrite_reloads_the_old_caddyfile() {
         runner.lines()[applied..],
         [
             "caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile",
-            "systemctl try-reload-or-restart caddy.service",
+            "systemctl reload-or-restart caddy.service",
         ]
     );
 }
@@ -886,6 +939,201 @@ fn a_failed_validate_fails_the_apply() {
     assert!(
         !runner
             .lines()
-            .contains(&"systemctl try-reload-or-restart caddy.service".to_owned())
+            .contains(&"systemctl reload-or-restart caddy.service".to_owned())
+    );
+}
+
+/// After the first lookup that times out, the rest are not looked up, and
+/// one note says how many.
+#[test]
+fn stops_looking_up_after_a_timeout() {
+    let fs = fs();
+    let mut runner = Host::default().with_caddy();
+    runner.dns = BTreeMap::from([
+        (
+            "app.example.com".to_owned(),
+            Ok(ahosts("app.example.com", &[HERE])),
+        ),
+        ("api.example.com".to_owned(), Err(())),
+        ("www.example.com".to_owned(), Err(())),
+    ]);
+    let notes = steps(&params(SEVERAL), &fs, &runner).notes[2..].to_vec();
+    assert_eq!(
+        notes,
+        [
+            "the resolver did not answer within 5 s, so whether api.example.com and 1 other \
+             domain point here was not checked"
+        ]
+    );
+    let lookups: Vec<String> = runner
+        .lines()
+        .into_iter()
+        .filter(|l| l.starts_with("getent"))
+        .collect();
+    assert_eq!(
+        lookups,
+        [
+            "getent ahosts app.example.com",
+            "getent ahosts api.example.com"
+        ]
+    );
+}
+
+/// The package's unmodified Caddyfile, by dpkg's recorded MD5, is
+/// replaced, and rollback restores it; an edited one is left alone.
+#[test]
+fn replaces_the_packages_default_caddyfile() {
+    let fs = with_caddyfile(PACKAGE_DEFAULT);
+    let runner = Host::resolving(&["app.example.com"], &[HERE])
+        .with_caddy()
+        .on(&fs);
+    let facts = facts();
+    let params = params(ONE);
+    let first = plan(&fs, &runner, &facts, &params);
+    assert!(
+        change_ids(&first).contains(&format!("file:{CADDYFILE}")),
+        "{:?}",
+        change_ids(&first)
+    );
+    assert!(
+        first.modules[0].notes.contains(
+            &"/etc/caddy/Caddyfile is the package's unmodified default, so it is replaced; \
+              rollback restores it"
+                .to_owned()
+        ),
+        "{:?}",
+        first.modules[0].notes
+    );
+    let state = StateDir::create(&fs, STATE, 0).unwrap();
+    let engine = Engine::lock(
+        &state,
+        Sys {
+            fs: &fs,
+            runner: &runner,
+        },
+    )
+    .unwrap();
+    engine
+        .apply(&first, &Deadman::default(), &mut |_| {})
+        .unwrap();
+    engine.rollback(Target::Last, &mut |_| {}).unwrap();
+    assert_eq!(
+        fs.read(Path::new(CADDYFILE)).unwrap(),
+        PACKAGE_DEFAULT.as_bytes()
+    );
+
+    // One edited line makes it the user's.
+    let edited = PACKAGE_DEFAULT.replace(":80", ":8080");
+    let fs = with_caddyfile(&edited);
+    let runner = Host::default().with_caddy().on(&fs);
+    let steps = steps(&params, &fs, &runner);
+    assert!(!ids(&steps).contains(&format!("file:{CADDYFILE}")));
+    assert!(steps.reloads.is_empty());
+    let sys = Sys {
+        fs: &fs,
+        runner: &runner,
+    };
+    assert_eq!(caddyfile_state(sys).unwrap(), Caddyfile::Other);
+}
+
+/// An apply after a rollback, which stopped Caddy, starts it again, and a
+/// Caddy that does not run after the reload rolls the apply back.
+#[test]
+fn starts_a_stopped_caddy_and_verifies_it_runs() {
+    let (fs, runner) = (fs(), Host::resolving(&["app.example.com"], &[HERE]));
+    let facts = facts();
+    let params = params(ONE);
+    let state = StateDir::create(&fs, STATE, 0).unwrap();
+    let engine = Engine::lock(
+        &state,
+        Sys {
+            fs: &fs,
+            runner: &runner,
+        },
+    )
+    .unwrap();
+    let apply = || {
+        let plan = plan(&fs, &runner, &facts, &params);
+        engine
+            .apply(&plan, &Deadman::default(), &mut |_| {})
+            .unwrap()
+    };
+    assert!(matches!(apply(), ApplyOutcome::Applied { .. }));
+    engine.rollback(Target::Last, &mut |_| {}).unwrap();
+    assert!(!*runner.active.lock().unwrap());
+    let before = runner.lines().len();
+    assert!(matches!(apply(), ApplyOutcome::Applied { .. }));
+    let again = &runner.lines()[before..];
+    assert!(
+        again.contains(&"systemctl reload-or-restart caddy.service".to_owned()),
+        "{again:?}"
+    );
+    assert!(
+        again.contains(&"systemctl is-active caddy.service".to_owned()),
+        "{again:?}"
+    );
+    assert!(*runner.active.lock().unwrap());
+
+    let fs = self::fs();
+    let runner = Host {
+        starts: false,
+        ..Host::resolving(&["app.example.com"], &[HERE])
+    };
+    let before = etc(&fs);
+    let plan = plan(&fs, &runner, &facts, &params);
+    let state = StateDir::create(&fs, STATE, 0).unwrap();
+    let engine = Engine::lock(
+        &state,
+        Sys {
+            fs: &fs,
+            runner: &runner,
+        },
+    )
+    .unwrap();
+    let outcome = engine
+        .apply(&plan, &Deadman::default(), &mut |_| {})
+        .unwrap();
+    let ApplyOutcome::RolledBack { cause, .. } = &outcome else {
+        panic!("{outcome:?}");
+    };
+    assert!(
+        cause
+            .to_string()
+            .contains("caddy.service is failed, not active"),
+        "{cause}"
+    );
+    assert_eq!(etc(&fs), before);
+}
+
+/// Another program on port 80 or 443 is a note.
+#[test]
+fn notes_another_program_on_port_80_or_443() {
+    let (fs, runner) = (fs(), Host::resolving(&["app.example.com"], &[HERE]));
+    let mut facts = facts();
+    let listener = |port, process: &str| crate::facts::Listener {
+        proto: Proto::Tcp,
+        addr: "0.0.0.0".into(),
+        port,
+        processes: vec![process.to_owned()],
+    };
+    facts.listeners = vec![listener(80, "nginx"), listener(443, "caddy")];
+    let params = params(ONE);
+    let steps = DeployProxy
+        .plan(
+            &PlanCx {
+                facts: &facts,
+                params: &params,
+                planned: &[],
+            },
+            Sys {
+                fs: &fs,
+                runner: &runner,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        steps.notes[2],
+        "something else listens on port 80 (nginx): Caddy cannot start while it does, and \
+         the apply then rolls back"
     );
 }

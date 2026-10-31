@@ -24,10 +24,10 @@ Unchecked ports will be blocked.
 ? More ports to open, e.g. 8080/tcp or 53/udp (Enter for none): 8080
   "8080" is not `<port>/tcp` or `<port>/udp`
 ? More ports to open, e.g. 8080/tcp or 53/udp (Enter for none): 8080/tcp, 51820/udp
+? Pick which modules to run yourself? (y/N) no
 Caddy can serve your apps over HTTPS and get their certificates. Each domain
 needs a DNS record for this server.
 ? Domain to serve, e.g. app.example.com (Enter for none): 
-? Pick which modules to run yourself? (y/N) no
 
 After you apply, you have 5 minutes to log in from a new terminal and confirm.
 If you don't, every change is undone.
