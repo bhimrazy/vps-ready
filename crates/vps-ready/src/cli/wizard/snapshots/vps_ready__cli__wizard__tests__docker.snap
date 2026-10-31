@@ -53,9 +53,9 @@ ssh.server: Turn off root and password logins over SSH (fixes SSH-001, SSH-002, 
       +PasswordAuthentication no
       +X11Forwarding no
 deploy.docker: Install Docker with logs capped and ports on loopback by default
-  note: Docker is already installed: only /etc/docker/daemon.json is managed
+  note: Docker is installed, but not from Docker's package: only /etc/docker/daemon.json is managed
   note: ports published without an address bind to 127.0.0.1 only, not to ::1: point a reverse proxy at 127.0.0.1:<port>, not localhost
-  note: the Docker daemon did not answer, so its running containers are unknown; with live-restore off, restarting Docker stops them
+  note: docker.service is not running; Docker reads the new daemon.json when it starts
   + directory /etc/docker (mode 0755, root:root)                          reversible
   + /etc/docker/daemon.json (mode 0644, root:root)                        reversible
       @@ -0,0 +1,16 @@

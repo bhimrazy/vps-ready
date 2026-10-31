@@ -155,7 +155,10 @@ fn a_docker_host_gets_web_without_its_published_ports() {
             let mut facts = vm(sys)?;
             facts.docker = true;
             if let Some(engine) = facts.docker_engine.as_mut() {
-                engine.dockerd = true;
+                engine.service = Some(crate::facts::DockerService {
+                    loaded: true,
+                    active: false,
+                });
             }
             facts
                 .listeners
@@ -188,7 +191,10 @@ fn a_docker_host_adds_a_domain_for_caddy() {
             let mut facts = vm(sys)?;
             facts.docker = true;
             if let Some(engine) = facts.docker_engine.as_mut() {
-                engine.dockerd = true;
+                engine.service = Some(crate::facts::DockerService {
+                    loaded: true,
+                    active: false,
+                });
             }
             Ok(facts)
         },

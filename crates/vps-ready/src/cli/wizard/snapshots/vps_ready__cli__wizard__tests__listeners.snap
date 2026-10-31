@@ -57,7 +57,7 @@ ssh.server: Turn off root and password logins over SSH (fixes SSH-001, SSH-002, 
       +X11Forwarding no
 deploy.docker: Install Docker with logs capped and ports on loopback by default
   note: Docker sets net.ipv4.ip_forward=1 and a FORWARD policy of drop; a host that routes other traffic (a WireGuard peer, a subnet router) needs its own forward rules
-  note: rollback leaves Docker's packages installed
+  note: rollback leaves Docker's packages installed, and removes the repository they update from
   note: ports published without an address bind to 127.0.0.1 only, not to ::1: point a reverse proxy at 127.0.0.1:<port>, not localhost
   + directory /etc/apt/keyrings (mode 0755, root:root)                    reversible
   + /etc/apt/keyrings/docker.asc (mode 0644, root:root)                   reversible

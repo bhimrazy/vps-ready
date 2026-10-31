@@ -9,10 +9,11 @@ modules:
     changes:
       - id: "file:/etc/docker/daemon.json"
         summary: "update /etc/docker/daemon.json (0600 0:0)"
-        diff: "@@ -1,10 +1,21 @@\n {\n-    \"registry-mirrors\": [\"https://mirror.example.com\"],\n-    \"log-driver\": \"json-file\",\n-    \"log-opts\": { \"labels\": \"app\" },\n-    \"ip\": \"0.0.0.0\",\n+    \"registry-mirrors\": [\n+        \"https://mirror.example.com\"\n+    ],\n+    \"log-driver\": \"local\",\n+    \"log-opts\": {\n+        \"max-size\": \"10m\",\n+        \"max-file\": \"3\"\n+    },\n+    \"ip\": \"127.0.0.1\",\n     \"default-network-opts\": {\n-        \"bridge\": { \"com.docker.network.driver.mtu\": \"1450\" }\n+        \"bridge\": {\n+            \"com.docker.network.driver.mtu\": \"1450\",\n+            \"com.docker.network.bridge.host_binding_ipv4\": \"127.0.0.1\"\n+        }\n     },\n-    \"debug\": false\n+    \"debug\": false,\n+    \"live-restore\": true,\n+    \"no-new-privileges\": true,\n+    \"userland-proxy\": false\n }\n"
+        diff: "@@ -1,10 +1,21 @@\n {\n-    \"registry-mirrors\": [\"https://mirror.example.com\"],\n-    \"log-driver\": \"json-file\",\n-    \"log-opts\": { \"labels\": \"app\" },\n-    \"ip\": \"192.0.2.10\",\n+    \"registry-mirrors\": [\n+        \"https://mirror.example.com\"\n+    ],\n+    \"log-driver\": \"local\",\n+    \"log-opts\": {\n+        \"max-size\": \"10m\",\n+        \"max-file\": \"3\"\n+    },\n+    \"ip\": \"127.0.0.1\",\n     \"default-network-opts\": {\n-        \"bridge\": { \"com.docker.network.driver.mtu\": \"1450\" }\n+        \"bridge\": {\n+            \"com.docker.network.driver.mtu\": \"1450\",\n+            \"com.docker.network.bridge.host_binding_ipv4\": \"127.0.0.1\"\n+        }\n     },\n-    \"debug\": false\n+    \"debug\": false,\n+    \"live-restore\": true,\n+    \"no-new-privileges\": true,\n+    \"userland-proxy\": false\n }\n"
         reversibility: reversible
     reloads:
       - docker-restart
     notes:
-      - "Docker is already installed: only /etc/docker/daemon.json is managed"
+      - "log-driver changes from json-file to local for new containers: a log shipper that reads json-file gets nothing from them, and json-file's log-opts are dropped"
+      - "ip changes from 192.0.2.10 to 127.0.0.1: ports the default bridge publishes without an address are no longer reachable on 192.0.2.10"
       - "ports published without an address bind to 127.0.0.1 only, not to ::1: point a reverse proxy at 127.0.0.1:<port>, not localhost"

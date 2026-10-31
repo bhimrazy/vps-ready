@@ -9,8 +9,8 @@ use super::{
     Applicability, DOCKER_PACKAGE, Module, ModuleError, ModuleSteps, NoParams, PlanCx, refuse,
 };
 use crate::engine::Reload;
-use crate::facts::docker::{DAEMON_JSON, DOCKERD, parse_daemon_json};
-use crate::facts::{DaemonJson, Facts, Init, OsFamily};
+use crate::facts::docker::{DAEMON_JSON, parse_daemon_json};
+use crate::facts::{DaemonJson, DockerEngine, Facts, Init, OsFamily};
 use crate::resource::{AptSource, Directory, File, Package, Resource, Validate};
 use crate::resource::{apt_source, architecture};
 use crate::sys::{FileOwner, Sys, SysError};
@@ -28,6 +28,18 @@ const DOCKER_DIR: &str = "/etc/docker";
 
 const LOG_DRIVER: &str = "local";
 
+/// The first release with `dockerd --validate` and `default-network-opts`.
+const MIN_MAJOR: u32 = 23;
+
+/// Where apt reads its sources.
+const SOURCES: &str = "/etc/apt/sources.list.d";
+
+/// The source `apt_source` writes for Docker.
+const DOCKER_SOURCES: &str = "/etc/apt/sources.list.d/docker.sources";
+
+/// Docker's repository, as any apt source names it.
+const DOCKER_REPO: &str = "download.docker.com";
+
 /// The keys this module sets. Ports published without an address bind to
 /// 127.0.0.1, on the default bridge (`ip`) and on networks created from now
 /// on (`default-network-opts`), so they do not bypass the firewall (FW-002).
@@ -43,10 +55,7 @@ fn settings() -> Map<String, Value> {
             "bridge": { "com.docker.network.bridge.host_binding_ipv4": "127.0.0.1" }
         }
     });
-    match value {
-        Value::Object(map) => map,
-        _ => Map::new(),
-    }
+    value.as_object().cloned().unwrap_or_default()
 }
 
 /// `current` with [`settings`] merged in key by key: objects are merged,
@@ -72,8 +81,9 @@ fn merge(into: &mut Map<String, Value>, from: Map<String, Value>) {
     }
 }
 
-/// Installs Docker Engine from Docker's repository, unless Docker is
-/// already installed, and sets safe defaults in `daemon.json`. Debian
+/// Installs Docker Engine from Docker's repository, and keeps that
+/// repository for a `docker-ce` already installed; a Docker installed
+/// otherwise only gets `daemon.json`. Sets safe defaults there. Debian
 /// family with systemd only. It adds nobody to the docker group.
 #[derive(Debug, Clone, Copy)]
 pub struct DeployDocker;
@@ -92,7 +102,9 @@ impl Module for DeployDocker {
          5432:5432` puts a database on the internet. With 127.0.0.1 as the \
          default address, a reverse proxy on the host reaches the container and \
          nobody else does. Capped logs cannot fill the disk, and live-restore \
-         keeps containers running while Docker restarts."
+         keeps containers running while Docker restarts. no-new-privileges keeps \
+         processes in new containers from gaining privileges, so setuid programs \
+         such as su and sudo stop working inside them."
     }
 
     fn applicable(&self, facts: &Facts) -> Applicability {
@@ -114,28 +126,57 @@ impl Module for DeployDocker {
         let facts = cx.facts;
         let mut resources = Vec::new();
         let mut notes = Vec::new();
-        let installed = facts.docker_engine.as_ref().is_some_and(|e| e.installed());
-        if installed {
+        let engine = facts.docker_engine.as_ref();
+        let installed = engine.is_some_and(DockerEngine::installed);
+        let from_package = engine.is_some_and(DockerEngine::from_package);
+        if let Some(major) = engine.and_then(DockerEngine::major)
+            && major < MIN_MAJOR
+        {
+            return refuse(&format!(
+                "Docker {major} is installed, and deploy.docker needs Docker {MIN_MAJOR}.0 or \
+                 later (for `dockerd --validate` and `default-network-opts`); upgrade it first"
+            ));
+        }
+        if installed && !from_package {
             notes.push(
-                "Docker is already installed: only /etc/docker/daemon.json is managed".to_owned(),
+                "Docker is installed, but not from Docker's package: only \
+                 /etc/docker/daemon.json is managed"
+                    .to_owned(),
             );
         } else {
-            let Some(source) = docker_source(facts) else {
-                return refuse("Docker's repository has no packages for this release");
-            };
-            resources.extend(apt_source(&source, &architecture(sys)?));
+            // Planned for an installed docker-ce too, where they have no
+            // change, so that it keeps a repository to get updates from.
+            if !(from_package && configured_elsewhere(sys)?) {
+                let Some(source) = docker_source(facts) else {
+                    return refuse("Docker's repository has no packages for this release");
+                };
+                if from_package && !sys.fs.exists(Path::new(DOCKER_SOURCES)) {
+                    notes.push(
+                        "docker-ce is installed without Docker's repository, so it gets no \
+                         updates; this adds the repository"
+                            .to_owned(),
+                    );
+                }
+                resources.extend(apt_source(&source, &architecture(sys)?));
+            }
             resources.extend(PACKAGES.iter().map(|name| {
                 Resource::Package(Package {
                     name: (*name).to_owned(),
                 })
             }));
-            notes.push(
-                "Docker sets net.ipv4.ip_forward=1 and a FORWARD policy of drop; a host that \
-                 routes other traffic (a WireGuard peer, a subnet router) needs its own \
-                 forward rules"
-                    .to_owned(),
-            );
-            notes.push("rollback leaves Docker's packages installed".to_owned());
+            if !from_package {
+                notes.push(
+                    "Docker sets net.ipv4.ip_forward=1 and a FORWARD policy of drop; a host \
+                     that routes other traffic (a WireGuard peer, a subnet router) needs its \
+                     own forward rules"
+                        .to_owned(),
+                );
+                notes.push(
+                    "rollback leaves Docker's packages installed, and removes the repository \
+                     they update from"
+                        .to_owned(),
+                );
+            }
         }
 
         let (current, owner) = match sys.fs.read(Path::new(DAEMON_JSON)) {
@@ -162,6 +203,7 @@ impl Module for DeployDocker {
                 if want == have {
                     bytes.clone()
                 } else {
+                    notes.extend(changed_notes(&have));
                     render(want, indent(bytes))?
                 }
             }
@@ -225,18 +267,68 @@ fn docker_reason(facts: &Facts) -> Option<String> {
         );
     }
     if facts.docker && !engine.installed() {
-        return Some(format!(
-            "Docker is installed, but neither from Docker's package nor as {DOCKERD} (a \
-             snap?), so vps-ready leaves it alone"
-        ));
+        return Some(
+            "Docker is installed, but neither from Docker's package nor with a \
+             docker.service unit (a snap?), so vps-ready leaves it alone"
+                .to_owned(),
+        );
     }
-    if !engine.installed() && docker_source(facts).is_none() {
+    // Docker's own package keeps its repository too.
+    let needs_repo = !engine.installed() || engine.from_package();
+    if needs_repo && docker_source(facts).is_none() {
         return Some(format!(
             "Docker's repository has no packages for {}",
             facts.os.pretty_name
         ));
     }
     None
+}
+
+/// Whether an apt source other than [`DOCKER_SOURCES`] already names
+/// Docker's repository, e.g. `docker.list` from Docker's older install
+/// docs. A second one with another `Signed-By` makes `apt-get update` fail.
+fn configured_elsewhere(sys: Sys) -> Result<bool, ModuleError> {
+    let mut files = vec![Path::new("/etc/apt/sources.list").to_path_buf()];
+    match sys.fs.read_dir(Path::new(SOURCES)) {
+        Ok(paths) => files.extend(paths),
+        Err(SysError::NotFound(_)) => {}
+        Err(e) => return Err(e.into()),
+    }
+    for path in files
+        .iter()
+        .filter(|p| p.as_path() != Path::new(DOCKER_SOURCES))
+    {
+        match sys.fs.read(path) {
+            Ok(bytes) if String::from_utf8_lossy(&bytes).contains(DOCKER_REPO) => return Ok(true),
+            Ok(_) | Err(SysError::NotFound(_)) => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(false)
+}
+
+/// What changing a value of the existing `daemon.json` means, beyond the
+/// diff.
+fn changed_notes(have: &Map<String, Value>) -> Vec<String> {
+    let mut notes = Vec::new();
+    if let Some(driver) = have.get("log-driver").and_then(Value::as_str)
+        && driver != LOG_DRIVER
+    {
+        notes.push(format!(
+            "log-driver changes from {driver} to {LOG_DRIVER} for new containers: a log \
+             shipper that reads {driver} gets nothing from them, and {driver}'s log-opts \
+             are dropped"
+        ));
+    }
+    if let Some(ip) = have.get("ip").and_then(Value::as_str)
+        && ip != "127.0.0.1"
+    {
+        notes.push(format!(
+            "ip changes from {ip} to 127.0.0.1: ports the default bridge publishes without \
+             an address are no longer reachable on {ip}"
+        ));
+    }
+    notes
 }
 
 fn docker_source(facts: &Facts) -> Option<AptSource> {
@@ -253,8 +345,18 @@ fn restart_notes(facts: &Facts, installed: bool) -> Vec<String> {
     if !installed {
         return notes;
     }
-    let daemon = facts.docker_engine.as_ref().and_then(|e| e.daemon.as_ref());
-    let Some(daemon) = daemon else {
+    let engine = facts.docker_engine.as_ref();
+    if engine
+        .and_then(|e| e.service)
+        .is_some_and(|s| s.loaded && !s.active)
+    {
+        notes.push(
+            "docker.service is not running; Docker reads the new daemon.json when it starts"
+                .to_owned(),
+        );
+        return notes;
+    }
+    let Some(daemon) = engine.and_then(|e| e.daemon.as_ref()) else {
         notes.push(
             "the Docker daemon did not answer, so its running containers are unknown; with \
              live-restore off, restarting Docker stops them"

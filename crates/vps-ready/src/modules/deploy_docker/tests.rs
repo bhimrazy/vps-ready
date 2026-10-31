@@ -8,11 +8,14 @@ use std::sync::Mutex;
 use super::*;
 use crate::engine::{self, ApplyOutcome, Deadman, Engine, Plan, Selected, StateDir, Target};
 use crate::facts::fixtures::host;
-use crate::facts::{DockerDaemon, DockerEngine};
+use crate::facts::{DockerDaemon, DockerEngine, DockerService};
 use crate::sys::fake::FakeFs;
 use crate::sys::{Cmd, FileKind, Fs, Output, Runner};
 
 const STATE: &str = "/var/lib/vps-ready";
+const VERSION: &str = "5:29.0.1-1~debian.13~trixie";
+const PORTS_NOTE: &str = "ports published without an address bind to 127.0.0.1 only, not to \
+                          ::1: point a reverse proxy at 127.0.0.1:<port>, not localhost";
 
 /// Packages that dpkg reports installed once `apt-get install` ran, and
 /// every command run.
@@ -23,6 +26,16 @@ struct Apt {
 }
 
 impl Apt {
+    /// With Docker's packages installed.
+    fn with_docker() -> Self {
+        let apt = Self::default();
+        apt.installed
+            .lock()
+            .unwrap()
+            .extend(PACKAGES.iter().map(|p| (*p).to_owned()));
+        apt
+    }
+
     /// Every command run, as a shell line.
     fn lines(&self) -> Vec<String> {
         self.calls
@@ -77,6 +90,20 @@ fn fs() -> FakeFs {
         .with_dir("/etc/apt/sources.list.d", root_dir())
 }
 
+/// [`fs`] with Docker's repository as this module writes it.
+fn docker_fs() -> FakeFs {
+    let fs = fs();
+    let source = AptSource::docker("debian", "trixie").unwrap();
+    for resource in apt_source(&source, "arm64") {
+        match resource {
+            Resource::Directory(d) => fs.create_dir_all(&d.path, 0o755).unwrap(),
+            Resource::File(f) => fs.write_atomic(&f.path, &f.content, f.owner).unwrap(),
+            other => panic!("{other:?}"),
+        }
+    }
+    fs
+}
+
 /// The captured Debian 13 host, without Docker.
 fn facts() -> Facts {
     host("debian-13", &[])
@@ -86,15 +113,32 @@ fn engine_mut(facts: &mut Facts) -> &mut DockerEngine {
     facts.docker_engine.as_mut().unwrap()
 }
 
-/// [`facts`] with Docker Engine installed from Docker's package and its
-/// daemon answering with `daemon`.
+const RUNNING: DockerService = DockerService {
+    loaded: true,
+    active: true,
+};
+
+/// [`facts`] with Docker Engine installed from Docker's package, running,
+/// and its daemon answering with `daemon`.
 fn with_docker(daemon: Option<DockerDaemon>) -> Facts {
     let mut facts = facts();
     facts.docker = true;
     let engine = engine_mut(&mut facts);
     engine.packages = vec![DOCKER_PACKAGE.to_owned()];
-    engine.dockerd = true;
+    engine.docker_ce_version = Some(VERSION.to_owned());
+    engine.service = Some(RUNNING);
     engine.daemon = daemon;
+    facts
+}
+
+/// [`facts`] with a Docker that is not Docker's package, e.g. installed
+/// from the static release with its own unit.
+fn with_other_docker() -> Facts {
+    let mut facts = facts();
+    facts.docker = true;
+    let engine = engine_mut(&mut facts);
+    engine.service = Some(RUNNING);
+    engine.daemon = Some(daemon(true, &[], &[]));
     facts
 }
 
@@ -108,17 +152,19 @@ fn daemon(live_restore: bool, running: &[&str], networks: &[&str]) -> DockerDaem
     }
 }
 
+fn try_steps(facts: &Facts, fs: &FakeFs, runner: &Apt) -> Result<ModuleSteps, ModuleError> {
+    DeployDocker.plan(
+        &PlanCx {
+            facts,
+            params: &toml::Table::new(),
+            planned: &[],
+        },
+        Sys { fs, runner },
+    )
+}
+
 fn steps(facts: &Facts, fs: &FakeFs, runner: &Apt) -> ModuleSteps {
-    DeployDocker
-        .plan(
-            &PlanCx {
-                facts,
-                params: &toml::Table::new(),
-                planned: &[],
-            },
-            Sys { fs, runner },
-        )
-        .unwrap()
+    try_steps(facts, fs, runner).unwrap()
 }
 
 fn plan<'a>(fs: &FakeFs, runner: &Apt, facts: &'a Facts) -> Plan<'a> {
@@ -127,6 +173,10 @@ fn plan<'a>(fs: &FakeFs, runner: &Apt, facts: &'a Facts) -> Plan<'a> {
 
 fn change_ids(plan: &Plan) -> Vec<String> {
     plan.steps().map(|s| s.change.id.clone()).collect()
+}
+
+fn ids(steps: &ModuleSteps) -> Vec<String> {
+    steps.resources.iter().map(Resource::id).collect()
 }
 
 fn reason(facts: &Facts) -> String {
@@ -235,9 +285,15 @@ fn not_applicable_in_a_swarm_on_a_snap_or_an_unknown_release() {
         "this node is part of a Docker swarm, and live-restore does not work in swarm mode"
     );
 
+    // A `docker` CLI or socket without docker-ce or a docker.service unit,
+    // even with a bare /usr/bin/dockerd.
     let mut facts = facts();
     facts.docker = true;
-    assert!(reason(&facts).starts_with("Docker is installed, but neither from Docker's package"));
+    assert_eq!(
+        reason(&facts),
+        "Docker is installed, but neither from Docker's package nor with a docker.service \
+         unit (a snap?), so vps-ready leaves it alone"
+    );
 
     let mut facts = self::facts();
     facts.os.codename = None;
@@ -245,8 +301,12 @@ fn not_applicable_in_a_swarm_on_a_snap_or_an_unknown_release() {
         reason(&facts),
         "Docker's repository has no packages for Debian GNU/Linux 13 (trixie)"
     );
-    // Docker already installed needs no repository.
+    // docker-ce keeps its repository, which needs the release.
     let mut facts = with_docker(None);
+    facts.os.codename = None;
+    assert!(reason(&facts).starts_with("Docker's repository has no packages"));
+    // Another Docker needs no repository.
+    let mut facts = with_other_docker();
     facts.os.codename = None;
     assert_eq!(DeployDocker.applicable(&facts), Applicability::Applicable);
 }
@@ -258,9 +318,8 @@ fn a_fresh_host_gets_docker_from_its_repository() {
     let (fs, runner) = (fs(), Apt::default());
     let facts = facts();
     let steps = steps(&facts, &fs, &runner);
-    let ids: Vec<String> = steps.resources.iter().map(Resource::id).collect();
     assert_eq!(
-        ids,
+        ids(&steps),
         [
             "directory:/etc/apt/keyrings",
             "file:/etc/apt/keyrings/docker.asc",
@@ -301,9 +360,9 @@ fn a_fresh_host_gets_docker_from_its_repository() {
             "Docker sets net.ipv4.ip_forward=1 and a FORWARD policy of drop; a host that \
              routes other traffic (a WireGuard peer, a subnet router) needs its own forward \
              rules",
-            "rollback leaves Docker's packages installed",
-            "ports published without an address bind to 127.0.0.1 only, not to ::1: point a \
-             reverse proxy at 127.0.0.1:<port>, not localhost",
+            "rollback leaves Docker's packages installed, and removes the repository they \
+             update from",
+            PORTS_NOTE,
         ]
     );
 }
@@ -356,28 +415,105 @@ fn applies_then_plans_nothing_and_rolls_back() {
     assert!(install < validate, "{lines:?}");
 }
 
-/// With Docker installed, only `daemon.json`: a new one.
+/// docker-ce installed from its repository: the source and the packages
+/// are planned and have no change, so only `daemon.json` is written.
 #[test]
-fn docker_installed_without_daemon_json() {
-    let (fs, runner) = (fs(), Apt::default());
+fn docker_ce_installed_without_daemon_json() {
+    let (fs, runner) = (docker_fs(), Apt::with_docker());
     let facts = with_docker(Some(daemon(true, &[], &[])));
+    let steps = steps(&facts, &fs, &runner);
+    assert_eq!(steps.resources.len(), 10, "{:?}", ids(&steps));
+    assert!(steps.resources.contains(&Resource::Package(Package {
+        name: DOCKER_PACKAGE.to_owned()
+    })));
+    assert_eq!(steps.notes, [PORTS_NOTE]);
     let first = plan(&fs, &runner, &facts);
     assert_eq!(
         change_ids(&first),
         ["directory:/etc/docker", "file:/etc/docker/daemon.json"]
     );
-    assert_eq!(
-        first.modules[0].notes,
-        [
-            "Docker is already installed: only /etc/docker/daemon.json is managed",
-            "ports published without an address bind to 127.0.0.1 only, not to ::1: point a \
-             reverse proxy at 127.0.0.1:<port>, not localhost",
-        ]
-    );
     let before = etc(&fs);
     apply_and_roll_back(&fs, &runner, &facts, &first);
     assert_eq!(etc(&fs), before);
     assert!(!runner.lines().iter().any(|l| l.starts_with("apt-get")));
+}
+
+/// docker-ce whose repository is gone, e.g. after a rollback of an
+/// earlier apply, gets it back so that it keeps getting updates.
+#[test]
+fn docker_ce_without_its_repository_gets_it_back() {
+    let (fs, runner) = (fs(), Apt::with_docker());
+    let facts = with_docker(Some(daemon(true, &[], &[])));
+    let first = plan(&fs, &runner, &facts);
+    assert_eq!(
+        change_ids(&first),
+        [
+            "directory:/etc/apt/keyrings",
+            "file:/etc/apt/keyrings/docker.asc",
+            "file:/etc/apt/sources.list.d/docker.sources",
+            "directory:/etc/docker",
+            "file:/etc/docker/daemon.json",
+        ]
+    );
+    assert_eq!(
+        first.modules[0].notes[0],
+        "docker-ce is installed without Docker's repository, so it gets no updates; this \
+         adds the repository"
+    );
+}
+
+/// A repository set up another way, such as `docker.list` from Docker's
+/// older install docs, is not added a second time.
+#[test]
+fn docker_ce_with_its_repository_in_another_file() {
+    let fs = fs().with_file(
+        "/etc/apt/sources.list.d/docker.list",
+        "deb [arch=arm64 signed-by=/etc/apt/keyrings/docker.gpg] \
+         https://download.docker.com/linux/debian trixie stable\n",
+    );
+    let runner = Apt::with_docker();
+    let facts = with_docker(Some(daemon(true, &[], &[])));
+    let steps = steps(&facts, &fs, &runner);
+    assert_eq!(
+        ids(&steps)[..2],
+        ["package:docker-ce", "package:docker-ce-cli"]
+    );
+    assert_eq!(steps.notes, [PORTS_NOTE]);
+}
+
+#[test]
+fn docker_before_23_is_refused() {
+    let (fs, runner) = (docker_fs(), Apt::with_docker());
+    let mut facts = with_docker(None);
+    engine_mut(&mut facts).docker_ce_version = Some("5:20.10.24~3-0~debian-bullseye".into());
+    match try_steps(&facts, &fs, &runner) {
+        Err(ModuleError::Refused(reason)) => assert_eq!(
+            reason,
+            "Docker 20 is installed, and deploy.docker needs Docker 23.0 or later (for \
+             `dockerd --validate` and `default-network-opts`); upgrade it first"
+        ),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// A Docker not from Docker's package only gets `daemon.json`.
+#[test]
+fn another_docker_gets_only_daemon_json() {
+    let (fs, runner) = (fs(), Apt::default());
+    let facts = with_other_docker();
+    let steps = steps(&facts, &fs, &runner);
+    assert_eq!(
+        ids(&steps),
+        ["directory:/etc/docker", "file:/etc/docker/daemon.json"]
+    );
+    assert_eq!(
+        steps.notes,
+        [
+            "Docker is installed, but not from Docker's package: only \
+             /etc/docker/daemon.json is managed",
+            PORTS_NOTE,
+        ]
+    );
 }
 
 /// Keys it sets are added or changed, every other key and the file's mode
@@ -388,21 +524,31 @@ fn merges_into_an_existing_daemon_json() {
     "registry-mirrors": ["https://mirror.example.com"],
     "log-driver": "json-file",
     "log-opts": { "labels": "app" },
-    "ip": "0.0.0.0",
+    "ip": "192.0.2.10",
     "default-network-opts": {
         "bridge": { "com.docker.network.driver.mtu": "1450" }
     },
     "debug": false
 }
 "#;
-    let fs = fs().with_dir("/etc/docker", root_dir());
+    let fs = docker_fs().with_dir("/etc/docker", root_dir());
     fs.write_atomic(Path::new(DAEMON_JSON), EXISTING.as_bytes(), root(0o600))
         .unwrap();
-    let runner = Apt::default();
+    let runner = Apt::with_docker();
     let facts = with_docker(Some(daemon(true, &[], &[])));
     let first = plan(&fs, &runner, &facts);
     assert_eq!(change_ids(&first), ["file:/etc/docker/daemon.json"]);
     insta::assert_yaml_snapshot!(first);
+    assert_eq!(
+        first.modules[0].notes[..2],
+        [
+            "log-driver changes from json-file to local for new containers: a log shipper \
+             that reads json-file gets nothing from them, and json-file's log-opts are \
+             dropped",
+            "ip changes from 192.0.2.10 to 127.0.0.1: ports the default bridge publishes \
+             without an address are no longer reachable on 192.0.2.10",
+        ]
+    );
 
     let state = StateDir::create(&fs, STATE, 0).unwrap();
     let engine = Engine::lock(
@@ -431,17 +577,18 @@ fn a_file_with_every_key_is_left_alone() {
 "log-opts": {"max-file": "3", "max-size": "10m", "compress": "false"},
 "no-new-privileges": true, "userland-proxy": false,
 "default-network-opts": {"bridge": {"com.docker.network.bridge.host_binding_ipv4": "127.0.0.1"}}}"#;
-    let fs = fs()
+    let fs = docker_fs()
         .with_dir("/etc/docker", root_dir())
         .with_file(DAEMON_JSON, DONE);
-    let runner = Apt::default();
+    let runner = Apt::with_docker();
     let facts = with_docker(Some(daemon(false, &["web"], &["app_default"])));
     let next = plan(&fs, &runner, &facts);
     assert!(change_ids(&next).is_empty(), "{:?}", change_ids(&next));
     // Nothing restarts, so nothing to warn about.
-    assert_eq!(
-        next.modules[0].notes,
-        ["Docker is already installed: only /etc/docker/daemon.json is managed"]
+    assert!(
+        next.modules[0].notes.is_empty(),
+        "{:?}",
+        next.modules[0].notes
     );
 }
 
@@ -449,34 +596,41 @@ fn a_file_with_every_key_is_left_alone() {
 /// existing networks keep their binding.
 #[test]
 fn notes_what_the_restart_does_to_running_containers_and_networks() {
-    let (fs, runner) = (fs(), Apt::default());
-    let notes = |daemon| {
-        let facts = with_docker(daemon);
-        steps(&facts, &fs, &runner).notes[2..].to_vec()
-    };
+    let (fs, runner) = (docker_fs(), Apt::with_docker());
+    let notes = |facts: Facts| steps(&facts, &fs, &runner).notes[1..].to_vec();
+    let docker = |daemon| notes(with_docker(daemon));
     assert_eq!(
-        notes(Some(daemon(false, &["web", "db"], &[]))),
+        docker(Some(daemon(false, &["web", "db"], &[]))),
         [
             "live-restore is off, so restarting Docker stops these running containers, and \
              only those with a restart policy start again: web, db; a rollback restarts \
              Docker, and them, again"
         ]
     );
-    assert!(notes(Some(daemon(true, &["web", "db"], &[]))).is_empty());
-    assert!(notes(Some(daemon(false, &[], &[]))).is_empty());
+    assert!(docker(Some(daemon(true, &["web", "db"], &[]))).is_empty());
+    assert!(docker(Some(daemon(false, &[], &[]))).is_empty());
     assert_eq!(
-        notes(Some(daemon(true, &[], &["app_default", "proxy"]))),
+        docker(Some(daemon(true, &[], &["app_default", "proxy"]))),
         [
             "these existing networks keep publishing ports on all addresses until they are \
              recreated (`docker compose down`, then `up`): app_default, proxy"
         ]
     );
     assert_eq!(
-        notes(None),
+        docker(None),
         [
             "the Docker daemon did not answer, so its running containers are unknown; with \
              live-restore off, restarting Docker stops them"
         ]
+    );
+    let mut stopped = with_docker(None);
+    engine_mut(&mut stopped).service = Some(DockerService {
+        loaded: true,
+        active: false,
+    });
+    assert_eq!(
+        notes(stopped),
+        ["docker.service is not running; Docker reads the new daemon.json when it starts"]
     );
 }
 

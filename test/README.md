@@ -46,9 +46,10 @@ forced to it, and two `rollback --last` runs restore the first and then remove
 the account.
 `test/container-docker.sh <distro> [binary]` installs Docker with
 `deploy.docker` from Docker's repository: the next plan is empty, live-restore
-is on, `docker run -p 8080:80` publishes on 127.0.0.1 only, and `rollback
---last` removes the source, the key and `daemon.json`, keeps the packages and
-restarts Docker with its defaults. It needs network access.
+is on, `docker run -p 8080:80` answers on 127.0.0.1 and not on the container's
+own address, and `rollback --last` removes the source, the key and
+`daemon.json`, keeps the packages and restarts Docker with its defaults. It
+needs network access.
 `test/container-proxy.sh <distro> [binary]` installs Caddy with
 `deploy.proxy` from Caddy's repository for one site, `app.localhost`, which
 Caddy serves from its own CA: the next plan is empty, the package kept our
