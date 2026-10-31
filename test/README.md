@@ -61,17 +61,20 @@ the applying session, an older session and a `ControlMaster` connection, and
 accepted from a new login. Those sessions are real `ssh` logins from inside
 the VM to its own sshd, since the connection that drives the VM may not be
 one (Lima's shell uses vsock). That module exists only in a
-binary built with `--features vps-ready/testing`. Last, `ssh.server`: the
+binary built with `--features vps-ready/testing`. Then `ssh.server`: the
 `minimal` profile confirmed by the admin it creates, then an unconfirmed apply
 that refuses new root logins during the window (also through `ssh.socket`) and
-reverts at its deadline after an edit. It needs `/dev/kvm`, `qemu-system-x86_64`,
-`qemu-img`, `cloud-localds` (cloud-image-utils), `ssh` and `jq`. The `vm`
-workflow pins the images and runs it on four distros.
+reverts at its deadline after an edit. Last, the wizard: `test/vm-wizard.exp`
+answers `sudo vps-ready` with its defaults over a real login, as the cycle's
+user and as root, and a new login as the admin confirms. It needs `/dev/kvm`,
+`qemu-system-x86_64`, `qemu-img`, `cloud-localds` (cloud-image-utils), `ssh` and
+`jq`; it installs `expect` in the VM. The `vm` workflow pins the images and
+runs it on four distros.
 
 Without KVM, for example on a Mac, pass `-` as the image and point
 `VM_SSH_CONFIG` at an ssh config whose `Host vm` reaches a user with
 passwordless sudo, such as a Lima VM's. The cycle changes that VM's kernel
-settings and apt configuration, so use a throwaway one.
+settings and apt configuration and installs `expect`, so use a throwaway one.
 
 ```sh
 limactl create --name=vpsr-dev --cpus=1 --memory=1 --disk=10 --mount-none template:ubuntu-24.04
