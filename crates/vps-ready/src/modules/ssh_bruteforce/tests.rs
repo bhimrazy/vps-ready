@@ -65,8 +65,14 @@ impl Runner for Debian {
             },
             "apt-get" => {
                 if cmd.args.iter().any(|a| a == "install") {
-                    state.installed.insert(last.to_owned());
-                    if last == "fail2ban" {
+                    // The names follow the last option.
+                    let options = cmd
+                        .args
+                        .iter()
+                        .rposition(|a| a.starts_with("Dpkg::Options"));
+                    let names = &cmd.args[options.map_or(cmd.args.len(), |i| i + 1)..];
+                    state.installed.extend(names.iter().cloned());
+                    if names.iter().any(|n| n == "fail2ban") {
                         std::fs::create_dir_all(self.root.join("etc/fail2ban/jail.d")).unwrap();
                         state.enabled = true;
                     }
@@ -269,7 +275,7 @@ fn takes_no_params() {
 fn restarts_fail2ban_after_its_changes() {
     let steps = steps(&facts(), &toml::Table::new()).unwrap();
     assert_eq!(steps.reloads, [Reload::Fail2banRestart]);
-    let Some(Resource::File(file)) = steps.resources.get(3) else {
+    let Some(Resource::File(file)) = steps.resources.get(1) else {
         panic!("the drop-in follows the packages");
     };
     // `fail2ban-client -t` checks the whole configuration, not one file.
@@ -318,7 +324,7 @@ fn apply_is_idempotent_and_rolls_back() {
         let first = plan(&module, &fs, &debian, &facts);
         let mut want: Vec<String> = Vec::new();
         if !start.installed.contains("fail2ban") {
-            want.extend(PACKAGES.map(|p| format!("package:{p}")));
+            want.push(format!("package:{}", PACKAGES.join(",")));
         }
         want.push(format!("file:{DROP_IN}"));
         if !start.active {

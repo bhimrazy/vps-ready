@@ -163,6 +163,7 @@ impl Module for SshServer {
                     gid: 0,
                 },
                 validate: Some(Validate::new("sshd", ["-t", "-f", Validate::PATH])),
+                describe: None,
             })],
             reloads: vec![Reload::SshdReload],
             notes: Vec::new(),

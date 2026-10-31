@@ -427,6 +427,7 @@ fn refuses_to_lock_out_without_a_keyed_sudo_user() {
             gid: 0,
         },
         validate: None,
+        describe: None,
     });
     assert_eq!(refused(&facts, &[keys.clone(), sudoers], &fs, vec![]), None);
     assert_eq!(
@@ -457,6 +458,7 @@ fn refuses_to_lock_out_without_a_keyed_sudo_user() {
             gid: 0,
         },
         validate: None,
+        describe: None,
     });
     facts.session = Some(session("root", 0));
     assert!(
@@ -479,6 +481,7 @@ fn refuses_to_lock_out_without_a_keyed_sudo_user() {
             gid: 0,
         },
         validate: None,
+        describe: None,
     });
     assert_eq!(refused(&facts, &[from, admin_sudo], &fs, vec![]), None);
     facts.session = None;

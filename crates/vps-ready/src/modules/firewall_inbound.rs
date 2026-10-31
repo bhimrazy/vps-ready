@@ -134,7 +134,7 @@ impl Ruleset {
 fn docker_planned(cx: &PlanCx) -> bool {
     cx.planned
         .iter()
-        .any(|r| matches!(r, Resource::Package(p) if p.name == DOCKER_PACKAGE))
+        .any(|r| matches!(r, Resource::Package(p) if p.names.iter().any(|n| n == DOCKER_PACKAGE)))
 }
 
 /// The interfaces named `br-*` that Docker did not name. The ruleset keeps
@@ -300,7 +300,7 @@ impl Module for FirewallInbound {
         let mut resources = Vec::new();
         if !cx.facts.firewall_tools.nft {
             resources.push(Resource::Package(Package {
-                name: "nftables".to_owned(),
+                names: vec!["nftables".to_owned()],
             }));
         }
         resources.extend([
@@ -313,12 +313,14 @@ impl Module for FirewallInbound {
                 content: format!("{ruleset}\n").into_bytes(),
                 owner: root(0o644),
                 validate: Some(Validate::new("nft", ["-c", "-f", Validate::PATH])),
+                describe: None,
             }),
             Resource::File(File {
                 path: UNIT_FILE.into(),
                 content: UNIT_TEXT.as_bytes().to_vec(),
                 owner: root(0o644),
                 validate: None,
+                describe: None,
             }),
             Resource::Service(Service {
                 unit: UNIT.to_owned(),

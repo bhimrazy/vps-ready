@@ -39,6 +39,8 @@ pub struct AptSource {
     pub name: &'static str,
     /// Armored public key that signs the repository.
     pub key: &'static str,
+    /// Fingerprint of `key`'s primary key, which the plan shows.
+    pub fingerprint: &'static str,
     /// Repository URI.
     pub uri: &'static str,
     /// Suite, e.g. the host's codename.
@@ -61,6 +63,7 @@ impl AptSource {
         plain_word(codename).then(|| Self {
             name: "docker",
             key: DOCKER_KEY,
+            fingerprint: DOCKER_FINGERPRINT,
             uri,
             suite: codename.to_owned(),
             component: "stable",
@@ -73,6 +76,7 @@ impl AptSource {
         Self {
             name: "caddy",
             key: CADDY_KEY,
+            fingerprint: CADDY_FINGERPRINT,
             uri: "https://dl.cloudsmith.io/public/caddy/stable/deb/debian",
             suite: "any-version".to_owned(),
             component: "main",
@@ -134,7 +138,7 @@ pub fn configured_elsewhere(sys: Sys, name: &str, repo: &str) -> Result<bool, Re
 /// `amd64` (see [`architecture`]): the keyrings directory, the key at
 /// `/etc/apt/keyrings/<name>.asc` and the deb822 source at
 /// `/etc/apt/sources.list.d/<name>.sources`. Rollback removes all three, the
-/// directory only if it is empty.
+/// directory only if it is empty. The plan shows the key as its fingerprint.
 #[must_use]
 pub fn apt_source(source: &AptSource, arch: &str) -> Vec<Resource> {
     let key = Path::new(KEYRINGS).join(format!("{}.asc", source.name));
@@ -161,12 +165,18 @@ pub fn apt_source(source: &AptSource, arch: &str) -> Vec<Resource> {
             content: source.key.as_bytes().to_vec(),
             owner: root(0o644),
             validate: None,
+            describe: Some(format!(
+                "PGP public key, fingerprint {} ({} lines)",
+                spaced(source.fingerprint),
+                source.key.lines().count()
+            )),
         }),
         Resource::File(File {
             path: source.path(),
             content: list.into_bytes(),
             owner: root(0o644),
             validate: None,
+            describe: None,
         }),
     ]
 }
@@ -196,6 +206,17 @@ fn plain_word(s: &str) -> bool {
     !s.is_empty()
         && s.chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '.')
+}
+
+/// `fingerprint` in groups of four, as `gpg` prints it but with single
+/// spaces.
+fn spaced(fingerprint: &str) -> String {
+    let chars: Vec<char> = fingerprint.chars().collect();
+    chars
+        .chunks(4)
+        .map(|c| c.iter().collect::<String>())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn root(mode: u32) -> FileOwner {
@@ -304,6 +325,39 @@ mod tests {
             assert_eq!((owner.uid, owner.gid), (0, 0));
             assert!(matches!(owner.mode, 0o644 | 0o755), "{:o}", owner.mode);
         }
+    }
+
+    #[test]
+    fn plan_shows_the_key_as_one_line() {
+        let fs = FakeFs::new()
+            .with_dir("/etc/apt", root(0o755))
+            .with_dir(KEYRINGS, root(0o755));
+        let sys = super::super::test_sys(&fs);
+        let source = AptSource::docker("debian", "trixie").unwrap();
+        let change = apt_source(&source, "amd64")[1].diff(sys).unwrap().unwrap();
+        assert_eq!(
+            change.summary,
+            "create /etc/apt/keyrings/docker.asc (0644 0:0): PGP public key, fingerprint \
+             9DC8 5822 9FC7 DD38 854A E2D8 8D81 803C 0EBF CD88 (62 lines)"
+        );
+        assert_eq!(change.diff, None);
+
+        // A changed key is shown the same way, never as a diff.
+        let fs = fs.with_file("/etc/apt/keyrings/caddy.asc", "old\n");
+        let sys = super::super::test_sys(&fs);
+        let change = apt_source(&AptSource::caddy(), "amd64")[1]
+            .diff(sys)
+            .unwrap()
+            .unwrap();
+        assert!(
+            change.summary.starts_with(
+                "update /etc/apt/keyrings/caddy.asc (0644 0:0): PGP public key, fingerprint \
+                 6576 0C51 EDEA 2017 CEA2 CA15 155B 6D79 CA56 EA34 ("
+            ),
+            "{}",
+            change.summary
+        );
+        assert_eq!(change.diff, None);
     }
 
     #[test]
