@@ -43,7 +43,8 @@ Run these on the server, as root or with `sudo`. The first two steps change noth
    `apply` prints the plan again and asks before it changes anything (`Apply 16 changes? [y/N]`). With `minimal` or `web` it arms the safety timer before the first change, makes the changes, and then ends like this, with your own admin user, address and port:
 
    ```text
-   Changes are live. Open a NEW terminal and run:
+   Changes are live. To keep them, open a NEW terminal on your computer and run
+   this to show you can still log in:
 
        ssh -t -o ControlPath=none -p 22 admin@203.0.113.10 sudo vps-ready confirm
 

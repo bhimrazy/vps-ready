@@ -11,6 +11,7 @@
 //! # Crate layout
 //!
 //! - [`cli`]: argument parsing and command dispatch.
+//! - [`tui`]: the questions of the wizard.
 //! - [`sys`]: the only place that touches the host (processes and files),
 //!   behind the [`sys::Runner`] and [`sys::Fs`] traits so everything else is
 //!   testable with fakes.
@@ -40,6 +41,7 @@ pub mod facts;
 pub mod modules;
 pub mod resource;
 pub mod sys;
+pub mod tui;
 
 /// Build metadata reported by `vps-ready version`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

@@ -1,8 +1,9 @@
 //! Command-line interface: argument definitions and command dispatch.
 //!
-//! Today: `version`, `detect`, `audit`, `plan`, `apply`, `rollback`,
-//! `confirm`, `history` and `modules`. Further commands are added as their milestones
-//! land; see the GitHub milestones.
+//! Today: the wizard (no command, on a terminal), `version`, `detect`,
+//! `audit`, `plan`, `apply`, `rollback`, `confirm`, `history` and
+//! `modules`. Further commands are added as their milestones land; see the
+//! GitHub milestones.
 
 use std::cmp::Reverse;
 use std::io::{self, BufRead, IsTerminal, Write};
@@ -13,7 +14,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use clap::builder::PossibleValuesParser;
-use clap::{ArgAction, ArgGroup, Parser, Subcommand};
+use clap::{ArgAction, ArgGroup, CommandFactory, Parser, Subcommand};
 use owo_colors::OwoColorize;
 use tracing_subscriber::EnvFilter;
 
@@ -26,6 +27,7 @@ use crate::sys::{RealFs, RealRunner, Sys};
 
 mod change;
 mod module_docs;
+mod wizard;
 
 /// Exit code of `audit` when a control failed or could not be checked.
 pub const EXIT_AUDIT_FAILED: u8 = 1;
@@ -42,7 +44,12 @@ pub const EXIT_INCOMPLETE: u8 = 3;
 /// Exit code of `apply` when its changes are live and wait for a confirm.
 pub const EXIT_PENDING: u8 = 4;
 
-/// Shown at the end of the help, which a bare `vps-ready` prints.
+/// Exit code of the wizard after Ctrl-C at a question, as a shell reports
+/// a process ended by SIGINT.
+pub const EXIT_INTERRUPTED: u8 = 130;
+
+/// Shown at the end of the help, which a bare `vps-ready` prints when it
+/// is not on a terminal.
 const FIRST_RUN: &str = "\
 Typical first run, as root:
   vps-ready detect          what this server is
@@ -57,7 +64,6 @@ Typical first run, as root:
     version,
     about,
     long_about = None,
-    arg_required_else_help = true,
     after_help = FIRST_RUN,
 )]
 pub struct Cli {
@@ -73,9 +79,10 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub no_color: bool,
 
-    /// Command to run.
+    /// Command to run. Without one, the wizard on a terminal, else the
+    /// help.
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 /// Top-level commands.
@@ -313,7 +320,31 @@ fn is_broken_pipe(err: &anyhow::Error) -> bool {
 pub fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
     let mut out = io::stdout().lock();
     let mut code = ExitCode::SUCCESS;
-    match &cli.command {
+    let Some(command) = &cli.command else {
+        if !(io::stdin().is_terminal() && io::stdout().is_terminal()) {
+            // As clap does for a missing command, so pipes see no wizard.
+            eprint!("{}", Cli::command().render_help());
+            return Ok(ExitCode::from(EXIT_ERROR));
+        }
+        no_json(cli, "the wizard")?;
+        let mut term = crate::tui::Terminal::new(cli.color_enabled())?;
+        let host = change::Host {
+            sigint_ends: Some(term.sigint_ends()),
+            ..real_host(cli)
+        };
+        let cwd = std::env::current_dir()?;
+        let n = wizard::run(
+            &host,
+            &mut term,
+            &cwd,
+            || io::stdin().lock(),
+            &mut out,
+            &mut io::stderr(),
+        )?;
+        out.flush()?;
+        return Ok(ExitCode::from(n));
+    };
+    match command {
         Command::Version => {
             if cli.json {
                 serde_json::to_writer_pretty(&mut out, &VERSION_INFO)?;
@@ -501,6 +532,7 @@ fn real_host(cli: &Cli) -> change::Host<'static> {
         sudo_user: std::env::var("SUDO_USER").ok().filter(|u| !u.is_empty()),
         stop: std::sync::Arc::new(AtomicBool::new(false)),
         catch_sigint: true,
+        sigint_ends: None,
         tty: io::stderr().is_terminal(),
         poll: Duration::from_secs(1),
     }

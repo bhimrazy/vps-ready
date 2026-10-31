@@ -47,6 +47,9 @@ pub(super) struct Host<'a> {
     /// Whether Ctrl-C sets `stop` while `apply` waits, instead of ending
     /// the process.
     pub catch_sigint: bool,
+    /// Set by the wizard, whose handler ends the process on Ctrl-C while
+    /// this is true; the wait for a confirm clears it.
+    pub sigint_ends: Option<Arc<AtomicBool>>,
     /// Whether stderr is a terminal, for a countdown on one line.
     pub tty: bool,
     /// How often the wait for a confirm reads the journal.
@@ -69,7 +72,7 @@ pub(super) struct Selection {
 
 impl Selection {
     /// The modules to run, with their params from `profile`.
-    fn select<'a>(
+    pub(super) fn select<'a>(
         &self,
         all: &[&'a dyn Module],
         profile: Option<&'a Profile>,
@@ -175,7 +178,10 @@ pub(super) fn plan_profile(
     }
     print_plan(out, &plan, &fixes(&plan, &facts)?, host.color)?;
     let n = plan.steps().count();
-    if n > 0 {
+    if n == 0 {
+        let whole = profile.is_some() && sel.modules.is_empty();
+        writeln!(out, "\n{}", nothing_to_do(whole))?;
+    } else {
         let args = sel.args();
         let them = if n == 1 { "it" } else { "them" };
         writeln!(out, "Run `sudo vps-ready apply{args}` to make {them}.")?;
@@ -198,7 +204,39 @@ pub(super) fn apply(
     // Before the load, so a run without root says so first.
     require_root(host, "apply")?;
     let profile = sel.load(host)?;
-    apply_profile(host, profile, sel, yes, window, input, out, err)
+    let whole = profile.is_some() && sel.modules.is_empty();
+    Ok(
+        match apply_profile(host, profile, sel, yes, window, input, out, err)? {
+            Applied::Nothing => {
+                writeln!(out, "\n{}", nothing_to_do(whole))?;
+                0
+            }
+            Applied::Declined => 0,
+            Applied::Ran(code) => code,
+        },
+    )
+}
+
+/// The end of an empty plan: a whole profile, not narrowed by `--module`,
+/// says the server matches it.
+fn nothing_to_do(whole: bool) -> &'static str {
+    if whole {
+        "Nothing to do: this server already matches."
+    } else {
+        "Nothing to do."
+    }
+}
+
+/// How [`apply_profile`] ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Applied {
+    /// The plan has no change. Not printed: the caller knows what was asked
+    /// for.
+    Nothing,
+    /// The answer was no.
+    Declined,
+    /// It ran and exits with this code.
+    Ran(u8),
 }
 
 /// [`apply`] with `profile` loaded; `sel` picks its modules. Checks root
@@ -213,7 +251,7 @@ pub(super) fn apply_profile(
     input: Option<&mut dyn BufRead>,
     out: &mut dyn Write,
     err: &mut dyn Write,
-) -> anyhow::Result<u8> {
+) -> anyhow::Result<Applied> {
     require_root(host, "apply")?;
     let modules = sel.select(host.modules, profile.as_ref())?;
     let state = StateDir::create(host.sys.fs, host.state_dir, host.state_uid)?;
@@ -232,7 +270,7 @@ pub(super) fn apply_profile(
     print_plan(out, &plan, &fixes(&plan, &facts)?, host.color)?;
     let n = plan.steps().count();
     if n == 0 {
-        return Ok(0);
+        return Ok(Applied::Nothing);
     }
     if !yes {
         let Some(input) = input else {
@@ -244,7 +282,7 @@ pub(super) fn apply_profile(
         input.read_line(&mut answer)?;
         if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
             writeln!(out, "Nothing was changed.")?;
-            return Ok(0);
+            return Ok(Applied::Declined);
         }
     }
     // An interrupted apply leaves its transaction unfinished; `rollback
@@ -274,7 +312,7 @@ pub(super) fn apply_profile(
             };
             confirm::print_pending(host, &facts, &plan.admins(), deadline, left, out)?;
             out.flush()?;
-            return confirm::wait(host, &state, &txn, deadline, &plan, out, err);
+            return confirm::wait(host, &state, &txn, deadline, &plan, out, err).map(Applied::Ran);
         }
         ApplyOutcome::Applied { txn } => {
             let journal = host.state_dir.join("txn").join(&txn);
@@ -296,10 +334,10 @@ pub(super) fn apply_profile(
                 "error: apply failed: {cause}. Every change was restored; \
                  transaction {txn} is {state}."
             )?;
-            return Ok(EXIT_ROLLED_BACK);
+            return Ok(Applied::Ran(EXIT_ROLLED_BACK));
         }
     }
-    Ok(0)
+    Ok(Applied::Ran(0))
 }
 
 /// `rollback`: undoes one transaction.
@@ -501,7 +539,8 @@ fn audit_fixed(host: &Host, plan: &Plan, out: &mut dyn Write) -> anyhow::Result<
 /// 2 changes in 1 module: 1 file, 1 kernel setting.
 /// ```
 ///
-/// A `partial` step adds a footnote line before the final one.
+/// A `partial` step adds a footnote line before the final one. An empty
+/// plan ends with its modules: the caller says why there is nothing to do.
 fn print_plan(
     out: &mut dyn Write,
     plan: &Plan,
@@ -583,7 +622,7 @@ fn print_plan(
     }
     let n = plan.steps().count();
     if n == 0 {
-        writeln!(out, "\nNothing to do.")
+        Ok(())
     } else {
         let modules = plan.changed_modules().len();
         writeln!(
@@ -797,7 +836,7 @@ fn short(secs: u64) -> String {
     }
 }
 
-fn plural(n: usize, word: &str) -> String {
+pub(super) fn plural(n: usize, word: &str) -> String {
     match (n, word) {
         (1, _) => word.to_owned(),
         (_, "directory") => "directories".to_owned(),
@@ -807,4 +846,4 @@ fn plural(n: usize, word: &str) -> String {
 
 mod confirm;
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;

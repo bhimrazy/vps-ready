@@ -1,0 +1,47 @@
+---
+source: crates/vps-ready/src/cli/wizard/tests.rs
+expression: text
+---
+vps-ready <version> on Debian GNU/Linux 13 (trixie) (docker container on vm-other)
+Audit: 5 passed, 5 failed (1 high, 3 medium, 1 low). vps-ready can fix all of them.
+
+? What will this server run?
+  > Something else: only SSH is open (recommended: no Docker or web server found)
+    Web apps or Docker: opens ports 80 and 443
+? Admin user for logging in: admin
+  new account: logs in with 1 key copied from /root/.ssh/authorized_keys; sudo
+  without a password.
+  Root and password logins will be turned off, so this key is how you log in.
+All other incoming ports are blocked.
+? More ports to open, e.g. 8080/tcp or 53/udp (Enter for none): 
+? Pick which modules to run yourself? (y/N) yes
+? Modules to run (Space toggles, Enter continues)
+  [ ] user.admin: Set up an admin account that logs in with an SSH key and uses sudo (can lock you out; undone unless you confirm)
+  [ ] ssh.server: Turn off root and password logins over SSH (can lock you out; undone unless you confirm)
+  [ ] firewall.inbound: Drop incoming traffic that no rule allows (can lock you out; undone unless you confirm)
+  [ ] ssh.bruteforce: Ban addresses that keep failing to log in over SSH
+  [x] kernel.sysctl: Harden kernel settings (does not apply: kernel settings belong to the host inside a container)
+  [ ] updates.auto: Install security updates automatically
+
+kernel.sysctl: not applicable (kernel settings belong to the host inside a container)
+
+Nothing to do with the modules you chose.
+
+? Save your answers to vps-ready.toml to repeat them later? (Y/n) no
+Not saved. To repeat this, save these lines to a file and run:
+  sudo vps-ready apply --profile <file>
+
+schema = 1
+extends = "minimal"
+
+[modules."firewall.inbound"]
+enabled = false
+
+[modules."ssh.server"]
+enabled = false
+
+[modules."updates.auto"]
+enabled = false
+
+[modules."user.admin"]
+enabled = false
