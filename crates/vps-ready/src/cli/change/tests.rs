@@ -834,6 +834,11 @@ fn a_dead_man_apply_is_pending_until_the_timer_reverts_it() {
         .on("dpkg-query", ["-W"], Output::success("installed"))
         .on("apt-config", ["-c"], Output::success(""))
         .on("systemd-run", Vec::<String>::new(), Output::success(""))
+        .on(
+            "/var/lib/vps-ready/bin/vps-ready",
+            ["version"],
+            Output::success(format!("{}\n", crate::VERSION_INFO)),
+        )
         .on("systemctl", Vec::<String>::new(), Output::success(""));
     let modules: &[&dyn Module] = &[&Lockout];
     let host = Host {
