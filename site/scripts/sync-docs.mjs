@@ -39,7 +39,7 @@ const PAGES = {
     slug: 'project/m5-plan',
     label: 'Design notes: M5',
     order: 9,
-    note: 'This is the proposed plan for the next release. Nothing in it is built yet.',
+    note: 'This is the plan for the next release. Nothing in it is built yet.',
   },
 };
 const DOCS_OUT = join(site, 'src/content/docs/docs');

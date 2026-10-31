@@ -1,6 +1,6 @@
 # M5 plan: deployment readiness (v0.5.0)
 
-> **Status: proposed.** Nothing below is built yet. The owner decisions at the end are open.
+> **Status: accepted.** Nothing below is built yet. The owner decided the open questions on 2026-10-31 (see the end).
 
 M5 takes a server that M3 and M4 hardened and gets it ready to run an app: Docker installed with safe defaults, a reverse proxy with automatic HTTPS, a deploy user for CI, and a way to install vps-ready itself as a package. The milestone as written also had Tailscale with public port 22 closed, and a cloud-init export. Those two change the safety model (a confirm that must arrive over the tailnet, and an apply with no one to confirm at all), so this plan moves them to a second release, v0.6.0, where they get their own design and VM time.
 
@@ -183,7 +183,9 @@ This plan departs from earlier docs; PR 8 updates them:
 
 Waves: {2, 5, 6} → 3 → 4 → {7, 8} → 9.
 
-## Owner decisions
+## Decided by the owner (2026-10-31)
+
+All five recommendations were accepted:
 
 1. **Split M5 into v0.5.0 (deploy modules, `.deb`, SBOM) and v0.6.0 (Tailscale, close 22, `--deadman=off`, cloud-init export).** Recommended: v0.5.0 then cannot lock out an admin. Alternative: one v0.5.0 with everything.
 2. **Embed vendor apt keys in the binary**, with a weekly CI check. Recommended over downloading the key at apply time.
