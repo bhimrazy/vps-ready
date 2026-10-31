@@ -1,0 +1,7 @@
+---
+source: crates/vps-ready/src/modules/deploy_user/tests.rs
+expression: "String::from_utf8(drop_in.content.clone()).unwrap()"
+---
+# Written by vps-ready (deploy.user). `vps-ready rollback --last`
+# restores the previous state; edits here are replaced by the next apply.
+deploy ALL=(root) NOPASSWD: /usr/local/bin/deploy-app ""

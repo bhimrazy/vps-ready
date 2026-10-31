@@ -415,6 +415,7 @@ fn refuses_to_lock_out_without_a_keyed_sudo_user() {
     // The admin of this plan, before user.admin has created it.
     let keys = Resource::AuthorizedKeys(AuthorizedKeys {
         user: "deploy".into(),
+        exact: false,
         keys: vec![KEY.into()],
     });
     let sudoers = Resource::File(File {
@@ -437,6 +438,50 @@ fn refuses_to_lock_out_without_a_keyed_sudo_user() {
             .unwrap()
             .ends_with("(deploy gets SSH keys from this plan but no sudo). Set one up with the user.admin module, or log in as such a user and run vps-ready with sudo")
     );
+
+    // `deploy.user` planned first, from root's session: keys that all have
+    // options and a sudo rule for one command do not make an admin.
+    let restricted = Resource::AuthorizedKeys(AuthorizedKeys {
+        user: "deploy".into(),
+        exact: true,
+        keys: vec![format!(
+            "restrict,command=\"/usr/local/bin/deploy-app\" {KEY}"
+        )],
+    });
+    let one_command = Resource::File(File {
+        path: "/etc/sudoers.d/90-vps-ready-deploy".into(),
+        content: b"deploy ALL=(root) NOPASSWD: /usr/local/bin/deploy-app \"\"\n".to_vec(),
+        owner: FileOwner {
+            mode: 0o440,
+            uid: 0,
+            gid: 0,
+        },
+        validate: None,
+    });
+    facts.session = Some(session("root", 0));
+    assert!(
+        refused(&facts, &[restricted, one_command], &fs, vec!["deploy"])
+            .unwrap()
+            .contains("(this SSH session is root's)")
+    );
+    // An admin whose only key is limited to some addresses is still one.
+    let from = Resource::AuthorizedKeys(AuthorizedKeys {
+        user: "admin".into(),
+        exact: false,
+        keys: vec![format!("from=\"203.0.113.0/24\" {KEY}")],
+    });
+    let admin_sudo = Resource::File(File {
+        path: "/etc/sudoers.d/90-vps-ready-admin".into(),
+        content: b"admin ALL=(ALL:ALL) NOPASSWD: ALL\n".to_vec(),
+        owner: FileOwner {
+            mode: 0o440,
+            uid: 0,
+            gid: 0,
+        },
+        validate: None,
+    });
+    assert_eq!(refused(&facts, &[from, admin_sudo], &fs, vec![]), None);
+    facts.session = None;
 
     // X11 forwarding alone needs no admin.
     let mut only_x11 = self::facts();
@@ -621,6 +666,7 @@ fn verify_checks_every_admin() {
     let keys = |user: &str| {
         Resource::AuthorizedKeys(AuthorizedKeys {
             user: user.into(),
+            exact: false,
             keys: vec![KEY.into()],
         })
     };

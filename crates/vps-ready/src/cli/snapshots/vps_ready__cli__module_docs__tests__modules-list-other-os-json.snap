@@ -44,5 +44,12 @@ expression: out
     "applies": false,
     "reason": "apt is supported only on Debian and Ubuntu",
     "arms_safety_timer": false
+  },
+  {
+    "id": "deploy.user",
+    "title": "Set up a deploy account whose SSH keys are restricted",
+    "applies": false,
+    "reason": "the deploy account is set up only on Debian and Ubuntu so far",
+    "arms_safety_timer": false
   }
 ]

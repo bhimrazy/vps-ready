@@ -21,6 +21,9 @@ pub struct User {
     pub groups: Vec<String>,
     /// Password field of a created account.
     pub password: Password,
+    /// GECOS comment of a created account, e.g. a marker a module looks
+    /// for later; `None` leaves it empty.
+    pub comment: Option<String>,
 }
 
 /// The password field `useradd` gives a created account. Neither allows a
@@ -40,6 +43,8 @@ pub(crate) struct Entry {
     pub(crate) uid: u32,
     pub(crate) gid: u32,
     pub(crate) home: PathBuf,
+    /// The GECOS field.
+    pub(crate) comment: String,
     /// Login shell; empty when the entry has none.
     pub(crate) shell: String,
 }
@@ -99,6 +104,9 @@ impl User {
             }
             if self.password == Password::Star {
                 cmd = cmd.args(["--password", "*"]);
+            }
+            if let Some(comment) = &self.comment {
+                cmd = cmd.args(["--comment", comment]);
             }
             run(sys, &cmd.arg(&self.name))?;
             return Ok(lookup(sys, &self.name)?.map(|e| e.uid));
@@ -217,13 +225,14 @@ pub(crate) fn lookup(sys: Sys, name: &str) -> Result<Option<Entry>, ResourceErro
     let text = out.stdout_str()?;
     let fields: Vec<&str> = text.trim_end().split(':').collect();
     let entry = match fields[..] {
-        [n, _, uid, gid, _, home, shell] if n == name && home.starts_with('/') => uid
+        [n, _, uid, gid, comment, home, shell] if n == name && home.starts_with('/') => uid
             .parse()
             .ok()
             .zip(gid.parse().ok())
             .map(|(uid, gid)| Entry {
                 uid,
                 gid,
+                comment: comment.to_owned(),
                 home: PathBuf::from(home),
                 shell: shell.to_owned(),
             }),
@@ -273,6 +282,7 @@ mod tests {
             name: "admin".into(),
             groups: groups.iter().map(|&g| g.to_owned()).collect(),
             password,
+            comment: None,
         })
     }
 
@@ -434,6 +444,32 @@ mod tests {
     }
 
     #[test]
+    fn apply_creates_with_a_comment_when_asked() {
+        let fs = FakeFs::new();
+        let runner = missing();
+        Resource::User(User {
+            name: "admin".into(),
+            groups: Vec::new(),
+            password: Password::Locked,
+            comment: Some("vps-ready test".into()),
+        })
+        .apply(sys(&fs, &runner))
+        .unwrap();
+        assert_eq!(
+            runner.calls()[1],
+            Cmd::new("useradd").args([
+                "--create-home",
+                "--user-group",
+                "--shell",
+                "/bin/bash",
+                "--comment",
+                "vps-ready test",
+                "admin",
+            ])
+        );
+    }
+
+    #[test]
     fn apply_never_touches_an_existing_password() {
         let fs = FakeFs::new();
         let runner = existing("admin");
@@ -459,6 +495,7 @@ mod tests {
                 name: name.into(),
                 groups: vec![group.into()],
                 password: Password::Locked,
+                comment: None,
             });
             let err = resource.diff(sys(&fs, &runner)).unwrap_err();
             assert!(matches!(err, ResourceError::InvalidName { .. }), "{err:?}");
@@ -607,6 +644,7 @@ mod tests {
             Some(Entry {
                 uid: 1001,
                 gid: 1001,
+                comment: String::new(),
                 home: "/home/admin".into(),
                 shell: "/bin/bash".into(),
             })

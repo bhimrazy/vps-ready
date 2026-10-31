@@ -15,7 +15,13 @@
 # login as the admin to the container's own address succeeds and apply
 # exits 0 -> rollback --last removes the account, its keys and the drop-in,
 # and keeps its home directory. Cycle 2: apply --deadman 1m, no confirm -> the
-# timer rolls it back (deadman-timeout) and apply exits 1.
+# timer rolls it back (deadman-timeout) and apply exits 1. Cycle 3: apply a
+# profile with deploy.user and a forced command -> the drop-in is 0440 and
+# passes `visudo -cf`, and the deploy key runs only that command, which
+# re-runs itself as root with sudo -> a second apply with another command
+# leaves only the key line forced to it, and the login runs it -> rollback
+# --last twice restores the first command, then removes the account and the
+# drop-in.
 # The container is capped at 1 GB and 1 CPU and is removed afterwards.
 set -eu
 cd "$(dirname "$0")/.."
@@ -26,6 +32,7 @@ image="vps-ready-test:$distro"
 name="vps-ready-admin-$distro-$$"
 tmp=$(mktemp -d)
 sudoers=/etc/sudoers.d/90-vps-ready-admin
+deploy_sudoers=/etc/sudoers.d/90-vps-ready-deploy
 
 [ -f "$bin" ] || { echo "binary not found: $bin" >&2; exit 2; }
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 2; }
@@ -176,5 +183,76 @@ docker exec "$name" sh -c '! getent passwd admin >/dev/null' || die "admin is st
 docker exec "$name" sh -c "test ! -e $sudoers" || die "$sudoers is still there"
 docker exec "$name" sh -c 'systemctl is-enabled vps-ready-deadman.service' 2>/dev/null |
   grep -qx disabled || die "the boot hook is still enabled"
+
+echo "== $distro: vps-ready apply --yes --profile with deploy.user"
+# A deploy command at $1 that prints $2: it runs as deploy and re-runs
+# itself as root with sudo, which the drop-in allows only without arguments.
+deploy_command() {
+  docker exec "$name" sh -c "printf '%s\n' '#!/bin/sh' \
+    '[ \"\$(id -u)\" -eq 0 ] || exec sudo $1' \
+    'echo \"$2 as \$(id -un)\"' >$1 && chmod 755 $1"
+}
+# Writes a deploy.user profile with command $1 to /root/deploy.toml.
+deploy_profile() {
+  printf '%s\n' 'schema = 1' '[modules."deploy.user"]' "keys = [\"$dkey\"]" \
+    "command = \"$1\"" >"$tmp/deploy.toml"
+  docker cp "$tmp/deploy.toml" "$name:/root/deploy.toml"
+}
+# What a new login with the deploy key runs when it asks for `id`.
+deploy_login() {
+  docker exec "$name" ssh -i /root/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null -o LogLevel=QUIET -o ControlPath=none "deploy@$self_ip" id
+}
+# The deploy key's line, forced to run $1.
+deploy_line() { printf 'restrict,command="%s" %s' "$1" "$dkey"; }
+docker exec "$name" ssh-keygen -q -t ed25519 -N "" -C ci@example.com -f /root/deploy_key
+dkey=$(docker exec "$name" cat /root/deploy_key.pub)
+deploy_command /usr/local/bin/deploy-app deployed
+deploy_profile /usr/local/bin/deploy-app
+rc=0; vr apply --yes --profile /root/deploy.toml || rc=$?
+[ "$rc" -eq 0 ] || die "apply of deploy.user exited $rc, expected 0"
+[ "$(newest '.[0].state')" = applied ] || die "newest transaction is not applied"
+docker exec "$name" getent passwd deploy | grep -q ':vps-ready deploy.user:' ||
+  die "deploy does not carry the deploy.user marker"
+[ "$(docker exec "$name" cat /home/deploy/.ssh/authorized_keys)" = \
+  "$(deploy_line /usr/local/bin/deploy-app)" ] ||
+  die "deploy's authorized_keys is not the restricted key"
+[ "$(docker exec "$name" stat -c '%a %U:%G' "$deploy_sudoers")" = "440 root:root" ] ||
+  die "$deploy_sudoers is not 0440 root:root"
+docker exec "$name" visudo -cf "$deploy_sudoers" >/dev/null || die "visudo -cf $deploy_sudoers fails"
+out=$(deploy_login) || die "the deploy login failed"
+[ "$out" = "deployed as root" ] || die "the deploy key ran something else: $out"
+if docker exec "$name" su -s /bin/sh deploy -c 'sudo -n /usr/local/bin/deploy-app x' >/dev/null 2>&1; then
+  die "deploy may run its command as root with arguments"
+fi
+rc=0; vr plan --json --profile /root/deploy.toml >"$tmp/deploy.json" || rc=$?
+[ "$rc" -eq 0 ] || die "plan exited $rc, expected 0"
+jq -e '[.modules[].changes | length] | add == 0' "$tmp/deploy.json" >/dev/null ||
+  { cat "$tmp/deploy.json"; die "plan still has changes after the deploy apply"; }
+
+echo "== $distro: vps-ready apply --yes --profile with another deploy command"
+deploy_command /usr/local/bin/deploy-next next
+deploy_profile /usr/local/bin/deploy-next
+rc=0; vr apply --yes --profile /root/deploy.toml || rc=$?
+[ "$rc" -eq 0 ] || die "the second apply of deploy.user exited $rc, expected 0"
+[ "$(docker exec "$name" cat /home/deploy/.ssh/authorized_keys)" = \
+  "$(deploy_line /usr/local/bin/deploy-next)" ] ||
+  die "deploy's authorized_keys does not hold only the key forced to the new command"
+docker exec "$name" visudo -cf "$deploy_sudoers" >/dev/null || die "visudo -cf $deploy_sudoers fails"
+out=$(deploy_login) || die "the deploy login failed"
+[ "$out" = "next as root" ] || die "the deploy key did not run the new command: $out"
+
+echo "== $distro: vps-ready rollback --last twice (deploy.user)"
+rc=0; vr rollback --last || rc=$?
+[ "$rc" -eq 0 ] || die "rollback exited $rc, expected 0"
+[ "$(docker exec "$name" cat /home/deploy/.ssh/authorized_keys)" = \
+  "$(deploy_line /usr/local/bin/deploy-app)" ] ||
+  die "rollback did not restore the first key line"
+out=$(deploy_login) || die "the deploy login failed"
+[ "$out" = "deployed as root" ] || die "after rollback the deploy key ran: $out"
+rc=0; vr rollback --last || rc=$?
+[ "$rc" -eq 0 ] || die "rollback exited $rc, expected 0"
+docker exec "$name" sh -c '! getent passwd deploy >/dev/null' || die "deploy is still there"
+docker exec "$name" sh -c "test ! -e $deploy_sudoers" || die "$deploy_sudoers is still there"
 
 echo "OK [$distro]"
