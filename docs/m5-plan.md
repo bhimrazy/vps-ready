@@ -15,7 +15,7 @@ Debian 12/13 and Ubuntu 22.04/24.04 with systemd, as in M4.
 | Release | Contents |
 |---|---|
 | **v0.5.0 (M5)** | `deploy.docker` (with the `FW-002` fix), `deploy.proxy` (Caddy), `deploy.user`, vendor apt sources, a `.deb` package, an SBOM |
-| **v0.6.0 (M5, part 2)** | `net.tailscale` and closing public 22, `apply --deadman=off\|selftest`, `export cloud-init` |
+| **v0.6.0 (M5, part 2)** | Closing public 22 behind any private network, `net.tailscale`, `apply --deadman=off\|selftest`, `export cloud-init` |
 
 None of the v0.5.0 modules touches sshd, the firewall's SSH rule or the admin's login, so they do not arm the safety timer. They cannot lock out an admin who logs in through the host's own sshd. They can stop containers (see the Docker restart below), which matters only to someone who reaches the host through a container, and the plan says when that will happen. The v0.6.0 items all change the SSH path or turn the timer off, so they are reviewed together as one change to the safety model.
 
@@ -131,13 +131,15 @@ This plan departs from earlier docs; PR 8 updates them:
 - `architecture.md`: `--deadman=off|selftest` and `export cloud-init` move from M5 to v0.6.0; the two new reloads.
 - `security-baseline.md`: `deploy.user`'s command is the user's choice, not fixed to `/usr/local/bin/deploy-app`; Nginx+certbot and rootless Docker/Podman are not offered in M5.
 - `m3-plan.md`: its pointers to M5 for Tailscale and `--deadman=off` now mean v0.6.0.
+- `decisions.md`: open question 4 (Tailscale or WireGuard) answered by the private-access direction above.
 - `decisions.md`: a new decision for the split.
 
 ### Not in M5
 
 | Planned before | M5 | When |
 |---|---|---|
-| `net.tailscale`, close public 22 | | v0.6.0, with a confirm that must arrive over `tailscale0` |
+| `net.tailscale`, close public 22 | | v0.6.0, see the direction below |
+| A WireGuard module (keys, peers, client config) | | When asked for; until then, a hand-made `wg0` works with the close-22 step |
 | `--deadman=off\|selftest` | | v0.6.0, with the export |
 | `export cloud-init` | | v0.6.0; a small `#cloud-config` that pins version and SHA256 (AWS limits user data to 16 KB) |
 | `.rpm`, `.apk` | `.deb` only | If vps-ready supports those distros |
@@ -146,6 +148,15 @@ This plan departs from earlier docs; PR 8 updates them:
 | Rootless Docker, Podman | Docker Engine | If asked for |
 | Nginx, Traefik | Caddy | Decision D12 |
 | `/etc/vps-ready/config.toml` | | M6, with `drift` |
+
+### Direction for v0.6.0: private access
+
+Recorded here so v0.5.0 does not paint it into a corner; v0.6.0 gets its own plan. Tailscale is one way to reach a server privately, not the only one (open question 4 in `decisions.md`). So v0.6.0 has two separate pieces:
+
+1. **Closing public 22 works with any private network.** A `firewall.inbound` parameter names the interface SSH must come through (`ssh_via = "tailscale0"`, `"wg0"`, `"nb0"` for NetBird, and so on). SSH stays open on that interface and closes everywhere else. It runs behind the safety timer, and only a confirm whose server address belongs to that interface counts. Refused at plan time: an interface that is down or has no address. A note when vps-ready cannot tell whether the interface comes back after a reboot (for `tailscale0` it checks that `tailscaled` is enabled; for `wg0`, that `wg-quick@wg0` is). The note also points to the provider's console as the way back in.
+2. **`net.tailscale` is the one install-and-join helper.** It installs Tailscale from its repository (a vendor source as above), joins with an auth key read from a file or the environment, never from the command line, and supports `login_server` for Headscale. Then the close-22 step uses `tailscale0`.
+
+A WireGuard module would generate keys, manage peers and print a client config: more to get right and more to support than Tailscale's join. It waits until someone asks. Until then, anyone who runs WireGuard, NetBird or ZeroTier sets up the interface themselves and uses piece 1.
 
 ## Testing
 
