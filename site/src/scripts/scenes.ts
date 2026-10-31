@@ -124,7 +124,6 @@ export const heroScenes: Record<'audit' | 'plan' | 'apply' | 'confirm', Step[]> 
 // cli/wizard.rs. Long runs are cut, marked with a dim "...", never reworded.
 export const wizardSnippet: Step[] = [
   { c: 'sudo vps-ready' },
-  { o: 'vps-ready 0.4.0 on Debian GNU/Linux 13 (trixie) (vm-other)' },
   { o: 'Audit: 13 passed, 12 failed (1 high, 5 medium, 6 low), 4 unknown. vps-ready can fix 11 of them.' },
   { o: '' },
   { o: `${sp('ask', '?')} What will this server run?` },
@@ -142,10 +141,8 @@ export const wizardSnippet: Step[] = [
   { o: '' },
   { o: 'After you apply, you have 5 minutes to log in from a new terminal and confirm.' },
   { o: "If you don't, every change is undone." },
-  { o: '' },
   { o: sp('dim', '...') },
   { o: '18 changes in 6 modules: 8 files, 1 directory, 6 kernel settings, 2 services, 1 user.' },
-  { o: 'partial: rollback removes a user it created but keeps its home directory.' },
   { o: 'Apply 18 changes? [y/N] y' },
   { o: sp('dim', '...') },
   { o: '' },
