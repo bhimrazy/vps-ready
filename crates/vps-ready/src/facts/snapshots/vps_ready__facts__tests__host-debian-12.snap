@@ -6,6 +6,7 @@ os:
   id: debian
   id_like: []
   version_id: "12"
+  codename: bookworm
   pretty_name: Debian GNU/Linux 12 (bookworm)
   family: debian
 init: systemd
@@ -236,6 +237,13 @@ updates:
     apt-daily.service: ok
     apt-daily.timer: ok
 docker: false
+docker_engine:
+  packages: []
+  docker_ce_version: ~
+  service: ~
+  daemon_json:
+    state: missing
+  daemon: ~
 bridges: []
 apparmor: false
 notices: []

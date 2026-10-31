@@ -7,7 +7,9 @@ use std::time::Duration;
 use askama::Template;
 use serde::Deserialize;
 
-use super::{Applicability, Module, ModuleError, ModuleSteps, ParamDoc, PlanCx, parse_params};
+use super::{
+    Applicability, DOCKER_PACKAGE, Module, ModuleError, ModuleSteps, ParamDoc, PlanCx, parse_params,
+};
 use crate::engine::Reload;
 use crate::facts::{Facts, Init, OsFamily, Proto};
 use crate::resource::{Directory, File, Package, Resource, Service, Validate};
@@ -116,6 +118,22 @@ impl Ruleset {
             not_docker: not_docker(facts),
         }
     }
+
+    /// [`Ruleset::new`], also for a Docker that `cx` plans.
+    fn planned(cx: &PlanCx, params: &Params) -> Self {
+        let mut ruleset = Self::new(cx.facts, params);
+        ruleset.docker |= docker_planned(cx);
+        ruleset
+    }
+}
+
+/// Whether a module before this one, `deploy.docker`, installs Docker in
+/// the same plan. Its bridges do not exist yet, and rules for them are
+/// valid all the same, so one apply is enough.
+fn docker_planned(cx: &PlanCx) -> bool {
+    cx.planned
+        .iter()
+        .any(|r| matches!(r, Resource::Package(p) if p.name == DOCKER_PACKAGE))
 }
 
 /// The interfaces named `br-*` that Docker did not name. The ruleset keeps
@@ -228,19 +246,7 @@ impl Module for FirewallInbound {
              listeners and `Port`), whatever `allow` says"
         )];
         if facts.docker {
-            notes.push(
-                "Docker is installed: input from docker0 and br-* is accepted, so \
-                 containers can reach services on the host; a compromised container \
-                 can reach all of them, as with no firewall"
-                    .to_owned(),
-            );
-            let others = not_docker(facts);
-            if !others.is_empty() {
-                notes.push(format!(
-                    "filtered like any other interface, since Docker did not name them: {}",
-                    others.join(", ")
-                ));
-            }
+            notes.extend(docker_notes(facts, "Docker is installed"));
         }
         let firewall = facts.firewall.as_ref();
         notes.extend(forwarded_note(facts));
@@ -283,8 +289,13 @@ impl Module for FirewallInbound {
     /// loads it when it starts.
     fn plan(&self, cx: &PlanCx, _: Sys) -> Result<ModuleSteps, ModuleError> {
         let params: Params = cx.params()?;
-        let model = Ruleset::new(cx.facts, &params);
+        let model = Ruleset::planned(cx, &params);
         let ruleset = model.render()?;
+        let mut notes = Vec::new();
+        if !cx.facts.docker && docker_planned(cx) {
+            notes.extend(docker_notes(cx.facts, "deploy.docker installs Docker"));
+        }
+        notes.extend(proxied_note(cx.facts, &model));
         let mut resources = Vec::new();
         if !cx.facts.firewall_tools.nft {
             resources.push(Resource::Package(Package {
@@ -318,7 +329,7 @@ impl Module for FirewallInbound {
         Ok(ModuleSteps {
             resources,
             reloads: vec![Reload::DaemonReload, Reload::FirewallReload],
-            notes: proxied_note(cx.facts, &model).into_iter().collect(),
+            notes,
         })
     }
 
@@ -326,7 +337,7 @@ impl Module for FirewallInbound {
     /// port the ruleset accepts.
     fn verify(&self, cx: &PlanCx, sys: Sys) -> Result<(), String> {
         let params: Params = cx.params().map_err(|e| e.to_string())?;
-        let want = Ruleset::new(cx.facts, &params);
+        let want = Ruleset::planned(cx, &params);
         let cmd = Cmd::new("nft")
             .args(["-j", "list", "table", "inet", "vps_ready"])
             .timeout(NFT_TIMEOUT);
@@ -347,6 +358,24 @@ impl Module for FirewallInbound {
     fn verify_timeout(&self) -> Duration {
         NFT_TIMEOUT
     }
+}
+
+/// What accepting input from Docker's bridges means, after `why`, e.g.
+/// `Docker is installed`.
+fn docker_notes(facts: &Facts, why: &str) -> Vec<String> {
+    let mut notes = vec![format!(
+        "{why}: input from docker0 and br-* is accepted, so containers can reach \
+         services on the host; a compromised container can reach all of them, as with \
+         no firewall"
+    )];
+    let others = not_docker(facts);
+    if !others.is_empty() {
+        notes.push(format!(
+            "filtered like any other interface, since Docker did not name them: {}",
+            others.join(", ")
+        ));
+    }
+    notes
 }
 
 /// The ports Docker publishes for `family` (`ip` or `ip6`), as `5432/tcp`.

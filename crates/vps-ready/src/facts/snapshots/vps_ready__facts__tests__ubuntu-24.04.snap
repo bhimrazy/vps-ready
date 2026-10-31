@@ -6,5 +6,6 @@ id: ubuntu
 id_like:
   - debian
 version_id: "24.04"
+codename: noble
 pretty_name: Ubuntu 24.04.3 LTS
 family: debian

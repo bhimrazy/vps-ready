@@ -5,5 +5,6 @@ expression: facts.os
 id: alpine
 id_like: []
 version_id: 3.22.1
+codename: ~
 pretty_name: Alpine Linux v3.22
 family: alpine

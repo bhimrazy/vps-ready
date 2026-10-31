@@ -18,6 +18,7 @@ All other incoming ports are blocked.
 ? Modules to run (Space toggles, Enter continues)
   [ ] user.admin: Set up an admin account that logs in with an SSH key and uses sudo (can lock you out; undone unless you confirm)
   [ ] ssh.server: Turn off root and password logins over SSH (can lock you out; undone unless you confirm)
+  [ ] deploy.docker: Install Docker with logs capped and ports on loopback by default
   [ ] firewall.inbound: Drop incoming traffic that no rule allows (can lock you out; undone unless you confirm)
   [ ] ssh.bruteforce: Ban addresses that keep failing to log in over SSH
   [x] kernel.sysctl: Harden kernel settings (does not apply: kernel settings belong to the host inside a container)

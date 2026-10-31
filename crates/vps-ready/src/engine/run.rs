@@ -1279,9 +1279,10 @@ impl<'a> Engine<'a> {
         progress: &mut dyn FnMut(Progress),
     ) -> Result<(), EngineError> {
         let best_effort = mode.best_effort();
-        // The hook runs before sshd starts, which then reads the restored
-        // config; `sshd -t` fails there on Ubuntu (no /run/sshd yet).
-        if mode == Mode::Boot && reload == Reload::SshdReload {
+        // The hook runs before sshd and Docker start, which then read the
+        // restored config; `sshd -t` fails there on Ubuntu (no /run/sshd
+        // yet).
+        if mode == Mode::Boot && matches!(reload, Reload::SshdReload | Reload::DockerRestart) {
             return Ok(());
         }
         progress(Progress::Reload(reload));
