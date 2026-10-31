@@ -17,7 +17,7 @@ expression: out
     {
       "name": "keys",
       "default": "[]",
-      "help": "Required: public keys without options, written with `restrict` (and `command=` when set)."
+      "help": "Required: public keys without options. The account's authorized_keys holds exactly these, written with `restrict` (and `command=` when set)."
     },
     {
       "name": "command",

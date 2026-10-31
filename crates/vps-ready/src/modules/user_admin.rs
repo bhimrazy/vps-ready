@@ -6,8 +6,9 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use super::{Applicability, Module, ModuleError, ModuleSteps, ParamDoc, PlanCx};
+use super::{Applicability, Module, ModuleError, ModuleSteps, ParamDoc, PlanCx, refuse};
 use crate::facts::{Facts, Init, OsFamily};
+use crate::resource::authorized_keys::is_plain_key;
 use crate::resource::user::{Entry, lookup};
 use crate::resource::{AuthorizedKeys, File, Password, Resource, User, Validate};
 use crate::sys::{Cmd, FileOwner, Sys, SysError};
@@ -143,13 +144,7 @@ impl Module for UserAdmin {
         } else {
             params.authorized_keys.clone()
         };
-        let usepam_off = cx
-            .facts
-            .ssh
-            .effective
-            .as_ref()
-            .and_then(|c| c.get("usepam"))
-            == Some("no");
+        let usepam_off = usepam_off(cx.facts);
         let password = if usepam_off {
             Password::Star
         } else {
@@ -158,14 +153,8 @@ impl Module for UserAdmin {
         if existing.is_none() && usepam_off {
             notes.push("UsePAM is off: password set to `*` so key logins work".to_owned());
         }
-        if existing.is_some()
-            && usepam_off
-            && shadow_field(sys, name)?.is_some_and(|f| f.starts_with('!'))
-        {
-            return refuse(&format!(
-                "UsePAM is off, and {name}'s password is locked (`!` in {SHADOW}), so sshd \
-                 refuses its key logins; set a password or run `usermod -p '*' {name}` first"
-            ));
+        if existing.is_some() && usepam_off {
+            check_not_locked(sys, name)?;
         }
 
         let sudoers = File {
@@ -235,6 +224,7 @@ impl Module for UserAdmin {
             }),
             Resource::AuthorizedKeys(AuthorizedKeys {
                 user: name.to_owned(),
+                exact: false,
                 keys,
             }),
         ];
@@ -260,8 +250,22 @@ impl Module for UserAdmin {
     }
 }
 
-pub(crate) fn refuse<T>(reason: &str) -> Result<T, ModuleError> {
-    Err(ModuleError::Refused(reason.to_owned()))
+/// Whether sshd runs with `UsePAM no`, which refuses key logins to an
+/// account whose password is locked (`!`).
+pub(crate) fn usepam_off(facts: &Facts) -> bool {
+    facts.ssh.effective.as_ref().and_then(|c| c.get("usepam")) == Some("no")
+}
+
+/// Refuses the existing account `name` if its password is locked, for when
+/// [`usepam_off`].
+pub(crate) fn check_not_locked(sys: Sys, name: &str) -> Result<(), ModuleError> {
+    if shadow_field(sys, name)?.is_some_and(|f| f.starts_with('!')) {
+        return refuse(&format!(
+            "UsePAM is off, and {name}'s password is locked (`!` in {SHADOW}), so sshd \
+             refuses its key logins; set a password or run `usermod -p '*' {name}` first"
+        ));
+    }
+    Ok(())
 }
 
 fn read_if_exists(sys: Sys, path: &Path) -> Result<Option<Vec<u8>>, ModuleError> {
@@ -362,27 +366,25 @@ fn copied_keys(
     Ok(keys)
 }
 
-/// Whether `line` starts with a key type rather than options, and has a key
-/// after it.
-pub(crate) fn is_plain_key(line: &str) -> bool {
-    let mut fields = line.split_whitespace();
-    fields.next().is_some_and(|kind| {
-        ["ssh-", "ecdsa-", "sk-"]
-            .iter()
-            .any(|p| kind.starts_with(p))
-    }) && fields.next().is_some()
-}
-
 /// The account `name`, if it exists. Refuses root, a group of that name
 /// without a user, and an existing account that is not a login user.
 pub(crate) fn check_name(sys: Sys, name: &str) -> Result<Option<Entry>, ModuleError> {
-    if name == "root" {
-        return refuse("`name` is root; the admin must be another account");
-    }
-    let existing = lookup(sys, name)?;
+    let existing = account(sys, name, "admin")?;
     if let Some(entry) = &existing {
         check_login_account(sys, name, entry)?;
     }
+    Ok(existing)
+}
+
+/// The account `name`, if it exists, for a module that sets up the `role`
+/// account. Refuses root, and a group of that name without a user.
+pub(crate) fn account(sys: Sys, name: &str, role: &str) -> Result<Option<Entry>, ModuleError> {
+    if name == "root" {
+        return refuse(&format!(
+            "`name` is root; the {role} must be another account"
+        ));
+    }
+    let existing = lookup(sys, name)?;
     if existing.is_none() && group_exists(sys, name)? {
         // `useradd --user-group` fails then; joining that group instead
         // could grant what it grants, e.g. Ubuntu's `%admin ALL=(ALL) ALL`.
@@ -424,8 +426,8 @@ fn check_login_account(sys: Sys, name: &str, entry: &Entry) -> Result<(), Module
     Ok(())
 }
 
-/// The user of the rule in a drop-in vps-ready wrote, if it has one.
-fn sudoers_user(content: &[u8]) -> Option<String> {
+/// The user of the first rule in a drop-in vps-ready wrote, if it has one.
+pub(crate) fn sudoers_user(content: &[u8]) -> Option<String> {
     String::from_utf8_lossy(content)
         .lines()
         .map(str::trim)

@@ -5,13 +5,17 @@ use std::path::Path;
 
 use serde::{Deserialize, Deserializer};
 
-use super::user_admin::{group_exists, has_sudo_rules, is_plain_key, refuse};
-use super::{Applicability, Module, ModuleError, ModuleSteps, ParamDoc, PlanCx};
+use super::user_admin::{
+    account, check_not_locked, group_exists, has_sudo_rules, sudoers_user, usepam_off,
+};
+use super::{
+    Applicability, DOCKER_PACKAGE, Module, ModuleError, ModuleSteps, ParamDoc, PlanCx, refuse,
+};
 use crate::engine::deadman::check_binary;
 use crate::facts::{Facts, OsFamily};
-use crate::resource::user::lookup;
+use crate::resource::authorized_keys::is_plain_key;
 use crate::resource::{AuthorizedKeys, File, Password, Resource, User, Validate};
-use crate::sys::{FileOwner, Sys};
+use crate::sys::{FileOwner, Sys, SysError};
 
 /// The sudoers drop-in. sudo skips files in an include directory whose name
 /// has a `.` or ends in `~`, so the name has neither.
@@ -20,11 +24,10 @@ pub const SUDOERS: &str = "/etc/sudoers.d/90-vps-ready-deploy";
 const SUDOERS_DIR: &str = "/etc/sudoers.d";
 
 /// The GECOS field of the account this module creates, by which a later
-/// plan knows the account is its own.
+/// plan knows the account is its own. Only an exact match counts, on
+/// purpose: `chfn` writes all four subfields (`vps-ready deploy.user,,,`),
+/// so a user who sets this as their own full name does not match.
 pub(crate) const COMMENT: &str = "vps-ready deploy.user";
-
-/// Installed by `deploy.docker`, which creates the `docker` group.
-const DOCKER_PACKAGE: &str = "docker-ce";
 
 const HEADER: &str = "\
 # Written by vps-ready (deploy.user). `vps-ready rollback --last`
@@ -45,6 +48,13 @@ struct Params {
     docker: bool,
 }
 
+impl Params {
+    /// `command`, unless empty.
+    fn command(&self) -> Option<&str> {
+        self.command.as_deref().filter(|c| !c.is_empty())
+    }
+}
+
 fn default_name() -> String {
     "deploy".to_owned()
 }
@@ -62,7 +72,9 @@ fn plain_keys<'de, D: Deserializer<'de>>(de: D) -> Result<Vec<String>, D::Error>
 }
 
 /// Creates the deploy account. Debian family only, as `user.admin`; it does
-/// not need the dead-man switch, since the admin's login is untouched.
+/// not need the dead-man switch, since the admin's login is untouched. Its
+/// keys all have options, so it is never taken for an admin who may
+/// confirm (see `keyed_users`).
 #[derive(Debug, Clone, Copy)]
 pub struct DeployUser;
 
@@ -82,10 +94,6 @@ impl Module for DeployUser {
          key gives away."
     }
 
-    fn keys_admins(&self) -> bool {
-        false
-    }
-
     fn params_doc(&self) -> &'static [ParamDoc] {
         &[
             ParamDoc {
@@ -96,7 +104,7 @@ impl Module for DeployUser {
             ParamDoc {
                 name: "keys",
                 default: "[]",
-                help: "Required: public keys without options, written with `restrict` (and `command=` when set).",
+                help: "Required: public keys without options. The account's authorized_keys holds exactly these, written with `restrict` (and `command=` when set).",
             },
             ParamDoc {
                 name: "command",
@@ -129,14 +137,14 @@ impl Module for DeployUser {
     fn plan(&self, cx: &PlanCx, sys: Sys) -> Result<ModuleSteps, ModuleError> {
         let params: Params = cx.params()?;
         let name = params.name.as_str();
+        let command = params.command();
         let mut notes = Vec::new();
         if params.keys.is_empty() {
             return refuse(
                 "`keys` is empty; set the public keys CI logs in with for deploy.user in a profile",
             );
         }
-        check_name(cx, sys, name)?;
-        let command = params.command.as_deref().filter(|c| !c.is_empty());
+        let existing = check_name(cx, sys, name)?;
 
         let mut groups = Vec::new();
         if params.docker {
@@ -156,17 +164,13 @@ impl Module for DeployUser {
             ));
         }
 
-        let usepam_off = cx
-            .facts
-            .ssh
-            .effective
-            .as_ref()
-            .and_then(|c| c.get("usepam"))
-            == Some("no");
-        // As `user.admin`: with `UsePAM no`, sshd refuses key logins to a
-        // locked account. Neither allows a password login.
-        let password = if usepam_off {
-            notes.push("UsePAM is off: password set to `*` so key logins work".to_owned());
+        // As `user.admin`. Neither password allows a password login.
+        let password = if usepam_off(cx.facts) {
+            if existing {
+                check_not_locked(sys, name)?;
+            } else {
+                notes.push("UsePAM is off: password set to `*` so key logins work".to_owned());
+            }
             Password::Star
         } else {
             Password::Locked
@@ -189,6 +193,10 @@ impl Module for DeployUser {
                          `apt-get install sudo` first, or leave out `command`"
                     ));
                 }
+                check_drop_in(sys, name)?;
+                notes.push(format!(
+                    "{name} may run {command} as root with sudo, without a password"
+                ));
                 format!("restrict,command=\"{command}\"")
             }
             None => {
@@ -201,6 +209,8 @@ impl Module for DeployUser {
                 "restrict".to_owned()
             }
         };
+        // Exact: an earlier line for the same key without `command=` would
+        // be the one sshd uses, and a key taken out of the profile must go.
         let keys = params
             .keys
             .iter()
@@ -217,6 +227,7 @@ impl Module for DeployUser {
             Resource::AuthorizedKeys(AuthorizedKeys {
                 user: name.to_owned(),
                 keys,
+                exact: true,
             }),
         ];
         if let Some(command) = command {
@@ -241,7 +252,7 @@ impl Module for DeployUser {
     /// With `command`, the deploy user has sudo rules.
     fn verify(&self, cx: &PlanCx, sys: Sys) -> Result<(), String> {
         let params: Params = cx.params().map_err(|e| e.to_string())?;
-        if params.command.as_deref().is_none_or(str::is_empty) {
+        if params.command().is_none() {
             return Ok(());
         }
         match has_sudo_rules(sys, &params.name) {
@@ -260,14 +271,10 @@ fn sudoers(name: &str, command: &str) -> String {
     format!("{HEADER}{name} ALL=(root) NOPASSWD: {command} \"\"\n")
 }
 
-/// Refuses root, the admin `user.admin` sets up in the same plan, an
-/// existing account this module did not create, and a group of that name
-/// without a user.
-fn check_name(cx: &PlanCx, sys: Sys, name: &str) -> Result<(), ModuleError> {
-    if name == "root" {
-        return refuse("`name` is root; the deploy user must be another account");
-    }
-    // `user.admin` is the only module before this one that plans a `User`.
+/// Whether the account exists. Refuses root, a group of that name without
+/// a user, the admin `user.admin` sets up in the same plan, and an existing
+/// account this module did not create.
+fn check_name(cx: &PlanCx, sys: Sys, name: &str) -> Result<bool, ModuleError> {
     if cx
         .planned
         .iter()
@@ -278,19 +285,31 @@ fn check_name(cx: &PlanCx, sys: Sys, name: &str) -> Result<(), ModuleError> {
              another `name`"
         ));
     }
-    match lookup(sys, name)? {
+    match account(sys, name, "deploy user")? {
         Some(entry) if entry.comment != COMMENT => refuse(&format!(
-            "{name} already exists, and deploy.user did not create it, so it does not \
-             get restricted keys or the docker group; set `name` to a new account"
+            "{name} already exists, and deploy.user did not create it (its GECOS field is \
+             not \"{COMMENT}\"), so it does not get restricted keys or the docker group; \
+             set `name` to a new account"
         )),
-        Some(_) => Ok(()),
-        // `useradd --user-group` fails then; joining that group instead
-        // could grant what it grants.
-        None if group_exists(sys, name)? => refuse(&format!(
-            "a group named {name} exists, but no user, so `useradd --user-group` \
-             cannot create {name}; set `name` to another user"
+        Some(_) => Ok(true),
+        None => Ok(false),
+    }
+}
+
+/// Refuses to hand the drop-in to another user, which would take the rule
+/// from the deploy user it names.
+fn check_drop_in(sys: Sys, name: &str) -> Result<(), ModuleError> {
+    let current = match sys.fs.read(Path::new(SUDOERS)) {
+        Ok(bytes) => bytes,
+        Err(SysError::NotFound(_)) => return Ok(()),
+        Err(e) => return Err(e.into()),
+    };
+    match sudoers_user(&current) {
+        Some(other) if other != name => refuse(&format!(
+            "{SUDOERS} gives sudo to {other}, not {name}; roll back the transaction that \
+             wrote it (`vps-ready history`), or remove the file, first"
         )),
-        None => Ok(()),
+        _ => Ok(()),
     }
 }
 

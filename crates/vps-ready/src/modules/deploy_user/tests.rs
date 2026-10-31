@@ -254,7 +254,6 @@ fn applies_on_debian_without_the_dead_man() {
     let mut facts = facts();
     assert_eq!(DeployUser.applicable(&facts), Applicability::Applicable);
     assert!(!DeployUser.needs_deadman());
-    assert!(!DeployUser.keys_admins());
     facts.os.family = OsFamily::Alpine;
     assert_eq!(
         DeployUser.applicable(&facts),
@@ -326,6 +325,7 @@ fn without_command_keys_are_restricted_and_there_is_no_sudo() {
                 Resource::AuthorizedKeys(AuthorizedKeys {
                     user: "deploy".into(),
                     keys: vec![format!("restrict {KEY}")],
+                    exact: true,
                 }),
             ]
         );
@@ -343,6 +343,11 @@ fn with_command_keys_are_forced_and_sudo_allows_only_it() {
         panic!("{:?}", steps.resources);
     };
     assert_eq!(keys.keys, [format!("restrict,command=\"{COMMAND}\" {KEY}")]);
+    assert!(keys.exact);
+    assert_eq!(
+        steps.notes,
+        ["deploy may run /usr/local/bin/deploy-app as root with sudo, without a password"]
+    );
     assert_eq!(drop_in.path, Path::new(SUDOERS));
     assert_eq!(drop_in.owner, root(0o440));
     assert_eq!(
@@ -454,35 +459,58 @@ fn the_admins_name_is_refused() {
     plan_steps(&fs, &runner, &admin.resources, &params("")).unwrap();
 }
 
-/// With `user.admin` in the same plan, only the admin may confirm.
+/// With `user.admin` in the same plan, only the admin may confirm, in
+/// either order.
 #[test]
 fn the_deploy_user_does_not_confirm() {
     let fs = fs();
     let runner = Debian::new(&fs, Accounts::default());
     let facts = facts();
     let admin = table(&format!("authorized_keys = [\"{ADMIN_KEY}\"]"));
-    let deploy = params("");
-    let selected = [
-        Selected {
-            module: &UserAdmin,
-            params: &admin,
-        },
-        Selected {
-            module: &DeployUser,
-            params: &deploy,
-        },
-    ];
-    let plan = engine::plan(
-        &selected,
-        &facts,
-        Sys {
-            fs: &fs,
-            runner: &runner,
-        },
-    )
-    .unwrap();
-    assert!(change_ids(&plan).contains(&"authorized-keys:deploy".to_owned()));
-    assert_eq!(plan.admins(), ["admin"]);
+    let deploy = params(&format!("command = \"{COMMAND}\""));
+    let admin = Selected {
+        module: &UserAdmin,
+        params: &admin,
+    };
+    let deploy = Selected {
+        module: &DeployUser,
+        params: &deploy,
+    };
+    for selected in [[admin, deploy], [deploy, admin]] {
+        let plan = engine::plan(
+            &selected,
+            &facts,
+            Sys {
+                fs: &fs,
+                runner: &runner,
+            },
+        )
+        .unwrap();
+        assert!(change_ids(&plan).contains(&"authorized-keys:deploy".to_owned()));
+        assert_eq!(plan.admins(), ["admin"]);
+    }
+}
+
+#[test]
+fn a_drop_in_for_another_user_is_refused() {
+    let fs = fs().with_file(
+        SUDOERS,
+        format!("# old\nci ALL=(root) NOPASSWD: {COMMAND} \"\"\n"),
+    );
+    let runner = Debian::new(&fs, Accounts::default());
+    assert_eq!(
+        refusal(plan_steps(
+            &fs,
+            &runner,
+            &[],
+            &params(&format!("command = \"{COMMAND}\""))
+        )),
+        "/etc/sudoers.d/90-vps-ready-deploy gives sudo to ci, not deploy; roll back the \
+         transaction that wrote it (`vps-ready history`), or remove the file, first"
+    );
+    // Without `command` it is not rewritten, only noted.
+    let steps = plan_steps(&fs, &runner, &[], &params("")).unwrap();
+    assert!(steps.notes[0].starts_with("no `command`: /etc/sudoers.d/90-vps-ready-deploy"));
 }
 
 #[test]
@@ -491,9 +519,16 @@ fn an_existing_account_it_did_not_create_is_refused() {
     let runner = Debian::new(&fs, Accounts::default().with_user("deploy", "Deploy,,,"));
     assert_eq!(
         refusal(plan_steps(&fs, &runner, &[], &params(""))),
-        "deploy already exists, and deploy.user did not create it, so it does not get \
-         restricted keys or the docker group; set `name` to a new account"
+        "deploy already exists, and deploy.user did not create it (its GECOS field is not \
+         \"vps-ready deploy.user\"), so it does not get restricted keys or the docker \
+         group; set `name` to a new account"
     );
+    // The marker set as a full name with chfn does not count.
+    let runner = Debian::new(
+        &fs,
+        Accounts::default().with_user("deploy", &format!("{COMMENT},,,")),
+    );
+    assert!(refusal(plan_steps(&fs, &runner, &[], &params(""))).contains("did not create it"));
     // Its own account, from an earlier apply, is kept up to date.
     let runner = Debian::new(&fs, Accounts::default().with_user("deploy", COMMENT));
     plan_steps(&fs, &runner, &[], &params("")).unwrap();
@@ -533,6 +568,28 @@ fn star_password_only_when_usepam_is_off() {
         panic!("{:?}", steps.resources);
     };
     assert_eq!(user.password, Password::Star);
+
+    // Its own account from an earlier apply, since locked: sshd would
+    // refuse its keys.
+    let fs = fs.with_file("/etc/shadow", "deploy:!:20000:0:99999:7:::\n");
+    let runner = Debian::new(&fs, Accounts::default().with_user("deploy", COMMENT));
+    let cx = PlanCx {
+        facts: &facts,
+        params: &params,
+        planned: &[],
+    };
+    let sys = Sys {
+        fs: &fs,
+        runner: &runner,
+    };
+    assert_eq!(
+        refusal(DeployUser.plan(&cx, sys)),
+        "UsePAM is off, and deploy's password is locked (`!` in /etc/shadow), so sshd \
+         refuses its key logins; set a password or run `usermod -p '*' deploy` first"
+    );
+    fs.write(Path::new("/etc/shadow"), b"deploy:*:20000:0:99999:7:::\n")
+        .unwrap();
+    DeployUser.plan(&cx, sys).unwrap();
 }
 
 #[test]
@@ -646,4 +703,110 @@ fn verify_fails_without_the_sudo_rule() {
         ..cx
     };
     assert_eq!(DeployUser.verify(&cx, sys), Ok(()));
+}
+
+/// The applying engine and its deadman settings.
+fn engine_on<'a>(fs: &'a FakeFs, runner: &'a Debian, state: &'a StateDir) -> Engine<'a> {
+    Engine::lock(state, Sys { fs, runner }).unwrap()
+}
+
+fn deadman() -> Deadman {
+    Deadman {
+        window: crate::engine::deadman::DEFAULT_WINDOW,
+        binary: BIN.into(),
+    }
+}
+
+/// Each apply leaves exactly the profile's keys: a forced command added,
+/// changed, then a key removed. Rollback steps back through them.
+#[test]
+fn the_key_file_follows_the_profile() {
+    const OTHER: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGother ci2@example.com";
+    const NEXT: &str = "/usr/local/bin/deploy-next";
+    let fs = fs();
+    fs.write_atomic(Path::new(NEXT), b"#!/bin/sh\n", root(0o755))
+        .unwrap();
+    let runner = Debian::new(&fs, Accounts::default());
+    let facts = facts();
+    let state = StateDir::create(&fs, STATE, 0).unwrap();
+    let engine = engine_on(&fs, &runner, &state);
+    let keys_file = Path::new("/home/deploy/.ssh/authorized_keys");
+    let both = format!("keys = [\"{KEY}\", \"{OTHER}\"]\n");
+    let steps = [
+        (both.clone(), format!("restrict {KEY}\nrestrict {OTHER}\n")),
+        (
+            format!("{both}command = \"{COMMAND}\""),
+            format!(
+                "restrict,command=\"{COMMAND}\" {KEY}\nrestrict,command=\"{COMMAND}\" {OTHER}\n"
+            ),
+        ),
+        (
+            format!("{both}command = \"{NEXT}\""),
+            format!("restrict,command=\"{NEXT}\" {KEY}\nrestrict,command=\"{NEXT}\" {OTHER}\n"),
+        ),
+        (
+            format!("keys = [\"{KEY}\"]\ncommand = \"{NEXT}\""),
+            format!("restrict,command=\"{NEXT}\" {KEY}\n"),
+        ),
+    ];
+    let mut files = Vec::new();
+    for (params, want) in &steps {
+        let params = table(params);
+        let plan = plan(&fs, &runner, &facts, &params);
+        let outcome = engine.apply(&plan, &deadman(), &mut |_| {}).unwrap();
+        assert!(
+            matches!(outcome, ApplyOutcome::Applied { .. }),
+            "{outcome:?}"
+        );
+        let text = String::from_utf8(fs.read(keys_file).unwrap()).unwrap();
+        assert_eq!(&text, want);
+        files.push(text);
+    }
+    // The drop-in names the newest command.
+    assert!(
+        String::from_utf8(fs.read(Path::new(SUDOERS)).unwrap())
+            .unwrap()
+            .contains(&format!("NOPASSWD: {NEXT} \"\""))
+    );
+    for want in files.iter().rev().skip(1) {
+        engine.rollback(Target::Last, &mut |_| {}).unwrap();
+        assert_eq!(
+            &String::from_utf8(fs.read(keys_file).unwrap()).unwrap(),
+            want
+        );
+    }
+}
+
+/// `docker = true` on its own existing account adds the group, and a
+/// rollback takes it out again.
+#[test]
+fn docker_on_an_existing_account_and_rollback() {
+    let home = FileOwner {
+        mode: 0o750,
+        uid: 1001,
+        gid: 1001,
+    };
+    let fs = fs().with_dir("/home/deploy", home);
+    let runner = Debian::new(
+        &fs,
+        Accounts::default()
+            .with_user("deploy", COMMENT)
+            .with_group("docker"),
+    );
+    let facts = facts();
+    let params = params("docker = true");
+    let state = StateDir::create(&fs, STATE, 0).unwrap();
+    let engine = engine_on(&fs, &runner, &state);
+    let plan = plan(&fs, &runner, &facts, &params);
+    assert!(change_ids(&plan).contains(&"user:deploy".to_owned()));
+    engine.apply(&plan, &deadman(), &mut |_| {}).unwrap();
+    assert_eq!(
+        runner.calls("usermod"),
+        [["--append", "--groups", "docker", "deploy"]]
+    );
+    assert_eq!(runner.accounts().users["deploy"].2, ["docker"]);
+    engine.rollback(Target::Last, &mut |_| {}).unwrap();
+    assert_eq!(runner.calls("gpasswd"), [["--delete", "deploy", "docker"]]);
+    assert!(runner.accounts().users["deploy"].2.is_empty());
+    assert!(runner.calls("userdel").is_empty());
 }

@@ -98,6 +98,16 @@ impl PlanCx<'_> {
     }
 }
 
+/// Docker Engine's package from Docker's repository, which creates the
+/// `docker` group: `deploy.user` with `docker = true` accepts a host
+/// without that group when a module before it plans this package.
+pub const DOCKER_PACKAGE: &str = "docker-ce";
+
+/// A [`ModuleError::Refused`] with `reason`.
+pub(crate) fn refuse<T>(reason: &str) -> Result<T, ModuleError> {
+    Err(ModuleError::Refused(reason.to_owned()))
+}
+
 /// Parses a module's table into its params `T`.
 ///
 /// # Errors
@@ -164,11 +174,6 @@ pub trait Module {
     fn force_restore(&self) -> bool {
         false
     }
-    /// Whether the users it gives SSH keys are admins, one of whom must log
-    /// in to confirm an apply. Not for an account whose keys are restricted.
-    fn keys_admins(&self) -> bool {
-        true
-    }
     /// The params its profile table accepts; empty for a module with none.
     fn params_doc(&self) -> &'static [ParamDoc] {
         &[]
@@ -217,8 +222,8 @@ pub trait Module {
 }
 
 /// Every module, in the order the plan lists and applies them.
-/// `deploy.user` comes after `ssh.server`, whose admin check reads the
-/// resources planned before it and must not take the deploy user for one.
+/// `deploy.user` comes last, after any module that installs Docker and so
+/// creates the `docker` group.
 #[must_use]
 pub fn all() -> &'static [&'static dyn Module] {
     &[

@@ -1248,6 +1248,7 @@ fn rollback_checks_and_restores_authorized_keys() {
         "test.keys",
         vec![Resource::AuthorizedKeys(AuthorizedKeys {
             user: "admin".into(),
+            exact: false,
             keys: vec!["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGtest me@laptop".into()],
         })],
     );

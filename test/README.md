@@ -41,7 +41,9 @@ the admin (with the key copied from root) confirms with `sudo vps-ready
 confirm`, and `rollback --last` removes the account; a second apply with
 `--deadman 1m` is rolled back by the timer. It then applies `deploy.user`
 with a forced command: the drop-in passes `visudo -cf`, the deploy key runs
-only that command, and `rollback --last` removes the account.
+only that command, a second apply with another command leaves only the key
+forced to it, and two `rollback --last` runs restore the first and then remove
+the account.
 
 ```sh
 cargo build --release --target aarch64-unknown-linux-musl   # x86_64-... on Intel

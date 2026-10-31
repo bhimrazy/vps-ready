@@ -21,3 +21,4 @@ modules:
         reversibility: reversible
     notes:
       - "docker = true: deploy joins the docker group, which is root access: it can start a container that mounts / and change anything on this host"
+      - "deploy may run /usr/local/bin/deploy-app as root with sudo, without a password"

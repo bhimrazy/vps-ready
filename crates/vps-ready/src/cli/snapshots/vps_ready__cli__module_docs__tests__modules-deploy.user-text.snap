@@ -16,8 +16,8 @@ Params (in the module's profile table)
       Login name of the deploy account; not user.admin's, and not an existing
       account vps-ready did not create.
   keys (default [])
-      Required: public keys without options, written with `restrict` (and
-      `command=` when set).
+      Required: public keys without options. The account's authorized_keys holds
+      exactly these, written with `restrict` (and `command=` when set).
   command (default "")
       Absolute path of a root-owned program that the keys can only run, and that
       the account may run as root with sudo, without arguments. Empty: no forced
