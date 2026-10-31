@@ -47,6 +47,9 @@ pub(super) struct Host<'a> {
     /// Whether Ctrl-C sets `stop` while `apply` waits, instead of ending
     /// the process.
     pub catch_sigint: bool,
+    /// Set by the wizard, whose handler ends the process on Ctrl-C while
+    /// this is true; the wait for a confirm clears it.
+    pub sigint_ends: Option<Arc<AtomicBool>>,
     /// Whether stderr is a terminal, for a countdown on one line.
     pub tty: bool,
     /// How often the wait for a confirm reads the journal.
@@ -69,7 +72,7 @@ pub(super) struct Selection {
 
 impl Selection {
     /// The modules to run, with their params from `profile`.
-    fn select<'a>(
+    pub(super) fn select<'a>(
         &self,
         all: &[&'a dyn Module],
         profile: Option<&'a Profile>,
@@ -173,7 +176,8 @@ pub(super) fn plan_profile(
         writeln!(out)?;
         return Ok(0);
     }
-    print_plan(out, &plan, &fixes(&plan, &facts)?, host.color)?;
+    let whole = profile.is_some() && sel.modules.is_empty();
+    print_plan(out, &plan, &fixes(&plan, &facts)?, whole, host.color)?;
     let n = plan.steps().count();
     if n > 0 {
         let args = sel.args();
@@ -229,7 +233,8 @@ pub(super) fn apply_profile(
             }
         }
     }
-    print_plan(out, &plan, &fixes(&plan, &facts)?, host.color)?;
+    let whole = profile.is_some() && sel.modules.is_empty();
+    print_plan(out, &plan, &fixes(&plan, &facts)?, whole, host.color)?;
     let n = plan.steps().count();
     if n == 0 {
         return Ok(0);
@@ -501,11 +506,14 @@ fn audit_fixed(host: &Host, plan: &Plan, out: &mut dyn Write) -> anyhow::Result<
 /// 2 changes in 1 module: 1 file, 1 kernel setting.
 /// ```
 ///
-/// A `partial` step adds a footnote line before the final one.
+/// A `partial` step adds a footnote line before the final one. An empty
+/// plan of a `whole` profile, not narrowed by `--module`, says the server
+/// matches it.
 fn print_plan(
     out: &mut dyn Write,
     plan: &Plan,
     fixes: &BTreeMap<String, Vec<String>>,
+    whole: bool,
     color: bool,
 ) -> io::Result<()> {
     const WIDTH: usize = 72;
@@ -582,7 +590,9 @@ fn print_plan(
         }
     }
     let n = plan.steps().count();
-    if n == 0 {
+    if n == 0 && whole {
+        writeln!(out, "\nNothing to do: this server already matches.")
+    } else if n == 0 {
         writeln!(out, "\nNothing to do.")
     } else {
         let modules = plan.changed_modules().len();
@@ -797,7 +807,7 @@ fn short(secs: u64) -> String {
     }
 }
 
-fn plural(n: usize, word: &str) -> String {
+pub(super) fn plural(n: usize, word: &str) -> String {
     match (n, word) {
         (1, _) => word.to_owned(),
         (_, "directory") => "directories".to_owned(),
@@ -807,4 +817,4 @@ fn plural(n: usize, word: &str) -> String {
 
 mod confirm;
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;

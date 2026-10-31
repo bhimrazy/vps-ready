@@ -1,0 +1,147 @@
+---
+source: crates/vps-ready/src/cli/wizard/tests.rs
+expression: text
+---
+vps-ready <version> on Debian GNU/Linux 13 (trixie) (vm-other)
+Audit: 12 passed, 12 failed (1 high, 5 medium, 6 low), 4 unknown. vps-ready can fix 11 of them.
+
+? What will this server run?
+  > Something else: SSH only (recommended: no Docker or web server found)
+    Web apps or Docker: opens ports 80 and 443
+? Admin user (logs in with an SSH key, uses sudo): admin
+  created, with 1 key from /root/.ssh/authorized_keys
+? Other ports to open, like 8080/tcp (Enter for none): 
+? Change the module list? (y/N) yes
+? Modules to run
+  [ ] user.admin: Set up an admin account that logs in with an SSH key and uses sudo (arms the safety timer)
+  [x] ssh.server: Turn off root and password logins over SSH (arms the safety timer)
+  [x] firewall.inbound: Drop incoming traffic that no rule allows (arms the safety timer)
+  [ ] ssh.bruteforce: Ban addresses that keep failing to log in over SSH
+  [x] kernel.sysctl: Harden kernel settings
+  [ ] updates.auto: Install security updates automatically
+  ssh.server: refusing to turn off root login and password login: no user other than root has an SSH key and sudo to log in with afterwards (there is no SSH session to take the user from). Set one up with the user.admin module, or log in as such a user and run vps-ready with sudo
+? Modules to run
+  [x] user.admin: Set up an admin account that logs in with an SSH key and uses sudo (arms the safety timer)
+  [x] ssh.server: Turn off root and password logins over SSH (arms the safety timer)
+  [x] firewall.inbound: Drop incoming traffic that no rule allows (arms the safety timer)
+  [x] ssh.bruteforce: Ban addresses that keep failing to log in over SSH
+  [x] kernel.sysctl: Harden kernel settings
+  [ ] updates.auto: Install security updates automatically
+
+user.admin: Set up an admin account that logs in with an SSH key and uses sudo
+  note: no `authorized_keys` given: copies 1 key from /root/.ssh/authorized_keys
+  + create user admin                                                     partial
+  + ~admin/.ssh/authorized_keys (mode 0600, admin:admin)                  reversible
+      @@ -0,0 +1 @@
+      +ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGroot root@laptop
+  + /etc/sudoers.d/90-vps-ready-admin (mode 0440, root:root)              reversible
+      @@ -0,0 +1,3 @@
+      +# Written by vps-ready (user.admin). `vps-ready rollback --last`
+      +# restores the previous state; edits here are replaced by the next apply.
+      +admin ALL=(ALL:ALL) NOPASSWD: ALL
+ssh.server: Turn off root and password logins over SSH (fixes SSH-001, SSH-002, SSH-005)
+  note: SSH sessions that are open now stay open; the new settings apply to new logins
+  note: Port, ListenAddress, AllowGroups, AuthenticationMethods and the crypto settings stay as they are
+  + /etc/ssh/sshd_config.d/00-vps-ready.conf (mode 0644, root:root)       reversible
+      @@ -0,0 +1,7 @@
+      +# Written by vps-ready (ssh.server). `vps-ready rollback --last`
+      +# restores the previous state; edits here are replaced by the next apply.
+      +# sshd uses the first value it reads for each keyword, and reads this file
+      +# before 50-cloud-init.conf and the rest of sshd_config.
+      +PermitRootLogin no
+      +PasswordAuthentication no
+      +X11Forwarding no
+firewall.inbound: Drop incoming traffic that no rule allows (fixes FW-001)
+  note: always accepts TCP 22, the current SSH ports (this session's, sshd's listeners and `Port`), whatever `allow` says
+  + directory /etc/vps-ready (mode 0755, root:root)                       reversible
+  + /etc/vps-ready/firewall.nft (mode 0644, root:root)                    reversible
+      @@ -0,0 +1,23 @@
+      +# Written by vps-ready (firewall.inbound). `vps-ready rollback --last`
+      +# restores the previous state; edits here are replaced by the next apply.
+      +# vps-ready-firewall.service loads it. It replaces only the table
+      +# inet vps_ready: other tables, such as Docker's or fail2ban's, stay.
+      +table inet vps_ready {}
+      +delete table inet vps_ready
+      +table inet vps_ready {
+      +  chain input {
+      +    type filter hook input priority filter; policy drop;
+      +    ct state established,related accept
+      +    ct state invalid drop
+      +    iif lo accept
+      +    meta l4proto icmp accept
+      +    # Neighbor discovery and path MTU: never block ICMPv6.
+      +    meta l4proto icmpv6 accept
+      +    # DHCPv4 replies that conntrack does not match (broadcast).
+      +    udp sport 67 udp dport 68 accept
+      +    # DHCPv6 client.
+      +    ip6 saddr fe80::/10 udp dport 546 accept
+      +    # The profile's `allow`, plus every current SSH port.
+      +    tcp dport { 22 } accept
+      +  }
+      +}
+  + /etc/systemd/system/vps-ready-firewall.service (mode 0644, root:root)  reversible
+      @@ -0,0 +1,19 @@
+      +# Written by vps-ready (firewall.inbound). `vps-ready rollback --last`
+      +# restores the previous state; edits here are replaced by the next apply.
+      +[Unit]
+      +Description=vps-ready: inbound firewall (nftables table inet vps_ready)
+      +DefaultDependencies=no
+      +Wants=network-pre.target
+      +After=nftables.service
+      +Before=network-pre.target shutdown.target
+      +Conflicts=shutdown.target
+      +
+      +[Service]
+      +Type=oneshot
+      +RemainAfterExit=yes
+      +ExecStart=/usr/sbin/nft -f /etc/vps-ready/firewall.nft
+      +ExecReload=/usr/sbin/nft -f /etc/vps-ready/firewall.nft
+      +ExecStop=-/usr/sbin/nft delete table inet vps_ready
+      +
+      +[Install]
+      +WantedBy=sysinit.target
+  ~ enable and start vps-ready-firewall.service                           reversible
+ssh.bruteforce: Ban addresses that keep failing to log in over SSH
+  note: no SSH session found, so only localhost is exempt from bans
+  note: if this installs fail2ban, rollback leaves it installed and enabled, as the package sets it up, so it runs the distro's own jails after a reboot; `systemctl disable --now fail2ban` turns it off
+  + /etc/fail2ban/jail.d/90-vps-ready.local (mode 0644, root:root)        reversible
+      @@ -0,0 +1,9 @@
+      +# Written by vps-ready (ssh.bruteforce). `vps-ready rollback --last`
+      +# restores the previous state; edits here are replaced by the next apply.
+      +[DEFAULT]
+      +banaction = nftables
+      +backend = systemd
+      +
+      +[sshd]
+      +enabled = true
+      +ignoreip = 127.0.0.1/8 ::1
+  ~ enable and start fail2ban.service                                     reversible
+kernel.sysctl: Harden kernel settings (fixes KRN-001, KRN-002, KRN-003, KRN-007, KRN-008, NET-002)
+  + /etc/sysctl.d/90-vps-ready.conf (mode 0644, root:root)                reversible
+      @@ -0,0 +1,8 @@
+      +# Written by vps-ready (kernel.sysctl). `vps-ready rollback --last`
+      +# restores the previous state; edits here are replaced by the next apply.
+      +kernel.kptr_restrict = 1
+      +kernel.dmesg_restrict = 1
+      +kernel.unprivileged_bpf_disabled = 2
+      +fs.protected_fifos = 1
+      +fs.protected_regular = 1
+      +net.ipv4.conf.all.accept_source_route = 0
+  ~ kernel.kptr_restrict 0 -> 1                                           reversible
+  ~ kernel.dmesg_restrict 0 -> 1                                          reversible
+  ~ kernel.unprivileged_bpf_disabled 0 -> 2                               reversible
+  ~ fs.protected_fifos 0 -> 1                                             reversible
+  ~ fs.protected_regular 0 -> 1                                           reversible
+  ~ net.ipv4.conf.all.accept_source_route 1 -> 0                          reversible
+
+17 changes in 5 modules: 7 files, 1 directory, 6 kernel settings, 2 services, 1 user.
+partial: rollback removes a user it created but keeps its home directory.
+Apply 17 changes? [y/N] n
+Nothing was changed.
+
+? Save your answers to vps-ready.toml to repeat them later? (Y/n) yes
+? /root/vps-ready.toml exists. Replace it? (y/N) yes
+Saved /root/vps-ready.toml.
+
+Next time, without questions:
+  sudo vps-ready apply --profile /root/vps-ready.toml

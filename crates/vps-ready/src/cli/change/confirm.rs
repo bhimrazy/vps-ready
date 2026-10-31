@@ -138,6 +138,9 @@ pub(super) fn wait(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> anyhow::Result<u8> {
+    if let Some(ends) = &host.sigint_ends {
+        ends.store(false, Ordering::SeqCst);
+    }
     if host.catch_sigint
         && let Err(e) =
             signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&host.stop))
