@@ -8,6 +8,7 @@
 # Cycle: apply --yes -> plan has no changes -> UPD-001 passes -> history shows
 # "applied" -> rollback --last -> the managed files match their state before.
 # unattended-upgrades stays installed by design, so this does not diff all of /etc.
+# First, every firewall.inbound ruleset snapshot must pass `nft -c`.
 # The container is capped at 512 MB and 1 CPU and is removed afterwards.
 set -eu
 cd "$(dirname "$0")/.."
@@ -43,6 +44,15 @@ docker exec "$name" chmod 755 /usr/local/bin/vps-ready
 
 vr() { docker exec "$name" vps-ready "$@"; }
 die() { echo "FAIL [$distro]: $*" >&2; exit 1; }
+
+# The firewall.inbound rulesets of the unit test snapshots must pass this
+# distro's `nft -c`; the snapshot's body follows its second `---` line.
+echo "== $distro: nft -c of the rendered rulesets"
+for snap in crates/vps-ready/src/modules/firewall_inbound/snapshots/*__ruleset-*.snap; do
+  awk 'n >= 2; /^---$/ { n++ }' "$snap" | docker exec -i "$name" nft -c -f - ||
+    die "nft -c rejects the ruleset of $snap"
+  echo "ok: $(basename "$snap")"
+done
 
 # Checksums of the files that exist now; 52vps-ready must not be one of them.
 echo "== $distro: before"

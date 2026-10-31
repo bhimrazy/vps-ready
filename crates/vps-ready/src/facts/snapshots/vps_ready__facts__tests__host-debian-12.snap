@@ -200,6 +200,7 @@ ssh:
       - /usr/bin/xauth
   socket_ports:
     - 22
+  listening: []
   fail2ban: false
 listeners:
   - proto: tcp
@@ -235,5 +236,6 @@ updates:
     apt-daily.service: ok
     apt-daily.timer: ok
 docker: false
+bridges: []
 apparmor: false
 notices: []

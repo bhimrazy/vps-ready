@@ -69,6 +69,7 @@ That one login also checks everything at once: the admin user exists, your key w
 | It started after the changes went live | A second terminal opened earlier also survived the reload |
 | It came in on a port the SSH server listens on | A login through another SSH server proves nothing about this one |
 | It is logged in as the admin user of the plan | That is the account you will use from now on |
+| It does not come from loopback | The firewall accepts loopback whatever its rules, so `ssh localhost` on the server proves nothing |
 
 These do **not** count as new: tmux, screen and mosh sessions, the provider's web console, and `ssh` connections shared through `ControlMaster`. The printed command sets `-o ControlPath=none` so your `ssh` opens a fresh connection even if your config shares them. A login through a jump host does count.
 

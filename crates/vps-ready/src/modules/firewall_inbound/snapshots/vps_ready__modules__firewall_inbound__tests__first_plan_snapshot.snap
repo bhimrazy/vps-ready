@@ -31,5 +31,5 @@ modules:
       - daemon-reload
       - firewall-reload
     notes:
-      - "always accepts TCP 22, the current SSH ports (this session's, sshd's listeners and `Port`), whatever `allow` says"
+      - "always accepts TCP 22, the current SSH ports (this session's, root's sshd listeners and `Port`), whatever `allow` says"
       - "if this installs nftables, rollback leaves it installed"

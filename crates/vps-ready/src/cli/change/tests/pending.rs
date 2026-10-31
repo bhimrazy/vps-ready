@@ -227,6 +227,27 @@ fn confirm_needs_a_new_ssh_login() {
         ),
         "{err}"
     );
+    let local = Host {
+        session: |_| {
+            Ok(Session {
+                client: "127.0.0.1:50022".parse().unwrap(),
+                server: "127.0.0.1:22".parse().unwrap(),
+                ..new_login(Sys {
+                    fs: &FakeFs::new(),
+                    runner: &FakeRunner::new(),
+                })?
+            })
+        },
+        ..lockout_host(&fs, &runner)
+    };
+    let (code, _, err) = confirm_cmd(&local, None);
+    assert_eq!(code, 2);
+    assert_eq!(
+        err,
+        "error: this SSH login comes from 127.0.0.1, on this server itself, so it does not \
+         show that the server can still be reached from outside. Confirm from your own computer. Open a new terminal and run: `ssh -t -o \
+         ControlPath=none -p 22 admin@<server address> sudo vps-ready confirm`\n"
+    );
     assert!(history_text(&host).contains("pending-confirm"));
 
     let new = Host {

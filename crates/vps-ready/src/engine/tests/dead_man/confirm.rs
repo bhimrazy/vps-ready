@@ -171,6 +171,46 @@ fn only_a_new_login_through_the_hosts_sshd_confirms() {
         .unwrap();
 }
 
+/// The firewall accepts all of loopback whatever its rules, so a login from
+/// there proves nothing about one from outside.
+#[test]
+fn a_login_from_loopback_does_not_confirm() {
+    let fs = armable();
+    let txn = applied(&fs);
+    set_uptime(&fs, 1100);
+    let run = dm_runner();
+    let state = state(&fs);
+    let engine = Engine::lock(
+        &state,
+        Sys {
+            fs: &fs,
+            runner: &run,
+        },
+    )
+    .unwrap();
+    let from = |client: &str| Session {
+        client: SocketAddr::new(client.parse().unwrap(), 50022),
+        ..login(951, 1050)
+    };
+    for (client, shown) in [
+        ("127.0.0.1", "127.0.0.1"),
+        ("127.1.2.3", "127.1.2.3"),
+        ("::1", "::1"),
+        ("::ffff:127.0.0.1", "127.0.0.1"),
+    ] {
+        let err = refusal(engine.confirm(None, &from(client), &[22]));
+        assert_eq!(err, Refusal::Local(shown.parse().unwrap()), "{client}");
+    }
+    assert_eq!(
+        Refusal::Local("127.0.0.1".parse().unwrap()).to_string(),
+        "this SSH login comes from 127.0.0.1, on this server itself, so it does not show \
+         that the server can still be reached from outside"
+    );
+    assert!(calls(&run).is_empty());
+    // QEMU's user networking: logins come from its gateway, 10.0.2.2.
+    assert_eq!(engine.confirm(None, &from("10.0.2.2"), &[22]).unwrap(), txn);
+}
+
 /// Rewrites the admins of the `state pending-confirm` record of `txn`,
 /// which [`applied`] journals as `["admin"]` (its session's user), to the
 /// JSON array `admins`.

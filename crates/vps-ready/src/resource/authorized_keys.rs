@@ -824,6 +824,9 @@ mod tests {
         fn read_dir(&self, path: &Path) -> Result<Vec<PathBuf>, SysError> {
             self.inner.read_dir(path)
         }
+        fn read_link(&self, path: &Path) -> Result<PathBuf, SysError> {
+            self.inner.read_link(path)
+        }
         fn metadata(&self, path: &Path) -> Result<FileMeta, SysError> {
             if path != Path::new(self.swapped) {
                 return self.inner.metadata(path);

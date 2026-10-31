@@ -50,7 +50,7 @@ ssh.server: Turn off root and password logins over SSH (fixes SSH-001, SSH-002, 
       +PasswordAuthentication no
       +X11Forwarding no
 firewall.inbound: Drop incoming traffic that no rule allows (fixes FW-001)
-  note: always accepts TCP 22, the current SSH ports (this session's, sshd's listeners and `Port`), whatever `allow` says
+  note: always accepts TCP 22, the current SSH ports (this session's, root's sshd listeners and `Port`), whatever `allow` says
   note: Docker is installed: input from docker0 and br-* is accepted, so containers can reach services on the host; a compromised container can reach all of them, as with no firewall
   + directory /etc/vps-ready (mode 0755, root:root)                       reversible
   + /etc/vps-ready/firewall.nft (mode 0644, root:root)                    reversible

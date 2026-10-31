@@ -86,6 +86,9 @@ pub(in crate::cli) fn confirm(
              and ssh connections shared through ControlMaster all count as old. {}",
             again(Some(&session))
         ),
+        Err(EngineError::Refused(r @ Refusal::Local(_))) => {
+            bail!("{r}. Confirm from your own computer. {}", again(None))
+        }
         Err(EngineError::Refused(r @ (Refusal::OtherSshd { .. } | Refusal::NotAdmin { .. }))) => {
             bail!("{r}. {}", again(Some(&session)))
         }
