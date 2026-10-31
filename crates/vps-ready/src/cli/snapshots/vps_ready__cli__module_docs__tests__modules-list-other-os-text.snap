@@ -33,4 +33,9 @@ updates.auto
   Install security updates automatically
   Does not apply to this host: apt is supported only on Debian and Ubuntu.
 
+deploy.user
+  Set up a deploy account whose SSH keys are restricted
+  Does not apply to this host: the deploy account is set up only on Debian and
+  Ubuntu so far.
+
 Details: vps-ready modules <ID>

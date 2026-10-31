@@ -9,7 +9,7 @@ use super::{Backup, FileCopy, ResourceError, after_path, before_path, file};
 use crate::sys::{FileKind, FileMeta, FileOwner, Sys, SysError};
 
 /// Public key lines that `~/.ssh/authorized_keys` of `user` must contain.
-/// Missing lines are appended; no line is ever removed.
+/// Missing lines are appended and no line is removed, unless `exact`.
 ///
 /// The path comes from the user's passwd entry when the resource is used,
 /// so the user may be created earlier in the same transaction. `~/.ssh`
@@ -24,6 +24,10 @@ pub struct AuthorizedKeys {
     pub user: String,
     /// Key lines, e.g. `ssh-ed25519 AAAAC3Nza... me@laptop`.
     pub keys: Vec<String>,
+    /// The file holds exactly `keys`, in order, and every other line is
+    /// removed: for keys whose options must not be bypassed by an earlier
+    /// line, and that must go when they are taken out of the profile.
+    pub exact: bool,
 }
 
 /// The file and its directory as they are now.
@@ -48,29 +52,29 @@ impl AuthorizedKeys {
         self.check_keys()?;
         let Some(target) = self.target(sys)? else {
             // The user does not exist yet: a `User` earlier in the plan creates it.
-            let (content, added) = self.desired(b"");
-            return Ok((added > 0).then(|| {
+            let (content, changed) = self.desired(b"");
+            return Ok(changed.then(|| {
                 let user = &self.user;
                 let summary = format!("create ~{user}/.ssh/authorized_keys (0600 {user}:{user})");
                 (summary, Some(unified(b"", &content)))
             }));
         };
-        let (content, added) = self.desired(target.bytes());
+        let (content, changed) = self.desired(target.bytes());
         let path = target.path.display();
         Ok(match &target.current {
-            None if added == 0 => None,
+            None if !changed => None,
             None => Some((
                 format!("create {path} ({})", fmt_owner(target.owner)),
                 Some(unified(b"", &content)),
             )),
-            Some((_, owner)) if added == 0 && *owner == target.owner => None,
+            Some((_, owner)) if !changed && *owner == target.owner => None,
             Some((bytes, owner)) => {
                 let owner = if *owner == target.owner {
                     fmt_owner(target.owner)
                 } else {
                     format!("{} -> {}", fmt_owner(*owner), fmt_owner(target.owner))
                 };
-                let diff = (added > 0).then(|| unified(bytes, &content));
+                let diff = changed.then(|| unified(bytes, &content));
                 Some((format!("update {path} ({owner})"), diff))
             }
         })
@@ -217,8 +221,24 @@ impl AuthorizedKeys {
         }))
     }
 
-    /// `current` with the missing keys appended, and how many there were.
-    fn desired(&self, current: &[u8]) -> (Vec<u8>, usize) {
+    /// The desired bytes, and whether they differ from `current`: with
+    /// `exact`, the keys alone; otherwise `current` with the missing keys
+    /// appended.
+    fn desired(&self, current: &[u8]) -> (Vec<u8>, bool) {
+        if self.exact {
+            let mut seen = Vec::new();
+            let mut out = Vec::new();
+            for key in self.keys.iter().map(|k| k.trim()) {
+                let id = identity(key);
+                if !seen.contains(&id) {
+                    out.extend_from_slice(key.as_bytes());
+                    out.push(b'\n');
+                    seen.push(id);
+                }
+            }
+            let changed = out != current;
+            return (out, changed);
+        }
         let mut have: Vec<String> = String::from_utf8_lossy(current)
             .lines()
             .map(identity)
@@ -239,8 +259,58 @@ impl AuthorizedKeys {
             have.push(id);
             added += 1;
         }
-        (out, added)
+        (out, added > 0)
     }
+}
+
+/// Whether `line` lets its user log in to a normal shell: a key, plain or
+/// with options other than `restrict` and `command=`, which limit it to no
+/// terminal or one program. `from=`, `expiry-time=` and the like still
+/// count, so an admin key limited to some addresses is an admin's.
+pub(crate) fn gives_a_shell(line: &str) -> bool {
+    let line = line.trim();
+    if is_plain_key(line) {
+        return true;
+    }
+    // The options end at the first space outside quotes; a quoted value
+    // may hold `\"`.
+    let (mut quoted, mut escaped) = (false, false);
+    let mut names = Vec::new();
+    let mut start = 0;
+    let mut end = line.len();
+    for (i, c) in line.char_indices() {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' if quoted => escaped = true,
+            '"' => quoted = !quoted,
+            ',' if !quoted => {
+                names.push(&line[start..i]);
+                start = i + 1;
+            }
+            ' ' | '\t' if !quoted => {
+                end = i;
+                break;
+            }
+            _ => {}
+        }
+    }
+    names.push(&line[start..end]);
+    is_plain_key(&line[end..])
+        && !names.iter().any(|o| {
+            let name = o.split('=').next().unwrap_or_default();
+            name.eq_ignore_ascii_case("restrict") || name.eq_ignore_ascii_case("command")
+        })
+}
+
+/// Whether `line` starts with a key type rather than options, and has a key
+/// after it.
+pub(crate) fn is_plain_key(line: &str) -> bool {
+    let mut fields = line.split_whitespace();
+    fields.next().is_some_and(|kind| {
+        ["ssh-", "ecdsa-", "sk-"]
+            .iter()
+            .any(|p| kind.starts_with(p))
+    }) && fields.next().is_some()
 }
 
 /// What makes two lines the same key: type and base64 blob, so a different
@@ -425,6 +495,7 @@ mod tests {
     fn keys(keys: &[&str]) -> Resource {
         Resource::AuthorizedKeys(AuthorizedKeys {
             user: "admin".into(),
+            exact: false,
             keys: keys.iter().map(|&k| k.to_owned()).collect(),
         })
     }
@@ -484,6 +555,7 @@ mod tests {
         let current = format!("# keys\n{OTHER}\nssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGtest");
         let resource = AuthorizedKeys {
             user: "admin".into(),
+            exact: false,
             keys: vec![
                 KEY.into(),
                 OTHER.into(),
@@ -492,14 +564,79 @@ mod tests {
             ],
         };
         // The same key with no comment is present; one with options is not.
-        let (out, added) = resource.desired(current.as_bytes());
-        assert_eq!(added, 1);
+        let (out, changed) = resource.desired(current.as_bytes());
+        assert!(changed);
         assert_eq!(
             String::from_utf8(out).unwrap(),
             format!("{current}\n{restricted}\n")
         );
-        let (_, added) = resource.desired(format!("{restricted}\n").as_bytes());
-        assert_eq!(added, 2);
+        let (out, changed) = resource.desired(format!("{restricted}\n").as_bytes());
+        assert!(changed);
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            format!("{restricted}\n{KEY}\n{OTHER}\n")
+        );
+        let (_, changed) = resource.desired(format!("{KEY}\n{OTHER}\n{restricted}\n").as_bytes());
+        assert!(!changed);
+    }
+
+    #[test]
+    fn exact_keys_replace_every_other_line() {
+        let restricted = format!("restrict {KEY}");
+        let resource = AuthorizedKeys {
+            user: "admin".into(),
+            keys: vec![restricted.clone(), format!(" {OTHER} ")],
+            exact: true,
+        };
+        let want = format!("{restricted}\n{OTHER}\n");
+        // An earlier unrestricted line for the same key goes, and so does
+        // a comment.
+        let (out, changed) = resource.desired(format!("# keys\n{KEY}\n{OTHER}\n").as_bytes());
+        assert!(changed);
+        assert_eq!(String::from_utf8(out).unwrap(), want);
+        let (_, changed) = resource.desired(want.as_bytes());
+        assert!(!changed);
+        // A key taken out of the list is removed.
+        let one = AuthorizedKeys {
+            keys: vec![restricted.clone()],
+            ..resource
+        };
+        let (out, changed) = one.desired(want.as_bytes());
+        assert!(changed);
+        assert_eq!(String::from_utf8(out).unwrap(), format!("{restricted}\n"));
+        // A key given twice, or again with another comment, is written once.
+        let twice = AuthorizedKeys {
+            keys: vec![
+                restricted.clone(),
+                OTHER.into(),
+                restricted.clone(),
+                format!("{} new@desk", OTHER.rsplit_once(' ').unwrap().0),
+            ],
+            ..one
+        };
+        let (out, _) = twice.desired(b"");
+        assert_eq!(String::from_utf8(out).unwrap(), want);
+    }
+
+    #[test]
+    fn options_that_keep_a_shell() {
+        for line in [
+            KEY.to_owned(),
+            format!("from=\"203.0.113.0/24\" {KEY}"),
+            format!("no-agent-forwarding,expiry-time=\"20991231\" {KEY}"),
+            format!("environment=\"A=restrict\" {KEY}"),
+        ] {
+            assert!(gives_a_shell(&line), "{line}");
+        }
+        for line in [
+            format!("restrict {KEY}"),
+            format!("restrict,command=\"/usr/local/bin/deploy-app\" {KEY}"),
+            format!("no-pty,Command=\"echo \\\"a, b\\\"\" {KEY}"),
+            "from=\"203.0.113.1\"".to_owned(),
+            "not a key".to_owned(),
+        ] {
+            assert!(!gives_a_shell(&line), "{line}");
+        }
     }
 
     #[test]
