@@ -34,6 +34,12 @@ const PAGES = {
   'release.md': { slug: 'project/release', label: 'Supply chain and release', order: 5 },
   'm2-plan.md': { slug: 'project/m2-plan', label: 'Design notes: M2', order: 6 },
   'm3-plan.md': { slug: 'project/m3-plan', label: 'Design notes: M3', order: 7 },
+  'm4-plan.md': {
+    slug: 'project/m4-plan',
+    label: 'Design notes: M4',
+    order: 8,
+    note: 'This is the plan for the next release. The wizard and `modules` are merged but not released yet; the status line below says where the code differs.',
+  },
 };
 const DOCS_OUT = join(site, 'src/content/docs/docs');
 const CONTROLS_SLUG = 'reference/security-controls';

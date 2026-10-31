@@ -68,6 +68,13 @@ npm run dev    # or `npm run build`, which also checks internal links
 
 Most docs pages are generated from `docs/*.md` (and the controls catalog) by `site/scripts/sync-docs.mjs` before every dev or build run. Edit the source in `docs/`, never the generated files under `site/src/content/docs/docs/` (they are listed in `site/.gitignore`). A new `docs/*.md` needs an entry in the script's page map, or the build fails.
 
+A pull request that touches the site uploads the built site as a `site-preview` artifact, kept for 7 days. To view it, download it from the `pages` run's summary page and serve it with any static server:
+
+```sh
+unzip site-preview.zip -d site-preview
+python3 -m http.server -d site-preview   # http://localhost:8000
+```
+
 ## Lint policy
 
 No `unwrap`, `expect` or `panic!` outside tests (enforced by clippy, see

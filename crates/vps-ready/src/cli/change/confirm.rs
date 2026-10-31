@@ -105,7 +105,11 @@ pub(super) fn print_pending(
 ) -> std::io::Result<()> {
     let ports = facts.ssh.ports();
     let session = facts.session.as_ref();
-    writeln!(out, "Changes are live. Open a NEW terminal and run:\n")?;
+    writeln!(
+        out,
+        "Changes are live. To keep them, open a NEW terminal on your computer and run\n\
+         this to show you can still log in:\n"
+    )?;
     writeln!(out, "    {}", ssh_line(host, admins, session, &ports))?;
     if let Some(ip) = session.map(|s| s.server.ip())
         && !public(ip)
@@ -138,15 +142,20 @@ pub(super) fn wait(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> anyhow::Result<u8> {
-    if host.catch_sigint
-        && let Err(e) =
-            signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&host.stop))
-    {
-        writeln!(
-            err,
-            "vps-ready: cannot catch Ctrl-C ({e}); it ends this wait, and the timer still \
-             reverts the changes unless confirmed"
-        )?;
+    if host.catch_sigint {
+        match signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&host.stop)) {
+            // Ctrl-C now stops the wait, so it must not end the process.
+            Ok(_) => {
+                if let Some(ends) = &host.sigint_ends {
+                    ends.store(false, Ordering::SeqCst);
+                }
+            }
+            Err(e) => writeln!(
+                err,
+                "vps-ready: cannot catch Ctrl-C ({e}); it ends this wait, and the timer still \
+                 reverts the changes unless confirmed"
+            )?,
+        }
     }
     let fs = host.sys.fs;
     let mut minute = None;
