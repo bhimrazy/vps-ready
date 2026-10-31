@@ -236,6 +236,17 @@ WantedBy=multi-user.target
     )
 }
 
+/// The binary the installed boot hook runs, if the unit file is there and
+/// names one.
+pub(super) fn hook_binary(fs: &dyn Fs) -> Option<std::path::PathBuf> {
+    let bytes = fs.read(Path::new(HOOK)).ok()?;
+    String::from_utf8_lossy(&bytes)
+        .lines()
+        .find_map(|l| l.strip_prefix("ExecStart="))
+        .and_then(|cmd| cmd.strip_suffix(" rollback --deadman-boot"))
+        .map(std::path::PathBuf::from)
+}
+
 /// Writes the boot hook if it differs (then `daemon-reload`) and enables it.
 pub(super) fn install_hook(sys: Sys, binary: &Path) -> Result<(), String> {
     let path = Path::new(HOOK);

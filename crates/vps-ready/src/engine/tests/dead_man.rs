@@ -747,6 +747,49 @@ fn a_manual_rollback_of_a_pending_transaction_disarms() {
 }
 
 #[test]
+fn a_binary_path_change_while_pending_is_refused() {
+    let fs = armable();
+    let facts = facts();
+    let [lock, keys, plain] = locking();
+    let plan = plan_of(&fs, &facts, &[&lock, &keys, &plain]);
+    let state = state(&fs);
+    let run = dm_runner();
+    let check = |binary: &str| {
+        Engine::lock(
+            &state,
+            Sys {
+                fs: &fs,
+                runner: &run,
+            },
+        )
+        .unwrap()
+        .ensure_hook_binary(Path::new(binary))
+    };
+
+    // Nothing pending: any path will do.
+    check("/usr/bin/vps-ready").unwrap();
+
+    let (txn, _) = pending(&fs, &plan);
+    check(BIN).unwrap();
+    let err = check("/usr/bin/vps-ready").unwrap_err();
+    assert!(
+        matches!(&err, EngineError::HookBinary { txn: t, hook, running }
+            if *t == txn && hook == BIN && running == "/usr/bin/vps-ready"),
+        "{err:?}"
+    );
+    let text = err.to_string();
+    assert!(
+        text.contains(&format!("boot hook runs {BIN}, not /usr/bin/vps-ready")),
+        "{text}"
+    );
+    assert!(text.contains(&format!("`{BIN} rollback --last`")), "{text}");
+
+    // Once rolled back, the stale hook file no longer matters.
+    manual(&fs, &dm_runner()).unwrap();
+    check("/usr/bin/vps-ready").unwrap();
+}
+
+#[test]
 fn a_resumed_rollback_of_an_armed_transaction_keeps_the_dead_man_reason() {
     let facts = facts();
     let [lock, ..] = locking();

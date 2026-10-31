@@ -282,6 +282,20 @@ pub fn main() -> ExitCode {
 /// Whether notices print as `vps-ready: <notice>` instead of log lines.
 static PLAIN_NOTICES: AtomicBool = AtomicBool::new(false);
 
+/// The first `vps-ready` on `path` when it is not `exe`, the running
+/// binary; `None` if `exe` comes first or `path` has none.
+fn shadowing_binary(exe: &Path, path: &std::ffi::OsStr) -> Option<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    let exe = exe.canonicalize().ok()?;
+    let first = std::env::split_paths(path)
+        .map(|d| d.join("vps-ready"))
+        .find(|f| {
+            f.metadata()
+                .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        })?;
+    (first.canonicalize().ok()? != exe).then_some(first)
+}
+
 /// Logs go to stderr. `RUST_LOG` wins when set; otherwise `-v` raises the
 /// level from `warn` to `info`, `debug` and `trace`. Without either, notices
 /// are plain lines and only errors from the logs remain.
@@ -351,6 +365,17 @@ pub fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
                 writeln!(out)?;
             } else {
                 writeln!(out, "{VERSION_INFO}")?;
+            }
+            if let Some(other) = std::env::current_exe()
+                .ok()
+                .zip(std::env::var_os("PATH"))
+                .and_then(|(exe, path)| shadowing_binary(&exe, &path))
+            {
+                eprintln!(
+                    "warning: {} comes earlier on PATH than this binary; running `vps-ready` \
+                     starts that one",
+                    other.display()
+                );
             }
         }
         Command::Detect { root } => {
@@ -974,6 +999,39 @@ fn ports_line(listeners: &[Listener]) -> String {
 mod tests {
     use super::*;
     use crate::facts::fixtures::{HOSTS, host};
+
+    #[test]
+    fn warns_of_a_vps_ready_earlier_on_path() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let bin = |d: &str| {
+            let dir = dir.path().join(d);
+            std::fs::create_dir(&dir).unwrap();
+            let file = dir.join("vps-ready");
+            std::fs::write(&file, "x").unwrap();
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+            file
+        };
+        let (a, b) = (bin("a"), bin("b"));
+        let empty = dir.path().join("empty");
+        std::fs::create_dir(&empty).unwrap();
+        let path = |dirs: &[&Path]| std::env::join_paths(dirs).unwrap();
+        let (da, db) = (a.parent().unwrap(), b.parent().unwrap());
+
+        // The running binary comes first, or is not on PATH, or the other
+        // copy is a link to it: no warning.
+        assert_eq!(shadowing_binary(&a, &path(&[da, db])), None);
+        assert_eq!(shadowing_binary(&a, &path(&[&empty])), None);
+        std::fs::remove_file(&b).unwrap();
+        std::os::unix::fs::symlink(&a, &b).unwrap();
+        assert_eq!(shadowing_binary(&a, &path(&[db, da])), None);
+        std::fs::remove_file(&b).unwrap();
+        std::fs::write(&b, "x").unwrap();
+        std::fs::set_permissions(&b, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        // Another copy comes first.
+        assert_eq!(shadowing_binary(&a, &path(&[&empty, db, da])), Some(b));
+    }
 
     #[test]
     fn parses_dead_man_windows() {

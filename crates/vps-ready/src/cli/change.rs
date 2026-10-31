@@ -256,6 +256,7 @@ pub(super) fn apply_profile(
     let modules = sel.select(host.modules, profile.as_ref())?;
     let state = StateDir::create(host.sys.fs, host.state_dir, host.state_uid)?;
     let engine = Engine::lock(&state, host.sys)?;
+    engine.ensure_hook_binary(&host.binary)?;
     engine.ensure_finished()?;
     let facts = (host.facts)(host.sys)?;
     log_notices(&facts);
@@ -352,7 +353,9 @@ pub(super) fn rollback(
     // Who runs it: a rollback must not remove their account.
     let mut own: Vec<String> = host.sudo_user.iter().cloned().collect();
     own.extend((host.session)(host.sys).ok().and_then(|s| s.user));
-    let done = Engine::lock(&state, host.sys)?.rollback_by(target, &own, &mut |p| {
+    let engine = Engine::lock(&state, host.sys)?;
+    engine.ensure_hook_binary(&host.binary)?;
+    let done = engine.rollback_by(target, &own, &mut |p| {
         print_progress(err, &p);
     })?;
     print_rollback(out, &done)?;

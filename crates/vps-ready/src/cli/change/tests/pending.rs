@@ -435,6 +435,36 @@ fn rollback_last_undoes_a_pending_apply_and_disarms() {
     assert!(history_text(&host).contains("rolled-back (manual)"));
 }
 
+#[test]
+fn apply_and_rollback_refuse_a_binary_other_than_the_boot_hooks() {
+    let fs = armable();
+    let runner = dm_runner();
+    let host = lockout_host(&fs, &runner);
+    assert_eq!(apply_lockout(&host).0, EXIT_PENDING);
+
+    // The package's path, while the hook names the install.sh one.
+    let moved = Host {
+        binary: "/usr/bin/vps-ready".into(),
+        ..lockout_host(&fs, &runner)
+    };
+    let (code, _, err) = apply_lockout(&moved);
+    assert_eq!(code, 2);
+    assert!(
+        err.contains(&format!("boot hook runs {BINARY}, not /usr/bin/vps-ready")),
+        "{err}"
+    );
+    let (code, _, err) = run(|out, err| rollback(&moved, Target::Last, out, err));
+    assert_eq!(code, 2);
+    assert!(
+        err.contains(&format!("`{BINARY} rollback --last`")),
+        "{err}"
+    );
+
+    // The binary the hook names still rolls back.
+    let (code, _, err) = rollback_last(&host);
+    assert_eq!(code, 0, "{err}");
+}
+
 /// The printed line logs in as the plan's admin, not as root who ran it.
 #[test]
 fn the_ssh_line_names_the_planned_admin() {

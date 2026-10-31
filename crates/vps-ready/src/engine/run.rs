@@ -299,6 +299,29 @@ impl<'a> Engine<'a> {
         }
     }
 
+    /// Fails if a transaction is pending a confirm and its boot hook runs a
+    /// binary other than `binary`: a reboot would then not roll it back, and
+    /// moving the binary is how that happens. The caller of `apply` and of
+    /// a manual `rollback` runs this first; the timer and the hook run the
+    /// binary they were armed with.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::HookBinary`], or an error reading the journals.
+    pub fn ensure_hook_binary(&self, binary: &Path) -> Result<(), EngineError> {
+        let Some(txn) = self.pending()? else {
+            return Ok(());
+        };
+        match deadman::hook_binary(self.sys.fs) {
+            Some(hook) if hook != binary => Err(EngineError::HookBinary {
+                txn: txn.id().to_owned(),
+                hook: hook.display().to_string(),
+                running: binary.display().to_string(),
+            }),
+            _ => Ok(()),
+        }
+    }
+
     /// Applies `plan`, the plan shown to the user. Each change is re-diffed
     /// first, and nothing happens if one differs. Resources that had no
     /// change are not re-diffed: if they drifted since, the next plan shows
