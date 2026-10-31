@@ -552,7 +552,7 @@ vm 'cat >/tmp/vr-wizard.exp' <test/vm-wizard.exp
 wizard_fail() { vm cat /tmp/vr-wizard.out || true; die "$1"; }
 # wizard <login> <admin>: `sudo vps-ready` over a new login as <login>,
 # under expect: every default, `y` to apply. In the background, since apply
-# waits for a confirm; returns once it is pending. The transcript lands in
+# waits for a confirm; returns soon after it is pending. The transcript lands in
 # /tmp/vr-wizard.out and the exit code in /tmp/vr-wizard.rc.
 wizard() {
   vm "rm -f /tmp/vr-wizard.rc; setsid -f sh -c 'expect /tmp/vr-wizard.exp $2 sh /tmp/vr-ssh -tt -o ControlPath=none $1@127.0.0.1 sudo NO_COLOR=1 vps-ready >/tmp/vr-wizard.out 2>&1; echo \$? >/tmp/vr-wizard.rc' </dev/null >/dev/null 2>&1"
@@ -562,6 +562,8 @@ wizard() {
     i=$((i + 1)); [ "$i" -le 120 ] || wizard_fail "not pending within 120 s"
     sleep 1
   done
+  # A login in the second the changes went live counts as old.
+  sleep 2
 }
 # wizard_done <admin>: confirms as <admin> from a new login; the wizard
 # exits 0 and printed the ssh line for <admin>. Sets $profile to what its
