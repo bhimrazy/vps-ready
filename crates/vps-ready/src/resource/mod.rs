@@ -56,7 +56,9 @@ pub enum ResourceError {
         reason: String,
     },
     /// A path vps-ready would write for a user is unsafe: it or a parent is
-    /// a symlink, or a directory on it has the wrong owner or mode.
+    /// a symlink, a directory on it has the wrong owner or mode, or the file
+    /// has another owner, more than one link or a setuid, setgid or sticky
+    /// bit.
     #[error("refusing to manage {path}: {reason}")]
     Unsafe {
         /// The offending path.
@@ -476,12 +478,12 @@ pub fn restore(sys: Sys, txn_dir: &Path, backup: &Backup) -> Result<(), Resource
             added_groups,
         } => user::restore(sys, name, *created, added_groups),
         Backup::AuthorizedKeys {
+            user,
             path,
             n,
             original,
             created_dir,
-            ..
-        } => authorized_keys::restore(sys, txn_dir, path, *n, *original, *created_dir),
+        } => authorized_keys::restore(sys, txn_dir, user, path, *n, *original, *created_dir),
     }
 }
 

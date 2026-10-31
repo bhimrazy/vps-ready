@@ -1100,13 +1100,16 @@ impl<'a> Engine<'a> {
         // reload does not stop the restores of earlier modules, which may be
         // the ones that matter (e.g. an sshd drop-in before a firewall); the
         // rollback then ends incomplete, without a final state. In the
-        // dead-man paths a failed restore does not stop the others either;
-        // elsewhere it ends the rollback, but only after the reloads due by
-        // then ran, so a daemon does not keep a config whose files are
-        // already restored.
+        // dead-man paths a failed restore does not stop the others either,
+        // but after a failed forced one the unforced ones wait; elsewhere it
+        // ends the rollback, but only after the reloads due by then ran, so
+        // a daemon does not keep a config whose files are already restored.
         let mut due: Vec<Reload> = Vec::new();
         let mut failed = Vec::new();
         let mut unrestored: Vec<(ByHand, EngineError)> = Vec::new();
+        // Unforced restores held back after a forced one failed.
+        let mut held: Vec<ByHand> = Vec::new();
+        let mut forced_failed = false;
         let mut run = || -> Result<(), EngineError> {
             // The group of the reloads in `due`.
             let mut due_group = None;
@@ -1137,6 +1140,16 @@ impl<'a> Engine<'a> {
                     };
                     note(open, line, best_effort)
                         .map_err(|e| incomplete(&id, &dir, left(i + 1), e))?;
+                    continue;
+                }
+                // A lock-down still in place needs the way in that apply set
+                // up before it, such as the admin `ssh.server` relies on, so
+                // the unforced restores wait for a rerun.
+                if forced_failed && !force {
+                    held.extend(by_hand(&dir, resource, backup).map(|mut step| {
+                        step.step = format!("only after the steps above succeed, {}", step.step);
+                        step
+                    }));
                     continue;
                 }
                 if best_effort {
@@ -1175,6 +1188,7 @@ impl<'a> Engine<'a> {
                     Ok(()) => done.restored += 1,
                     Err(e) if best_effort => {
                         tracing::error!("{e}; restoring the others");
+                        forced_failed |= force;
                         let step = by_hand(&dir, resource, backup).unwrap_or_else(|| ByHand {
                             resource: resource.clone(),
                             step: "see the journal".into(),
@@ -1197,6 +1211,7 @@ impl<'a> Engine<'a> {
         flushed.map_err(|e| incomplete(&id, &dir, left(0), e))?;
         if !unrestored.is_empty() || !failed.is_empty() {
             let mut left: Vec<ByHand> = unrestored.iter().map(|(step, _)| step.clone()).collect();
+            left.append(&mut held);
             left.extend(failed.iter().map(|(reload, _)| ByHand {
                 resource: reload.name().to_owned(),
                 step: reload::line(&reload.command()),

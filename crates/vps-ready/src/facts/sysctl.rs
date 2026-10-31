@@ -215,6 +215,9 @@ mod tests {
             }
             self.inner.read(path)
         }
+        fn read_nofollow(&self, path: &Path) -> Result<(Vec<u8>, crate::sys::FileMeta), SysError> {
+            self.inner.read_nofollow(path)
+        }
         fn exists(&self, path: &Path) -> bool {
             self.inner.exists(path)
         }

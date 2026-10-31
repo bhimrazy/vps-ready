@@ -137,6 +137,8 @@ enum Node {
     File(Vec<u8>),
     Dir,
     Symlink(PathBuf),
+    /// A FIFO; it has no content.
+    Fifo,
 }
 
 #[derive(Debug, Clone)]
@@ -145,15 +147,45 @@ struct Entry {
     mode: u32,
     uid: u32,
     gid: u32,
+    nlink: u64,
 }
 
 impl Entry {
     fn new(node: Node, mode: u32) -> Self {
+        Self::owned(
+            node,
+            FileOwner {
+                mode,
+                uid: 0,
+                gid: 0,
+            },
+        )
+    }
+
+    fn owned(node: Node, owner: FileOwner) -> Self {
         Self {
             node,
-            mode,
-            uid: 0,
-            gid: 0,
+            mode: owner.mode,
+            uid: owner.uid,
+            gid: owner.gid,
+            nlink: 1,
+        }
+    }
+
+    fn meta(&self) -> FileMeta {
+        let (kind, len) = match &self.node {
+            Node::File(contents) => (FileKind::File, contents.len() as u64),
+            Node::Dir => (FileKind::Dir, 0),
+            Node::Symlink(target) => (FileKind::Symlink, target.as_os_str().len() as u64),
+            Node::Fifo => (FileKind::Other, 0),
+        };
+        FileMeta {
+            kind,
+            len,
+            mode: self.mode,
+            uid: self.uid,
+            gid: self.gid,
+            nlink: self.nlink,
         }
     }
 }
@@ -231,9 +263,9 @@ fn io_error(path: &Path, kind: io::ErrorKind) -> SysError {
     }
 }
 
-/// An in-memory [`Fs`]: a map from absolute path to a file, directory or
-/// symlink, each with a mode and owner. Directories also exist implicitly as
-/// ancestors of other entries, as `0755 root:root`. Files added with
+/// An in-memory [`Fs`]: a map from absolute path to a file, directory,
+/// symlink or FIFO, each with a mode and owner. Directories also exist
+/// implicitly as ancestors of other entries, as `0755 root:root`. Files added with
 /// [`FakeFs::with_file`] are `0644 root:root`.
 ///
 /// [`FakeFs::fail`] makes one call of a write operation fail, to test what
@@ -280,13 +312,9 @@ impl FakeFs {
     /// Adds (or replaces) a directory with `owner`.
     #[must_use]
     pub fn with_dir(self, path: impl Into<PathBuf>, owner: FileOwner) -> Self {
-        let entry = Entry {
-            node: Node::Dir,
-            mode: owner.mode,
-            uid: owner.uid,
-            gid: owner.gid,
-        };
-        self.lock().entries.insert(path.into(), entry);
+        self.lock()
+            .entries
+            .insert(path.into(), Entry::owned(Node::Dir, owner));
         self
     }
 
@@ -294,6 +322,29 @@ impl FakeFs {
     #[must_use]
     pub fn with_symlink(self, path: impl Into<PathBuf>, target: impl Into<PathBuf>) -> Self {
         let entry = Entry::new(Node::Symlink(target.into()), 0o777);
+        self.lock().entries.insert(path.into(), entry);
+        self
+    }
+
+    /// Adds (or replaces) a `0644 root:root` FIFO.
+    #[must_use]
+    pub fn with_fifo(self, path: impl Into<PathBuf>) -> Self {
+        let entry = Entry::new(Node::Fifo, 0o644);
+        self.lock().entries.insert(path.into(), entry);
+        self
+    }
+
+    /// Adds (or replaces) a `0644 root:root` file with `nlink` hard links;
+    /// its other names are not modeled.
+    #[must_use]
+    pub fn with_linked_file(
+        self,
+        path: impl Into<PathBuf>,
+        contents: impl Into<Vec<u8>>,
+        nlink: u64,
+    ) -> Self {
+        let mut entry = Entry::new(Node::File(contents.into()), 0o644);
+        entry.nlink = nlink;
         self.lock().entries.insert(path.into(), entry);
         self
     }
@@ -340,6 +391,31 @@ impl Fs for FakeFs {
             .ok_or_else(|| not_found(path))
     }
 
+    fn read_nofollow(&self, path: &Path) -> Result<(Vec<u8>, FileMeta), SysError> {
+        let state = self.lock();
+        let subject = || path.display().to_string();
+        let is_link = |p: &Path| matches!(state.entries.get(p), Some(e) if matches!(e.node, Node::Symlink(_)));
+        if path.ancestors().any(is_link) {
+            return Err(SysError::Symlink(subject()));
+        }
+        let Some(entry) = state.entries.get(path) else {
+            if state.is_dir(path) {
+                return Err(SysError::NotRegular {
+                    path: subject(),
+                    kind: FileKind::Dir,
+                });
+            }
+            return Err(not_found(path));
+        };
+        match &entry.node {
+            Node::File(contents) => Ok((contents.clone(), entry.meta())),
+            _ => Err(SysError::NotRegular {
+                path: subject(),
+                kind: entry.meta().kind,
+            }),
+        }
+    }
+
     fn exists(&self, path: &Path) -> bool {
         let state = self.lock();
         let target = state.resolve(path);
@@ -366,28 +442,11 @@ impl Fs for FakeFs {
         let state = self.lock();
         let Some(entry) = state.entries.get(path) else {
             if state.is_dir(path) {
-                return Ok(FileMeta {
-                    kind: FileKind::Dir,
-                    len: 0,
-                    mode: 0o755,
-                    uid: 0,
-                    gid: 0,
-                });
+                return Ok(Entry::new(Node::Dir, 0o755).meta());
             }
             return Err(not_found(path));
         };
-        let (kind, len) = match &entry.node {
-            Node::File(contents) => (FileKind::File, contents.len() as u64),
-            Node::Dir => (FileKind::Dir, 0),
-            Node::Symlink(target) => (FileKind::Symlink, target.as_os_str().len() as u64),
-        };
-        Ok(FileMeta {
-            kind,
-            len,
-            mode: entry.mode,
-            uid: entry.uid,
-            gid: entry.gid,
-        })
+        Ok(entry.meta())
     }
 
     fn read_link(&self, path: &Path) -> Result<PathBuf, SysError> {
@@ -405,17 +464,12 @@ impl Fs for FakeFs {
         match state.entries.get(path).map(|e| &e.node) {
             Some(Node::Symlink(_)) => return Err(SysError::Symlink(path.display().to_string())),
             Some(Node::Dir) => return Err(io_error(path, io::ErrorKind::IsADirectory)),
-            Some(Node::File(_)) | None => {}
+            Some(Node::File(_) | Node::Fifo) | None => {}
         }
         state.require_parent(path)?;
         state.tick(Op::Write, path)?;
         state.tick(Op::Rename, path)?;
-        let entry = Entry {
-            node: Node::File(bytes.to_vec()),
-            mode: owner.mode,
-            uid: owner.uid,
-            gid: owner.gid,
-        };
+        let entry = Entry::owned(Node::File(bytes.to_vec()), owner);
         state.entries.insert(path.to_path_buf(), entry);
         Ok(())
     }
@@ -454,7 +508,7 @@ impl Fs for FakeFs {
     fn remove(&self, path: &Path) -> Result<(), SysError> {
         let mut state = self.lock();
         match state.entries.get(path).map(|e| &e.node) {
-            Some(Node::File(_) | Node::Symlink(_)) => {}
+            Some(Node::File(_) | Node::Symlink(_) | Node::Fifo) => {}
             Some(Node::Dir) => return Err(io_error(path, io::ErrorKind::IsADirectory)),
             None => return Err(not_found(path)),
         }
@@ -475,7 +529,7 @@ impl Fs for FakeFs {
         let dirs: Vec<&Path> = path.ancestors().collect();
         for dir in dirs.into_iter().rev() {
             match state.entries.get(dir).map(|e| &e.node) {
-                Some(Node::File(_) | Node::Symlink(_)) => {
+                Some(Node::File(_) | Node::Symlink(_) | Node::Fifo) => {
                     return Err(io_error(path, io::ErrorKind::NotADirectory));
                 }
                 Some(Node::Dir) => {}
@@ -495,13 +549,9 @@ impl Fs for FakeFs {
             return Err(io_error(path, io::ErrorKind::AlreadyExists));
         }
         state.require_parent(path)?;
-        let entry = Entry {
-            node: Node::Dir,
-            mode: owner.mode,
-            uid: owner.uid,
-            gid: owner.gid,
-        };
-        state.entries.insert(path.to_path_buf(), entry);
+        state
+            .entries
+            .insert(path.to_path_buf(), Entry::owned(Node::Dir, owner));
         Ok(())
     }
 
