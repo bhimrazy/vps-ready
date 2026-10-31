@@ -1,0 +1,22 @@
+---
+source: crates/vps-ready/src/cli/module_docs.rs
+expression: out
+---
+firewall.inbound
+  Drop incoming traffic that no rule allows
+  Applies to this host.
+  Arms the safety timer.
+
+Why
+  Without a firewall, any service listening on all addresses, such as a database
+  left at its defaults, is reachable from the internet. This one accepts SSH,
+  the ports the profile allows and replies to the server's own connections, and
+  drops the rest.
+
+Params (in the module's profile table)
+  allow (default [])
+      Ports to accept from anywhere, e.g. ["443/tcp", "443/udp"]; the SSH ports
+      are always accepted.
+
+Fixes these audit controls
+  FW-001 [medium] Incoming traffic denied by default

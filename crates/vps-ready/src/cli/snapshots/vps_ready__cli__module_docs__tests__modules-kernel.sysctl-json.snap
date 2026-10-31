@@ -1,0 +1,85 @@
+---
+source: crates/vps-ready/src/cli/module_docs.rs
+expression: out
+---
+{
+  "id": "kernel.sysctl",
+  "title": "Harden kernel settings",
+  "applies": false,
+  "reason": "kernel settings belong to the host inside a container",
+  "arms_safety_timer": false,
+  "why": "Hides kernel addresses and logs from normal users, restricts BPF, ptrace and perf, protects shared directories such as /tmp, and turns on SYN cookies.",
+  "params": [],
+  "controls": [
+    {
+      "id": "KRN-001",
+      "severity": "low",
+      "title": "Kernel pointers hidden"
+    },
+    {
+      "id": "KRN-002",
+      "severity": "low",
+      "title": "Kernel log restricted to root"
+    },
+    {
+      "id": "KRN-003",
+      "severity": "medium",
+      "title": "Unprivileged BPF disabled"
+    },
+    {
+      "id": "KRN-004",
+      "severity": "medium",
+      "title": "ptrace scope restricted"
+    },
+    {
+      "id": "KRN-005",
+      "severity": "medium",
+      "title": "Symlink protection enabled"
+    },
+    {
+      "id": "KRN-006",
+      "severity": "medium",
+      "title": "Hardlink protection enabled"
+    },
+    {
+      "id": "KRN-007",
+      "severity": "low",
+      "title": "FIFO protection enabled"
+    },
+    {
+      "id": "KRN-008",
+      "severity": "low",
+      "title": "Regular file protection enabled"
+    },
+    {
+      "id": "KRN-009",
+      "severity": "low",
+      "title": "Setuid core dumps restricted"
+    },
+    {
+      "id": "KRN-010",
+      "severity": "medium",
+      "title": "Address space randomization fully enabled"
+    },
+    {
+      "id": "KRN-011",
+      "severity": "low",
+      "title": "Kernel profiling restricted"
+    },
+    {
+      "id": "NET-001",
+      "severity": "low",
+      "title": "TCP SYN cookies enabled"
+    },
+    {
+      "id": "NET-002",
+      "severity": "low",
+      "title": "Source-routed packets rejected"
+    },
+    {
+      "id": "NET-003",
+      "severity": "low",
+      "title": "Broadcast pings ignored"
+    }
+  ]
+}

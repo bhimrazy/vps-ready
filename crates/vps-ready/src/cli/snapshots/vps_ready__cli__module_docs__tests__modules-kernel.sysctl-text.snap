@@ -1,0 +1,32 @@
+---
+source: crates/vps-ready/src/cli/module_docs.rs
+expression: out
+---
+kernel.sysctl
+  Harden kernel settings
+  Does not apply to this host: kernel settings belong to the host inside a
+  container.
+  Does not arm the safety timer.
+
+Why
+  Hides kernel addresses and logs from normal users, restricts BPF, ptrace and
+  perf, protects shared directories such as /tmp, and turns on SYN cookies.
+
+Params (in the module's profile table)
+  none
+
+Fixes these audit controls
+  KRN-001 [low] Kernel pointers hidden
+  KRN-002 [low] Kernel log restricted to root
+  KRN-003 [medium] Unprivileged BPF disabled
+  KRN-004 [medium] ptrace scope restricted
+  KRN-005 [medium] Symlink protection enabled
+  KRN-006 [medium] Hardlink protection enabled
+  KRN-007 [low] FIFO protection enabled
+  KRN-008 [low] Regular file protection enabled
+  KRN-009 [low] Setuid core dumps restricted
+  KRN-010 [medium] Address space randomization fully enabled
+  KRN-011 [low] Kernel profiling restricted
+  NET-001 [low] TCP SYN cookies enabled
+  NET-002 [low] Source-routed packets rejected
+  NET-003 [low] Broadcast pings ignored
