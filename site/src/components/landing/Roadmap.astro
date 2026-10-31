@@ -13,8 +13,8 @@ const stops: Stop[] = [
   { m: 'M1', name: 'Audit', text: 'Detect the host, check controls', state: 'done', pill: 'v0.1.0' },
   { m: 'M2', name: 'Engine', text: 'Plan, apply, journal, rollback', state: 'done', pill: 'v0.2.0' },
   { m: 'M3', name: 'Lockout-safe', text: 'SSH, firewall, admin user, safety timer', state: 'done', pill: 'v0.3.0' },
-  { m: 'M4', name: 'Wizard', text: 'Guided setup and module explanations', state: 'next', pill: 'next' },
-  { m: 'M5', name: 'Deploy-ready', text: 'Signed apt, dnf and apk packages' },
+  { m: 'M4', name: 'Wizard', text: 'Guided setup and module explanations', state: 'done', pill: 'v0.4.0' },
+  { m: 'M5', name: 'Deploy-ready', text: 'Signed apt, dnf and apk packages', state: 'next', pill: 'next' },
   { m: 'M6', name: 'More distros', text: 'Broader support, deeper checks' },
 ];
 const dot = {
@@ -27,7 +27,7 @@ const dot = {
 <Section id="roadmap" alt>
   <SectionHead label="Roadmap">
     <Fragment slot="title">Built in small, safe releases.</Fragment>
-    Each release is tagged and signed. The guided setup is merged and ships next.
+    Each release is tagged and signed. The guided setup ships in v0.4.0.
   </SectionHead>
 
   <div
