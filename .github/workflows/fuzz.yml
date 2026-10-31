@@ -32,10 +32,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master 2026-10-16
         with:
           toolchain: nightly
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: fuzz
       - run: cargo +nightly install cargo-fuzz --version 0.13.2 --locked
+      # cargo-fuzz has no --locked; fetching first fails if fuzz/Cargo.lock is stale.
+      - run: cargo +nightly fetch --locked --manifest-path fuzz/Cargo.toml
       - run: cargo +nightly fuzz build -O
       - name: Run each target for 60s
         run: |
