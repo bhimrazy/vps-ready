@@ -60,6 +60,14 @@
 #     as root with a key: a new admin with root's key (`admin`, or
 #     `sysadmin` where an `admin` group exists, as on Ubuntu); root no
 #     longer logs in -> rollback removes the admin, and root logs in again.
+#   Deploy, a test profile: `web` (with deploy.docker), deploy.proxy for
+#   app.localhost (Caddy serves it from its own CA) and deploy.user with a key
+#   forced to a root-owned command, confirmed by the new admin -> a container
+#   published with `-p 8080:80` answers through Caddy over HTTPS and not on the
+#   VM's own address; the deploy key runs only its command, and sudo with an
+#   argument is refused -> rollback removes Docker's and Caddy's sources, keys
+#   and config files and the deploy user, Caddy is disabled, and the cycle's
+#   user still logs in.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -557,9 +565,10 @@ jq -e '.[0].reason == "verify-failed"' "$tmp/history.json" >/dev/null ||
   { vr history; die "rolled back, but not with reason verify-failed"; }
 vm test ! -e "$ssh_dropin" || die "$ssh_dropin still exists"
 
-# expect drives the wizard; the VM gets it, the runner does not need it.
-vm 'sudo apt-get -qq -o DPkg::Lock::Timeout=120 update && sudo DEBIAN_FRONTEND=noninteractive apt-get -qq -o DPkg::Lock::Timeout=120 install expect >/dev/null' ||
-  die "cannot install expect"
+# expect drives the wizard and curl the deploy cycle; the VM gets them, the
+# runner does not need them.
+vm 'sudo apt-get -qq -o DPkg::Lock::Timeout=120 update && sudo DEBIAN_FRONTEND=noninteractive apt-get -qq -o DPkg::Lock::Timeout=120 install expect curl >/dev/null' ||
+  die "cannot install expect and curl"
 vm 'cat >/tmp/vr-wizard.exp' <test/vm-wizard.exp
 wizard_fail() { vm cat /tmp/vr-wizard.out || true; die "$1"; }
 # wizard <login> <admin>: `sudo vps-ready` over a new login as <login>,
@@ -643,6 +652,94 @@ rc=0; vr rollback --last || rc=$?
 root_login || die "root cannot log in after the rollback"
 case $profile in /*) vm sudo rm -f "$profile" ;; esac
 vm sudo rm -f /root/.ssh/authorized_keys
+
+echo "== $distro: deploy profile, confirmed by the new admin"
+deploy_cmd=/usr/local/bin/deploy-app
+# Runs as deploy and re-runs itself as root with sudo, which the drop-in
+# allows only without arguments.
+vm "sudo tee $deploy_cmd >/dev/null" <<'SH'
+#!/bin/sh
+[ "$(id -u)" -eq 0 ] || exec sudo /usr/local/bin/deploy-app
+echo "deployed as $(id -un)"
+SH
+vm sudo chmod 755 "$deploy_cmd"
+vm 'test -f ~/.ssh/vr_deploy || ssh-keygen -q -t ed25519 -N "" -C ci@example.com -f ~/.ssh/vr_deploy'
+dkey=$(vm cat .ssh/vr_deploy.pub)
+printf '%s\n' 'schema = 1' 'extends = "web"' \
+  '[modules."user.admin"]' "name = \"$admin\"" \
+  '[modules."deploy.proxy"]' 'sites = [{ domain = "app.localhost", upstream = "127.0.0.1:8080" }]' \
+  '[modules."deploy.user"]' "keys = [\"$dkey\"]" "command = \"$deploy_cmd\"" |
+  vm 'cat >/tmp/vr-deploy.toml'
+deploy_files="/etc/apt/sources.list.d/docker.sources /etc/apt/keyrings/docker.asc /etc/docker/daemon.json
+  /etc/apt/sources.list.d/caddy.sources /etc/apt/keyrings/caddy.asc /etc/caddy/Caddyfile
+  /etc/sudoers.d/90-vps-ready-deploy"
+for f in $deploy_files; do vm test ! -e "$f" || die "$f exists before apply"; done
+# As apply_session, with a longer wait: apply installs Docker, Caddy and fail2ban.
+vm "rm -f /tmp/vr-apply.rc; setsid -f sh -c 'sh /tmp/vr-ssh -o ControlPath=none $user@127.0.0.1 sudo vps-ready apply --yes --profile /tmp/vr-deploy.toml --deadman 5m >/tmp/vr-apply.out 2>&1; echo \$? >/tmp/vr-apply.rc' </dev/null >/dev/null 2>&1"
+i=0
+until vr history --json >"$tmp/history.json" && jq -e '.[0].state == "pending-confirm"' "$tmp/history.json" >/dev/null; do
+  vm test ! -e /tmp/vr-apply.rc || { vm cat /tmp/vr-apply.out; die "apply ended before its changes were pending"; }
+  i=$((i + 5)); [ "$i" -le 600 ] || { vm cat /tmp/vr-apply.out; die "not pending within 600 s"; }
+  sleep 5
+done
+# A login in the second the changes went live counts as old.
+sleep 2
+rc=0; local_ssh -o ControlPath=none "$admin@$self_ip" sudo vps-ready confirm || rc=$?
+[ "$rc" -eq 0 ] || die "confirm as $admin exited $rc, expected 0"
+expect_newest confirmed
+expect_rc /tmp/vr-apply.rc 0
+
+# The app image holds only Caddy's own binary, which is static, so no
+# registry is involved (ECR's mirror refused CI's runners with "Data limit
+# exceeded").
+# shellcheck disable=SC2016 # expanded in the VM
+vm 'd=$(mktemp -d) && install -d -m 1777 "$d/tmp" && cp /usr/bin/caddy "$d/" &&
+  sudo tar -C "$d" -c . | sudo docker import -c "ENV HOME=/tmp" - vr-app >/dev/null && rm -rf "$d"' ||
+  die "cannot build the app image"
+vm sudo docker run -d --name app -p 8080:80 vr-app \
+  /caddy respond --listen :80 "'hello from the container'" >/dev/null || die "docker run failed"
+ports=$(vm sudo docker port app 80/tcp)
+[ "$ports" = "127.0.0.1:8080" ] || die "the port is published on $ports, expected 127.0.0.1:8080 only"
+body=$(vm curl -fsS -k --retry 10 --retry-delay 1 --retry-all-errors \
+  --resolve app.localhost:443:127.0.0.1 https://app.localhost/) || die "HTTPS through Caddy failed"
+echo "$body"
+[ "$body" = "hello from the container" ] || die "unexpected answer through Caddy: $body"
+if vm curl -sS --max-time 3 "http://$self_ip:8080/" >/dev/null 2>&1; then
+  die "the container answers on $self_ip:8080"
+fi
+echo "$self_ip:8080: no answer"
+
+# deploy_login <command>: a new login with the deploy key, asking for <command>.
+deploy_login() {
+  vm ssh -i .ssh/vr_deploy -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ControlPath=none deploy@127.0.0.1 "$1"
+}
+for cmd in id 'cat /etc/shadow'; do
+  out=$(deploy_login "$cmd") || die "the deploy login asking for $cmd failed"
+  [ "$out" = "deployed as root" ] || die "the deploy key asking for $cmd ran something else: $out"
+done
+if vm sudo -u deploy sudo -n "$deploy_cmd" x >/dev/null 2>&1; then
+  die "deploy may run its command as root with an argument"
+fi
+
+vm sudo docker rm -f app >/dev/null
+vm sudo docker rmi vr-app >/dev/null
+# `userdel` fails while an account has processes, e.g. its systemd --user.
+i=0
+while vm pgrep -u "$admin,deploy" >/dev/null; do
+  i=$((i + 1)); [ "$i" -le 30 ] || die "$admin or deploy still has processes after 30 s"
+  sleep 1
+done
+rc=0; vr rollback --last || rc=$?
+[ "$rc" -eq 0 ] || die "rollback of the deploy profile exited $rc, expected 0"
+expect_newest rolled-back
+for f in $deploy_files; do vm test ! -e "$f" || die "$f is left after rollback"; done
+! vm id deploy >/dev/null 2>&1 || die "deploy still exists after rollback"
+! vm id "$admin" >/dev/null 2>&1 || die "$admin still exists after rollback"
+state=$(vm systemctl is-enabled caddy.service || true)
+[ "$state" = disabled ] || die "Caddy is $state after rollback, expected disabled"
+local_ssh -o ControlPath=none "$user@$self_ip" true || die "$user cannot log in after the rollback"
+vm sudo rm -f "$deploy_cmd" /tmp/vr-deploy.toml
 
 echo "== $distro: vps-ready history"
 vr history
