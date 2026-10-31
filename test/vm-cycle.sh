@@ -56,8 +56,9 @@
 #   question, `y` to apply, confirmed from a new login; the wizard exits 0
 #   and the `--profile` of its "Next time" line plans no changes.
 #     as the cycle's user: the session user is the admin -> rollback.
-#     as root with a key: a new `admin` with root's key; root no longer
-#     logs in -> rollback removes `admin`, and root logs in again.
+#     as root with a key: a new admin with root's key (`admin`, or
+#     `sysadmin` where an `admin` group exists, as on Ubuntu); root no
+#     longer logs in -> rollback removes the admin, and root logs in again.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -599,24 +600,34 @@ vm test ! -e "$ssh_dropin" || die "$ssh_dropin still exists after rollback"
 case $profile in /*) vm sudo rm -f "$profile" ;; esac
 root_login || die "root cannot log in after the rollback"
 
-echo "== $distro: the wizard, as root"
-! vm id admin >/dev/null 2>&1 || die "admin exists before the wizard"
-wizard root admin
-wizard_done admin
+# Ubuntu's images have an `admin` group and no such user, so the wizard
+# offers `sysadmin` there.
+case $distro in ubuntu-*) new="sysadmin" ;; *) new="admin" ;; esac
+echo "== $distro: the wizard, as root (new admin $new)"
+! vm id "$new" >/dev/null 2>&1 || die "$new exists before the wizard"
+wizard root "$new"
+wizard_done "$new"
 grep -q "new account: logs in with 1 key copied from /root/.ssh/authorized_keys" "$tmp/wizard.out" ||
   die "the wizard did not offer a new admin with root's key"
-[ "$profile" = minimal ] || die "the defaults printed --profile $profile, expected minimal"
-expect_no_changes admin
+[ "$(vm sudo cat "/home/$new/.ssh/authorized_keys")" = "$(vm cat .ssh/vr_local.pub)" ] ||
+  die "$new does not have root's key"
+# A name other than the built-in default is saved to a file.
+case $new:$profile in
+  admin:minimal | sysadmin:/root/vps-ready.toml) ;;
+  *) die "the \"Next time\" line has --profile $profile, not the one for $new" ;;
+esac
+expect_no_changes "$new"
 ! root_login || die "root logs in after the confirm"
 i=0
-while vm pgrep -u admin >/dev/null; do
-  i=$((i + 1)); [ "$i" -le 30 ] || die "admin still has processes after 30 s"
+while vm pgrep -u "$new" >/dev/null; do
+  i=$((i + 1)); [ "$i" -le 30 ] || die "$new still has processes after 30 s"
   sleep 1
 done
 rc=0; vr rollback --last || rc=$?
 [ "$rc" -eq 0 ] || die "rollback of the wizard's transaction exited $rc, expected 0"
-! vm id admin >/dev/null 2>&1 || die "admin still exists after rollback"
+! vm id "$new" >/dev/null 2>&1 || die "$new still exists after rollback"
 root_login || die "root cannot log in after the rollback"
+case $profile in /*) vm sudo rm -f "$profile" ;; esac
 vm sudo rm -f /root/.ssh/authorized_keys
 
 echo "== $distro: vps-ready history"

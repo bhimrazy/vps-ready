@@ -74,7 +74,7 @@ Containers can't test kernel sysctls, reboots, sshd socket activation, the host 
   - a `Match User` block with `PermitRootLogin yes` read before the drop-in → verify (`sshd -T -C`) fails and apply rolls back.
 - **The wizard**, `sudo vps-ready` over a real login with a terminal, driven by `expect` (installed in the VM only, script in `test/vm-wizard.exp`): Enter at every question, `y` to apply, a new login as the admin confirms, the wizard exits 0, and the `--profile` its "Next time" line prints plans no changes:
   - as the cycle's user: the session user is offered and becomes the admin (an existing account), then `rollback --last`;
-  - as root with a key: a new `admin` with root's key, the line is `--profile minimal`, root no longer logs in; `rollback --last` removes `admin` and root logs in again.
+  - as root with a key: a new admin with root's key, `admin` (the line is `--profile minimal`) or, on Ubuntu, whose images have an `admin` group, `sysadmin` (saved to `/root/vps-ready.toml`); root no longer logs in; `rollback --last` removes the admin and root logs in again.
 - **Checked by hand, not in the script** (Lima, Debian 13 and Ubuntu 24.04): the firewall drops a port it does not allow (port 80 timed out from another network namespace while 22 connected), a DHCP lease renewal works under it, a reboot in the window loads the firewall, then runs the hook, then starts sshd, and `systemd-analyze verify` of `vps-ready-firewall.service` is clean.
 
 Layer 1 covers the rest of the dead-man design on fakes: a crash at every journal line after `armed`, a full disk during the rollback, the timer firing mid-apply, the confirm rules and their refusals, and session detection on fake `/proc` trees copied from real hosts.
