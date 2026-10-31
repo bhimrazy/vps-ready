@@ -166,7 +166,8 @@ pub fn boottime(fs: &dyn Fs) -> Result<u64, EngineError> {
 }
 
 /// Checks that a root timer may run `path`: an absolute path of plain
-/// characters (it goes into a unit file), not under `/home`, `/tmp`,
+/// characters (it goes into a unit file) without `.` or `..` components,
+/// not under `/home`, `/tmp`,
 /// `/var/tmp` or `/dev/shm`, a regular file, and it and every parent
 /// directory owned by root and not writable by group or others. Otherwise the user who could replace it
 /// would get a root shell. Returns why not.
@@ -181,6 +182,13 @@ pub fn check_binary(fs: &dyn Fs, path: &Path) -> Result<(), String> {
     });
     if !path.is_absolute() || !plain {
         return Err("it is not an absolute path of letters, digits and `/._+-`".into());
+    }
+    // `Path::components` drops a `.` inside the path, so split the text.
+    if path
+        .to_str()
+        .is_some_and(|s| s.split('/').any(|c| c == "." || c == ".."))
+    {
+        return Err("it has a `.` or `..` component".into());
     }
     if let Some(dir) = UNSAFE_DIRS.iter().find(|d| path.starts_with(d)) {
         return Err(format!("it is under {dir}"));
@@ -498,6 +506,8 @@ mod tests {
             ("vps-ready", "not an absolute path"),
             ("/usr/local/bin/vps ready", "not an absolute path"),
             ("/opt/%n/vps-ready", "not an absolute path"),
+            ("/usr/local/bin/../bin/vps-ready", "a `.` or `..` component"),
+            ("/usr/./local/bin/vps-ready", "a `.` or `..` component"),
             ("/home/admin/vps-ready", "it is under /home"),
             ("/tmp/vps-ready", "it is under /tmp"),
             ("/var/tmp/vps-ready", "it is under /var/tmp"),

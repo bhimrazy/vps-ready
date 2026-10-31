@@ -19,6 +19,7 @@ use crate::modules::firewall_inbound::{self, Allow};
 use crate::modules::user_admin::{self, SessionKeys};
 use crate::modules::{Applicability, Module, ModuleError};
 use crate::resource::ResourceError;
+use crate::resource::authorized_keys::is_plain_key;
 use crate::sys::FileOwner;
 use crate::tui::{Item, Prompt, PromptError};
 
@@ -368,7 +369,7 @@ fn ask_key(
     loop {
         let key = prompt.input("Public key", "")?;
         let key = key.trim();
-        if user_admin::is_plain_key(key) {
+        if is_plain_key(key) {
             return Ok(key.to_owned());
         }
         say(
