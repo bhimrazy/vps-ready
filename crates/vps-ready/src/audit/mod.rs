@@ -73,6 +73,7 @@ pub enum Check {
     /// and no `Match` block in `sshd_config` or its includes sets another.
     /// A `Match` block that does fails the control whatever its criteria,
     /// and its `fix` module is not named: no module edits `Match` blocks.
+    /// [`Finding::manual_fix`] says to edit the block by hand instead.
     SshdEffective {
         /// Keyword in lowercase, as `sshd -T` prints it.
         key: String,
@@ -161,6 +162,10 @@ pub struct Finding {
     /// What the check found.
     #[serde(flatten)]
     pub outcome: Outcome,
+    /// How to fix a failure no module fixes, for the text report, e.g. for
+    /// a `Match` block. Not in the JSON, where `found` names the same line.
+    #[serde(skip)]
+    pub manual_fix: Option<String>,
 }
 
 impl Finding {
@@ -267,10 +272,17 @@ pub fn run(controls: Vec<Control>, facts: &Facts) -> Report {
         .into_iter()
         .map(|mut control| {
             let outcome = evaluate(&control.check, facts);
+            let mut manual_fix = None;
             if matches!(outcome, Outcome::Fail { .. })
-                && sshd_match_override(&control.check, facts).is_some()
+                && let Some(m) = sshd_match_override(&control.check, facts)
             {
                 control.fix = None;
+                manual_fix = Some(format!(
+                    "edit the Match block at {}:{} by hand (vps-ready does not edit Match \
+                     blocks)",
+                    m.file.display(),
+                    m.line
+                ));
             }
             match outcome {
                 Outcome::Pass => summary.passed += 1,
@@ -278,7 +290,11 @@ pub fn run(controls: Vec<Control>, facts: &Facts) -> Report {
                 Outcome::Unknown { .. } => summary.unknown += 1,
                 Outcome::Skip { .. } => summary.skipped += 1,
             }
-            Finding { control, outcome }
+            Finding {
+                control,
+                outcome,
+                manual_fix,
+            }
         })
         .collect();
     Report {
@@ -1023,6 +1039,13 @@ mod tests {
         );
         // ssh.server writes only global settings, so it is not the fix.
         assert_eq!(findings[0].control.fix, None);
+        assert_eq!(
+            findings[0].manual_fix.as_deref(),
+            Some(
+                "edit the Match block at /etc/ssh/sshd_config.d/50-cloud.conf:3 by hand \
+                 (vps-ready does not edit Match blocks)"
+            )
+        );
     }
 
     #[test]
