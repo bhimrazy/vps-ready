@@ -5,32 +5,29 @@ expression: out
 user.admin
   Set up an admin account that logs in with an SSH key and uses sudo
   Applies to this host.
-  Arms the safety timer.
+  Arms the safety timer: confirm from a new SSH session.
 
 ssh.server
   Turn off root and password logins over SSH
   Applies to this host.
-  Arms the safety timer.
+  Arms the safety timer: confirm from a new SSH session.
 
 firewall.inbound
   Drop incoming traffic that no rule allows
   Applies to this host.
-  Arms the safety timer.
+  Arms the safety timer: confirm from a new SSH session.
 
 ssh.bruteforce
   Ban addresses that keep failing to log in over SSH
   Applies to this host.
-  Does not arm the safety timer.
 
 kernel.sysctl
   Harden kernel settings
   Does not apply to this host: kernel settings belong to the host inside a
   container.
-  Does not arm the safety timer.
 
 updates.auto
   Install security updates automatically
   Applies to this host.
-  Does not arm the safety timer.
 
 Details: vps-ready modules <ID>

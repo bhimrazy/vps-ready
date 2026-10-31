@@ -5,7 +5,7 @@ expression: out
 firewall.inbound
   Drop incoming traffic that no rule allows
   Applies to this host.
-  Arms the safety timer.
+  Arms the safety timer: confirm from a new SSH session.
 
 Why
   Without a firewall, any service listening on all addresses, such as a database

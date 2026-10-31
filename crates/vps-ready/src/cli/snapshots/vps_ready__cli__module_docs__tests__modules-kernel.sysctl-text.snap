@@ -6,7 +6,6 @@ kernel.sysctl
   Harden kernel settings
   Does not apply to this host: kernel settings belong to the host inside a
   container.
-  Does not arm the safety timer.
 
 Why
   Hides kernel addresses and logs from normal users, restricts BPF, ptrace and

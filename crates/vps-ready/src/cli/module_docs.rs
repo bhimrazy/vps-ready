@@ -135,10 +135,12 @@ fn write_entry(out: &mut impl Write, e: &Entry) -> io::Result<()> {
         )?,
     }
     if e.arms_safety_timer {
-        writeln!(out, "  Arms the safety timer.")
-    } else {
-        writeln!(out, "  Does not arm the safety timer.")
+        writeln!(
+            out,
+            "  Arms the safety timer: confirm from a new SSH session."
+        )?;
     }
+    Ok(())
 }
 
 fn write_wrapped(out: &mut impl Write, text: &str, indent: &str) -> io::Result<()> {
