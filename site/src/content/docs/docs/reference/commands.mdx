@@ -20,7 +20,7 @@ The command is installed as `vps-ready` and also as `vpsready`. Run `vps-ready -
 | [`rollback`](#rollback) | Undoes a transaction | yes | no |
 | [`history`](#history) | Lists transactions | yes | yes |
 | [`modules`](#modules) | Lists the modules, or explains one | no | yes |
-| `version` | Prints version and build information | no | yes |
+| `version` | Prints version and build information, and warns when another `vps-ready` is on `PATH` | no | yes |
 
 ## Global flags
 
@@ -96,7 +96,7 @@ Prints a diff of every file and setting `apply` would change, grouped by module,
 | `--profile NAME\|PATH` | `minimal`, `web`, or the path of a [profile file](/docs/guides/profiles-and-modules/#write-your-own-profile) |
 | `--module ID` | Only this module; repeat it for more. With a profile, it must be one of the profile's modules |
 
-Without either flag, it plans `kernel.sysctl` and `updates.auto` only. Module IDs: `user.admin`, `ssh.server`, `firewall.inbound`, `ssh.bruteforce`, `kernel.sysctl`, `updates.auto`.
+Without either flag, it plans `kernel.sysctl` and `updates.auto` only. Module IDs: `user.admin`, `ssh.server`, `deploy.docker`, `firewall.inbound`, `ssh.bruteforce`, `kernel.sysctl`, `updates.auto`, `deploy.proxy`, `deploy.user`. The last two need settings (domains, keys) from a [profile file](/docs/guides/deployment-modules/).
 
 Exits 0, or 2 on error.
 
@@ -106,7 +106,7 @@ Exits 0, or 2 on error.
 sudo vps-ready apply [--profile NAME|PATH] [--module ID]... [--deadman DUR] [--yes | --dry-run]
 ```
 
-Plans, shows the plan, asks `Apply N changes? [y/N]`, then snapshots each original, validates, writes atomically and verifies. Any failure restores everything. When the run includes `user.admin`, `ssh.server` or `firewall.inbound`, it arms the [safety timer](/docs/guides/safety-net/) first and waits for a confirm from a new SSH login.
+Plans, shows the plan, asks `Apply N changes? [y/N]`, then snapshots each original, validates, writes atomically and verifies. Any failure restores everything. When the run includes `user.admin`, `ssh.server` or `firewall.inbound` (the deployment modules do not), it arms the [safety timer](/docs/guides/safety-net/) first and waits for a confirm from a new SSH login.
 
 | Flag | What it does |
 |---|---|

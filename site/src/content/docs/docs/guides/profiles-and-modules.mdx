@@ -1,6 +1,6 @@
 ---
 title: Profiles and modules
-description: What the minimal and web profiles change, what each of the six modules writes, what it checks first, and how to undo it.
+description: What the minimal and web profiles change, what each of the nine modules writes, what it checks first, and how to undo it.
 sidebar:
   order: 2
 ---
@@ -17,13 +17,15 @@ vps-ready groups its changes into **modules**, and a **profile** picks which mod
 | SSH server config (`ssh.server`) | | yes | yes |
 | Firewall (`firewall.inbound`) | | SSH only | SSH, 80/tcp, 443/tcp, 443/udp |
 | fail2ban (`ssh.bruteforce`) | | | yes |
+| Docker (`deploy.docker`) | | | yes |
 | Kernel settings (`kernel.sysctl`) | yes | yes | yes |
 | Automatic updates (`updates.auto`) | yes | yes | yes |
 | Asks for a confirm | no | yes | yes |
 
 - **Plain `apply`**, with no `--profile` or `--module`, only changes kernel settings and automatic updates. Nothing in it can lock you out, so a future version can never make a plain `apply` start changing SSH or the firewall.
 - **minimal** is for any server you log into over SSH.
-- **web** is minimal plus the web ports (UDP 443 is for HTTP/3) and fail2ban.
+- **web** is minimal plus the web ports (UDP 443 is for HTTP/3), fail2ban and Docker with safe defaults.
+- **`deploy.proxy` (Caddy) and `deploy.user` are in no built-in profile.** They need values only you have (domains, deploy keys), so you add them in your own profile, or the guided setup adds Caddy when you give it a domain. See [Deploy an app](/docs/guides/deployment-modules/).
 
 `sudo vps-ready` with no arguments picks between these two for you and builds the profile from your answers: see the [quick start](/docs/quick-start/). To read what a module does before choosing, run `vps-ready modules` (or `vps-ready modules ssh.server` for one).
 
@@ -39,12 +41,15 @@ sudo vps-ready plan --profile web
 |---|---|---|---|
 | 1 | `user.admin` | yes | Creates the way in that is not root |
 | 2 | `ssh.server` | yes | Turns off root and password logins, and refuses unless that way in exists |
-| 3 | `firewall.inbound` | yes | Drops unsolicited traffic, always allowing the SSH ports in use |
-| 4 | `ssh.bruteforce` | no | Can only ban an address, and never yours |
-| 5 | `kernel.sysctl` | no | Cannot lock you out |
-| 6 | `updates.auto` | no | Cannot lock you out |
+| 3 | `deploy.docker` | no | Before the firewall, so the firewall knows Docker's bridges |
+| 4 | `firewall.inbound` | yes | Drops unsolicited traffic, always allowing the SSH ports in use |
+| 5 | `ssh.bruteforce` | no | Can only ban an address, and never yours |
+| 6 | `kernel.sysctl` | no | Cannot lock you out |
+| 7 | `updates.auto` | no | Cannot lock you out |
+| 8 | `deploy.proxy` | no | After the firewall, so it can read whether ports 80 and 443 are open |
+| 9 | `deploy.user` | no | Last: a login for CI, separate from the admin |
 
-The order is fixed. The admin user comes first because turning off root and password logins is only safe once there is another way in, and the firewall comes last so it can allow the SSH port your login really uses. The three guarded modules share one transaction, so a single new login confirms all of them together. To see which part fails on a tricky server, apply `--module user.admin` on its own first, then the rest.
+The order is fixed. The admin user comes first because turning off root and password logins is only safe once there is another way in, and the firewall comes after the admin user and SSH so it can allow the SSH port your login really uses. On their own, the three deployment modules do not touch the SSH server, the firewall's SSH rule or the admin's login, so they do not arm the safety timer. In a run with a guarded module, as in the `web` profile, they share its transaction: confirm it, or the timer undoes them too. The three guarded modules share one transaction, so a single new login confirms all of them together. To see which part fails on a tricky server, apply `--module user.admin` on its own first, then the rest.
 
 ## The modules
 
@@ -108,6 +113,16 @@ Once SSH takes keys only, brute-force attempts are mostly log noise, and OpenSSH
 
 **Undo:** the drop-in is removed; the package stays installed.
 
+### `deploy.docker`, `deploy.proxy` and `deploy.user`: deployment
+
+**Changes:** `deploy.docker` installs Docker Engine from Docker's repository and writes `/etc/docker/daemon.json`; `deploy.proxy` installs Caddy and writes a `Caddyfile` with one block per site; `deploy.user` creates a login account for CI whose keys are restricted. `deploy.docker` is in the `web` profile; the other two need your domains or keys.
+
+**Checks first:** each says in the plan what it will do and refuses what it cannot do safely, for example Docker from the distro's `docker.io` package, or a `Caddyfile` you wrote by hand.
+
+**Undo:** config files are restored or removed and package sources removed, and packages stay installed. `deploy.user`'s account is removed, and its home directory stays. Caddy is stopped and disabled when there was no `Caddyfile` before.
+
+The details, with the commands and what to expect, are in [Deploy an app](/docs/guides/deployment-modules/).
+
 ## Write your own profile
 
 A profile is a TOML file. It can extend `minimal` or `web`, change a module's settings, or leave a module out:
@@ -126,6 +141,9 @@ allow = ["22/tcp", "443/tcp"]
 
 [modules."ssh.bruteforce"]
 enabled = false
+
+[modules."deploy.proxy"]
+sites = [{ domain = "app.example.com", upstream = "127.0.0.1:8080" }]
 ```
 
 ```sh
