@@ -247,7 +247,8 @@ updates:
 docker: false
 docker_engine:
   packages: []
-  dockerd: false
+  docker_ce_version: ~
+  service: ~
   daemon_json:
     state: missing
   daemon: ~

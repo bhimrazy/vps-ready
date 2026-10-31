@@ -25,7 +25,7 @@ pub mod updates;
 pub mod virt;
 
 pub use bridges::Bridge;
-pub use docker::{DaemonJson, DockerDaemon, DockerEngine};
+pub use docker::{DaemonJson, DockerDaemon, DockerEngine, DockerService};
 pub use firewall::{Firewall, FirewallTools, InputChain, Ports, PublishedPort};
 pub use listeners::{Listener, Proto};
 pub use os_release::{OsFamily, OsRelease};
@@ -355,9 +355,9 @@ mod tests {
     /// runs exactly these read-only commands. A new probe has to be added
     /// here, where review sees it. `iptables-save -t filter` and
     /// `ip6tables-save -t filter` run only when nft shows a multiport rule,
-    /// so they are pinned in `firewall`'s tests; `docker info`, `docker ps`
-    /// and `docker network ls` run only on a host with Docker, so they are
-    /// pinned in `docker`'s.
+    /// so they are pinned in `firewall`'s tests; `systemctl show docker.service`,
+    /// `docker info`, `docker ps` and `docker network ls` run only on a host
+    /// with Docker, so they are pinned in `docker`'s.
     const READ_ONLY_COMMANDS: [&[&str]; 13] = [
         &["systemd-detect-virt", "--container"],
         &["systemd-detect-virt", "--vm"],
@@ -396,7 +396,7 @@ mod tests {
         &[
             "dpkg-query",
             "-W",
-            "--showformat=${Package} ${db:Status-Status}\\n",
+            "--showformat=${Package} ${db:Status-Status} ${Version}\\n",
             "docker-ce",
             "docker.io",
             "podman-docker",

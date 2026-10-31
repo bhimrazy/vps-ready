@@ -1,25 +1,30 @@
 //! Docker Engine on the Debian family: the packages that matter to
-//! `deploy.docker`, `/etc/docker/daemon.json`, and what the running daemon
-//! says about itself. Only read-only commands: `dpkg-query`, `docker info`,
-//! `docker ps` and `docker network ls`.
+//! `deploy.docker`, `docker.service`, `/etc/docker/daemon.json`, and what
+//! the running daemon says about itself. Only read-only commands:
+//! `dpkg-query`, `systemctl show`, `docker info`, `docker ps` and
+//! `docker network ls`. The daemon is asked only while `docker.service` is
+//! active, since `docker` would otherwise start it through `docker.socket`.
 
 use std::path::Path;
 
 use serde::Serialize;
 
-use super::{Probe, probe};
+use super::{Probe, probe, prop, systemctl_show};
 use crate::sys::{Cmd, Fs, Runner, SysError};
 
 /// Docker's configuration file.
 pub const DAEMON_JSON: &str = "/etc/docker/daemon.json";
 
 /// Docker's daemon. Its package and the static release both put it here.
-pub const DOCKERD: &str = "/usr/bin/dockerd";
+const DOCKERD: &str = "/usr/bin/dockerd";
+
+/// Docker Engine's package from Docker's repository.
+const DOCKER_CE: &str = "docker-ce";
 
 /// The packages asked about: Docker Engine from Docker's repository, then
 /// the distro's packages that conflict with it.
 pub const PACKAGES: [&str; 5] = [
-    "docker-ce",
+    DOCKER_CE,
     "docker.io",
     "podman-docker",
     "containerd",
@@ -31,22 +36,50 @@ pub const PACKAGES: [&str; 5] = [
 pub struct DockerEngine {
     /// The installed packages among [`PACKAGES`], in that order.
     pub packages: Vec<String>,
-    /// Whether [`DOCKERD`] exists.
-    pub dockerd: bool,
+    /// The version of `docker-ce`, e.g. `5:29.0.1-1~debian.13~trixie`.
+    pub docker_ce_version: Option<String>,
+    /// `docker.service`. `None` when there is no sign of Docker, a
+    /// conflicting package is installed, or systemd could not be asked.
+    pub service: Option<DockerService>,
     /// [`DAEMON_JSON`].
     pub daemon_json: DaemonJson,
-    /// The running daemon. `None` when Docker is not installed, a
-    /// conflicting package is, or the daemon did not answer.
+    /// The running daemon. `None` unless `docker.service` is active and
+    /// the daemon answered.
     pub daemon: Option<DockerDaemon>,
 }
 
 impl DockerEngine {
-    /// Whether Docker Engine is installed: Docker's package, or a daemon
-    /// where the package puts it.
+    /// Whether Docker Engine is installed: Docker's package, or another
+    /// install that has a `docker.service` unit.
     #[must_use]
     pub fn installed(&self) -> bool {
-        self.dockerd || self.packages.iter().any(|p| p == "docker-ce")
+        self.from_package() || self.service.as_ref().is_some_and(|s| s.loaded)
     }
+
+    /// Whether `docker-ce` is installed.
+    #[must_use]
+    pub fn from_package(&self) -> bool {
+        self.packages.iter().any(|p| p == DOCKER_CE)
+    }
+
+    /// The major version of `docker-ce`, e.g. 29.
+    #[must_use]
+    pub fn major(&self) -> Option<u32> {
+        let version = self.docker_ce_version.as_deref()?;
+        // Without the epoch: `5:29.0.1-1~...` is 29.
+        let upstream = version.split_once(':').map_or(version, |(_, v)| v);
+        let digits: String = upstream.chars().take_while(char::is_ascii_digit).collect();
+        digits.parse().ok()
+    }
+}
+
+/// The state of `docker.service`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct DockerService {
+    /// Whether systemd has the unit.
+    pub loaded: bool,
+    /// Whether it runs.
+    pub active: bool,
 }
 
 /// The state of [`DAEMON_JSON`].
@@ -77,33 +110,57 @@ pub struct DockerDaemon {
     pub networks: Vec<String>,
 }
 
-/// `None` when `dpkg-query` is missing or fails.
+/// `None` when `dpkg-query` is missing or fails. `docker` is whether
+/// Docker's socket or CLI exists.
 pub(super) fn detect(
     fs: &dyn Fs,
     runner: &dyn Runner,
     docker: bool,
     notices: &mut Vec<String>,
 ) -> Option<DockerEngine> {
-    let packages = installed(runner, notices)?;
+    let installed = installed(runner, notices)?;
+    let packages: Vec<String> = installed.iter().map(|(p, _)| p.clone()).collect();
+    let docker_ce_version = installed
+        .into_iter()
+        .find(|(p, _)| p == DOCKER_CE)
+        .and_then(|(_, v)| v);
     let daemon_json = daemon_json(fs);
-    let conflicts = packages.iter().any(|p| p != "docker-ce");
-    let daemon = (docker && !conflicts)
-        .then(|| daemon(runner, notices))
+    let conflicts = packages.iter().any(|p| p != DOCKER_CE);
+    let sign = docker || docker_ce_version.is_some() || fs.exists(Path::new(DOCKERD));
+    let service = (sign && !conflicts)
+        .then(|| service(runner, notices))
         .flatten();
+    let daemon = match service {
+        Some(DockerService { active: true, .. }) => daemon(runner, notices),
+        Some(DockerService { loaded: true, .. }) => {
+            notices.push(
+                "docker.service is not running; its containers and networks are unknown".to_owned(),
+            );
+            None
+        }
+        _ => None,
+    };
     Some(DockerEngine {
         packages,
-        dockerd: fs.exists(Path::new(DOCKERD)),
+        docker_ce_version,
+        service,
         daemon_json,
         daemon,
     })
 }
 
-/// The installed packages among [`PACKAGES`]. A package in any state but
-/// `not-installed` or `config-files` counts, since it is in the way of
-/// Docker's packages as well.
-fn installed(runner: &dyn Runner, notices: &mut Vec<String>) -> Option<Vec<String>> {
+/// The installed packages among [`PACKAGES`], in that order, with their
+/// versions. A package in any state but `not-installed` or `config-files`
+/// counts, since it is in the way of Docker's packages as well.
+fn installed(
+    runner: &dyn Runner,
+    notices: &mut Vec<String>,
+) -> Option<Vec<(String, Option<String>)>> {
     let cmd = Cmd::new("dpkg-query")
-        .args(["-W", "--showformat=${Package} ${db:Status-Status}\\n"])
+        .args([
+            "-W",
+            "--showformat=${Package} ${db:Status-Status} ${Version}\\n",
+        ])
         .args(PACKAGES);
     let out = match probe(runner, &cmd, notices) {
         // Exit 1: some of the names matched no package.
@@ -118,19 +175,40 @@ fn installed(runner: &dyn Runner, notices: &mut Vec<String>) -> Option<Vec<Strin
         Probe::Missing | Probe::Failed => return None,
     };
     let text = String::from_utf8_lossy(&out.stdout);
-    let present: Vec<&str> = text
+    let present: Vec<(&str, Option<&str>)> = text
         .lines()
-        .filter_map(|l| l.split_once(' '))
-        .filter(|(_, status)| !matches!(*status, "not-installed" | "config-files"))
-        .map(|(name, _)| name)
+        .filter_map(|l| {
+            let mut fields = l.split_whitespace();
+            Some((fields.next()?, fields.next()?, fields.next()))
+        })
+        .filter(|(_, status, _)| !matches!(*status, "not-installed" | "config-files"))
+        .map(|(name, _, version)| (name, version))
         .collect();
     Some(
         PACKAGES
             .iter()
-            .filter(|p| present.contains(p))
-            .map(|p| (*p).to_owned())
+            .filter_map(|p| {
+                let (_, version) = present.iter().find(|(name, _)| name == p)?;
+                Some(((*p).to_owned(), version.map(str::to_owned)))
+            })
             .collect(),
     )
+}
+
+/// `docker.service` from `systemctl show`; `None` with a notice when that
+/// fails.
+fn service(runner: &dyn Runner, notices: &mut Vec<String>) -> Option<DockerService> {
+    let units = systemctl_show(
+        runner,
+        &["docker.service"],
+        "docker.service is unknown",
+        notices,
+    )?;
+    let unit = units.first()?;
+    Some(DockerService {
+        loaded: prop(unit, "LoadState") == "loaded",
+        active: prop(unit, "ActiveState") == "active",
+    })
 }
 
 fn daemon_json(fs: &dyn Fs) -> DaemonJson {
@@ -161,8 +239,7 @@ pub fn parse_daemon_json(
     }
 }
 
-/// Asks the daemon. One that does not answer, e.g. because it is stopped,
-/// gets a notice and `None`.
+/// Asks the daemon. One that does not answer gets a notice and `None`.
 fn daemon(runner: &dyn Runner, notices: &mut Vec<String>) -> Option<DockerDaemon> {
     let info = ask(
         runner,
@@ -231,13 +308,21 @@ mod tests {
 
     const DPKG: &[&str] = &[
         "-W",
-        "--showformat=${Package} ${db:Status-Status}\\n",
+        "--showformat=${Package} ${db:Status-Status} ${Version}\\n",
         "docker-ce",
         "docker.io",
         "podman-docker",
         "containerd",
         "runc",
     ];
+
+    const SHOW: &[&str] = &[
+        "show",
+        "--property=Id,LoadState,ActiveState,UnitFileState",
+        "docker.service",
+    ];
+
+    const VERSION: &str = "5:29.0.1-1~debian.13~trixie";
 
     fn exit(status: i32, stdout: &str, stderr: &str) -> Output {
         Output {
@@ -247,13 +332,20 @@ mod tests {
         }
     }
 
+    fn unit(active: &str) -> Output {
+        Output::success(format!(
+            "Id=docker.service\nLoadState=loaded\nActiveState={active}\nUnitFileState=enabled\n"
+        ))
+    }
+
     fn daemon_runner(info: Output) -> FakeRunner {
         FakeRunner::new()
             .on(
                 "dpkg-query",
                 DPKG.iter().copied(),
-                exit(1, "docker-ce installed\n", ""),
+                exit(1, &format!("docker-ce installed {VERSION}\n"), ""),
             )
+            .on("systemctl", SHOW.iter().copied(), unit("active"))
             .on("docker", ["info"], info)
             .on("docker", ["ps"], Output::success("web\ndb\n"))
             .on("docker", ["network"], Output::success("app_default\n"))
@@ -261,7 +353,7 @@ mod tests {
 
     /// The commands are read-only and fixed, as the facts' own list.
     #[test]
-    fn asks_dpkg_then_the_daemon() {
+    fn asks_dpkg_systemd_then_the_daemon() {
         let runner = daemon_runner(Output::success("false inactive\n"));
         let mut notices = Vec::new();
         let engine = detect(&FakeFs::new(), &runner, true, &mut notices).unwrap();
@@ -270,7 +362,11 @@ mod tests {
             engine,
             DockerEngine {
                 packages: vec!["docker-ce".to_owned()],
-                dockerd: false,
+                docker_ce_version: Some(VERSION.to_owned()),
+                service: Some(DockerService {
+                    loaded: true,
+                    active: true
+                }),
                 daemon_json: DaemonJson::Missing,
                 daemon: Some(DockerDaemon {
                     live_restore: false,
@@ -280,13 +376,16 @@ mod tests {
                 }),
             }
         );
+        assert_eq!(engine.major(), Some(29));
+        assert!(engine.installed() && engine.from_package());
         let ran: Vec<Vec<String>> = runner
             .calls()
             .into_iter()
             .map(|c| std::iter::once(c.program).chain(c.args).collect())
             .collect();
-        let want: [&[&str]; 4] = [
+        let want: [&[&str]; 5] = [
             &[&["dpkg-query"], DPKG].concat(),
+            &[&["systemctl"], SHOW].concat(),
             &[
                 "docker",
                 "info",
@@ -307,6 +406,27 @@ mod tests {
             ],
         ];
         assert_eq!(ran, want);
+    }
+
+    /// A stopped Docker is not asked: `docker` would start it through
+    /// `docker.socket`.
+    #[test]
+    fn a_stopped_docker_is_not_asked() {
+        let runner = FakeRunner::new()
+            .on(
+                "dpkg-query",
+                DPKG.iter().copied(),
+                exit(1, &format!("docker-ce installed {VERSION}\n"), ""),
+            )
+            .on("systemctl", SHOW.iter().copied(), unit("inactive"));
+        let mut notices = Vec::new();
+        let engine = detect(&FakeFs::new(), &runner, true, &mut notices).unwrap();
+        assert_eq!(engine.daemon, None);
+        assert_eq!(runner.calls().len(), 2);
+        assert_eq!(
+            notices,
+            ["docker.service is not running; its containers and networks are unknown"]
+        );
     }
 
     #[test]
@@ -331,28 +451,48 @@ mod tests {
         assert!(daemon.live_restore && daemon.swarm);
     }
 
-    /// Without Docker, or with a conflicting package, the daemon is not
-    /// asked: `docker` may be Podman.
+    /// Without a sign of Docker, or with a conflicting package, neither
+    /// systemd nor the daemon is asked: `docker` may be Podman.
     #[test]
-    fn asks_the_daemon_only_for_docker() {
+    fn asks_only_about_docker() {
         let runner = FakeRunner::new().on(
             "dpkg-query",
             DPKG.iter().copied(),
             exit(
                 1,
-                "docker.io installed\nrunc installed\ncontainerd config-files\n",
+                "docker.io installed 26.1.5+dfsg1-9\nrunc installed 1.1.15\n\
+                 containerd config-files 1.7.24\n",
                 "dpkg-query: no packages found matching docker-ce\n",
             ),
         );
         let engine = detect(&FakeFs::new(), &runner, true, &mut Vec::new()).unwrap();
         assert_eq!(engine.packages, ["docker.io", "runc"]);
-        assert_eq!(engine.daemon, None);
+        assert_eq!((engine.service, &engine.daemon), (None, &None));
         assert_eq!(runner.calls().len(), 1);
 
-        let runner = daemon_runner(Output::success("false inactive\n"));
+        let runner = FakeRunner::new().on("dpkg-query", ["-W"], exit(1, "", ""));
         let engine = detect(&FakeFs::new(), &runner, false, &mut Vec::new()).unwrap();
-        assert_eq!(engine.daemon, None);
+        assert_eq!((engine.service, &engine.daemon), (None, &None));
+        assert!(!engine.installed());
         assert_eq!(runner.calls().len(), 1);
+    }
+
+    #[test]
+    fn major_versions() {
+        let major = |v: &str| {
+            DockerEngine {
+                packages: vec![DOCKER_CE.to_owned()],
+                docker_ce_version: Some(v.to_owned()),
+                service: None,
+                daemon_json: DaemonJson::Missing,
+                daemon: None,
+            }
+            .major()
+        };
+        assert_eq!(major(VERSION), Some(29));
+        assert_eq!(major("5:20.10.24~3-0~debian-bullseye"), Some(20));
+        assert_eq!(major("23.0.0-1"), Some(23));
+        assert_eq!(major("odd"), None);
     }
 
     #[test]
