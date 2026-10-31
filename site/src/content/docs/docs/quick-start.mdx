@@ -36,7 +36,7 @@ needs a DNS record for this server.
 - The admin line says whether the name is a new or an existing account, and which SSH keys it gets.
 - Ports that something listens on are offered unchecked; unchecked ports are blocked.
 - `y` to the module question lets you pick modules one by one.
-- The Caddy questions appear when Docker is part of the setup. Press Enter at the first one to skip Caddy. A domain with an upstream adds the `deploy.proxy` module, and a bad domain, a duplicate, or an upstream written as `localhost:8080` is asked again with the reason. See [Deploy an app](/docs/guides/deployment-modules/#caddy-with-domains-and-upstreams).
+- The Caddy questions appear when Docker is part of the setup, or when you tick `deploy.proxy` in the module list. Press Enter at the first one to skip Caddy. A domain with an upstream adds the `deploy.proxy` module, and a bad domain, a duplicate, or an upstream written as `localhost:8080` is asked again with the reason. See [Deploy an app](/docs/guides/deployment-modules/#caddy-with-domains-and-upstreams).
 
 Then it shows the same plan as `apply`, asks `Apply N changes? [y/N]` and applies behind the safety timer; confirm from a new login as described below. It ends with the `sudo vps-ready apply --profile ...` command that repeats the setup without questions, and offers to save your answers to `vps-ready.toml` when they differ from a built-in profile.
 

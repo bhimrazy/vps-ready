@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-import { Aside, Steps } from '@astrojs/starlight/components';
+import { Aside } from '@astrojs/starlight/components';
 
 Hardening a server is half the job; the other half is getting an app onto it. Three modules do that: `deploy.docker` installs Docker with safe defaults, `deploy.proxy` puts Caddy in front of your apps with HTTPS, and `deploy.user` gives your CI a login that can do one thing. They work like every other module: `plan` shows the diff, `apply` journals it, `rollback` undoes it.
 
@@ -13,13 +13,11 @@ Hardening a server is half the job; the other half is getting an app onto it. Th
 These modules ship with v0.5.0, which is not released yet. Until then, they are on `main` only.
 </Aside>
 
-None of the three touches the SSH server, the firewall's SSH rule or the admin's login, so they do not arm the [safety timer](/docs/guides/safety-net/) and there is nothing to confirm. They can restart Docker, which matters if you reach the server through a container (see [Docker restarts](#what-a-rollback-leaves-behind)).
+On their own, the three do not touch the SSH server, the firewall's SSH rule or the admin's login, so they do not arm the [safety timer](/docs/guides/safety-net/). In a run with a guarded module, as in the `web` profile, they share its transaction: confirm it, or the timer undoes them too (and Docker restarts again). They can restart Docker, which matters if you reach the server through a container (see [Docker restarts](#what-a-rollback-leaves-behind)).
 
-| Module | In a profile | Needs |
-|---|---|---|
-| `deploy.docker` | `web` | Nothing |
-| `deploy.proxy` | No | `sites` |
-| `deploy.user` | No | `keys` |
+- **`deploy.docker`** is in the `web` profile and needs no settings.
+- **`deploy.proxy`** is in no profile. It needs `sites`, a domain and an upstream for each.
+- **`deploy.user`** is in no profile. It needs `keys`.
 
 ## Docker, with ports on loopback
 
@@ -29,32 +27,35 @@ sudo vps-ready plan --profile web
 
 `deploy.docker` adds Docker's own apt repository, installs `docker-ce`, `docker-ce-cli`, `containerd.io` and the buildx and compose plugins, and writes `/etc/docker/daemon.json`:
 
-```json
+```json wrap=false title="/etc/docker/daemon.json"
 {
   "log-driver": "local",
-  "log-opts": { "max-size": "10m", "max-file": "3" },
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "3"
+  },
   "live-restore": true,
   "no-new-privileges": true,
   "userland-proxy": false,
   "ip": "127.0.0.1",
-  "default-network-opts": { "bridge": { "com.docker.network.bridge.host_binding_ipv4": "127.0.0.1" } }
+  "default-network-opts": {
+    "bridge": {
+      "com.docker.network.bridge.host_binding_ipv4": "127.0.0.1"
+    }
+  }
 }
 ```
 
 Logs stop growing without limit, containers keep running while the Docker daemon restarts, and a published port with no address (`-p 8080:80`) listens on `127.0.0.1` only. Put a reverse proxy in front of it, which is what `deploy.proxy` is for.
 
-**Use `127.0.0.1`, not `localhost`.** With an IPv4 binding address Docker does not publish on IPv6, and `localhost` may resolve to `::1`. The plan says this, and `deploy.proxy` refuses a `localhost` upstream.
-
-`no-new-privileges` means setuid programs such as `su` and `sudo` stop working inside new containers.
-
-### What FW-002 still reports
-
+<Aside type="note" title="What FW-002 still reports">
 Docker publishes ports through its own forwarding rules, which the input-only [firewall](/docs/guides/profiles-and-modules/#firewallinbound-the-firewall) never sees. That is control `FW-002`. The loopback default fixes it for new ports, but `audit` keeps reporting every port published on a public address, with a hint that the default is now loopback:
 
 - **A port you publish with an address.** `-p 0.0.0.0:8080:80` gets what you asked for.
 - **A network that existed before.** The default applies to the default bridge and to networks created after Docker restarts. A running compose project keeps its old binding until you recreate it with `docker compose down`, then `up`. The plan lists such networks.
 
 vps-ready does not filter Docker's forwarding itself: that would have to stay correct across Docker's own rule changes.
+</Aside>
 
 ### When it does not apply
 
@@ -62,14 +63,18 @@ It says which of these it found, and changes nothing:
 
 - Docker from the distro (`docker.io`), `podman-docker`, or the distro's `containerd` or `runc`. It does not remove them: removing a running container stack is not a hardening step.
 - A snap Docker, a swarm node (`live-restore` does not work there), or a `daemon.json` that is not valid JSON.
+- A Docker older than 23.0, which lacks `dockerd --validate` and `default-network-opts`.
+- A host without systemd, or a Debian or Ubuntu release that Docker's repository has no packages for.
 
 If Docker is already installed, the module only manages `daemon.json`, merged key by key: keys it sets are added or changed, your other keys stay, and the plan shows the diff. An existing `docker-ce` keeps getting updates from Docker's repository.
 
 ### Good to know
 
+- **Use `127.0.0.1`, not `localhost`.** With an IPv4 binding address Docker does not publish on IPv6, and `localhost` may resolve to `::1`. The plan says this, and `deploy.proxy` refuses a `localhost` upstream.
+- **`no-new-privileges`** means setuid programs such as `su` and `sudo` stop working inside new containers.
 - **The docker group is root.** `deploy.docker` adds nobody to it.
 - **Docker sets `ip_forward=1`** and a `FORWARD` policy of drop. A host that routes other traffic, such as a VPN peer or a subnet router, needs its own forward rules.
-- **No automatic updates.** `updates.auto` leaves Docker's and Caddy's repositories out, so apply their updates yourself with `apt upgrade`.
+- **Updates are yours.** `updates.auto` installs the distro's security updates only, so Docker and Caddy update when you run `apt upgrade`.
 - **The firewall knows Docker.** When `deploy.docker` is in the same plan, `firewall.inbound` accepts traffic from `docker0` and the `br-*` bridges, so one `apply` is enough on a fresh server.
 
 ## Caddy, with domains and upstreams
@@ -99,11 +104,11 @@ app.example.com {
 
 Caddy gets and renews the certificates by itself and redirects HTTP to HTTPS. There are no other directives; the module is for the common case of a few apps behind one server. `sites` is required, and a bad or repeated domain is refused with the reason. A domain is two or more lowercase labels (no wildcard, no IP address). An upstream is `host:port` with no scheme or path.
 
-The [guided setup](/docs/quick-start/#the-guided-way) asks for domains when Docker is in the profile, and adds `deploy.proxy` if you give it one. Entering none is fine.
+The [guided setup](/docs/quick-start/#the-guided-way) asks for domains when Docker is in the profile, or when you tick `deploy.proxy` in the module list, and adds `deploy.proxy` if you give it one. Entering none is fine.
 
-**A Caddyfile you wrote yourself is never overwritten.** vps-ready's file starts with a header line. A `Caddyfile` without it is left alone: the module says so and only makes sure Caddy is installed.
+**A Caddyfile you wrote yourself is never overwritten.** vps-ready's file starts with a header line. A `Caddyfile` without it is left alone, and the module says so and only makes sure Caddy is installed. The one exception is the package's own unmodified default, which is replaced (and restored by a rollback).
 
-Before Caddy starts, its config is validated, and afterwards `apply` checks that Caddy is running. A config that fails validation, or a Caddy that cannot bind ports 80 and 443, makes the apply roll back.
+Before Caddy reloads, its config is validated, and afterwards `apply` checks that Caddy is running (`systemctl is-active`). A config that fails validation, or a Caddy that cannot bind ports 80 and 443, makes the apply roll back.
 
 ### DNS and the firewall
 
@@ -128,12 +133,25 @@ command = "/usr/local/bin/deploy-app"   # optional
 docker  = false
 ```
 
+The guided setup does not ask for this one; it comes only from a profile file:
+
+```sh
+sudo vps-ready apply --profile ./my-server.toml --module deploy.user
+```
+
 - **Restricted keys.** Every key is written with `restrict`, which turns off port forwarding, agent forwarding and terminals. With a `command`, it is also forced: the key runs that one program as the deploy user, whatever the client asks for. The keys must have no options of their own. The file holds exactly your `keys`, so removing one from the profile and applying again takes it away.
-- **Sudo, for that one command.** With a `command`, a sudoers drop-in lets the deploy user run it as root without a password and without arguments. Without a `command` there is no sudo at all. The command is your choice: any absolute path to a program owned by root that nobody else can write.
+- **Sudo, for that one command.** With a `command`, a sudoers drop-in lets the deploy user run it as root without a password and without arguments. Without a `command` there is no sudo at all. The command is your choice.
 - **No password.** The account's password is locked.
 - **`docker = true`** adds the account to the `docker` group. The plan says in words that this is root access.
 
-The deploy user is refused when `name` is the admin's, or an account that vps-ready did not create already exists, so an existing user never gets restricted keys by surprise.
+### What it refuses
+
+- A `name` equal to the admin's, or an existing account that vps-ready did not create, so an existing user never gets restricted keys by surprise.
+- A key that already has options.
+- A `command` that is not an absolute path to a file owned by root, that is under `/home`, `/tmp`, `/var/tmp` or `/dev/shm`, that has `.` or `..` in it, or that sits in a directory anyone but root can write.
+- A `command` when sudo is not installed.
+- `docker = true` without a `docker` group, unless Docker is installed in the same plan.
+- A sudoers drop-in of the same name that names another user.
 
 ### Re-run the command as root
 
@@ -154,21 +172,19 @@ sudo chmod 755 /usr/local/bin/deploy-app
 ```
 
 <Aside type="caution" title="Arguments do not get through">
-sudo clears the environment, including `SSH_ORIGINAL_COMMAND`, which is where sshd puts what the client asked to run. The sudoers rule also allows no arguments. So the script cannot read what CI sent, and it has to do the same thing every time. For two different jobs, use two keys and two users.
+By default sudo resets the environment (`env_reset`), which drops `SSH_ORIGINAL_COMMAND`, where sshd puts what the client asked to run. The sudoers rule also allows no arguments. So the script cannot read what CI sent, and it has to do the same thing every time. For two different jobs, use two keys and two users.
 </Aside>
-
-The deploy script must exist and be safe when you plan: a `command` that is not an absolute path, is not owned by root, or can be written by anyone else is refused.
 
 ## What a rollback leaves behind
 
 `vps-ready rollback --last` undoes these modules like any other, with a few things to know. Packages are never removed (see [Undo and recover](/docs/guides/undo-and-recover/)).
 
-| Module | Rollback | Stays |
-|---|---|---|
-| `deploy.docker` | Removes `daemon.json` and Docker's apt source and key, then restarts Docker | The Docker packages |
-| `deploy.proxy` | Removes the `Caddyfile` and Caddy's apt source and key, then stops and disables Caddy | The `caddy` package, and on a fresh install the package's default file as `Caddyfile.dpkg-dist` |
-| `deploy.user` | Removes the account and its sudoers drop-in, and restores `authorized_keys` | The home directory |
+**`deploy.docker`.** Rollback restores `daemon.json` (it removes the file only if the apply created it), removes Docker's apt source and key if the apply added them, then restarts Docker if it is running (a stopped Docker stays stopped). Stays: the Docker packages.
+
+**`deploy.proxy`.** Rollback restores the `Caddyfile` that was there before and reloads Caddy. When there was none, it removes the file, then stops and disables Caddy, since Caddy cannot run without one. Caddy's apt source and key are removed if the apply added them. Stays: the `caddy` package, and on a fresh install the package's default file as `Caddyfile.dpkg-dist`.
+
+**`deploy.user`.** Rollback removes the sudoers drop-in and the `authorized_keys` it wrote, then the account with `userdel`. That fails while a CI session is still running; the rollback then prints `pkill -u <name>; userdel <name>` for you to run. Stays: the home directory.
 
 **Docker restarts.** Applying the new `daemon.json` restarts Docker, because the settings cannot be reloaded. With `live-restore` already on, running containers are not touched. With it off, the plan lists the running containers, says they will stop, and says a rollback restarts Docker again. Only containers with a restart policy come back by themselves. The note is the warning: `--yes` still means yes.
 
-**Caddy stops.** Without its `Caddyfile`, Caddy can neither validate, reload nor start, so a rollback stops and disables it rather than leave it serving a removed config from memory. If an earlier `Caddyfile` of vps-ready's existed, it is restored and Caddy reloads it.
+**Caddy stops** only in the case above, because without its `Caddyfile` it can neither validate, reload nor start; stopping it keeps it from serving a removed config from memory.

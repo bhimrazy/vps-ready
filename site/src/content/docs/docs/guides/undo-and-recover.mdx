@@ -67,7 +67,9 @@ Some things a rollback leaves on purpose: installed packages (`nftables`, `fail2
 
 ### Docker and Caddy
 
-Rolling back `deploy.docker` removes `daemon.json` and restarts Docker. If `live-restore` was off before, that stops the running containers a second time (the apply stopped them once), and only those with a restart policy start again. `apply` listed them in its plan. Rolling back `deploy.proxy` removes the `Caddyfile`, then stops and disables Caddy, since it cannot run without one. Both modules also remove the vendor's apt source and key, and leave the packages. Details: [Deploy an app](/docs/guides/deployment-modules/#what-a-rollback-leaves-behind).
+Rolling back `deploy.docker` restores `daemon.json` (it removes the file only if the apply created it), removes Docker's apt source and key if the apply added them, then restarts Docker if it is running; a stopped Docker stays stopped. If `live-restore` was off before, that restart stops the running containers a second time (the apply stopped them once), and only those with a restart policy start again. `apply` listed them in its plan.
+
+Rolling back `deploy.proxy` restores the `Caddyfile` that was there before and reloads Caddy. Only when there was none does it remove the file, then stop and disable Caddy, since it cannot run without one. Both modules leave their packages. Details: [Deploy an app](/docs/guides/deployment-modules/#what-a-rollback-leaves-behind).
 
 ## Locked out?
 
