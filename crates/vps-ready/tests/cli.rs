@@ -176,6 +176,25 @@ fn unknown_module_is_a_usage_error() {
 }
 
 #[test]
+fn modules_lists_and_describes() {
+    vps_ready()
+        .arg("modules")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("firewall.inbound"));
+    vps_ready()
+        .args(["modules", "ssh.server", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(r#""id": "ssh.server""#));
+    vps_ready()
+        .args(["modules", "nope"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("invalid value 'nope'"));
+}
+
+#[test]
 fn unknown_profile_is_an_error() {
     vps_ready()
         .args(["plan", "--profile", "nope"])
