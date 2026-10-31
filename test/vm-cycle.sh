@@ -689,11 +689,15 @@ rc=0; local_ssh -o ControlPath=none "$admin@$self_ip" sudo vps-ready confirm || 
 expect_newest confirmed
 expect_rc /tmp/vr-apply.rc 0
 
-# busybox 1.37 by digest, from a mirror without Docker Hub's pull limits.
-busybox=public.ecr.aws/docker/library/busybox@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec
-vm sudo docker run -d --name app -p 8080:80 "$busybox" \
-  sh -c "'mkdir /www && echo hello from the container >/www/index.html && exec httpd -f -p 80 -h /www'" >/dev/null ||
-  die "docker run failed"
+# The app image holds only Caddy's own binary, which is static, so no
+# registry is involved (ECR's mirror refused CI's runners with "Data limit
+# exceeded").
+# shellcheck disable=SC2016 # expanded in the VM
+vm 'd=$(mktemp -d) && install -d -m 1777 "$d/tmp" && cp /usr/bin/caddy "$d/" &&
+  sudo tar -C "$d" -c . | sudo docker import -c "ENV HOME=/tmp" - vr-app >/dev/null && rm -rf "$d"' ||
+  die "cannot build the app image"
+vm sudo docker run -d --name app -p 8080:80 vr-app \
+  /caddy respond --listen :80 "'hello from the container'" >/dev/null || die "docker run failed"
 ports=$(vm sudo docker port app 80/tcp)
 [ "$ports" = "127.0.0.1:8080" ] || die "the port is published on $ports, expected 127.0.0.1:8080 only"
 body=$(vm curl -fsS -k --retry 10 --retry-delay 1 --retry-all-errors \
@@ -719,6 +723,7 @@ if vm sudo -u deploy sudo -n "$deploy_cmd" x >/dev/null 2>&1; then
 fi
 
 vm sudo docker rm -f app >/dev/null
+vm sudo docker rmi vr-app >/dev/null
 # `userdel` fails while an account has processes, e.g. its systemd --user.
 i=0
 while vm pgrep -u "$admin,deploy" >/dev/null; do
