@@ -642,30 +642,41 @@ impl Fs for RealFs {
         // Without O_NONBLOCK, opening a FIFO waits for a writer.
         let flags =
             OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::NOCTTY | OFlags::CLOEXEC;
-        let fd = rfs::openat(&dir, name, flags, Mode::empty()).map_err(|e| errno(subject(), e))?;
-        let st = rfs::fstat(&fd).map_err(|e| errno(subject(), e))?;
-        let kind = match FileType::from_raw_mode(st.st_mode) {
-            FileType::RegularFile => FileKind::File,
-            FileType::Directory => FileKind::Dir,
-            _ => FileKind::Other,
+        let not_regular = |kind| SysError::NotRegular {
+            path: subject(),
+            kind,
         };
-        if kind != FileKind::File {
-            return Err(SysError::NotRegular {
-                path: subject(),
-                kind,
-            });
+        let fd = match rfs::openat(&dir, name, flags, Mode::empty()) {
+            Ok(fd) => fd,
+            // What opening a socket fails with (`EOPNOTSUPP` on macOS).
+            Err(rustix::io::Errno::NXIO | rustix::io::Errno::OPNOTSUPP) => {
+                return Err(not_regular(FileKind::Other));
+            }
+            Err(e) => return Err(errno(subject(), e)),
+        };
+        let mut file = File::from(fd);
+        let meta = file
+            .metadata()
+            .map_err(|e| SysError::from_io(subject(), e))?;
+        let ft = meta.file_type();
+        if !ft.is_file() {
+            let kind = if ft.is_dir() {
+                FileKind::Dir
+            } else {
+                FileKind::Other
+            };
+            return Err(not_regular(kind));
         }
         let mut bytes = Vec::new();
-        File::from(fd)
-            .read_to_end(&mut bytes)
+        file.read_to_end(&mut bytes)
             .map_err(|e| SysError::from_io(subject(), e))?;
         let meta = FileMeta {
-            kind,
+            kind: FileKind::File,
             len: bytes.len() as u64,
-            mode: u32::from(st.st_mode) & 0o7777,
-            uid: st.st_uid,
-            gid: st.st_gid,
-            nlink: u64::from(st.st_nlink),
+            mode: meta.mode() & 0o7777,
+            uid: meta.uid(),
+            gid: meta.gid(),
+            nlink: meta.nlink(),
         };
         Ok((bytes, meta))
     }
@@ -1082,7 +1093,20 @@ mod tests {
             .output()
             .unwrap();
         assert!(out.status.success(), "{out:?}");
-        read_nofollow_contract(&RealFs::new(dir.path()));
+        let fs = RealFs::new(dir.path());
+        read_nofollow_contract(&fs);
+        let _socket = std::os::unix::net::UnixListener::bind(etc.join("sock")).unwrap();
+        let err = fs.read_nofollow(Path::new("/etc/sock")).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                SysError::NotRegular {
+                    kind: FileKind::Other,
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
     }
 
     #[test]

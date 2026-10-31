@@ -940,13 +940,17 @@ fn a_failed_forced_restore_keeps_the_admin_it_relies_on() {
     else {
         panic!("{err:?}");
     };
-    let resources: Vec<&str> = left.iter().map(|s| s.resource.as_str()).collect();
+    let steps: Vec<String> = left.iter().map(ToString::to_string).collect();
     assert_eq!(
-        resources,
+        steps,
         [
-            format!("file:{drop_in}").as_str(),
-            "authorized-keys:admin",
-            "user:admin"
+            format!("file:{drop_in}: remove {drop_in}"),
+            format!(
+                "authorized-keys:admin: only after the steps above succeed, remove {keys}, \
+                 then rmdir /home/admin/.ssh"
+            ),
+            "user:admin: only after the steps above succeed, pkill -u admin; userdel admin"
+                .to_owned(),
         ]
     );
     assert!(fs.exists(Path::new(drop_in)));

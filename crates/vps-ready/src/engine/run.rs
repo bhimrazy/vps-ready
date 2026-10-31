@@ -1146,7 +1146,10 @@ impl<'a> Engine<'a> {
                 // up before it, such as the admin `ssh.server` relies on, so
                 // the unforced restores wait for a rerun.
                 if forced_failed && !force {
-                    held.extend(by_hand(&dir, resource, backup));
+                    held.extend(by_hand(&dir, resource, backup).map(|mut step| {
+                        step.step = format!("only after the steps above succeed, {}", step.step);
+                        step
+                    }));
                     continue;
                 }
                 if best_effort {

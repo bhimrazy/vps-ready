@@ -378,24 +378,30 @@ pub(crate) fn unchanged(sys: Sys, txn_dir: &Path, backup: &Backup) -> Result<boo
 /// How to restore `backup` by hand.
 pub(crate) fn by_hand(txn_dir: &Path, backup: &Backup) -> Option<String> {
     let Backup::AuthorizedKeys {
+        user,
         path,
         n,
         original,
         created_dir,
-        ..
     } = backup
     else {
         return None;
     };
     Some(match original {
-        Some(copy) => format!(
-            "copy {} to {} (mode {:04o}, owner {}:{})",
-            before_path(txn_dir, *n).display(),
-            path.display(),
-            copy.mode & 0o644,
-            copy.uid,
-            copy.gid
-        ),
+        Some(copy) => {
+            // The owner `restore` sets.
+            let owner = if copy.uid == 0 {
+                format!("0:{}", copy.gid)
+            } else {
+                format!("{user} and their primary group")
+            };
+            format!(
+                "copy {} to {} (mode {:04o}, owner {owner})",
+                before_path(txn_dir, *n).display(),
+                path.display(),
+                copy.mode & 0o644,
+            )
+        }
         None => match path.parent().filter(|_| *created_dir) {
             Some(dir) => format!("remove {}, then rmdir {}", path.display(), dir.display()),
             None => format!("remove {}", path.display()),
@@ -930,7 +936,12 @@ mod tests {
         assert_eq!(restored(&backup(0o4600, 0)), (0o600, 0, 42));
         assert_eq!(fs.read(path).unwrap(), format!("{OTHER}\n").as_bytes());
         let step = by_hand(txn, &backup(0o6755, 1001)).unwrap();
-        assert!(step.ends_with("(mode 0644, owner 1001:42)"), "{step}");
+        assert!(
+            step.ends_with("(mode 0644, owner admin and their primary group)"),
+            "{step}"
+        );
+        let step = by_hand(txn, &backup(0o4600, 0)).unwrap();
+        assert!(step.ends_with("(mode 0600, owner 0:42)"), "{step}");
     }
 
     #[test]
@@ -1029,7 +1040,7 @@ mod tests {
         assert_eq!(
             by_hand(txn, &existed).unwrap(),
             format!(
-                "copy {} to {path} (mode 0600, owner 1001:1001)",
+                "copy {} to {path} (mode 0600, owner admin and their primary group)",
                 before_path(txn, 1).display()
             )
         );
