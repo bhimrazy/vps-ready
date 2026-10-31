@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use super::*;
 use crate::facts::SessionId;
+use crate::resource::after_path;
 
 const BIN: &str = "/usr/local/bin/vps-ready";
 const UPTIME: &str = "/proc/uptime";
@@ -840,6 +841,130 @@ fn a_created_account_whose_name_was_taken_since_is_not_removed() {
         }]
     );
     assert!(!calls(&run).iter().any(|c| c.starts_with("userdel")));
+}
+
+/// `user.admin` then `ssh.server`, as a plan that sets up an admin and
+/// turns off root and password login journals them.
+#[test]
+fn a_failed_forced_restore_keeps_the_admin_it_relies_on() {
+    let fs = armable();
+    let state = state(&fs);
+    let txn = state.create_txn(&fs, 1).unwrap();
+    let dir = txn.dir().to_path_buf();
+    let rec = |event| Record { at: 1, event };
+    let applied = |resource: &str, uid| {
+        rec(Event::Applied {
+            resource: resource.into(),
+            uid,
+        })
+    };
+    let keys = "/home/admin/.ssh/authorized_keys";
+    let drop_in = crate::modules::ssh_server::DROP_IN;
+    let records = [
+        rec(Event::Begin {
+            version: "0.3.0".into(),
+            modules: vec!["user.admin".into(), "ssh.server".into()],
+        }),
+        rec(Event::Armed {
+            unit: deadman::unit_name(txn.id(), 1),
+            boot_id: "a".into(),
+            deadline: Deadline {
+                boottime: 1100,
+                wall: 1,
+            },
+        }),
+        rec(Event::Backup {
+            resource: "user:admin".into(),
+            backup: Backup::User {
+                name: "admin".into(),
+                created: true,
+                added_groups: Vec::new(),
+            },
+            force_restore: false,
+        }),
+        applied("user:admin", Some(1001)),
+        rec(Event::Backup {
+            resource: "authorized-keys:admin".into(),
+            backup: Backup::AuthorizedKeys {
+                user: "admin".into(),
+                path: keys.into(),
+                n: 1,
+                original: None,
+                created_dir: true,
+            },
+            force_restore: false,
+        }),
+        applied("authorized-keys:admin", None),
+        rec(Event::Backup {
+            resource: format!("file:{drop_in}"),
+            backup: Backup::File {
+                path: drop_in.into(),
+                n: 2,
+                original: None,
+            },
+            force_restore: true,
+        }),
+        applied(&format!("file:{drop_in}"), None),
+        rec(Event::Reloaded {
+            reload: Reload::SshdReload,
+        }),
+    ];
+    for r in &records {
+        txn.append(&fs, r).unwrap();
+    }
+    let key = owner(0o600);
+    for (path, after, bytes) in [
+        (keys, after_path(&dir, 1), "ssh-ed25519 AAAA admin\n"),
+        (drop_in, after_path(&dir, 2), "PermitRootLogin no\n"),
+    ] {
+        let path = Path::new(path);
+        fs.create_dir_all(path.parent().unwrap(), 0o700).unwrap();
+        fs.write_atomic(&after, bytes.as_bytes(), key).unwrap();
+        fs.write_atomic(path, bytes.as_bytes(), key).unwrap();
+    }
+    let run = dm_runner()
+        .on(
+            "getent",
+            ["passwd", "admin"],
+            Output::success("admin:x:1001:1001::/home/admin:/bin/bash\n"),
+        )
+        .on("userdel", Vec::<String>::new(), Output::success(""));
+
+    // The drop-in's removal, the first restore, fails.
+    set_uptime(&fs, 5000);
+    fs.fail_next(Op::Remove);
+    let err = timer(&fs, &run, txn.id()).unwrap_err();
+    let EngineError::RollbackIncomplete {
+        left: Some(left), ..
+    } = &err
+    else {
+        panic!("{err:?}");
+    };
+    let steps: Vec<String> = left.iter().map(ToString::to_string).collect();
+    assert_eq!(
+        steps,
+        [
+            format!("file:{drop_in}: remove {drop_in}"),
+            format!(
+                "authorized-keys:admin: only after the steps above succeed, remove {keys}, \
+                 then rmdir /home/admin/.ssh"
+            ),
+            "user:admin: only after the steps above succeed, pkill -u admin; userdel admin"
+                .to_owned(),
+        ]
+    );
+    assert!(fs.exists(Path::new(drop_in)));
+    assert!(fs.exists(Path::new(keys)));
+    assert!(!calls(&run).iter().any(|c| c.starts_with("userdel")));
+
+    // A rerun that can remove the drop-in restores the rest as well.
+    let DeadmanOutcome::RolledBack(done) = timer(&fs, &run, txn.id()).unwrap() else {
+        panic!("not rolled back");
+    };
+    assert_eq!(done.restored, 3);
+    assert!(!fs.exists(Path::new(drop_in)));
+    assert!(!fs.exists(Path::new(keys)));
+    assert!(calls(&run).contains(&"userdel admin".to_owned()));
 }
 
 #[test]
