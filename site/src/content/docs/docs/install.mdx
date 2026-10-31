@@ -25,10 +25,13 @@ Run these on the server. vps-ready is one static binary for Linux on x86_64 and 
 
 The install script downloads the release tarball for the machine, checks it against the SHA-256 embedded in the script, verifies the release signature when `gh` or `cosign` is installed, and copies the binary to `/usr/local/bin`. [View the install script](https://github.com/bhimrazy/vps-ready/releases/latest/download/install.sh).
 
+If `cosign`, or `gh` while logged in (`gh auth status`), is installed and the signature check fails, the install stops (use `--skip-verify` to override). A `gh` that is not logged in is skipped. With no usable tool, the script says so and continues: the binary is then checked only against the checksums embedded in the script, so verify the script itself (below) if that matters to you.
+
 | Option | What it does |
 |---|---|
 | `--dry-run` | Show what would be done, change nothing |
-| `--prefix DIR` | Install directory (default: `/usr/local/bin`) |
+| `--prefix DIR` | Install directory (default: `/usr/local/bin`). Refused when group- or other-writable |
+| `--skip-verify` | Install even if the signature check fails; the SHA-256 check still runs |
 | `--version` | Print the version the script installs and exit |
 
 The command is also installed as `vpsready`, without the hyphen.
@@ -57,6 +60,20 @@ vps-ready never updates itself: it makes no network calls except package install
 Check with `vps-ready --version`, and see the [releases](https://github.com/bhimrazy/vps-ready/releases) for what changed. The installer only replaces the binary; your journal in `/var/lib/vps-ready` stays, so `history` and `rollback --last` keep working.
 
 To pin a version or read the script first, download the versioned installer from its release instead of `latest`, for example <code>{`https://github.com/bhimrazy/vps-ready/releases/download/v${VERSION}/install.sh`}</code>.
+
+## Verify the install script
+
+`install.sh` is listed in `checksums.txt`, which is signed, so you can check the script before running it. Download the script, `checksums.txt` and its bundle from the same release (pin the version rather than using `latest`).
+
+<Command lines={[
+  `V=${VERSION}`,
+  'B=https://github.com/bhimrazy/vps-ready/releases/download/v$V',
+  'curl -fsSLO $B/install.sh -O $B/checksums.txt -O $B/checksums.txt.sigstore.json',
+  `cosign verify-blob --bundle checksums.txt.sigstore.json --certificate-identity-regexp '^https://github.com/bhimrazy/vps-ready/\\.github/workflows/release\\.yml@refs/tags/v' --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt`,
+  'sha256sum --check --ignore-missing checksums.txt',
+]} />
+
+With `gh` instead of `cosign`: `gh attestation verify install.sh --repo bhimrazy/vps-ready`.
 
 ## Verify a release by hand
 

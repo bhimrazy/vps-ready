@@ -4,11 +4,12 @@
 #
 #   curl -fsSLO https://github.com/bhimrazy/vps-ready/releases/download/v__VERSION__/install.sh
 #   less install.sh
-#   sudo sh install.sh [--dry-run] [--prefix DIR] [--version]
+#   sudo sh install.sh [--dry-run] [--prefix DIR] [--skip-verify] [--version]
 #
 # It downloads the tarball for this machine, checks it against the SHA-256
 # embedded below, verifies the release signature with gh or cosign when one
-# is installed, and copies the binary into place.
+# is installed (a failed check stops the install unless --skip-verify), and
+# copies the binary into place.
 set -eu
 
 VERSION="__VERSION__"
@@ -29,10 +30,12 @@ usage() {
 	cat <<EOF
 Install vps-ready $VERSION.
 
-Usage: sh install.sh [--dry-run] [--prefix DIR] [--version]
+Usage: sh install.sh [--dry-run] [--prefix DIR] [--skip-verify] [--version]
 
   --dry-run     show what would be done, change nothing
   --prefix DIR  install directory (default: /usr/local/bin)
+  --skip-verify install even if the signature check fails (the SHA-256
+                check still runs)
   --version     print the version this script installs and exit
 EOF
 }
@@ -60,31 +63,48 @@ sha256() {
 }
 
 # The SHA-256 check already happened; this proves the tarball came from
-# this repository's release workflow. Never fatal when no tool is present.
+# this repository's release workflow. A failing check is fatal; having no
+# usable tool (gh counts only when logged in) is not.
 verify_signature() {
-	if has gh; then
-		if gh attestation verify "$tmp/$tarball" --repo "$REPO" >/dev/null 2>&1; then
+	if has gh && ! gh auth status >/dev/null 2>&1; then
+		say "gh is not logged in, skipping it"
+	elif has gh; then
+		if gh attestation verify "$tmp/$tarball" --repo "$REPO" \
+			--signer-workflow "$REPO/.github/workflows/release.yml" \
+			--source-ref "refs/tags/v$VERSION" >/dev/null 2>&1; then
 			say "provenance verified with gh attestation"
 			return 0
 		fi
-		say "gh attestation verify failed (is gh logged in?); trying cosign"
+		if ! has cosign; then
+			die "gh attestation verify failed; pass --skip-verify to install anyway"
+		fi
+		say "gh attestation verify failed; trying cosign"
 	fi
 	if has cosign; then
 		download "$BASE_URL/checksums.txt" "$tmp/checksums.txt"
 		download "$BASE_URL/checksums.txt.sigstore.json" "$tmp/checksums.txt.sigstore.json"
 		cosign verify-blob --bundle "$tmp/checksums.txt.sigstore.json" \
 			--certificate-identity-regexp "$IDENTITY" --certificate-oidc-issuer "$ISSUER" \
-			"$tmp/checksums.txt" >/dev/null 2>&1 || die "cosign signature verification FAILED"
+			"$tmp/checksums.txt" >/dev/null 2>&1 ||
+			die "cosign signature verification FAILED; pass --skip-verify to install anyway"
 		grep -q "^$expected  $tarball\$" "$tmp/checksums.txt" ||
 			die "tarball checksum is not in the signed checksums.txt"
 		say "signature verified with cosign"
 		return 0
 	fi
-	echo "note: checked the SHA-256 embedded in this script; to also verify the Sigstore signature, see docs/release.md (needs cosign or gh)" >&2
+	say "note: no usable gh (installed and logged in) or cosign, so the binary was checked only against the checksums embedded in this script; install one and rerun to verify the signature (see docs/release.md)"
+}
+
+# A group- or world-writable directory lets another user swap files in it.
+check_prefix() {
+	if [ -n "$(find "$1" -maxdepth 0 \( -perm -020 -o -perm -002 \) 2>/dev/null)" ]; then
+		die "$1 is writable by group or others; fix with chmod go-w or choose another --prefix"
+	fi
 }
 
 main() {
 	dry_run=0
+	skip_verify=0
 	prefix=/usr/local/bin
 	while [ $# -gt 0 ]; do
 		case $1 in
@@ -95,6 +115,7 @@ main() {
 			shift
 			;;
 		--prefix=*) prefix=${1#*=} ;;
+		--skip-verify) skip_verify=1 ;;
 		--version)
 			echo "$VERSION"
 			exit 0
@@ -120,9 +141,16 @@ main() {
 	expected=$(printf '%s\n' "$CHECKSUMS" | awk -v f="$tarball" '$2 == f { print $1 }')
 	[ -n "$expected" ] || die "no checksum for $tarball in this installer"
 
+	[ ! -d "$prefix" ] || check_prefix "$prefix"
+
 	if [ "$dry_run" = 1 ]; then
 		say "would download $BASE_URL/$tarball"
 		say "would check sha256 $expected"
+		if [ "$skip_verify" = 1 ]; then
+			say "would skip the signature check (--skip-verify)"
+		else
+			say "would verify the signature with gh or cosign if installed"
+		fi
 		say "would install $prefix/vps-ready (and the shortcut $prefix/vpsready)"
 		return 0
 	fi
@@ -134,13 +162,21 @@ main() {
 	actual=$(sha256 "$tmp/$tarball")
 	[ "$actual" = "$expected" ] || die "checksum mismatch: expected $expected, got $actual"
 	say "sha256 ok"
-	verify_signature
+	if [ "$skip_verify" = 1 ]; then
+		say "warning: --skip-verify, signature not checked"
+	else
+		verify_signature
+	fi
 
 	tar -xzf "$tmp/$tarball" -C "$tmp"
 	mkdir -p "$prefix"
-	cp "$tmp/vps-ready-$VERSION-$target/vps-ready" "$prefix/.vps-ready.new"
-	chmod 0755 "$prefix/.vps-ready.new"
-	mv -f "$prefix/.vps-ready.new" "$prefix/vps-ready"
+	check_prefix "$prefix"
+	# Same filesystem as the target, so the rename is atomic; mktemp creates
+	# the file exclusively, so nothing planted can be followed.
+	new=$(mktemp "$prefix/.vps-ready.XXXXXX")
+	trap 'rm -rf "$tmp" "$new"' EXIT INT TERM
+	install -m 0755 "$tmp/vps-ready-$VERSION-$target/vps-ready" "$new"
+	mv -f "$new" "$prefix/vps-ready"
 	# The same command without the hyphen.
 	ln -sfn vps-ready "$prefix/vpsready"
 	say "installed $prefix/vps-ready (also available as vpsready)"
