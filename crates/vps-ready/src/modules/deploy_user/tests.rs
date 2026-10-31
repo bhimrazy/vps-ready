@@ -489,6 +489,25 @@ fn the_deploy_user_does_not_confirm() {
         assert!(change_ids(&plan).contains(&"authorized-keys:deploy".to_owned()));
         assert_eq!(plan.admins(), ["admin"]);
     }
+
+    // An admin whose only key is limited to some addresses still confirms.
+    let from = table(&format!(
+        "authorized_keys = ['from=\"203.0.113.0/24\" {ADMIN_KEY}']"
+    ));
+    let admin = Selected {
+        module: &UserAdmin,
+        params: &from,
+    };
+    let plan = engine::plan(
+        &[admin, deploy],
+        &facts,
+        Sys {
+            fs: &fs,
+            runner: &runner,
+        },
+    )
+    .unwrap();
+    assert_eq!(plan.admins(), ["admin"]);
 }
 
 #[test]

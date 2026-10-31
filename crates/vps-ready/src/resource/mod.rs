@@ -12,7 +12,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::sys::{Cmd, FileKind, FileOwner, Output, Sys, SysError};
-use authorized_keys::is_plain_key;
+use authorized_keys::gives_a_shell;
 
 pub(crate) mod authorized_keys;
 pub(crate) mod directory;
@@ -420,14 +420,14 @@ impl From<FileCopy> for FileOwner {
 }
 
 /// The users other than root that `resources` give at least one key line
-/// without options, in order, each once. A user whose every line has
-/// options, such as `deploy.user`'s `restrict`, may be limited to one
-/// command, so it is not taken for an admin who can log in and confirm.
+/// that can open a shell (`gives_a_shell`), in order, each once. A user
+/// whose every line has `restrict` or `command=`, such as `deploy.user`'s,
+/// is not taken for an admin who can log in and confirm.
 pub fn keyed_users<'a>(resources: impl IntoIterator<Item = &'a Resource>) -> Vec<String> {
     let mut users: Vec<String> = Vec::new();
     for resource in resources {
         if let Resource::AuthorizedKeys(keys) = resource
-            && keys.keys.iter().any(|k| is_plain_key(k.trim()))
+            && keys.keys.iter().any(|k| gives_a_shell(k))
             && keys.user != "root"
             && !users.contains(&keys.user)
         {
@@ -570,9 +570,21 @@ mod tests {
                 "mixed",
                 &["restrict ssh-ed25519 AAAA m", "ssh-ed25519 AAAA n"],
             ),
+            keys(
+                "from",
+                &["from=\"203.0.113.0/24\",no-agent-forwarding ssh-ed25519 AAAA f"],
+            ),
+            keys(
+                "forced",
+                &["no-pty,COMMAND=\"echo \\\"a,b c\\\"\" ssh-ed25519 AAAA g"],
+            ),
+            keys("restricted-pty", &["Restrict,pty ssh-ed25519 AAAA h"]),
             keys("admin", &["ssh-ed25519 AAAA b"]),
         ];
-        assert_eq!(keyed_users(&resources), ["admin", "deploy", "mixed"]);
+        assert_eq!(
+            keyed_users(&resources),
+            ["admin", "deploy", "mixed", "from"]
+        );
         assert!(keyed_users(&[]).is_empty());
     }
 

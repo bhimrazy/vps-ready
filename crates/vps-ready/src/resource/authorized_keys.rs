@@ -226,11 +226,16 @@ impl AuthorizedKeys {
     /// appended.
     fn desired(&self, current: &[u8]) -> (Vec<u8>, bool) {
         if self.exact {
-            let out: Vec<u8> = self
-                .keys
-                .iter()
-                .flat_map(|k| [k.trim().as_bytes(), b"\n"].concat())
-                .collect();
+            let mut seen = Vec::new();
+            let mut out = Vec::new();
+            for key in self.keys.iter().map(|k| k.trim()) {
+                let id = identity(key);
+                if !seen.contains(&id) {
+                    out.extend_from_slice(key.as_bytes());
+                    out.push(b'\n');
+                    seen.push(id);
+                }
+            }
             let changed = out != current;
             return (out, changed);
         }
@@ -256,6 +261,45 @@ impl AuthorizedKeys {
         }
         (out, added > 0)
     }
+}
+
+/// Whether `line` lets its user log in to a normal shell: a key, plain or
+/// with options other than `restrict` and `command=`, which limit it to no
+/// terminal or one program. `from=`, `expiry-time=` and the like still
+/// count, so an admin key limited to some addresses is an admin's.
+pub(crate) fn gives_a_shell(line: &str) -> bool {
+    let line = line.trim();
+    if is_plain_key(line) {
+        return true;
+    }
+    // The options end at the first space outside quotes; a quoted value
+    // may hold `\"`.
+    let (mut quoted, mut escaped) = (false, false);
+    let mut names = Vec::new();
+    let mut start = 0;
+    let mut end = line.len();
+    for (i, c) in line.char_indices() {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' if quoted => escaped = true,
+            '"' => quoted = !quoted,
+            ',' if !quoted => {
+                names.push(&line[start..i]);
+                start = i + 1;
+            }
+            ' ' | '\t' if !quoted => {
+                end = i;
+                break;
+            }
+            _ => {}
+        }
+    }
+    names.push(&line[start..end]);
+    is_plain_key(&line[end..])
+        && !names.iter().any(|o| {
+            let name = o.split('=').next().unwrap_or_default();
+            name.eq_ignore_ascii_case("restrict") || name.eq_ignore_ascii_case("command")
+        })
 }
 
 /// Whether `line` starts with a key type rather than options, and has a key
@@ -560,6 +604,39 @@ mod tests {
         let (out, changed) = one.desired(want.as_bytes());
         assert!(changed);
         assert_eq!(String::from_utf8(out).unwrap(), format!("{restricted}\n"));
+        // A key given twice, or again with another comment, is written once.
+        let twice = AuthorizedKeys {
+            keys: vec![
+                restricted.clone(),
+                OTHER.into(),
+                restricted.clone(),
+                format!("{} new@desk", OTHER.rsplit_once(' ').unwrap().0),
+            ],
+            ..one
+        };
+        let (out, _) = twice.desired(b"");
+        assert_eq!(String::from_utf8(out).unwrap(), want);
+    }
+
+    #[test]
+    fn options_that_keep_a_shell() {
+        for line in [
+            KEY.to_owned(),
+            format!("from=\"203.0.113.0/24\" {KEY}"),
+            format!("no-agent-forwarding,expiry-time=\"20991231\" {KEY}"),
+            format!("environment=\"A=restrict\" {KEY}"),
+        ] {
+            assert!(gives_a_shell(&line), "{line}");
+        }
+        for line in [
+            format!("restrict {KEY}"),
+            format!("restrict,command=\"/usr/local/bin/deploy-app\" {KEY}"),
+            format!("no-pty,Command=\"echo \\\"a, b\\\"\" {KEY}"),
+            "from=\"203.0.113.1\"".to_owned(),
+            "not a key".to_owned(),
+        ] {
+            assert!(!gives_a_shell(&line), "{line}");
+        }
     }
 
     #[test]

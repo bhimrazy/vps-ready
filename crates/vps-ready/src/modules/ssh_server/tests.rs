@@ -461,6 +461,23 @@ fn refuses_to_lock_out_without_a_keyed_sudo_user() {
             .unwrap()
             .contains("(this SSH session is root's)")
     );
+    // An admin whose only key is limited to some addresses is still one.
+    let from = Resource::AuthorizedKeys(AuthorizedKeys {
+        user: "admin".into(),
+        exact: false,
+        keys: vec![format!("from=\"203.0.113.0/24\" {KEY}")],
+    });
+    let admin_sudo = Resource::File(File {
+        path: "/etc/sudoers.d/90-vps-ready-admin".into(),
+        content: b"admin ALL=(ALL:ALL) NOPASSWD: ALL\n".to_vec(),
+        owner: FileOwner {
+            mode: 0o440,
+            uid: 0,
+            gid: 0,
+        },
+        validate: None,
+    });
+    assert_eq!(refused(&facts, &[from, admin_sudo], &fs, vec![]), None);
     facts.session = None;
 
     // X11 forwarding alone needs no admin.
