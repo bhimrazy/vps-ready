@@ -119,12 +119,33 @@ export const heroScenes: Record<'audit' | 'plan' | 'apply' | 'confirm', Step[]> 
   ],
 };
 
-// Design preview of the M4 wizard (static, not real output yet).
+// The M4 wizard on a Docker host, from the `docker` transcript snapshot
+// (crates/vps-ready/src/cli/wizard/snapshots) and the closing lines from
+// cli/wizard.rs. Long runs are cut, marked with a dim "...", never reworded.
 export const wizardSnippet: Step[] = [
   { c: 'sudo vps-ready' },
-  { o: `${sp('ask', '?')} This server runs: ${sp('sel', 'web apps (Docker)')}` },
-  { o: `${sp('ask', '?')} Admin user name: admin` },
-  { o: `${sp('ask', '?')} Open ports: 22, 80, 443` },
-  { o: 'Plan: 5 modules, 9 changes. Apply now? y' },
-  { o: `${sp('dim', 'Next time:')} ${sp('b', 'sudo vps-ready apply --profile web')}` },
+  { o: 'Audit: 13 passed, 12 failed (1 high, 5 medium, 6 low), 4 unknown. vps-ready can fix 11 of them.' },
+  { o: '' },
+  { o: `${sp('ask', '?')} What will this server run?` },
+  { o: `  ${sp('sel', '&gt; Web apps or Docker: opens ports 80 and 443 (recommended: Docker is installed)')}` },
+  { o: '    Something else: only SSH is open' },
+  { o: `${sp('ask', '?')} Admin user for logging in: admin` },
+  { o: '  new account: logs in with 1 key copied from /root/.ssh/authorized_keys; sudo' },
+  { o: '  without a password.' },
+  { o: 'Unchecked ports will be blocked.' },
+  { o: `${sp('ask', '?')} Open ports besides SSH (22, always open)` },
+  { o: '  [x] 80/tcp' },
+  { o: '  [x] 443/tcp' },
+  { o: '  [x] 443/udp' },
+  { o: `${sp('ask', '?')} Pick which modules to run yourself? (y/N) no` },
+  { o: '' },
+  { o: 'After you apply, you have 5 minutes to log in from a new terminal and confirm.' },
+  { o: "If you don't, every change is undone." },
+  { o: sp('dim', '...') },
+  { o: '18 changes in 6 modules: 8 files, 1 directory, 6 kernel settings, 2 services, 1 user.' },
+  { o: 'Apply 18 changes? [y/N] y' },
+  { o: sp('dim', '...') },
+  { o: '' },
+  { o: 'Next time, without questions:' },
+  { o: `  ${sp('b', 'sudo vps-ready apply --profile web')}` },
 ];
