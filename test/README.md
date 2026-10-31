@@ -83,15 +83,23 @@ binary built with `--features vps-ready/testing`. Then `ssh.server`: the
 that refuses new root logins during the window (also through `ssh.socket`) and
 reverts at its deadline after an edit. Last, the wizard: `test/vm-wizard.exp`
 answers `sudo vps-ready` with its defaults over a real login, as the cycle's
-user and as root, and a new login as the admin confirms. It needs `/dev/kvm`,
-`qemu-system-x86_64`, `qemu-img`, `cloud-localds` (cloud-image-utils), `ssh` and
-`jq`; it installs `expect` in the VM. The `vm` workflow pins the images and
+user and as root, and a new login as the admin confirms. Then the deploy
+modules: the `web` profile with `deploy.proxy` for `app.localhost` and
+`deploy.user` with a forced command, confirmed by the new admin; a container
+published with `-p 8080:80` answers through Caddy and not on the VM's own
+address, the deploy key runs only its command, and `rollback --last` removes
+Docker's and Caddy's sources, keys and config files and the deploy user, and
+disables Caddy. It needs `/dev/kvm`, `qemu-system-x86_64`, `qemu-img`,
+`cloud-localds` (cloud-image-utils), `ssh` and `jq`; it installs `expect` and
+`curl` in the VM, and the VM needs network access for Docker's and Caddy's
+repositories and a container image. The `vm` workflow pins the images and
 runs it on four distros.
 
 Without KVM, for example on a Mac, pass `-` as the image and point
 `VM_SSH_CONFIG` at an ssh config whose `Host vm` reaches a user with
 passwordless sudo, such as a Lima VM's. The cycle changes that VM's kernel
-settings and apt configuration and installs `expect`, so use a throwaway one.
+settings and apt configuration and installs `expect`, `curl`, Docker and
+Caddy, so use a throwaway one.
 
 ```sh
 limactl create --name=vpsr-dev --cpus=1 --memory=1 --disk=10 --mount-none template:ubuntu-24.04
