@@ -8,6 +8,8 @@ use crate::facts::SessionId;
 use crate::resource::after_path;
 
 const BIN: &str = "/usr/local/bin/vps-ready";
+/// Where the timer and the boot hook run the binary from.
+const COPY: &str = "/state/bin/vps-ready";
 const UPTIME: &str = "/proc/uptime";
 const WINDOW: Duration = Duration::from_secs(300);
 
@@ -66,12 +68,12 @@ fn apply_dm(fs: &dyn Fs, runner: &FakeRunner, plan: &Plan) -> Result<ApplyOutcom
 
 fn timer(fs: &dyn Fs, runner: &FakeRunner, txn: &str) -> Result<DeadmanOutcome, EngineError> {
     let state = state(fs);
-    Engine::lock(&state, Sys { fs, runner })?.deadman(txn, Path::new(BIN), 0, &mut |_| {})
+    Engine::lock(&state, Sys { fs, runner })?.deadman(txn, Path::new(COPY), 0, &mut |_| {})
 }
 
 fn boot_hook(fs: &dyn Fs, runner: &FakeRunner) -> Result<Vec<Rollback>, EngineError> {
     let state = state(fs);
-    Engine::lock(&state, Sys { fs, runner })?.deadman_boot(Path::new(BIN), &mut |_| {})
+    Engine::lock(&state, Sys { fs, runner })?.deadman_boot(Path::new(COPY), &mut |_| {})
 }
 
 fn manual(fs: &dyn Fs, runner: &FakeRunner) -> Result<Rollback, EngineError> {
@@ -92,6 +94,7 @@ fn pending(fs: &dyn Fs, plan: &Plan) -> (String, Deadline) {
 fn host_without_hook(fs: &dyn Fs) -> Tree {
     let mut tree = host(fs);
     tree.remove(Path::new(deadman::HOOK));
+    tree.remove(Path::new(COPY));
     tree.remove(Path::new(UPTIME));
     tree.remove(Path::new(BOOT_ID));
     tree
@@ -114,7 +117,7 @@ fn systemd_run(txn: &str, n: usize, secs: u64) -> String {
         "systemd-run --unit=vps-ready-deadman-{txn}-{n} --on-active={secs}s \
          --timer-property=AccuracySec=1s \
          --description=vps-ready: roll back transaction {txn} unless confirmed \
-         {BIN} rollback --txn {txn} --deadman"
+         {COPY} rollback --txn {txn} --deadman"
     )
 }
 
@@ -166,7 +169,7 @@ fn arms_before_the_first_change_and_waits_for_a_confirm() {
     );
     assert_eq!(
         fs.read(Path::new(deadman::HOOK)).unwrap(),
-        deadman::hook_unit(Path::new(BIN)).as_bytes()
+        deadman::hook_unit(Path::new(COPY)).as_bytes()
     );
     assert_eq!(
         names(&fs, &txn),
@@ -414,7 +417,7 @@ fn an_edited_forced_file_is_restored_and_its_edit_kept() {
         },
     )
     .unwrap()
-    .deadman(&txn, Path::new(BIN), 0, &mut |p| match p {
+    .deadman(&txn, Path::new(COPY), 0, &mut |p| match p {
         Progress::During { copy, .. } => shown.push(format!("during {}", copy.display())),
         Progress::Skip(step) => shown.push(format!("skip {step}")),
         _ => {}
@@ -647,7 +650,7 @@ fn a_timer_that_fires_mid_apply_waits_for_the_lock() {
             )
             .unwrap();
             let txn = state.txns(&fs).unwrap().pop().unwrap();
-            engine.deadman(txn.id(), Path::new(BIN), 0, &mut |_| {})
+            engine.deadman(txn.id(), Path::new(COPY), 0, &mut |_| {})
         });
         // Apply under the lock; the timer's rollback cannot start meanwhile.
         let outcome = held.apply(&plan, &deadman_cfg(), &mut |_| {}).unwrap();
@@ -747,46 +750,156 @@ fn a_manual_rollback_of_a_pending_transaction_disarms() {
 }
 
 #[test]
-fn a_binary_path_change_while_pending_is_refused() {
+fn the_timer_and_the_boot_hook_run_a_private_copy_of_the_binary() {
     let fs = armable();
     let facts = facts();
-    let [lock, keys, plain] = locking();
-    let plan = plan_of(&fs, &facts, &[&lock, &keys, &plain]);
-    let state = state(&fs);
+    let [lock, ..] = locking();
+    let plan = plan_of(&fs, &facts, &[&lock]);
     let run = dm_runner();
-    let check = |binary: &str| {
-        Engine::lock(
-            &state,
-            Sys {
-                fs: &fs,
-                runner: &run,
-            },
-        )
-        .unwrap()
-        .ensure_hook_binary(Path::new(binary))
+    let ApplyOutcome::Pending { txn, .. } = apply_dm(&fs, &run, &plan).unwrap() else {
+        panic!("not pending");
     };
 
-    // Nothing pending: any path will do.
-    check("/usr/bin/vps-ready").unwrap();
+    assert_eq!(
+        fs.read(Path::new(COPY)).unwrap(),
+        fs.read(Path::new(BIN)).unwrap()
+    );
+    let meta = fs.metadata(Path::new(COPY)).unwrap();
+    assert_eq!((meta.mode, meta.uid), (0o755, 0));
+    assert_eq!(
+        fs.read(Path::new(deadman::HOOK)).unwrap(),
+        deadman::hook_unit(Path::new(COPY)).as_bytes()
+    );
+    assert_eq!(deadman::hook_binary(&fs).as_deref(), Some(Path::new(COPY)));
+    let timers: Vec<String> = calls(&run)
+        .into_iter()
+        .filter(|c| c.starts_with("systemd-run"))
+        .collect();
+    assert_eq!(timers.len(), 2);
+    for t in &timers {
+        assert!(
+            t.ends_with(&format!("{COPY} rollback --txn {txn} --deadman")),
+            "{t}"
+        );
+    }
 
+    // Moving or removing the installed binary changes nothing: the timer
+    // and the boot hook run the copy.
+    fs.remove(Path::new(BIN)).unwrap();
+    set_uptime(&fs, 1400);
+    let state = state(&fs);
+    let run = dm_runner();
+    let out = Engine::lock(
+        &state,
+        Sys {
+            fs: &fs,
+            runner: &run,
+        },
+    )
+    .unwrap()
+    .deadman(&txn, Path::new(COPY), 0, &mut |_| {})
+    .unwrap();
+    assert!(matches!(out, DeadmanOutcome::RolledBack(_)), "{out:?}");
+    assert_eq!(
+        state_of(&fs, &txn),
+        rolled_back(RollbackReason::DeadmanTimeout)
+    );
+    // Kept, not removed: the next apply overwrites it.
+    assert!(fs.exists(Path::new(COPY)));
+}
+
+#[test]
+fn the_boot_hook_rolls_back_without_the_installed_binary() {
+    let fs = armable();
+    let facts = facts();
+    let [lock, ..] = locking();
+    let plan = plan_of(&fs, &facts, &[&lock]);
     let (txn, _) = pending(&fs, &plan);
-    check(BIN).unwrap();
-    let err = check("/usr/bin/vps-ready").unwrap_err();
-    assert!(
-        matches!(&err, EngineError::HookBinary { txn: t, hook, running }
-            if *t == txn && hook == BIN && running == "/usr/bin/vps-ready"),
-        "{err:?}"
+    fs.remove(Path::new(BIN)).unwrap();
+    fs.write(Path::new(BOOT_ID), b"b\n").unwrap();
+    let state = state(&fs);
+    let run = dm_runner();
+    let done = Engine::lock(
+        &state,
+        Sys {
+            fs: &fs,
+            runner: &run,
+        },
+    )
+    .unwrap()
+    .deadman_boot(Path::new(COPY), &mut |_| {})
+    .unwrap();
+    assert_eq!(done.len(), 1);
+    assert_eq!(
+        state_of(&fs, &txn),
+        rolled_back(RollbackReason::DeadmanReboot)
     );
-    let text = err.to_string();
-    assert!(
-        text.contains(&format!("boot hook runs {BIN}, not /usr/bin/vps-ready")),
-        "{text}"
-    );
-    assert!(text.contains(&format!("`{BIN} rollback --last`")), "{text}");
+}
 
-    // Once rolled back, the stale hook file no longer matters.
+#[test]
+fn a_manual_rollback_never_depends_on_the_binary_path() {
+    let fs = armable();
+    let facts = facts();
+    let [lock, ..] = locking();
+    let plan = plan_of(&fs, &facts, &[&lock]);
+    let (txn, _) = pending(&fs, &plan);
+    fs.remove(Path::new(BIN)).unwrap();
     manual(&fs, &dm_runner()).unwrap();
-    check("/usr/bin/vps-ready").unwrap();
+    assert_eq!(state_of(&fs, &txn), rolled_back(RollbackReason::Manual));
+    assert!(fs.exists(Path::new(COPY)));
+}
+
+#[test]
+fn a_copy_left_by_a_failed_arm_does_not_break_the_next_apply() {
+    let fs = armable();
+    let facts = facts();
+    let [lock, ..] = locking();
+    let plan = plan_of(&fs, &facts, &[&lock]);
+    let failing = runner(Output::success("")).on(
+        "systemd-run",
+        Vec::<String>::new(),
+        failed("Failed to start transient timer unit"),
+    );
+    let outcome = apply_dm(&fs, &failing, &plan).unwrap();
+    assert!(
+        matches!(outcome, ApplyOutcome::RolledBack { .. }),
+        "{outcome:?}"
+    );
+    assert!(fs.exists(Path::new(COPY)));
+    // A newer binary replaces the stale copy.
+    fs.write_atomic(
+        Path::new(BIN),
+        b"\x7fELF-new",
+        FileOwner {
+            mode: 0o755,
+            uid: 0,
+            gid: 0,
+        },
+    )
+    .unwrap();
+    pending(&fs, &plan);
+    assert_eq!(fs.read(Path::new(COPY)).unwrap(), b"\x7fELF-new");
+}
+
+#[test]
+fn an_unsafe_binary_is_refused_before_it_is_copied() {
+    let fs = armable();
+    let facts = facts();
+    let [lock, ..] = locking();
+    let plan = plan_of(&fs, &facts, &[&lock]);
+    fs.write_atomic(
+        Path::new(BIN),
+        b"\x7fELF",
+        FileOwner {
+            mode: 0o777,
+            uid: 0,
+            gid: 0,
+        },
+    )
+    .unwrap();
+    let err = apply_dm(&fs, &dm_runner(), &plan).unwrap_err();
+    assert!(matches!(err, EngineError::UnsafeBinary { .. }), "{err:?}");
+    assert!(!fs.exists(Path::new(COPY)));
 }
 
 #[test]
@@ -1172,7 +1285,7 @@ fn an_incomplete_timer_rollback_is_retried_a_few_times() {
             },
         )
         .unwrap()
-        .deadman(&txn, Path::new(BIN), n, &mut |_| {})
+        .deadman(&txn, Path::new(COPY), n, &mut |_| {})
     };
 
     let run = dm_runner();
@@ -1187,7 +1300,7 @@ fn an_incomplete_timer_rollback_is_retried_a_few_times() {
         &format!(
             "systemd-run --unit={retry} --on-active=60s --timer-property=AccuracySec=1s \
              --description=vps-ready: retry the rollback of transaction {txn} \
-             {BIN} rollback --txn {txn} --deadman --attempt 1"
+             {COPY} rollback --txn {txn} --deadman --attempt 1"
         )
     );
     assert_eq!(names(&fs, &txn).last().unwrap(), "retry 1");

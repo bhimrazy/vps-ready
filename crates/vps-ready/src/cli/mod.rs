@@ -282,18 +282,31 @@ pub fn main() -> ExitCode {
 /// Whether notices print as `vps-ready: <notice>` instead of log lines.
 static PLAIN_NOTICES: AtomicBool = AtomicBool::new(false);
 
-/// The first `vps-ready` on `path` when it is not `exe`, the running
-/// binary; `None` if `exe` comes first or `path` has none.
-fn shadowing_binary(exe: &Path, path: &std::ffi::OsStr) -> Option<PathBuf> {
+/// The executables named `vps-ready` in the directories of `path` that are
+/// not `exe`, the running binary, nearest first and without repeats. An
+/// empty entry (the current directory), a directory or a file that is not
+/// executable does not count.
+fn other_binaries(exe: &Path, path: &std::ffi::OsStr) -> Vec<PathBuf> {
     use std::os::unix::fs::PermissionsExt;
-    let exe = exe.canonicalize().ok()?;
-    let first = std::env::split_paths(path)
-        .map(|d| d.join("vps-ready"))
-        .find(|f| {
-            f.metadata()
-                .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-        })?;
-    (first.canonicalize().ok()? != exe).then_some(first)
+    let Ok(exe) = exe.canonicalize() else {
+        return Vec::new();
+    };
+    let mut seen = vec![exe];
+    let mut found = Vec::new();
+    for dir in std::env::split_paths(path).filter(|d| !d.as_os_str().is_empty()) {
+        let file = dir.join("vps-ready");
+        let runs = file
+            .metadata()
+            .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0);
+        let Some(real) = file.canonicalize().ok().filter(|_| runs) else {
+            continue;
+        };
+        if !seen.contains(&real) {
+            seen.push(real);
+            found.push(file);
+        }
+    }
+    found
 }
 
 /// Logs go to stderr. `RUST_LOG` wins when set; otherwise `-v` raises the
@@ -366,16 +379,13 @@ pub fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
             } else {
                 writeln!(out, "{VERSION_INFO}")?;
             }
-            if let Some(other) = std::env::current_exe()
-                .ok()
-                .zip(std::env::var_os("PATH"))
-                .and_then(|(exe, path)| shadowing_binary(&exe, &path))
-            {
-                eprintln!(
-                    "warning: {} comes earlier on PATH than this binary; running `vps-ready` \
-                     starts that one",
-                    other.display()
-                );
+            if let Some((exe, path)) = std::env::current_exe().ok().zip(std::env::var_os("PATH")) {
+                for other in other_binaries(&exe, &path) {
+                    eprintln!(
+                        "warning: another vps-ready is installed at {}; remove one of them",
+                        other.display()
+                    );
+                }
             }
         }
         Command::Detect { root } => {
@@ -1001,36 +1011,46 @@ mod tests {
     use crate::facts::fixtures::{HOSTS, host};
 
     #[test]
-    fn warns_of_a_vps_ready_earlier_on_path() {
+    fn finds_other_vps_ready_binaries_on_path() {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
-        let bin = |d: &str| {
+        let sub = |d: &str| {
             let dir = dir.path().join(d);
             std::fs::create_dir(&dir).unwrap();
-            let file = dir.join("vps-ready");
+            dir
+        };
+        let exec = |d: &Path| {
+            let file = d.join("vps-ready");
             std::fs::write(&file, "x").unwrap();
             std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
             file
         };
-        let (a, b) = (bin("a"), bin("b"));
-        let empty = dir.path().join("empty");
-        std::fs::create_dir(&empty).unwrap();
+        let (da, db, dc) = (sub("a"), sub("b"), sub("c"));
+        let (a, b) = (exec(&da), exec(&db));
         let path = |dirs: &[&Path]| std::env::join_paths(dirs).unwrap();
-        let (da, db) = (a.parent().unwrap(), b.parent().unwrap());
 
-        // The running binary comes first, or is not on PATH, or the other
-        // copy is a link to it: no warning.
-        assert_eq!(shadowing_binary(&a, &path(&[da, db])), None);
-        assert_eq!(shadowing_binary(&a, &path(&[&empty])), None);
+        // Only the running binary, wherever it is on PATH, or none.
+        assert!(other_binaries(&a, &path(&[&da])).is_empty());
+        assert!(other_binaries(&a, &path(&[&dc])).is_empty());
+        // Another copy, before or after the running one.
+        assert_eq!(other_binaries(&a, &path(&[&da, &db])), vec![b.clone()]);
+        assert_eq!(other_binaries(&a, &path(&[&db, &da])), vec![b.clone()]);
+        // The running binary is not on PATH at all.
+        assert_eq!(other_binaries(&a, &path(&[&dc, &db])), vec![b.clone()]);
+        // A link to the running binary, and a repeated directory, are not others.
         std::fs::remove_file(&b).unwrap();
         std::os::unix::fs::symlink(&a, &b).unwrap();
-        assert_eq!(shadowing_binary(&a, &path(&[db, da])), None);
+        assert!(other_binaries(&a, &path(&[&db, &da])).is_empty());
         std::fs::remove_file(&b).unwrap();
-        std::fs::write(&b, "x").unwrap();
-        std::fs::set_permissions(&b, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let b = exec(&db);
+        assert_eq!(other_binaries(&a, &path(&[&db, &da, &db])), vec![b.clone()]);
 
-        // Another copy comes first.
-        assert_eq!(shadowing_binary(&a, &path(&[&empty, db, da])), Some(b));
+        // Not executable, a directory, and an empty entry (the current
+        // directory) do not count.
+        std::fs::set_permissions(&b, std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::create_dir(dc.join("vps-ready")).unwrap();
+        assert!(other_binaries(&a, &path(&[&db, &dc, Path::new(""), &da])).is_empty());
+        assert!(other_binaries(&a, std::ffi::OsStr::new("")).is_empty());
     }
 
     #[test]

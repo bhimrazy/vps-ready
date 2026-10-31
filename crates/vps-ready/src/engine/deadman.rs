@@ -41,7 +41,7 @@ const UNSAFE_DIRS: [&str; 4] = ["/home", "/tmp", "/var/tmp", "/dev/shm"];
 pub struct Deadman {
     /// How long a confirm has once the changes are live.
     pub window: Duration,
-    /// The binary the timer and the boot hook run: this one,
+    /// The binary to copy for the timer and the boot hook: this one,
     /// [`std::env::current_exe`]. [`check_binary`] must accept it.
     pub binary: std::path::PathBuf,
 }
@@ -234,6 +234,66 @@ WantedBy=multi-user.target
 ",
         binary.display()
     )
+}
+
+/// Where [`install_copy`] puts the binary the timer and the boot hook run,
+/// for the state directory `state`.
+#[must_use]
+pub fn private_binary(state: &Path) -> std::path::PathBuf {
+    state.join("bin").join("vps-ready")
+}
+
+/// Copies `src`, which [`check_binary`] accepted, to [`private_binary`]
+/// (mode 0755, root, written through a temp file, synced and renamed) and
+/// checks the copy the same way. One file, overwritten by each apply that
+/// arms the switch: a copy left by a crash or a finished transaction does
+/// no harm, and a pending transaction is the newest, so nothing else uses
+/// it. Returns its path.
+pub(super) fn install_copy(
+    fs: &dyn Fs,
+    state: &Path,
+    src: &Path,
+) -> Result<std::path::PathBuf, EngineError> {
+    let dest = private_binary(state);
+    if src == dest {
+        return Ok(dest);
+    }
+    let fail = |why: String| {
+        EngineError::Deadman(format!(
+            "copying {} to {}: {why}",
+            src.display(),
+            dest.display()
+        ))
+    };
+    let dir = state.join("bin");
+    fs.create_dir_all(&dir, 0o700)
+        .map_err(|e| fail(e.to_string()))?;
+    let bytes = fs.read(src).map_err(|e| fail(e.to_string()))?;
+    let owner = FileOwner {
+        mode: 0o755,
+        uid: 0,
+        gid: 0,
+    };
+    fs.write_atomic(&dest, &bytes, owner)
+        .map_err(|e| fail(e.to_string()))?;
+    check_binary(fs, &dest).map_err(|reason| EngineError::UnsafeBinary {
+        path: dest.display().to_string(),
+        reason,
+    })?;
+    Ok(dest)
+}
+
+/// The binary a re-arm of the pending transaction uses: the private copy if
+/// the boot hook runs it, so `confirm --extend` keeps the version that
+/// applied; otherwise `running`, for a transaction armed before the copy
+/// existed, whose hook names the installed binary.
+pub(super) fn rearm_binary(fs: &dyn Fs, state: &Path, running: &Path) -> std::path::PathBuf {
+    let copy = private_binary(state);
+    if hook_binary(fs).as_deref() == Some(copy.as_path()) {
+        copy
+    } else {
+        running.to_owned()
+    }
 }
 
 /// The binary the installed boot hook runs, if the unit file is there and

@@ -221,9 +221,10 @@ For modules with `needs_deadman` (`user.admin`, `ssh.server`, `firewall.inbound`
 ```
 arm:     (before the first change; a failure ends the transaction before any backup)
          check the binary: root-owned, not group- or world-writable, not under /home or /tmp
-         enable the boot hook vps-ready-deadman.service
+         copy it to /var/lib/vps-ready/bin/vps-ready (root, 0755, written through a temp file and renamed)
+         enable the boot hook vps-ready-deadman.service, which runs the copy
          systemd-run --unit=vps-ready-deadman-<txn>-1 --on-active=<window + every step's timeout> \
-           <binary> rollback --txn <txn> --deadman
+           /var/lib/vps-ready/bin/vps-ready rollback --txn <txn> --deadman
          journal "armed" {unit, boot_id, deadline}
 apply:   backup, write, reload sshd / start the firewall, verify
 pending: re-arm to the window (5 minutes by default) under unit -2; journal "state pending-confirm"
@@ -240,7 +241,7 @@ reboot:  the boot hook rolls back before sshd starts (reason deadman-reboot)
 - **No confirm code.** At most one transaction can be pending, so a code would pick between one choice, and a code printed in the old terminal proves nothing about the new one. The protection is the new-session check. `confirm --extend [DUR]` moves the deadline (at most 30 minutes ahead, 2 hours after the changes went live) from any session, since extending proves nothing.
 - **New session, from the process tree.** sudo drops `SSH_CONNECTION`, so `confirm` walks `/proc` up to the nearest `sshd`/`sshd-session` process and compares its PID and start time with the session recorded at apply. tmux, screen, mosh, the console and `ControlMaster` connections all count as old. A client on loopback is refused too: the firewall accepts that traffic whatever its rules.
 - **Deadlines** are `CLOCK_BOOTTIME` seconds plus the boot ID, so an NTP step during the window changes nothing.
-- **The boot hook** `/etc/systemd/system/vps-ready-deadman.service` (`DefaultDependencies=no`, `After=vps-ready-firewall.service`, `Before=ssh.service ssh.socket`, `TimeoutStartSec=120`) is written outside any transaction and enabled only while one is armed. It rolls back a transaction armed in an earlier boot, so sshd starts with the restored config; every command it runs has 20 s at most.
+- **The boot hook** `/etc/systemd/system/vps-ready-deadman.service` (`DefaultDependencies=no`, `After=vps-ready-firewall.service`, `Before=ssh.service ssh.socket`, `TimeoutStartSec=120`) is written outside any transaction and enabled only while one is armed. It rolls back a transaction armed in an earlier boot, so sshd starts with the restored config; every command it runs has 20 s at most. The timer and the hook run a private copy of the binary that applied, made at arm time, so moving, removing or upgrading the installed binary (`install.sh`, the `.deb`) cannot break them, and the unattended rollback is the version that applied. The copy is one file, overwritten by the next arm and left in place after a confirm or rollback. `confirm --extend` re-arms with the same copy. A transaction armed by v0.4.0, whose hook names the installed binary, is left as it was.
 - **The dead-man rollback is per resource.** Resources of a module with `force_restore` (`ssh.server`, `firewall.inbound`) are restored even if edited during the window; the edit is kept as `files/<n>.during`. Any other resource that changed is skipped and journaled with its by-hand step. Restores go first and the journal is best effort, so a full disk does not stop them. If a forced restore fails, the unforced ones after it (such as the admin `user.admin` set up) wait for a rerun, so the way in stays while the lock-down does. A manual `rollback` keeps the all-or-nothing check.
 - **Waiting.** `apply` counts down until the transaction leaves pending-confirm: exit 0 when confirmed, 1 when rolled back, 4 when Ctrl-C stopped the wait (the timer keeps running).
 
@@ -285,6 +286,7 @@ Planned:
         files/<n>.after              bytes vps-ready wrote
         files/<n>.during             an edit made during the confirm window, kept when the dead-man restored the file
 /etc/systemd/system/vps-ready-deadman.service    the boot hook; enabled only while a transaction is armed
+/var/lib/vps-ready/bin/vps-ready     the copy of the binary that the timer and the boot hook run
 /etc/vps-ready/firewall.nft           firewall.inbound's table, loaded by vps-ready-firewall.service
 /etc/vps-ready/config.toml            planned: last-applied profile (with `drift`)
 /var/lib/vps-ready/state.json         planned: managed-file hashes for drift detection (with `drift`)

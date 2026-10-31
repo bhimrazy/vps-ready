@@ -436,32 +436,25 @@ fn rollback_last_undoes_a_pending_apply_and_disarms() {
 }
 
 #[test]
-fn apply_and_rollback_refuse_a_binary_other_than_the_boot_hooks() {
+fn a_rollback_from_another_binary_path_works_while_pending() {
     let fs = armable();
     let runner = dm_runner();
     let host = lockout_host(&fs, &runner);
     assert_eq!(apply_lockout(&host).0, EXIT_PENDING);
+    let copy = format!("{STATE}/bin/vps-ready");
+    assert!(
+        String::from_utf8(fs.read(Path::new(crate::engine::deadman::HOOK)).unwrap())
+            .unwrap()
+            .contains(&format!("ExecStart={copy} rollback")),
+    );
 
-    // The package's path, while the hook names the install.sh one.
+    // The package installed elsewhere and the old binary is gone.
+    fs.remove(Path::new(BINARY)).unwrap();
     let moved = Host {
         binary: "/usr/bin/vps-ready".into(),
         ..lockout_host(&fs, &runner)
     };
-    let (code, _, err) = apply_lockout(&moved);
-    assert_eq!(code, 2);
-    assert!(
-        err.contains(&format!("boot hook runs {BINARY}, not /usr/bin/vps-ready")),
-        "{err}"
-    );
-    let (code, _, err) = run(|out, err| rollback(&moved, Target::Last, out, err));
-    assert_eq!(code, 2);
-    assert!(
-        err.contains(&format!("`{BINARY} rollback --last`")),
-        "{err}"
-    );
-
-    // The binary the hook names still rolls back.
-    let (code, _, err) = rollback_last(&host);
+    let (code, _, err) = rollback_last(&moved);
     assert_eq!(code, 0, "{err}");
 }
 

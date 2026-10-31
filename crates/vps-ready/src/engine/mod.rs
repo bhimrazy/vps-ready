@@ -109,20 +109,6 @@ pub enum EngineError {
         /// What is wrong with it.
         reason: String,
     },
-    /// The pending transaction's boot hook runs another binary than this.
-    #[error(
-        "transaction {txn} is waiting for a confirm, and its boot hook runs {hook}, not {running}. \
-         Run `{hook} rollback --last` (or `confirm`) with that binary, or put the binary back at \
-         {hook}; otherwise a reboot would leave the changes in place"
-    )]
-    HookBinary {
-        /// The pending transaction.
-        txn: String,
-        /// The binary the boot hook names.
-        hook: String,
-        /// The binary that is running.
-        running: String,
-    },
     /// `confirm` or `confirm --extend` refused.
     #[error(transparent)]
     Refused(#[from] Refusal),

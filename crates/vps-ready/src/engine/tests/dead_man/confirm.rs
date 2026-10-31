@@ -482,6 +482,45 @@ fn several_pending_transactions_need_txn() {
     assert_eq!(confirm(&fs, &dm_runner(), Some(&txn), &new).unwrap(), txn);
 }
 
+/// The caller's binary is not the one re-armed: the copy that applied is,
+/// even when the installed binary moved. A transaction armed before the copy
+/// existed has a hook naming the installed binary, which is kept.
+#[test]
+fn extend_keeps_the_copy_and_a_pre_copy_hook_keeps_its_binary() {
+    let fs = armable();
+    let txn = applied(&fs);
+    set_uptime(&fs, 1100);
+    let run = dm_runner();
+    extend(&fs, &run, 600).unwrap();
+    let timer = calls(&run).remove(0);
+    assert!(
+        timer.contains(&format!("{COPY} rollback --txn {txn}")),
+        "{timer}"
+    );
+
+    // As armed by v0.4.0: the hook runs the installed binary.
+    let fs = armable();
+    let txn = applied(&fs);
+    fs.write(
+        Path::new(deadman::HOOK),
+        deadman::hook_unit(Path::new(BIN)).as_bytes(),
+    )
+    .unwrap();
+    set_uptime(&fs, 1100);
+    let run = dm_runner();
+    extend(&fs, &run, 600).unwrap();
+    let timer = calls(&run).remove(0);
+    assert!(
+        timer.contains(&format!("{BIN} rollback --txn {txn}")),
+        "{timer}"
+    );
+    // The hook was not rewritten.
+    assert_eq!(
+        fs.read(Path::new(deadman::HOOK)).unwrap(),
+        deadman::hook_unit(Path::new(BIN)).as_bytes()
+    );
+}
+
 #[test]
 fn extend_re_arms_under_a_new_unit_within_both_caps() {
     let fs = armable();
@@ -605,7 +644,7 @@ fn an_incomplete_boot_rollback_is_retried_by_a_timer() {
         &format!(
             "systemd-run --unit={retry} --on-active=60s --timer-property=AccuracySec=1s \
              --description=vps-ready: retry the rollback of transaction {txn} \
-             {BIN} rollback --txn {txn} --deadman --attempt 1"
+             {COPY} rollback --txn {txn} --deadman --attempt 1"
         )
     );
     // Still enabled: the next boot tries again too.
@@ -624,7 +663,7 @@ fn an_incomplete_boot_rollback_is_retried_by_a_timer() {
         },
     )
     .unwrap()
-    .deadman(&txn, Path::new(BIN), 1, &mut |_| {})
+    .deadman(&txn, Path::new(COPY), 1, &mut |_| {})
     .unwrap();
     assert!(
         matches!(outcome, DeadmanOutcome::RolledBack(_)),
