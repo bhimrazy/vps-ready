@@ -27,15 +27,18 @@ With no arguments on a terminal, vps-ready starts a short setup. It checks that 
 ? Pick which modules to run yourself? (y/N) no
 ```
 
-The recommended answer comes first and says why. The admin user line says whether the name is a new account or an existing one, and which SSH keys it gets; ports that something listens on are offered unchecked, and unchecked ports are blocked. Answering `y` to the module question lets you pick modules one by one.
+- The recommended answer comes first and says why.
+- The admin line says whether the name is a new or an existing account, and which SSH keys it gets.
+- Ports that something listens on are offered unchecked; unchecked ports are blocked.
+- `y` to the last question lets you pick modules one by one.
 
-Then it prints the same plan as `apply`, asks `Apply N changes? [y/N]`, arms the safety timer and applies. Confirm from a new login as described below. It ends with `Next time, without questions:` and the `sudo vps-ready apply --profile ...` command that repeats the setup. If your answers differ from the `minimal` and `web` profiles, it offers to save them to `vps-ready.toml` first.
+Then it shows the same plan as `apply`, asks `Apply N changes? [y/N]` and applies behind the safety timer; confirm from a new login as described below. It ends with the `sudo vps-ready apply --profile ...` command that repeats the setup without questions, and offers to save your answers to `vps-ready.toml` when they differ from a built-in profile.
 
-Ctrl-C at a question stops with `Nothing was changed.` Without a terminal (a script, a pipe), `vps-ready` prints help instead. To read what a module does before you agree to it, run `vps-ready modules` or `vps-ready modules ssh.server` ([reference](/docs/reference/commands/#modules)).
+Ctrl-C at a question stops with `Nothing was changed.` To read what a module does first, run `vps-ready modules ssh.server` ([reference](/docs/reference/commands/#modules)).
 
 ## Step by step
 
-The same flow without the questions. The first two steps change nothing, so you can stop after either one.
+Prefer to run each stage yourself? This is the same flow without the questions. The first two steps change nothing, so you can stop after either one.
 
 <Steps>
 
