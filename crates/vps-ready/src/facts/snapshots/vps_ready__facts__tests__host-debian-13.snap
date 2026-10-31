@@ -6,6 +6,7 @@ os:
   id: debian
   id_like: []
   version_id: "13"
+  codename: trixie
   pretty_name: Debian GNU/Linux 13 (trixie)
   family: debian
 init: systemd
@@ -254,6 +255,12 @@ updates:
     apt-daily.service: ok
     apt-daily.timer: ok
 docker: false
+docker_engine:
+  packages: []
+  dockerd: false
+  daemon_json:
+    state: missing
+  daemon: ~
 bridges: []
 apparmor: false
 notices: []

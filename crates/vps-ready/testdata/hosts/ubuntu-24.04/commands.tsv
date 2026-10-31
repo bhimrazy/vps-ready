@@ -9,6 +9,7 @@ nft	0	nft	-j	list	ruleset
 firewall-units	0	systemctl	show	--property=Id,LoadState,ActiveState,UnitFileState	firewalld.service	nftables.service
 apt-periodic	0	apt-config	dump	APT::Periodic
 apt-units	0	systemctl	show	--property=Id,LoadState,ActiveState,UnitFileState	apt-daily.timer	apt-daily-upgrade.timer	apt-daily.service	apt-daily-upgrade.service
+docker-packages	1	dpkg-query	-W	--showformat=${Package} ${db:Status-Status}\n	docker-ce	docker.io	podman-docker	containerd	runc
 sshd-T-before-login	255	sshd	-T
 listeners-before-login	0	ss	-tulnpH
 sshd-T-dropin-99	0	sshd	-T

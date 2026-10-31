@@ -23,6 +23,12 @@ pub enum Reload {
     Fail2banRestart,
     /// `systemctl daemon-reload`, with no check.
     DaemonReload,
+    /// `dockerd --validate`, then `systemctl try-restart docker.service`:
+    /// the `daemon.json` keys vps-ready sets are not reloaded on SIGHUP.
+    /// The check reads the default config file, `/etc/docker/daemon.json`,
+    /// and also passes when there is none, as after a rollback that removed
+    /// it; with `--config-file` it would fail then and skip the restart.
+    DockerRestart,
 }
 
 /// Longer than systemd's default start and stop timeout (90 s), so systemd
@@ -38,6 +44,7 @@ impl Reload {
             Self::FirewallReload => "firewall-reload",
             Self::Fail2banRestart => "fail2ban-restart",
             Self::DaemonReload => "daemon-reload",
+            Self::DockerRestart => "docker-restart",
         }
     }
 
@@ -51,6 +58,7 @@ impl Reload {
             }
             Self::Fail2banRestart => Some(Cmd::new("fail2ban-client").arg("-t")),
             Self::DaemonReload => None,
+            Self::DockerRestart => Some(Cmd::new("dockerd").arg("--validate")),
         }
     }
 
@@ -62,6 +70,7 @@ impl Reload {
             Self::FirewallReload => &["try-reload-or-restart", "vps-ready-firewall.service"],
             Self::Fail2banRestart => &["try-restart", "fail2ban.service"],
             Self::DaemonReload => &["daemon-reload"],
+            Self::DockerRestart => &["try-restart", "docker.service"],
         };
         Cmd::new("systemctl")
             .args(args.iter().copied())
@@ -141,11 +150,12 @@ mod tests {
         assert_eq!(check("out", "err\n"), format!("{cmd}: err"));
     }
 
-    const ALL: [Reload; 4] = [
+    const ALL: [Reload; 5] = [
         Reload::SshdReload,
         Reload::FirewallReload,
         Reload::Fail2banRestart,
         Reload::DaemonReload,
+        Reload::DockerRestart,
     ];
 
     #[test]
@@ -180,6 +190,10 @@ mod tests {
                     "systemctl try-restart fail2ban.service".into()
                 ),
                 (None, "systemctl daemon-reload".into()),
+                (
+                    Some("dockerd --validate".into()),
+                    "systemctl try-restart docker.service".into()
+                ),
             ]
         );
     }
