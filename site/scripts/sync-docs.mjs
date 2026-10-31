@@ -39,7 +39,7 @@ const PAGES = {
     slug: 'project/m5-plan',
     label: 'Design notes: M5',
     order: 9,
-    note: 'This is the plan for the next release. Nothing in it is built yet.',
+    note: 'This is the plan for v0.5.0, which is in progress and not released yet. The private-access direction for v0.6.0 at the end is not built.',
   },
 };
 const DOCS_OUT = join(site, 'src/content/docs/docs');

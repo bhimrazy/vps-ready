@@ -274,7 +274,7 @@ sequenceDiagram
 Planned:
 - **OpenRC:** a double-forked `setsid` watchdog plus a `local.d` boot hook (M6; today the dead-man modules need systemd).
 - **firewalld:** runtime-only rules as a second safety net (M6).
-- **Non-interactive (cloud-init):** `--deadman=off` with the invariants still enforced, or `--deadman=selftest` (probe the new config via `ssh-keyscan localhost:<port>`) (M5).
+- **Non-interactive (cloud-init):** `--deadman=off` with the invariants still enforced, or `--deadman=selftest` (probe the new config via `ssh-keyscan localhost:<port>`) (v0.6.0, with `export cloud-init`).
 
 ## State layout
 
@@ -308,7 +308,7 @@ vps-ready apply [plan.json | --profile X] [--module M] [--yes] [--deadman 5m|off
 vps-ready confirm [--txn ID] [--extend [DUR]]
 vps-ready rollback [--last | --txn ID]
 vps-ready history | drift
-vps-ready export cloud-init --profile X > user-data.yaml
+vps-ready export cloud-init --profile X > user-data.yaml   # v0.6.0
 vps-ready modules [ID]                  list modules; with an ID, why, params and the controls fixed (no root; not the files touched: that needs a plan against a host)
 vps-ready version
 ```
@@ -343,7 +343,7 @@ enabled = false
 
 Without `--profile` or `--module`, `plan` and `apply` select only `kernel.sysctl` and `updates.auto`, so an upgrade never makes a plain `apply` start changing SSH or the firewall.
 
-**cloud-init:** `vps-ready export cloud-init` emits `#cloud-config` that writes the profile, downloads a **pinned version, verifying its SHA256** (embedded in the user-data), and runs `apply --yes --deadman=off` from `runcmd`.
+**cloud-init (v0.6.0):** `vps-ready export cloud-init` emits `#cloud-config` that writes the profile, downloads a **pinned version, verifying its SHA256** (embedded in the user-data), and runs `apply --yes --deadman=off` from `runcmd`.
 
 ## Repo layout
 

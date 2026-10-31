@@ -62,8 +62,12 @@ A manual rollback is all or nothing, so it refuses (exit code 2) rather than und
 If a rollback starts but cannot finish, it exits 3 and says what is left to do by hand, for example when `userdel` fails because the admin user still has processes running.
 
 <Aside type="note">
-Some things a rollback leaves on purpose: installed packages (`nftables`, `fail2ban`, `unattended-upgrades`) stay installed, and a created admin user's home directory stays, in case it holds your files. The plan labels these changes `partial`.
+Some things a rollback leaves on purpose: installed packages (`nftables`, `fail2ban`, `unattended-upgrades`, and Docker's and Caddy's) stay installed, and a created admin user's home directory stays, in case it holds your files. The plan labels these changes `partial`.
 </Aside>
+
+### Docker and Caddy
+
+Rolling back `deploy.docker` removes `daemon.json` and restarts Docker. If `live-restore` was off before, that stops the running containers a second time (the apply stopped them once), and only those with a restart policy start again. `apply` listed them in its plan. Rolling back `deploy.proxy` removes the `Caddyfile`, then stops and disables Caddy, since it cannot run without one. Both modules also remove the vendor's apt source and key, and leave the packages. Details: [Deploy an app](/docs/guides/deployment-modules/#what-a-rollback-leaves-behind).
 
 ## Locked out?
 

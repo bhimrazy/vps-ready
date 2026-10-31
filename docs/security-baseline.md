@@ -164,10 +164,10 @@ Also make sure **needrestart ≥ 3.8**, because older versions have local-root C
 
 | ID | Module | Key points |
 |---|---|---|
-| `deploy.docker` | Docker Engine from the **official repo** | `daemon.json`: `log-driver local` with size limits, `live-restore`, `no-new-privileges`, `userland-proxy:false`, `ip:127.0.0.1`. **The docker group is equivalent to root.** Rootless/Podman as an option |
-| `deploy.user` | `deploy` user | No general sudo; `sudoers` allows only `/usr/local/bin/deploy-app`; restricted `authorized_keys` (`restrict,command="…"`) for CI |
-| `deploy.proxy` | Reverse proxy | **Caddy** by default (auto HTTPS); Nginx+certbot as an option; Traefik only behind a docker-socket proxy |
-| `net.tailscale` | Private admin access | `tailscale up`, allow on `tailscale0`, **then close public 22 as the very last step**, behind its own dead-man switch |
+| `deploy.docker` | Docker Engine from the **official repo** | `daemon.json`: `log-driver local` with size limits, `live-restore`, `no-new-privileges`, `userland-proxy:false`, `ip:127.0.0.1`. **The docker group is equivalent to root.** Rootless Docker and Podman are not offered in M5 |
+| `deploy.user` | `deploy` user | No general sudo; with a `command`, `sudoers` allows only that one program (the user's choice, an absolute path to a root-owned file), as root and without arguments; restricted `authorized_keys` (`restrict,command="…"`) for CI |
+| `deploy.proxy` | Reverse proxy | **Caddy** (auto HTTPS). Nginx+certbot is not offered in M5, and Traefik would only go behind a docker-socket proxy |
+| `net.tailscale` | Private admin access | `tailscale up`, allow on `tailscale0`, **then close public 22 as the very last step**, behind its own dead-man switch (v0.6.0, with any private network, not only Tailscale) |
 | `ops.backup` | restic → S3/B2/SFTP | systemd timer, `forget --prune`, weekly `check`, DB dumps, healthchecks.io ping. *Provider snapshots aren't backups* |
 | `ops.monitor` | node_exporter / Beszel | Bind to localhost or the tailnet. **Netdata listens publicly on :19999 by default** |
 

@@ -455,21 +455,21 @@ Waves: {2, 3, 4, 5} → {6, 8} → {7, 12} → {9, 10, 11} → 13.
 
 | Architecture | M3 | When |
 |---|---|---|
-| Changing the SSH port, `ssh.socket` edits, SELinux port labels | Port 22 stays (D6) | Only if asked for; Tailscale is the real fix (M5) |
+| Changing the SSH port, `ssh.socket` edits, SELinux port labels | Port 22 stays (D6) | Only if asked for; Tailscale is the real fix (v0.6.0) |
 | `AllowGroups`, `MaxAuthTries`, `LoginGraceTime`, `LogLevel VERBOSE`, crypto subtraction, FIDO2/TOTP | The seven keywords of `SSH-001` to `SSH-007` | Paranoid profile (M6), each with a control |
 | `/etc/cloud/cloud.cfg.d/99-vps-ready.cfg` | Not needed: `00-` wins | If a test shows otherwise |
 | ufw and firewalld backends; the `Firewall`, `Sshd`, `ServiceManager`, `PkgManager` platform traits | nftables and systemd called directly; Debian family only | M6 (RHEL, Alpine) |
 | OpenRC watchdog, firewalld runtime-only rules | Dead-man modules need systemd | M6 |
-| `--deadman=off` and `--deadman=selftest` (cloud-init) | Every dead-man apply waits for a confirm | M5, with `export cloud-init` |
+| `--deadman=off` and `--deadman=selftest` (cloud-init) | Every dead-man apply waits for a confirm | v0.6.0, with `export cloud-init` |
 | Confirm codes | No code; one pending transaction at a time | If more than one can ever be pending |
-| Fixing `FW-002` (`daemon.json` `ip`, `DOCKER-USER`) | Reported in the plan | `deploy.docker` (M5) |
+| Fixing `FW-002` (`daemon.json` `ip`, `DOCKER-USER`) | Reported in the plan | `deploy.docker` (M5, v0.5.0) |
 | CrowdSec | fail2ban | M6, opt-in |
 | `paranoid` profile, JSON Schema (`schemars`), `/etc/vps-ready/config.toml`, multi-level `extends` | `minimal`, `web`, one-level `extends` from built-ins | JSON Schema with the wizard (M4); `config.toml` with `drift` (M6) |
 | `requires`/`conflicts` and a topological sort | Fixed registry order and a plan-time check | When a module order cannot be fixed |
 | `FirewallRuleset`, `LineInFile`, `Command` resources | `File` + `Service` | If a module cannot do without them |
 | `cargo-fuzz` targets for `sshd-config` | Property tests | Later (the crate itself is published from v0.3.0) |
 | Incus VM tests | Existing QEMU/KVM harness | Not planned |
-| Tailscale and closing public 22 | Not in M3 | M5 |
+| Tailscale and closing public 22 | Not in M3 | v0.6.0 |
 
 ## Fact check
 

@@ -1,6 +1,6 @@
 ---
 title: Install
-description: Install vps-ready on a Linux server with the install script or from crates.io, check the install, and upgrade later.
+description: Install vps-ready on a Linux server with the install script, a .deb package or crates.io, check the install, and upgrade later.
 ---
 
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
@@ -17,6 +17,9 @@ Run these on the server. vps-ready is one static binary for Linux on x86_64 and 
   </TabItem>
   <TabItem label="read it first">
     <Command lines={[`curl -fsSLO ${script}`, 'less install.sh', 'sudo sh install.sh']} />
+  </TabItem>
+  <TabItem label=".deb">
+    <Command lines={[`curl -fsSLO https://github.com/bhimrazy/vps-ready/releases/download/v<version>/vps-ready_<version>_amd64.deb`, `sudo apt install ./vps-ready_<version>_amd64.deb`]} />
   </TabItem>
   <TabItem label="cargo">
     <Command lines={['cargo install vps-ready --locked']} />
@@ -37,7 +40,31 @@ The command is also installed as `vpsready`, without the hyphen.
 The safety timer runs the binary as root later, so `apply` refuses the admin user, SSH server config and firewall modules when the binary is under `/home`, `/tmp`, `/var/tmp` or `/dev/shm`, or when it or a parent directory is writable by anyone but root. The install script's `/usr/local/bin` is fine. A `cargo install` as a normal user lands in `~/.cargo/bin`, so copy the binary to `/usr/local/bin` before you use a profile.
 </Aside>
 
-Building with `cargo` needs a Rust toolchain on the server. Signed packages for apt, dnf and apk are planned for v0.5.
+Building with `cargo` needs a Rust toolchain on the server.
+
+## The .deb package
+
+From v0.5.0, each release has `vps-ready_<version>_amd64.deb` and `vps-ready_<version>_arm64.deb`, for Debian and Ubuntu. They hold the same binary as the tarball, installed to `/usr/bin/vps-ready` with the `vpsready` link. The package has no install scripts: installing it changes nothing else on the system.
+
+The `.deb` is not signed on its own, and apt does not check a signature on a file you install by path. It is covered by the release's `checksums.txt`, so run the checksum step from [Verify a release by hand](#verify-a-release-by-hand) first, then:
+
+```sh
+sudo apt install ./vps-ready_<version>_amd64.deb
+```
+
+There is no apt repository, so `apt upgrade` does not update it: install the newer `.deb` the same way. There are no `.rpm` or `.apk` packages, because vps-ready runs only on Debian and Ubuntu.
+
+### Moving from the install script
+
+`/usr/local/bin` comes before `/usr/bin` on `PATH`, so a binary left by `install.sh` would keep running instead of the package. Remove it first:
+
+```sh
+sudo rm /usr/local/bin/vps-ready /usr/local/bin/vpsready
+sudo apt install ./vps-ready_<version>_amd64.deb
+hash -r
+```
+
+`vps-ready version` warns when it finds another `vps-ready` on `PATH` (`warning: another vps-ready is installed at <path>`), and the first one on `PATH` is the one that runs. A pending safety timer is not affected by the move: it runs a private copy of the binary that applied, kept in `/var/lib/vps-ready/bin`.
 
 ## Check the install
 
@@ -60,7 +87,7 @@ To pin a version or read the script first, download the versioned installer from
 
 ## Verify a release by hand
 
-Every release ships `checksums.txt`, a Sigstore bundle for it, and a GitHub build-provenance attestation for each tarball and for `install.sh`.
+Every release ships `checksums.txt` (which lists the tarballs, the `.deb` files and the SBOM), a Sigstore bundle for it, and a GitHub build-provenance attestation for each tarball and `.deb` file and for `install.sh`.
 
 ```sh
 # 1. Checksums
@@ -73,8 +100,21 @@ cosign verify-blob \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   checksums.txt
 
-# 3. Build provenance for a tarball
+# 3. Build provenance for a tarball or a .deb
 gh attestation verify vps-ready-<version>-<target>.tar.gz --repo bhimrazy/vps-ready
+gh attestation verify vps-ready_<version>_amd64.deb --repo bhimrazy/vps-ready
 ```
+
+### The SBOM
+
+Each release also has `vps-ready-<version>.cdx.json`, a CycloneDX 1.5 list of the crates the binary is built from. It is listed in `checksums.txt`, and attested as a second attestation on the tarballs and `.deb` files, with the SBOM as its predicate. `gh` checks the SLSA provenance by default, so name the CycloneDX predicate type to check the SBOM's attestation:
+
+```sh
+gh attestation verify vps-ready_<version>_amd64.deb \
+  --repo bhimrazy/vps-ready \
+  --predicate-type https://cyclonedx.org/bom
+```
+
+Add `--format json` to print what the attestation carries and compare it with the SBOM you downloaded.
 
 The trust model of each install channel is in [Supply chain and release](/docs/project/release/).

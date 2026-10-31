@@ -25,12 +25,18 @@ With no arguments on a terminal, vps-ready starts a short setup. It checks that 
   [x] 443/tcp
   [x] 443/udp
 ? Pick which modules to run yourself? (y/N) no
+Caddy can serve your apps over HTTPS and get their certificates. Each domain
+needs a DNS record for this server.
+? Domain to serve, e.g. app.example.com (Enter for none): app.example.com
+? Address of the app behind app.example.com, e.g. 127.0.0.1:8080: 127.0.0.1:8080
+? Another domain (Enter for no more):
 ```
 
 - The recommended answer comes first and says why.
 - The admin line says whether the name is a new or an existing account, and which SSH keys it gets.
 - Ports that something listens on are offered unchecked; unchecked ports are blocked.
-- `y` to the last question lets you pick modules one by one.
+- `y` to the module question lets you pick modules one by one.
+- The Caddy questions appear when Docker is part of the setup. Press Enter at the first one to skip Caddy. A domain with an upstream adds the `deploy.proxy` module, and a bad domain, a duplicate, or an upstream written as `localhost:8080` is asked again with the reason. See [Deploy an app](/docs/guides/deployment-modules/#caddy-with-domains-and-upstreams).
 
 Then it shows the same plan as `apply`, asks `Apply N changes? [y/N]` and applies behind the safety timer; confirm from a new login as described below. It ends with the `sudo vps-ready apply --profile ...` command that repeats the setup without questions, and offers to save your answers to `vps-ready.toml` when they differ from a built-in profile.
 

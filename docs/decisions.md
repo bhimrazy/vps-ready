@@ -23,6 +23,7 @@
 | D17 | **Templates: `askama`** | Compile-time checked: a typo in a config template is a build error, not a runtime surprise on a server | Runtime template engines (errors surface only when rendered); `format!` strings (unreadable for whole config files) |
 | D18 | **No async runtime** | The tool is sequential: one transaction, a handful of subprocesses. `std::process::Command` with timeouts is enough; no extra runtime in the binary or in the learning curve | tokio (bigger binary, async everywhere for no gain) |
 | D19 | **Brute-force protection: fail2ban now, CrowdSec later** (decided 2026-10-24, shipped in v0.3.0 as `ssh.bruteforce`) | Local, packaged on Debian and Ubuntu, no network calls; its `sshd` jail reads the journal and bans in its own nftables table. Only the `web` profile enables it: once SSH is key-only, brute force is mostly log noise, and OpenSSH 9.8+ slows repeated failures itself (`PerSourcePenalties`) | CrowdSec by default: stronger, but it phones home for its community blocklist. It stays an opt-in for M6 |
+| D20 | **Split M5 into v0.5.0 and v0.6.0** (decided 2026-10-31) | v0.5.0 (`deploy.docker`, `deploy.proxy`, `deploy.user`, vendor apt sources, `.deb`, SBOM) touches neither sshd, the firewall's SSH rule nor the admin's login, so it cannot lock an admin out. v0.6.0 (closing public 22 behind a private network, `net.tailscale`, `--deadman=off\|selftest`, `export cloud-init`) changes the SSH path or turns the timer off, so it is reviewed as one change to the safety model | One v0.5.0 with everything |
 
 ### D13 in short
 
@@ -36,5 +37,5 @@
 1. **How opinionated is the default?** Decided (2026-10-31, M4): the wizard recommends a profile (`web` when Docker or a public web listener is found, else `minimal`) and the module list is not shown unless you answer yes to "Pick which modules to run yourself?", one keypress away. See [the M4 plan](m4-plan.md).
 2. **Brute-force default for the web profile:** decided, see D19.
 3. **Should we bundle or call out to ssh-audit/Lynis?** *Suggestion:* port the essential SSH checks natively, and call Lynis only if it's installed.
-4. **Is Tailscale a first-class module** (third-party control plane), or do we offer only WireGuard? *Suggestion:* both, with Tailscale as the easy path.
+4. **Is Tailscale a first-class module** (third-party control plane), or do we offer only WireGuard? Decided (2026-10-31, v0.6.0 direction): neither is the only way. Closing public 22 works with any private network through a `firewall.inbound` parameter that names the interface (`tailscale0`, `wg0`, `nb0`); `net.tailscale` is the one install-and-join helper; a WireGuard module waits until someone asks. See [the M5 plan](m5-plan.md#direction-for-v060-private-access).
 5. **Fork or contribute instead?** If hostveil or koncreet look closer to your goals once the first milestones are done, contributing is a legitimate choice. The research says the gap is in *trust and quality*, not features.
