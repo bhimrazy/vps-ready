@@ -153,6 +153,17 @@ pub(super) fn plan(
     out: &mut dyn Write,
 ) -> anyhow::Result<u8> {
     let profile = sel.load(host)?;
+    plan_profile(host, profile, sel, json, out)
+}
+
+/// [`plan`] with `profile` loaded; `sel` picks its modules.
+pub(super) fn plan_profile(
+    host: &Host,
+    profile: Option<Profile>,
+    sel: &Selection,
+    json: bool,
+    out: &mut dyn Write,
+) -> anyhow::Result<u8> {
     let modules = sel.select(host.modules, profile.as_ref())?;
     let facts = (host.facts)(host.sys)?;
     log_notices(&facts);
@@ -184,8 +195,25 @@ pub(super) fn apply(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> anyhow::Result<u8> {
+    // Before the load, so a run without root says so first.
     require_root(host, "apply")?;
     let profile = sel.load(host)?;
+    apply_profile(host, profile, sel, yes, window, input, out, err)
+}
+
+/// [`apply`] with `profile` loaded; `sel` picks its modules.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn apply_profile(
+    host: &Host,
+    profile: Option<Profile>,
+    sel: &Selection,
+    yes: bool,
+    window: Duration,
+    input: Option<&mut dyn BufRead>,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> anyhow::Result<u8> {
+    require_root(host, "apply")?;
     let modules = sel.select(host.modules, profile.as_ref())?;
     let state = StateDir::create(host.sys.fs, host.state_dir, host.state_uid)?;
     let engine = Engine::lock(&state, host.sys)?;
