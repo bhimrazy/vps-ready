@@ -127,9 +127,9 @@ Each module gains `params_doc() -> &'static [ParamDoc]` (name, default, help); m
 
 Waves: {2, 3} → 4 → {5, 6} → 7.
 
-## Open for the owner
+## Decided by the owner (2026-10-31)
 
-Each has a recommendation; the plan above assumes it.
+All eight recommendations were accepted:
 
 1. **`dialoguer` instead of `inquire`.** Recommended for the smaller dependency tree (see above).
 2. **Bare `vps-ready` is the wizard on a terminal** and help otherwise, with no `wizard` subcommand.
