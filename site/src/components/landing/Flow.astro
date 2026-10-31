@@ -1,0 +1,65 @@
+---
+import Card from './ui/Card.astro';
+import Icon from './ui/Icon.astro';
+import Section from './ui/Section.astro';
+import SectionHead from './ui/SectionHead.astro';
+
+const steps = [
+  {
+    title: 'Audit',
+    cmd: 'vps-ready audit',
+    text: 'Checks 29 controls and reports pass, fail, unknown or skipped. Changes nothing.',
+    icon: '<circle cx="11" cy="11" r="7"/><path d="M16 16l5 5"/>',
+  },
+  {
+    title: 'Plan',
+    cmd: 'vps-ready plan',
+    text: 'Prints the exact diff of every file and setting it would touch, and which parts are reversible.',
+    icon: '<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h4"/>',
+  },
+  {
+    title: 'Apply',
+    cmd: 'vps-ready apply',
+    text: 'Applies everything in a journaled transaction and verifies each change. SSH and firewall changes arm the safety timer first.',
+    icon: '<path d="M4 12h16M14 6l6 6-6 6"/>',
+  },
+  {
+    title: 'Confirm',
+    cmd: 'vps-ready confirm',
+    text: 'Run from a new SSH login. It proves you can still get in and cancels the safety timer.',
+    icon: '<circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/>',
+  },
+  {
+    title: 'Roll back',
+    cmd: 'vps-ready rollback',
+    text: 'Restores files, settings, users and services from the journal. Runs on its own if no one confirms in time.',
+    icon: '<path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 010 11H11"/>',
+  },
+];
+
+---
+
+<Section id="flow">
+  <SectionHead label="How it works">
+    <Fragment slot="title">Look first. Change second. Undo anytime.</Fragment>
+    Five commands, run on the server itself. Nothing changes until you approve the plan, and SSH and firewall changes only stay once you
+    prove you can still log in.
+  </SectionHead>
+
+  <Card bare class="grid grid-cols-5 max-[920px]:grid-cols-1">
+    {
+      steps.map((s, i) => (
+        <div class="relative grid min-w-0 content-start gap-2.5 border-l border-line p-5 first:border-0 max-[920px]:border-t max-[920px]:border-l-0 max-[920px]:first:border-t-0">
+          <span class="absolute top-5 right-[18px] font-mono text-xs font-medium text-subtle">{i + 1}</span>
+          <Icon d={s.icon} />
+          <h3 class="font-mono text-base font-bold">{s.title}</h3>
+          <code class="max-w-full justify-self-start rounded-md border border-line bg-surface px-2 py-0.5 font-mono text-[13px] font-medium wrap-anywhere">
+            {s.cmd}
+          </code>
+          <p class="text-sm text-muted">{s.text}</p>
+        </div>
+      ))
+    }
+  </Card>
+
+</Section>

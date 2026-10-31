@@ -1,0 +1,26 @@
+---
+// Starlight's SiteTitle with the brand wordmark (green hyphen) and a "docs" tag.
+import { logos } from 'virtual:starlight/user-images';
+import config from 'virtual:starlight/user-config';
+const { siteTitleHref } = Astro.locals.starlightRoute;
+---
+
+<a
+  href={siteTitleHref}
+  class="site-title sl-flex min-w-0 items-center gap-2.5 whitespace-nowrap text-(--sl-color-white) no-underline"
+  aria-label="vps-ready home"
+>
+  {
+    config.logo && logos.dark && (
+      <>
+        <img class="light:sl-hidden print:hidden h-7 w-auto" alt="" src={logos.dark.src} width={logos.dark.width} height={logos.dark.height} />
+        <img class="dark:sl-hidden print:block h-7 w-auto" alt="" src={logos.light?.src} width={logos.light?.width} height={logos.light?.height} />
+      </>
+    )
+  }
+  <span class="font-mono text-lg leading-none font-bold tracking-[-0.03em]" translate="no">vps<b class="text-(--sl-color-accent)">-</b>ready</span>
+</a>
+<a
+  href={`${import.meta.env.BASE_URL}docs/`}
+  class="ms-2.5 self-center rounded-full border border-(--sl-color-gray-5) px-2 py-1 font-mono text-[0.6875rem] leading-none font-medium tracking-[0.08em] text-(--sl-color-gray-3) uppercase no-underline hover:text-(--sl-color-white)"
+>docs</a>

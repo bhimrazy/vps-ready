@@ -1,0 +1,31 @@
+---
+import Pill from './ui/Pill.astro';
+import Section from './ui/Section.astro';
+import SectionHead from './ui/SectionHead.astro';
+
+const layers = [
+  ['Unit', 'Every module planned and verified against a fake filesystem.', 'every change'],
+  ['Containers', 'Apply and rollback for updates.auto and ssh.bruteforce; apply, confirm and rollback for user.admin.', 'every change'],
+  ['Real VMs', 'x86_64 VMs on QEMU/KVM: a real SSH server, real reboots and real second SSH logins.', 'nightly'],
+];
+---
+
+<Section id="tested">
+  <SectionHead label="Tested">
+    <Fragment slot="title">Tested where lockouts actually happen.</Fragment>
+    Unit tests can't prove you can still get in after a reboot. So the risky paths run against real systems.
+  </SectionHead>
+  <ul class="m-0 grid list-none p-0">
+    {
+      layers.map(([name, text, when]) => (
+        <li class="grid grid-cols-[140px_minmax(0,1fr)_auto] items-baseline gap-[18px] border-t border-line py-4 first:border-t-0 first:pt-0 max-[720px]:grid-cols-1 max-[720px]:gap-1.5">
+          <b class="font-mono text-sm font-bold">{name}</b>
+          <span class="text-sm text-muted">{text}</span>
+          <Pill tone="g" class="justify-self-start">
+            {when}
+          </Pill>
+        </li>
+      ))
+    }
+  </ul>
+</Section>

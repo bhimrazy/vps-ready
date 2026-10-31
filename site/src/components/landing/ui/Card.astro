@@ -1,0 +1,12 @@
+---
+// The one card: white, hairline border, 10px radius, 20px padding.
+import type { HTMLAttributes } from 'astro/types';
+
+interface Props extends HTMLAttributes<'div'> {
+  /** No padding, for cards whose children pad themselves. */
+  bare?: boolean;
+}
+const { bare, class: cls, ...rest } = Astro.props;
+---
+
+<div class:list={['min-w-0 rounded-[10px] border border-line bg-bg', !bare && 'p-5', cls]} {...rest}><slot /></div>

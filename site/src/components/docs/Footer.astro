@@ -1,0 +1,31 @@
+---
+import Default from '@astrojs/starlight/components/Footer.astro';
+import FeedbackWidget from '../FeedbackWidget.astro';
+import { AUTHOR, EMAIL, LINKS, MAILTO, TAGLINE, VERSION } from '../../lib/site';
+---
+
+<Default />
+<div
+  class="mt-10 grid gap-2.5 border-t border-(--sl-color-hairline-light) pt-5 text-xs text-(--sl-color-gray-3) [&_a]:text-(--sl-color-gray-2) [&_a]:no-underline [&_a:hover]:text-(--sl-color-text-accent)"
+  data-pagefind-ignore
+>
+  <div class="flex flex-wrap justify-between gap-x-5 gap-y-1.5">
+    <a href="/" class="font-mono font-bold"><span translate="no">vps<b class="text-(--sl-color-accent)">-</b>ready</span> v{VERSION}</a>
+    <span>{TAGLINE}</span>
+  </div>
+  <div class="flex flex-wrap justify-between gap-x-5 gap-y-1.5">
+    <a href={LINKS.bug}>Report a bug</a>
+    <a href={LINKS.lockout}>Got locked out?</a>
+    <a href={LINKS.security}>Security issue</a>
+    <a href={MAILTO}>{EMAIL}</a>
+  </div>
+  <div class="flex flex-wrap justify-between gap-x-5 gap-y-1.5">
+    <span>Built and maintained by <a href={AUTHOR.site}>{AUTHOR.name}</a></span>
+    <span class="flex gap-4">
+      <a href={AUTHOR.github}>GitHub</a>
+      <a href={AUTHOR.x}>X</a>
+      <a href={AUTHOR.linkedin}>LinkedIn</a>
+    </span>
+  </div>
+</div>
+<FeedbackWidget />

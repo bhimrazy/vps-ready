@@ -1,0 +1,130 @@
+// Terminal scripts for the hero demo and the wizard preview.
+//
+// The hero lines are vps-ready's real output, wrapped at 80 columns as it
+// prints them. Each line comes from the CLI code or its snapshot tests
+// (crates/vps-ready/src/cli): the audit FAIL rows from the audit_shows_fix
+// snapshot, the plan and apply lines from a Debian 13 VM run (assets/demo.png)
+// in today's format, the confirm block from cli/change/confirm.rs and its
+// pending tests. The counts are made consistent for one example host (29
+// controls). Long runs are cut, never reworded.
+import { sp, type Step } from './motion';
+
+const TX = '20261030T140230Z';
+const root: Step[] = [{ title: 'root@vps: ~' }, { clock: null }];
+const I = '         '; // the audit's detail indent
+
+export const heroScenes: Record<'audit' | 'plan' | 'apply' | 'confirm', Step[]> = {
+  audit: [
+    ...root,
+    { c: 'sudo vps-ready audit' },
+    { o: sp('b', 'Audit of Debian GNU/Linux 13 (trixie): 29 controls'), d: 200 },
+    { o: '' },
+    { o: sp('dim', 'STATUS   ID       SEVERITY  CONTROL') },
+    { o: `${sp('badb', 'FAIL')}     KRN-004  medium    ptrace scope restricted` },
+    { o: `${I}kernel.yama.ptrace_scope is 0, expected 1, 2 or 3` },
+    { o: sp('dim', `${I}Otherwise a compromised process can read the memory of your other`) },
+    { o: sp('dim', `${I}processes, including secrets such as keys held by ssh-agent.`) },
+    { o: `${I}fix: sudo vps-ready apply --module kernel.sysctl` },
+    { o: `${sp('badb', 'FAIL')}     NET-005  medium    IPv4 ICMP redirects not accepted` },
+    { o: `${I}ICMP redirects are accepted on new interfaces (default) and eth0:` },
+    { o: `${I}accept_redirects 1 in all and on each, forwarding 0 on each` },
+    { o: sp('dim', `${I}Accepted ICMP redirects change the server's routes, so a forged`) },
+    { o: sp('dim', `${I}redirect can send its traffic through another machine on the local`) },
+    { o: sp('dim', `${I}network.`) },
+    { o: `${I}fix: not automated yet` },
+    { o: `${sp('badb', 'FAIL')}     KRN-001  low       Kernel pointers hidden` },
+    { o: `${I}kernel.kptr_restrict is 0, expected 1 or 2` },
+    { o: sp('dim', `${I}Kernel memory addresses help an attacker aim a kernel exploit; hiding`) },
+    { o: sp('dim', `${I}them from normal users makes that harder.`) },
+    { o: `${I}fix: sudo vps-ready apply --module kernel.sysctl`, d: 200 },
+    { o: '' },
+    { o: '25 passed, 3 failed (2 medium, 1 low), 0 unknown, 1 skipped' },
+    { o: 'Skipped: Docker is not installed.' },
+    { o: 'vps-ready can fix 2 of the 3 (KRN-004, KRN-001): run `sudo vps-ready plan`.' },
+    { o: 'The other one needs a manual fix for now; it says so above.' },
+    { o: 'Run `vps-ready audit --all` to list the 25 passing controls too.' },
+    { w: 4000 },
+  ],
+  plan: [
+    ...root,
+    { c: 'sudo vps-ready plan' },
+    { o: sp('b', 'kernel.sysctl: Harden kernel settings (fixes KRN-001, KRN-004)'), d: 160 },
+    { o: `  ${sp('add', '+ /etc/sysctl.d/90-vps-ready.conf (mode 0644, root:root)')}                ${sp('dim', 'reversible')}` },
+    { o: `      ${sp('hunk', '@@ -0,0 +1,4 @@')}` },
+    { o: `      ${sp('add', '+# Written by vps-ready (kernel.sysctl). `vps-ready rollback --last`')}` },
+    { o: `      ${sp('add', '+# restores the previous state; edits here are replaced by the next apply.')}` },
+    { o: `      ${sp('add', '+kernel.kptr_restrict = 1')}` },
+    { o: `      ${sp('add', '+kernel.yama.ptrace_scope = 1')}` },
+    { o: `  ${sp('chg', '~ kernel.kptr_restrict 0 -&gt; 1')}                                           ${sp('dim', 'reversible')}` },
+    { o: `  ${sp('chg', '~ kernel.yama.ptrace_scope 0 -&gt; 1')}                                       ${sp('dim', 'reversible')}` },
+    { o: sp('b', 'updates.auto: Install security updates automatically'), d: 160 },
+    { o: `  ${sp('add', '+ /etc/apt/apt.conf.d/52vps-ready (mode 0644, root:root)')}                ${sp('dim', 'reversible')}` },
+    { o: `      ${sp('hunk', '@@ -0,0 +1,3 @@')}` },
+    { o: `      ${sp('add', '+APT::Periodic::Enable "1";')}` },
+    { o: `      ${sp('add', '+APT::Periodic::Update-Package-Lists "1";')}` },
+    { o: `      ${sp('add', '+APT::Periodic::Unattended-Upgrade "1";')}`, d: 300 },
+    { o: '' },
+    { o: '4 changes in 2 modules: 2 files, 2 kernel settings.' },
+    { o: 'Run `sudo vps-ready apply` to make them.' },
+    { w: 4000 },
+  ],
+  apply: [
+    ...root,
+    { c: 'sudo vps-ready apply' },
+    { o: '4 changes in 2 modules: 2 files, 2 kernel settings.', d: 300 },
+    { o: 'Apply 4 changes? [y/N] ' },
+    { a: 'y' },
+    { o: 'If this is interrupted, run `sudo vps-ready rollback --last` to undo it.', d: 400 },
+    { o: '[1/4] create /etc/sysctl.d/90-vps-ready.conf (mode 0644, root:root)', d: 380 },
+    { o: '[2/4] set kernel.kptr_restrict 0 -&gt; 1', d: 380 },
+    { o: '[3/4] set kernel.yama.ptrace_scope 0 -&gt; 1', d: 380 },
+    { o: '[4/4] create /etc/apt/apt.conf.d/52vps-ready (mode 0644, root:root)', d: 500 },
+    { o: `verify: ${sp('addb', 'ok')}`, d: 400 },
+    {
+      o: 'Applied 4 changes (transaction 20261023T190556Z, journal /var/lib/vps-ready/txn/20261023T190556Z). Undo with `sudo vps-ready rollback --last`.',
+      d: 500,
+    },
+    { w: 4000 },
+  ],
+  confirm: [
+    { title: 'admin@vps: ~' },
+    { clock: null },
+    { c: 'sudo vps-ready apply --profile minimal' },
+    { o: '16 changes in 5 modules: 7 files, 1 directory, 6 kernel settings, 1 service, 1 user.', d: 300 },
+    { o: 'Apply 16 changes? [y/N] ' },
+    { a: 'y' },
+    { o: `Applied 16 changes (transaction ${TX}). Undo them now with \`sudo vps-ready rollback --last\`.`, d: 300 },
+    { o: 'Changes are live. Open a NEW terminal and run:', d: 200 },
+    { o: '' },
+    { o: '    ssh -t -o ControlPath=none -p 22 admin@203.0.113.10 sudo vps-ready confirm' },
+    { o: '' },
+    { o: 'If no new session confirms by 14:07:30 UTC (5:00 left), every change is rolled back.' },
+    { o: 'More time: sudo vps-ready confirm --extend' },
+    { o: 'Do not edit files vps-ready manages until you confirm: an unconfirmed change reverts them.' },
+    { o: 'Ctrl-C stops waiting here, not the timer.', d: 200 },
+    { countdown: [300, 238] },
+    { o: '── a new terminal on your laptop ──', sep: true },
+    { title: 'you@laptop: ~' },
+    { c: 'ssh -t -o ControlPath=none -p 22 admin@203.0.113.10 sudo vps-ready confirm', p: 'you@laptop $', pc: 'promptLaptop' },
+    { w: 500 },
+    {
+      o: `Confirmed transaction ${TX} from a new SSH login (admin from 198.51.100.7). The changes stay; undo them with \`sudo vps-ready rollback --last\`.`,
+      d: 300,
+    },
+    { clock: 'confirmed', ok: true },
+    { title: 'admin@vps: ~' },
+    { o: '── back in the first terminal ──', sep: true },
+    { o: `${sp('addb', 'Confirmed:')} the changes of transaction ${TX} stay. Undo them with \`sudo vps-ready rollback --last\`.` },
+    { w: 4500 },
+  ],
+};
+
+// Design preview of the M4 wizard (static, not real output yet).
+export const wizardSnippet: Step[] = [
+  { c: 'sudo vps-ready' },
+  { o: `${sp('ask', '?')} This server runs: ${sp('sel', 'web apps (Docker)')}` },
+  { o: `${sp('ask', '?')} Admin user name: admin` },
+  { o: `${sp('ask', '?')} Open ports: 22, 80, 443` },
+  { o: 'Plan: 5 modules, 9 changes. Apply now? y' },
+  { o: `${sp('dim', 'Next time:')} ${sp('b', 'sudo vps-ready apply --profile web')}` },
+];

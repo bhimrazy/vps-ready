@@ -1,0 +1,166 @@
+---
+// Floating feedback button and panel, on the landing page and the docs.
+// Posts to the main site's feedback API; any failure falls back to email.
+import { EMAIL, LINKS, MAILTO } from '../lib/site';
+
+const field =
+  'block w-full rounded-md border border-line bg-bg px-3 py-2 font-sans text-sm text-ink placeholder:text-subtle focus:border-brand focus:outline-none dark:border-(--sl-color-gray-5) dark:bg-(--sl-color-black) dark:text-(--sl-color-white)';
+const quick =
+  'flex-1 rounded-md border border-line px-2 py-1.5 text-center font-mono text-[11px] font-medium text-muted no-underline hover:border-brand-line hover:text-brand dark:border-(--sl-color-gray-5) dark:text-(--sl-color-gray-3) dark:hover:text-(--sl-color-text-accent)';
+// Dark styles use Starlight's theme variables; the landing page is light only.
+const accent =
+  'bg-brand text-on-accent hover:bg-brand-ink dark:bg-(--sl-color-accent) dark:text-(--sl-color-text-invert) dark:hover:bg-(--sl-color-accent-high)';
+---
+
+<div
+  data-feedback
+  data-pagefind-ignore
+  data-email={EMAIL}
+  data-bug={LINKS.bug}
+  class="fixed right-4 bottom-4 z-50 font-sans sm:right-6 sm:bottom-6"
+>
+  <div
+    id="feedback-panel"
+    role="dialog"
+    aria-labelledby="feedback-title"
+    popover="manual"
+    class="inset-auto right-4 bottom-4 m-0 w-[min(calc(100vw-2rem),22rem)] overflow-hidden rounded-[10px] border border-line p-0 sm:right-6 sm:bottom-6 bg-bg text-ink shadow-[0_24px_48px_-20px_rgb(31_35_40/0.35)] dark:border-(--sl-color-gray-5) dark:bg-(--sl-color-gray-6) dark:text-(--sl-color-white)"
+  >
+    <div class="flex items-start gap-3 border-b border-line bg-surface px-4 py-3 dark:border-(--sl-color-gray-5) dark:bg-(--sl-color-black)">
+      <div class="min-w-0 flex-1">
+        <p id="feedback-title" class="m-0 font-mono text-sm font-bold">Send feedback</p>
+        <p class="m-0 text-xs text-muted dark:text-(--sl-color-gray-3)">Questions, ideas or problems with vps-ready.</p>
+      </div>
+      <button
+        type="button"
+        data-close
+        aria-label="Close feedback"
+        class="-mr-1 cursor-pointer rounded-md border-0 bg-transparent p-1 text-muted hover:bg-grid hover:text-ink dark:text-(--sl-color-gray-3) dark:hover:bg-(--sl-color-gray-5) dark:hover:text-(--sl-color-white)"
+      >
+        <svg class="block size-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"
+          ><path d="M4 4l8 8M12 4l-8 8"></path></svg
+        >
+      </button>
+    </div>
+
+    <div class="flex gap-1.5 px-4 pt-3.5">
+      <a class={quick} href={LINKS.bug}>Report a bug</a>
+      <a class={quick} href={LINKS.lockout}>Locked out?</a>
+      <a class={quick} href={MAILTO}>Email</a>
+    </div>
+
+    <form class="m-0 grid gap-2.5 px-4 pt-3 pb-4" novalidate>
+      <label class="sr-only" for="feedback-message">Message</label>
+      <textarea
+        id="feedback-message"
+        name="message"
+        rows="3"
+        maxlength="2000"
+        required
+        placeholder="What were you looking for, or any feedback?"
+        class:list={[field, 'resize-none']}></textarea>
+      <p class="m-0 -mt-1 text-xs text-muted dark:text-(--sl-color-gray-3)">Sent to bhimraj.com.np with this page's address.</p>
+      <label class="sr-only" for="feedback-name">Name (optional)</label>
+      <input id="feedback-name" name="name" type="text" maxlength="100" autocomplete="name" placeholder="Name (optional)" class={field} />
+      <label class="sr-only" for="feedback-email">Email for a reply (optional)</label>
+      <input id="feedback-email" name="email" type="email" maxlength="254" autocomplete="email" placeholder="Email for a reply" class={field} />
+      <input name="website" type="text" tabindex="-1" autocomplete="off" aria-hidden="true" class="sr-only" />
+      <button
+        type="submit"
+        class:list={['flex min-h-10 w-full cursor-pointer items-center justify-center rounded-md border-0 font-mono text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60', accent]}
+      >
+        Send
+      </button>
+      <p data-status role="status" class="m-0 text-xs text-muted empty:hidden dark:text-(--sl-color-gray-3) [&_a]:text-brand dark:[&_a]:text-(--sl-color-text-accent)"></p>
+    </form>
+  </div>
+
+  <button
+    type="button"
+    data-toggle
+    aria-expanded="false"
+    aria-controls="feedback-panel"
+    class:list={[
+      'ml-auto flex min-h-11 min-w-11 cursor-pointer items-center justify-center gap-2 rounded-full border-0 px-4 font-mono text-[13px] font-medium shadow-[0_8px_24px_-8px_rgb(26_127_55/0.6)] aria-expanded:hidden max-[640px]:px-0',
+      accent,
+    ]}
+  >
+    <svg class="size-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"
+      ><path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z"></path></svg
+    >
+    <span class="max-[640px]:sr-only">Feedback</span>
+  </button>
+</div>
+{/* On phones, extra space at the end of the page so the last lines can scroll clear of the button. */}
+<div data-feedback-spacer aria-hidden="true" class="h-16 sm:hidden"></div>
+
+<script>
+  const API = 'https://bhimraj.com.np/api/feedback';
+  const root = document.querySelector<HTMLElement>('[data-feedback]')!;
+  // Mount at the end of <body>: inside the docs content the button would sit
+  // under Starlight's right sidebar and could not be clicked.
+  document.body.append(document.querySelector('[data-feedback-spacer]')!, root);
+  const panel = root.querySelector<HTMLElement>('#feedback-panel')!;
+  const toggle = root.querySelector<HTMLButtonElement>('[data-toggle]')!;
+  const form = root.querySelector('form')!;
+  const message = form.querySelector('textarea')!;
+  const send = form.querySelector<HTMLButtonElement>('[type=submit]')!;
+  const status = form.querySelector<HTMLElement>('[data-status]')!;
+  const { email, bug } = root.dataset;
+
+  function setOpen(open: boolean) {
+    panel.togglePopover(open);
+    toggle.setAttribute('aria-expanded', String(open));
+    (open ? message : toggle).focus();
+  }
+  toggle.addEventListener('click', () => setOpen(true));
+  root.querySelector('[data-close]')!.addEventListener('click', () => setOpen(false));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === "Escape" && panel.matches(":popover-open")) setOpen(false);
+  });
+
+  function fallback(text: string) {
+    const body = `Hi Bhimraj,\n\n${text}\n\n---\nvps-ready version (vps-ready --version): \nServer OS: `;
+    const href = `mailto:${email}?subject=${encodeURIComponent('vps-ready: ')}&body=${encodeURIComponent(body)}`;
+    status.replaceChildren(
+      "Couldn't send. ",
+      Object.assign(document.createElement('a'), { href, textContent: 'Email me instead' }),
+      ', or ',
+      Object.assign(document.createElement('a'), { href: bug, textContent: 'open a GitHub issue' }),
+      '.',
+    );
+  }
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const data = new FormData(form);
+    const text = String(data.get('message') ?? '').trim();
+    if (!text) return message.focus();
+    send.disabled = true;
+    send.textContent = 'Sending...';
+    status.textContent = '';
+    try {
+      const res = await fetch(API, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: text,
+          name: data.get('name'),
+          email: data.get('email'),
+          website: data.get('website'),
+          reason: 'vps-ready',
+          path: location.pathname,
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(String(res.status));
+      form.reset();
+      status.textContent = json?.message ?? 'Thanks, I read every note.';
+    } catch {
+      fallback(text);
+    } finally {
+      send.disabled = false;
+      send.textContent = 'Send';
+    }
+  });
+</script>

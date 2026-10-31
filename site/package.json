@@ -1,0 +1,23 @@
+{
+  "name": "vps-ready-site",
+  "type": "module",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "sync-docs": "node scripts/sync-docs.mjs",
+    "dev": "npm run sync-docs && astro dev",
+    "build": "npm run sync-docs && astro build",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "0.42.6",
+    "@astrojs/starlight-tailwind": "5.0.0",
+    "@fontsource/jetbrains-mono": "5.3.0",
+    "@fontsource/public-sans": "5.3.0",
+    "@tailwindcss/vite": "4.3.3",
+    "astro": "7.4.0",
+    "mermaid": "12.2.0",
+    "starlight-links-validator": "0.27.0",
+    "tailwindcss": "4.3.3"
+  }
+}

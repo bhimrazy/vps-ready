@@ -1,0 +1,133 @@
+---
+import { INSTALL_URL, VERSION } from '../../lib/site';
+import { breakableCommand } from '../../lib/wrap';
+import { frameHtml, SCREEN } from '../../scripts/motion';
+import { heroScenes } from '../../scripts/scenes';
+import Pill from './ui/Pill.astro';
+import Tab from './ui/Tab.astro';
+import Terminal from './ui/Terminal.astro';
+
+const scenes = Object.keys(heroScenes);
+const quick = `curl -fsSL ${INSTALL_URL} | sudo sh`;
+---
+
+<header
+  id="top"
+  class="border-b border-line bg-bg bg-[linear-gradient(var(--color-grid)_1px,transparent_1px),linear-gradient(90deg,var(--color-grid)_1px,transparent_1px)] bg-size-[32px_32px] bg-position-[-1px_-1px] pt-28 pb-30 max-[920px]:pt-16 max-[920px]:pb-18"
+>
+  <div class="mx-auto w-full max-w-[1160px] px-4 grid grid-cols-[minmax(0,1fr)_minmax(0,580px)] items-center gap-12 max-[920px]:grid-cols-[minmax(0,1fr)]">
+    <div class="grid min-w-0 justify-items-start gap-7">
+      <span class="font-mono text-xs leading-none font-medium tracking-[0.1em] text-brand uppercase">Linux VPS hardening &middot; v{VERSION}</span>
+      <h1
+        class="max-w-[15ch] font-mono text-[clamp(34px,3.4vw,44px)] leading-[1.15] font-bold tracking-[-0.03em] text-balance max-[920px]:max-w-none"
+      >
+        Harden a fresh server <em class="block text-brand not-italic">without locking yourself out.</em>
+      </h1>
+      <p class="max-w-[44ch] text-lg text-muted">
+        SSH keys, a firewall and automatic updates in one run. If an SSH or firewall change locks you out, it rolls back on its own.
+      </p>
+      <div class="grid w-full gap-2">
+      <div class="flex w-full max-w-full items-stretch overflow-hidden rounded-[10px] border border-line bg-bg">
+        <code
+          id="quick-cmd"
+          class="flex min-w-0 flex-1 items-start gap-[1ch] px-4 py-3 text-left font-mono text-[12.5px] leading-[1.6] wrap-normal break-normal whitespace-pre-wrap"
+          ><span class="flex-none text-muted select-none" aria-hidden="true">$</span><span data-cmd class="min-w-0" set:html={breakableCommand(quick)} /></code
+        >
+        <button
+          type="button"
+          id="quick-copy"
+          class="min-h-11 flex-none cursor-pointer self-stretch border-0 border-l border-solid border-line bg-surface px-4 font-mono text-xs font-medium text-ink hover:text-brand"
+        >
+          Copy
+        </button>
+      </div>
+      <p class="font-sans text-[13px] text-muted">
+        Linux x86_64 and arm64 &middot;{' '}
+        <a class="inline-flex items-center gap-1 text-muted underline-offset-2 hover:text-ink hover:underline max-sm:-my-3 max-sm:py-3" href={INSTALL_URL}
+          >View the script first<svg
+            class="size-3"
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"><path d="M5 11l6-6M6 5h5v5"></path></svg
+          ></a
+        >
+      </p>
+      </div>
+    </div>
+
+    <Terminal id="demo" title="root@vps: ~" titleId="demo-title" dots class="shadow-term">
+      <Pill slot="status" id="demo-clock" tone="a" hidden />
+      {
+        scenes.map((s, i) => (
+          <Tab slot="tabs" on={i === 0} data-scene={s} class="flex-1 px-1.5 last:border-r-0">
+            {s}
+          </Tab>
+        ))
+      }
+      <div
+        id="demo-screen"
+        aria-live="off"
+        class:list={[SCREEN, 'h-[360px] max-h-none px-[11px] text-[11px] max-[600px]:h-[300px] max-sm:overflow-x-auto max-sm:whitespace-pre']}
+        set:html={frameHtml(heroScenes.audit)}
+      />
+    </Terminal>
+  </div>
+</header>
+
+<script>
+  import { copyText } from '../../scripts/copy';
+  import { Player, reducedMotion } from '../../scripts/motion';
+  import { heroScenes } from '../../scripts/scenes';
+
+  const quick = document.getElementById('quick-cmd')!;
+  const quickBtn = document.getElementById('quick-copy')!;
+  quickBtn.addEventListener('click', () => copyText(quick.querySelector('[data-cmd]')!.textContent ?? '', quickBtn, quick));
+
+  type Scene = keyof typeof heroScenes;
+  const still = reducedMotion();
+  const clock = document.getElementById('demo-clock')!;
+  const title = document.getElementById('demo-title')!;
+  const hero = new Player(document.getElementById('demo-screen')!, {
+    title: (t) => (title.textContent = t),
+    clock: (t, ok) => {
+      clock.hidden = t == null;
+      if (t == null) return;
+      clock.textContent = t;
+      clock.dataset.tone = ok ? 'g' : 'a';
+    },
+  });
+  const order = Object.keys(heroScenes) as Scene[];
+  const tabs = document.querySelectorAll<HTMLButtonElement>('#demo [data-scene]');
+  const select = (name: Scene) => tabs.forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.scene === name)));
+  // Auto-advance through the scenes until the user picks one.
+  let picked = false;
+
+  function run(i: number, keep: boolean) {
+    const name = order[i % order.length];
+    select(name);
+    if (still) return hero.render(heroScenes[name]);
+    hero.play(heroScenes[name], keep).then(
+      () => picked || run(i + 1, true),
+      () => {},
+    );
+  }
+  // A click replaces whatever is playing (play cancels the earlier run and
+  // clears the screen) and stops the auto-advance.
+  tabs.forEach((b) =>
+    b.addEventListener('click', () => {
+      picked = true;
+      run(order.indexOf(b.dataset.scene as Scene), false);
+    }),
+  );
+
+  // Open on the audit's finished frame (rendered at build), hold it, then play on from plan.
+  if (!still)
+    hero.sleep(4000, hero.tok).then(
+      () => run(1, true),
+      () => {},
+    );
+</script>

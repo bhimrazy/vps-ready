@@ -1,0 +1,241 @@
+---
+import Card from './ui/Card.astro';
+import Panel from './ui/Panel.astro';
+import Pill from './ui/Pill.astro';
+import Section from './ui/Section.astro';
+import SectionHead from './ui/SectionHead.astro';
+import SubHead from './ui/SubHead.astro';
+import Tab from './ui/Tab.astro';
+import Terminal from './ui/Terminal.astro';
+import { SCREEN } from '../../scripts/motion';
+
+// [id, name, modules, before, after]
+const rows = [
+  ['ba-root', 'Root login over SSH', 'ssh.server', 'Anyone can try to log in as root', 'Off. You log in as your own admin user'],
+  ['ba-login', 'How you log in', 'user.admin, ssh.server', 'Passwords accepted, so they can be guessed', 'SSH keys only'],
+  ['ba-fw', 'Firewall', 'firewall.inbound', 'Every port open to the internet', 'Only SSH and the ports you choose'],
+  ['ba-brute', 'Password guessing', 'ssh.bruteforce', 'Bots can guess forever', 'Repeat offenders get banned (fail2ban)'],
+  ['ba-upd', 'Security updates', 'updates.auto', 'Installed only when you remember', 'Installed automatically every day'],
+  ['ba-kern', 'Kernel settings', 'kernel.sysctl', 'Distribution defaults', 'Hardened: kernel pointers hidden, ptrace limited'],
+];
+
+// Shown before scripts run (and then replaced by the live feed).
+const seed = [
+  ['14:03:58', 'bad', 'root', '203.0.113.41'],
+  ['14:04:01', 'chg', 'ubuntu', '198.51.100.17'],
+  ['14:04:02', 'bad', 'root', '192.0.2.88'],
+  ['14:04:05', 'chg', 'postgres', '203.0.113.9'],
+  ['14:04:06', 'bad', 'admin', '198.51.100.203'],
+  ['14:04:09', 'bad', 'root', '192.0.2.150'],
+];
+const event = (k: string) =>
+  k === 'bad' ? '<span class="text-danger">Failed password</span>' : '<span class="text-warn-ink">Invalid user   </span>';
+---
+
+<Section id="why" alt>
+  <SectionHead label="Why">
+    <Fragment slot="title">A new server is open to the internet from minute one.</Fragment>
+    Rent a VPS and it usually comes with root login on, passwords allowed and no firewall. Bots find it fast. Locking it down by hand
+    takes an afternoon of guides, and one wrong SSH setting can lock you out for good.
+  </SectionHead>
+
+  <div class="grid grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] items-stretch gap-4 max-[920px]:grid-cols-[minmax(0,1fr)]">
+    <Card class="grid grid-rows-[auto_auto_minmax(72px,1fr)_auto] gap-[18px]">
+      <span class="flex items-center gap-2 font-mono text-xs font-medium tracking-[0.1em] text-danger uppercase"
+        ><i class="size-2 rounded-full bg-danger"></i>Simulated log</span
+      >
+      <div>
+        <div id="guess-big" class="font-mono text-[clamp(44px,5.6vw,64px)] leading-none font-bold tracking-[-0.04em] tabular-nums">120</div>
+        <p class="mt-2 max-w-[34ch] text-sm text-muted">failed logins in this simulation, the kind a fresh server sees all day</p>
+      </div>
+      <div id="spark" aria-hidden="true" class="flex min-h-[72px] items-end gap-[3px] border-b border-line"></div>
+      <div class="-mt-2.5 flex justify-between font-mono text-xs text-subtle"><span>2 min ago</span><span>now</span></div>
+    </Card>
+    <div class="flex min-w-0 flex-col">
+      <Terminal title="journalctl -u ssh -f" class="flex-1">
+        <Pill slot="status" id="log-count" tone="r" class="max-[600px]:hidden">120 failed logins</Pill>
+        <div
+          id="log-screen"
+          class:list={[
+            SCREEN,
+            'h-[300px] flex-1 justify-end px-[18px] text-xs max-[600px]:px-3 max-[600px]:text-[11px] [mask-image:linear-gradient(to_bottom,transparent_0,#000_35%)]',
+            '*:overflow-hidden *:rounded-[3px] *:text-ellipsis *:whitespace-pre',
+          ]}
+        >
+          {
+            seed.map(([ts, k, u, ip]) => (
+              <div set:html={`<span class="text-muted max-[600px]:hidden">${ts}  </span>${event(k)}  ${u.padEnd(9)}<span class="text-muted">from</span> ${ip}`} />
+            ))
+          }
+        </div>
+      </Terminal>
+      <p class="mt-3 font-mono text-xs text-muted">Simulated SSH log of a typical fresh server. Addresses are documentation examples.</p>
+    </div>
+  </div>
+
+  <div class="mt-9">
+    <SubHead>
+      <Fragment slot="title">From wide open to locked down, in one run.</Fragment>
+      Switch views to see what <span class="whitespace-nowrap">vps-ready</span> does to a typical fresh server. You see the exact plan
+      before anything changes.
+    </SubHead>
+    <Panel>
+      <div slot="head" id="ba-switch" class="flex min-w-0 items-stretch self-stretch" role="group" aria-label="Show server state">
+        <Tab on id="ba-before">Fresh VPS</Tab>
+        <Tab id="ba-after">After vps-ready</Tab>
+      </div>
+      <Fragment slot="meta">
+        <span class="font-mono text-xs text-muted">Shown for the web profile</span>
+        <Pill id="ba-score" tone="r">0 of 6 protected</Pill>
+      </Fragment>
+      <div id="ba-rows" class="grid">
+        {
+          rows.map(([id, name, mod, before, after]) => (
+            <div
+              id={id}
+              data-b={before}
+              data-a={after}
+              class="group/row grid scroll-mt-[120px] grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_auto] items-center gap-4 border-t border-grid px-[18px] py-3.5 first:border-t-0 target:bg-warn-soft max-[640px]:grid-cols-[minmax(0,1fr)_auto]"
+            >
+              <div>
+                <b class="block font-semibold">{name}</b>
+                <small class="font-mono text-xs text-subtle">{mod}</small>
+              </div>
+              <span
+                data-val
+                class="text-sm text-muted motion-safe:transition-opacity motion-safe:duration-250 motion-safe:group-data-flip/row:opacity-0 max-[640px]:col-span-full max-[640px]:row-start-2"
+              >
+                {before}
+              </span>
+              <Pill data-st tone="r">
+                exposed
+              </Pill>
+            </div>
+          ))
+        }
+      </div>
+    </Panel>
+  </div>
+</Section>
+
+<script>
+  import { reducedMotion } from '../../scripts/motion';
+
+  const still = reducedMotion();
+
+  // Before / after switch.
+  const rows = document.querySelectorAll<HTMLElement>('#ba-rows > div');
+  const bBefore = document.getElementById('ba-before')!;
+  const bAfter = document.getElementById('ba-after')!;
+  const score = document.getElementById('ba-score')!;
+  let baTok = 0;
+  function setRow(r: HTMLElement, on: boolean) {
+    r.querySelector('[data-val]')!.textContent = on ? r.dataset.a! : r.dataset.b!;
+    const p = r.querySelector<HTMLElement>('[data-st]')!;
+    p.textContent = on ? 'protected' : 'exposed';
+    p.dataset.tone = on ? 'g' : 'r';
+  }
+  function setScore(n: number) {
+    score.textContent = `${n} of 6 protected`;
+    score.dataset.tone = n === 6 ? 'g' : n === 0 ? 'r' : 'a';
+  }
+  function setBA(on: boolean, animate: boolean) {
+    const t = ++baTok;
+    bBefore.setAttribute('aria-pressed', String(!on));
+    bAfter.setAttribute('aria-pressed', String(on));
+    rows.forEach((r, i) => {
+      if (!animate) return setRow(r, on);
+      setTimeout(() => {
+        if (t !== baTok) return;
+        r.dataset.flip = '';
+        setTimeout(() => {
+          setRow(r, on);
+          delete r.dataset.flip;
+        }, 200);
+      }, i * 160);
+    });
+    if (!animate) return setScore(on ? 6 : 0);
+    let n = 0;
+    const iv = setInterval(() => {
+      if (t !== baTok) return clearInterval(iv);
+      n++;
+      setScore(on ? n : 6 - n);
+      if (n >= 6) clearInterval(iv);
+    }, 160);
+  }
+  bBefore.addEventListener('click', () => setBA(false, !still));
+  bAfter.addEventListener('click', () => setBA(true, !still));
+
+  // SSH log feed (simulated; RFC 5737 addresses).
+  const logS = document.getElementById('log-screen')!;
+  const logC = document.getElementById('log-count')!;
+  const big = document.getElementById('guess-big')!;
+  const spark = document.getElementById('spark')!;
+  const users = ['root', 'root', 'root', 'admin', 'admin', 'ubuntu', 'test', 'postgres', 'git', 'oracle', 'user'];
+  const nets = ['192.0.2.', '198.51.100.', '203.0.113.'];
+  const NB = 24;
+  const buckets: number[] = Array(NB).fill(0);
+  let fails = 0;
+  let sec = 0;
+  logS.textContent = '';
+  for (let i = 0; i < NB; i++) {
+    const s = document.createElement('span');
+    s.className = 'min-h-[2px] flex-1 rounded-t-[2px] bg-danger-line transition-[height] duration-300 last:bg-danger';
+    spark.appendChild(s);
+  }
+  const bars = [...spark.children] as HTMLElement[];
+
+  function drawStats() {
+    const max = Math.max(...buckets, 4);
+    bars.forEach((s, i) => (s.style.height = `${Math.round((buckets[i] / max) * 100)}%`));
+    big.textContent = fails.toLocaleString('en-US');
+    logC.textContent = `${fails} failed logins`;
+  }
+  const pick = <T,>(a: T[]) => a[Math.floor(Math.random() * a.length)];
+  function logLine(fresh: boolean) {
+    sec += 1 + Math.floor(Math.random() * 4);
+    const ts = `14:${String(2 + (Math.floor(sec / 60) % 58)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`;
+    const ip = pick(nets) + (2 + Math.floor(Math.random() * 250));
+    const u = pick(users);
+    const ev =
+      u === 'root' || Math.random() < 0.45
+        ? '<span class="text-danger">Failed password</span>'
+        : '<span class="text-warn-ink">Invalid user   </span>';
+    const d = document.createElement('div');
+    if (fresh) d.className = 'motion-safe:animate-flash';
+    d.innerHTML = `<span class="text-muted max-[600px]:hidden">${ts}  </span>${ev}  ${u.padEnd(9)}<span class="text-muted">from</span> ${ip}`;
+    logS.appendChild(d);
+    while (logS.children.length > 40) logS.firstChild!.remove();
+    fails++;
+    buckets[NB - 1]++;
+  }
+  // Seed two minutes of history so the card is complete at rest.
+  for (let q = 0; q < NB; q++) {
+    const k = 2 + Math.floor(Math.random() * 5);
+    for (let j = 0; j < k; j++) logLine(false);
+    if (q < NB - 1) {
+      buckets.shift();
+      buckets.push(0);
+    }
+  }
+  drawStats();
+
+  // The feed runs only while the log is on screen.
+  let visible = false;
+  new IntersectionObserver((es) => (visible = es.some((e) => e.isIntersecting))).observe(logS);
+  if (!still) {
+    (function feed() {
+      if (visible) {
+        logLine(true);
+        drawStats();
+      }
+      setTimeout(feed, 350 + Math.random() * 900);
+    })();
+    setInterval(() => {
+      if (!visible) return;
+      buckets.shift();
+      buckets.push(0);
+      drawStats();
+    }, 5000);
+  }
+</script>

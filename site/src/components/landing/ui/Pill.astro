@@ -1,0 +1,22 @@
+---
+// The one pill (chips, statuses, clocks). Color comes from data-tone, so
+// scripts recolor a pill by setting that attribute: g, a, r, or none.
+import type { HTMLAttributes } from 'astro/types';
+
+interface Props extends HTMLAttributes<'span'> {
+  tone?: 'g' | 'a' | 'r';
+}
+const { tone, class: cls, ...rest } = Astro.props;
+---
+
+<span
+  data-tone={tone}
+  class:list={[
+    'inline-block rounded-full border border-line bg-surface px-[9px] py-[3px] font-mono text-xs leading-[1.4] font-medium whitespace-nowrap text-muted tabular-nums transition-colors duration-300',
+    'data-[tone=g]:border-brand-line data-[tone=g]:bg-brand-soft data-[tone=g]:text-brand-ink',
+    'data-[tone=a]:border-warn-line data-[tone=a]:bg-warn-soft data-[tone=a]:text-warn',
+    'data-[tone=r]:border-danger-line data-[tone=r]:bg-danger-soft data-[tone=r]:text-danger',
+    cls,
+  ]}
+  {...rest}><slot /></span
+>

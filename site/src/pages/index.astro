@@ -1,0 +1,36 @@
+---
+import Compare from '../components/landing/Compare.astro';
+import Faq from '../components/landing/Faq.astro';
+import Flow from '../components/landing/Flow.astro';
+import Footer from '../components/landing/Footer.astro';
+import GetStarted from '../components/landing/GetStarted.astro';
+import Hero from '../components/landing/Hero.astro';
+import Modules from '../components/landing/Modules.astro';
+import Nav from '../components/landing/Nav.astro';
+import Roadmap from '../components/landing/Roadmap.astro';
+import Safety from '../components/landing/Safety.astro';
+import Tested from '../components/landing/Tested.astro';
+import Why from '../components/landing/Why.astro';
+import Landing from '../layouts/Landing.astro';
+import { TAGLINE } from '../lib/site';
+---
+
+<Landing
+  title="vps-ready: harden a fresh Linux VPS without locking yourself out"
+  description={`${TAGLINE} vps-ready audits a Linux server, shows the exact plan, applies key-only SSH, a firewall, fail2ban and automatic updates, and rolls back SSH and firewall changes that cut off your access.`}
+>
+  <Nav />
+  <main id="main">
+    <Hero />
+    <Why />
+    <Flow />
+    <Safety />
+    <Compare />
+    <Modules />
+    <Tested />
+    <Roadmap />
+    <Faq />
+    <GetStarted />
+  </main>
+  <Footer />
+</Landing>

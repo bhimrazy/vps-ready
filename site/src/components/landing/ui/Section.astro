@@ -1,0 +1,13 @@
+---
+interface Props {
+  id: string;
+  /** Gray band with top and bottom rules. */
+  alt?: boolean;
+  wrapClass?: string;
+}
+const { id, alt, wrapClass } = Astro.props;
+---
+
+<section id={id} class:list={['scroll-mt-[60px] py-[88px]', alt && 'border-y border-line bg-surface']}>
+  <div class:list={['mx-auto w-full max-w-[1160px] px-4', wrapClass]}><slot /></div>
+</section>

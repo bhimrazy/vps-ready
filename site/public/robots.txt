@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://vps-ready.bhimraj.com.np/sitemap-index.xml

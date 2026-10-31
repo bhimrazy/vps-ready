@@ -1,0 +1,161 @@
+---
+title: Profiles and modules
+description: What the minimal and web profiles change, what each of the six modules writes, what it checks first, and how to undo it.
+sidebar:
+  order: 2
+---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+vps-ready groups its changes into **modules**, and a **profile** picks which modules run. You choose one with `--profile`, or pick modules one by one with `--module`.
+
+## Pick a profile
+
+| | Plain `apply` | `--profile minimal` | `--profile web` |
+|---|---|---|---|
+| Admin user (`user.admin`) | | yes | yes |
+| SSH server config (`ssh.server`) | | yes | yes |
+| Firewall (`firewall.inbound`) | | SSH only | SSH, 80/tcp, 443/tcp, 443/udp |
+| fail2ban (`ssh.bruteforce`) | | | yes |
+| Kernel settings (`kernel.sysctl`) | yes | yes | yes |
+| Automatic updates (`updates.auto`) | yes | yes | yes |
+| Asks for a confirm | no | yes | yes |
+
+- **Plain `apply`**, with no `--profile` or `--module`, only changes kernel settings and automatic updates. Nothing in it can lock you out, so a future version can never make a plain `apply` start changing SSH or the firewall.
+- **minimal** is for any server you log into over SSH.
+- **web** is minimal plus the web ports (UDP 443 is for HTTP/3) and fail2ban.
+
+Run `plan` with the same flags first to see exactly what would change on your server:
+
+```sh
+sudo vps-ready plan --profile web
+```
+
+## The order modules run in
+
+| Order | Module | Safety net | Why it sits here |
+|---|---|---|---|
+| 1 | `user.admin` | yes | Creates the way in that is not root |
+| 2 | `ssh.server` | yes | Turns off root and password logins, and refuses unless that way in exists |
+| 3 | `firewall.inbound` | yes | Drops unsolicited traffic, always allowing the SSH ports in use |
+| 4 | `ssh.bruteforce` | no | Can only ban an address, and never yours |
+| 5 | `kernel.sysctl` | no | Cannot lock you out |
+| 6 | `updates.auto` | no | Cannot lock you out |
+
+The order is fixed. The admin user comes first because turning off root and password logins is only safe once there is another way in, and the firewall comes last so it can allow the SSH port your login really uses. The three guarded modules share one transaction, so a single new login confirms all of them together. To see which part fails on a tricky server, apply `--module user.admin` on its own first, then the rest.
+
+## The modules
+
+Every module reads the live state first, plans only what fails, and writes files it owns. A second `apply` finds nothing to do.
+
+### `user.admin`: the admin user
+
+**Changes:** creates an admin user named `admin` (or completes an existing one), adds your SSH keys to its `~/.ssh/authorized_keys`, and gives it sudo with `/etc/sudoers.d/90-vps-ready-admin` (`admin ALL=(ALL:ALL) NOPASSWD: ALL`, as cloud images do for their default user).
+
+**Keys:** without keys in a profile, it copies the keys of the account you logged in with. Key lines with options such as `command=` are skipped, since they would restrict the admin too.
+
+**Checks first:** it refuses when the name is `root`, when an existing account is a system account (uid below 1000, or a shell not listed in `/etc/shells`), when sudo is not installed, or when there are no keys to copy. An account that already has sudo rules keeps them, and no sudoers file is written.
+
+**Undo:** rollback removes a user it created but keeps its home directory, so the change is labeled `partial`. Keys it added and the sudoers file are restored exactly.
+
+### `ssh.server`: the SSH server config
+
+**Changes:** writes one drop-in, `/etc/ssh/sshd_config.d/00-vps-ready.conf`, and reloads the SSH server. It sets each of these to `no`, but only the ones that fail today:
+
+`PermitRootLogin` · `PasswordAuthentication` · `KbdInteractiveAuthentication` · `PermitEmptyPasswords` · `X11Forwarding` · `HostbasedAuthentication` · `PermitUserEnvironment`
+
+It never touches `Port`, `ListenAddress`, `AllowGroups`, `AuthenticationMethods` or the crypto settings, and it never edits `sshd_config` itself. The SSH port stays 22. The `00-` name makes it win over cloud-init's `50-cloud-init.conf`, which turns passwords back on.
+
+**Checks first:** it refuses to turn off root or password logins unless a user other than root has an SSH key and sudo: the admin from `user.admin`, or the user you are logged in as. It also checks that `sshd_config` reads the drop-in before anything that could override it. After the reload, it verifies the effective config with `sshd -T` for the admin's own connection.
+
+**Undo:** the drop-in is removed (or restored) and the SSH server is reloaded. SSH sessions that are open stay open throughout.
+
+### `firewall.inbound`: the firewall
+
+**Changes:** installs `nftables` if it is missing, writes its own table `inet vps_ready` to `/etc/vps-ready/firewall.nft`, and loads it with its own `vps-ready-firewall.service`. The table drops incoming traffic that no rule allows and accepts replies, loopback, ICMP (including all of ICMPv6), DHCP, and the profile's ports.
+
+**Checks first:** it always accepts every SSH port in use (your session's, the SSH server's listeners and its `Port`), whatever the profile says. It is not applied while ufw or firewalld is active, or when it cannot read the current rules. See [Use it on a server that's already running things](/docs/guides/existing-server/).
+
+**Undo:** rollback deletes only the `inet vps_ready` table and its unit, so Docker's and fail2ban's rules stay. If it installed `nftables`, the package stays installed.
+
+### `ssh.bruteforce`: fail2ban (web profile)
+
+**Changes:** installs `nftables`, `python3-systemd` and `fail2ban`, writes `/etc/fail2ban/jail.d/90-vps-ready.local` to turn on the `sshd` jail (reading the systemd journal, banning in nftables), and restarts fail2ban.
+
+**Checks first:** the address of the SSH session running `apply` is never banned, nor is localhost.
+
+**Undo:** the jail file is restored, but packages are never removed, so fail2ban stays installed and enabled and runs the distro's own jails. `systemctl disable --now fail2ban` turns it off.
+
+<Aside type="note">
+Once SSH takes keys only, brute-force attempts are mostly log noise, and OpenSSH 9.8 and later already slows them down with `PerSourcePenalties`. That is why fail2ban is only in the web profile.
+</Aside>
+
+### `kernel.sysctl`: kernel settings
+
+**Changes:** sets safer kernel and network settings at runtime and keeps them across reboots in `/etc/sysctl.d/90-vps-ready.conf`: hidden kernel pointers and logs, restricted BPF, ptrace and perf, protected links, FIFOs and files in shared directories such as `/tmp`, full address space randomization, no setuid core dumps, SYN cookies, no source-routed packets, and ignored broadcast pings.
+
+**Checks first:** only failing settings are changed, so a stricter value your distro already uses stays. It never sets `ip_forward=0`, which would break Docker. Inside a container it does nothing, since the settings belong to the host.
+
+**Undo:** the drop-in is removed and each setting gets its old value back. If the server rebooted since `apply`, the running values stay until the next boot, which reads the restored files.
+
+### `updates.auto`: automatic security updates
+
+**Changes:** installs `unattended-upgrades` and writes `/etc/apt/apt.conf.d/52vps-ready`, which turns on apt's daily package list update and unattended upgrade. Automatic reboots are left to you.
+
+**Checks first:** Debian and Ubuntu only. If apt's systemd timers are turned off, the plan says so and leaves them off.
+
+**Undo:** the drop-in is removed; the package stays installed.
+
+## Write your own profile
+
+A profile is a TOML file. It can extend `minimal` or `web`, change a module's settings, or leave a module out:
+
+```toml title="my-server.toml"
+schema  = 1
+extends = "web"
+
+[modules."user.admin"]
+name            = "deploy"
+authorized_keys = ["ssh-ed25519 AAAAC3Nza... me@laptop"]
+sudo            = "nopasswd"     # or "password"
+
+[modules."firewall.inbound"]
+allow = ["22/tcp", "443/tcp"]
+
+[modules."ssh.bruteforce"]
+enabled = false
+```
+
+```sh
+sudo vps-ready plan --profile ./my-server.toml
+```
+
+A typo in a key is an error that names the module, not a silently ignored line. `sudo = "password"` only works for an account that already has a password; vps-ready never asks for or sets one.
+
+<Tabs>
+  <TabItem label="One module">
+
+```sh
+sudo vps-ready apply --module kernel.sysctl
+```
+
+  </TabItem>
+  <TabItem label="Several modules">
+
+```sh
+sudo vps-ready apply --module user.admin --module ssh.server
+```
+
+  </TabItem>
+  <TabItem label="From a profile">
+
+```sh
+sudo vps-ready apply --profile web --module firewall.inbound
+```
+
+With `--profile`, `--module` picks from that profile's modules and uses its settings.
+
+  </TabItem>
+</Tabs>
+
+Each failed control in `audit` names the module that fixes it; the full list is in [Security controls](/docs/reference/security-controls/).

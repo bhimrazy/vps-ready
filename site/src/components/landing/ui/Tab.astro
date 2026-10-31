@@ -1,0 +1,22 @@
+---
+// The one tab style: a toggle button (aria-pressed) that picks what a panel
+// shows. Selected is neutral: white, ink text, green underline.
+import type { HTMLAttributes } from 'astro/types';
+
+interface Props extends HTMLAttributes<'button'> {
+  on?: boolean;
+}
+const { on = false, class: cls, ...rest } = Astro.props;
+---
+
+<button
+  type="button"
+  aria-pressed={String(on)}
+  class:list={[
+    'relative min-h-11 cursor-pointer border-0 border-r border-solid border-line bg-transparent px-3.5 font-mono text-xs font-medium whitespace-nowrap text-muted hover:text-ink max-[420px]:px-2.5',
+    'aria-pressed:bg-bg aria-pressed:text-ink',
+    'after:absolute after:inset-x-0 after:-bottom-px after:hidden after:h-0.5 after:bg-brand aria-pressed:after:block',
+    cls,
+  ]}
+  {...rest}><slot /></button
+>
