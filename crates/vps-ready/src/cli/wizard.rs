@@ -8,11 +8,11 @@ use std::path::Path;
 
 use anyhow::bail;
 
-use super::EXIT_INTERRUPTED;
-use super::change::{self, Host, Selection, plural};
+use super::change::{self, Applied, Host, Selection, plural};
+use super::{EXIT_INTERRUPTED, wrap};
 use crate::VERSION_INFO;
 use crate::audit::{self, Outcome, Severity};
-use crate::config::ProfileBuilder;
+use crate::config::{Profile, ProfileBuilder};
 use crate::engine::{self, Engine, EngineError, StateDir};
 use crate::facts::{Facts, OsFamily, Proto, Virt};
 use crate::modules::firewall_inbound::{self, Allow};
@@ -38,7 +38,7 @@ pub(super) fn run<R: BufRead>(
     start_checks(host)?;
     let facts = (host.facts)(host.sys)?;
     header(&facts, out)?;
-    let builder = match ask(host, &facts, prompt, out) {
+    let (builder, picked) = match ask(host, &facts, prompt, out) {
         Err(e) if interrupted(&e) => {
             writeln!(out, "Nothing was changed.")?;
             return Ok(EXIT_INTERRUPTED);
@@ -46,9 +46,21 @@ pub(super) fn run<R: BufRead>(
         answers => answers?,
     };
     let profile = builder.build(host.modules)?;
+    if arms_timer(host, &facts, &profile) {
+        let minutes = engine::deadman::DEFAULT_WINDOW.as_secs() / 60;
+        writeln!(out)?;
+        say(
+            out,
+            "",
+            &format!(
+                "After you apply, you have {minutes} minutes to log in from a new terminal \
+                 and confirm. If you don't, every change is undone."
+            ),
+        )?;
+    }
     writeln!(out)?;
     let mut input = stdin();
-    let code = change::apply_profile(
+    let applied = change::apply_profile(
         host,
         Some(profile),
         &Selection::default(),
@@ -58,13 +70,38 @@ pub(super) fn run<R: BufRead>(
         out,
         err,
     )?;
-    if code != 0 {
-        return Ok(code);
+    match applied {
+        // "Nothing was changed." ends it.
+        Applied::Declined => return Ok(0),
+        Applied::Ran(code) if code != 0 => return Ok(code),
+        Applied::Ran(_) => {}
+        Applied::Nothing if picked => writeln!(out, "\nNothing to do with the modules you chose.")?,
+        Applied::Nothing => writeln!(out, "\nNothing to do: this server already matches.")?,
     }
     match next_time(host, &builder, prompt, cwd, out) {
-        Err(e) if interrupted(&e) => Ok(EXIT_INTERRUPTED),
+        Err(e) if interrupted(&e) => {
+            writeln!(out, "Not saved.")?;
+            Ok(EXIT_INTERRUPTED)
+        }
         done => done.map(|()| 0),
     }
+}
+
+/// Whether `profile` runs a module that arms the safety timer here.
+fn arms_timer(host: &Host, facts: &Facts, profile: &Profile) -> bool {
+    host.modules.iter().any(|m| {
+        m.needs_deadman()
+            && profile.params(m.id()).is_some()
+            && m.applicable(facts) == Applicability::Applicable
+    })
+}
+
+/// `text` wrapped at 80 columns, each line after `indent`.
+fn say(out: &mut dyn Write, indent: &str, text: &str) -> std::io::Result<()> {
+    for line in wrap(text, 80 - indent.len()) {
+        writeln!(out, "{indent}{line}")?;
+    }
+    Ok(())
 }
 
 fn interrupted(err: &anyhow::Error) -> bool {
@@ -136,26 +173,26 @@ fn header(facts: &Facts, out: &mut dyn Write) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The questions, in order; the answers as a profile.
+/// The questions, in order; the answers as a profile, and whether the
+/// module list was changed.
 fn ask(
     host: &Host,
     facts: &Facts,
     prompt: &mut dyn Prompt,
     out: &mut dyn Write,
-) -> anyhow::Result<ProfileBuilder> {
+) -> anyhow::Result<(ProfileBuilder, bool)> {
     let mut builder = ask_profile(facts, prompt)?;
     ask_admin(host, facts, prompt, out, &mut builder)?;
     ask_ports(host, facts, prompt, out, &mut builder)?;
-    if prompt.confirm("Change the module list?", false)? {
-        ask_modules(host, facts, prompt, out, &mut builder)?;
-    }
-    Ok(builder)
+    let picked = prompt.confirm("Pick which modules to run yourself?", false)?
+        && ask_modules(host, facts, prompt, out, &mut builder)?;
+    Ok((builder, picked))
 }
 
 /// `web` or `minimal`, the recommended one first.
 fn ask_profile(facts: &Facts, prompt: &mut dyn Prompt) -> anyhow::Result<ProfileBuilder> {
     let web = "Web apps or Docker: opens ports 80 and 443";
-    let ssh = "Something else: SSH only";
+    let ssh = "Something else: only SSH is open";
     let serving = facts
         .listeners
         .iter()
@@ -203,14 +240,19 @@ fn ask_admin(
         Err(e) => return Err(e.into()),
     };
     let found = keys.as_ref().filter(|k| !k.keys.is_empty());
-    let with_keys = match found {
-        Some(k) => format!(
-            "{} {} from {}",
-            k.keys.len(),
-            plural(k.keys.len(), "key"),
-            k.path.display()
-        ),
-        None => "the public key you paste next".to_owned(),
+    let (copied, from) = match found {
+        Some(k) => {
+            let n = format!("{} {}", k.keys.len(), plural(k.keys.len(), "key"));
+            let path = k.path.display();
+            (
+                format!("{n} copied from {path}"),
+                format!("{n} from {path}"),
+            )
+        }
+        None => {
+            let next = "the public key you paste next".to_owned();
+            (next.clone(), next)
+        }
     };
     let session = facts
         .session
@@ -219,29 +261,41 @@ fn ask_admin(
         .filter(|u| *u != "root");
     let default = session.unwrap_or(user_admin::DEFAULT_NAME);
     let name = loop {
-        let name = prompt.input("Admin user (logs in with an SSH key, uses sudo)", default)?;
+        let name = prompt.input("Admin user for logging in", default)?;
         let name = name.trim().to_owned();
-        match user_admin::check_name(host.sys, &name) {
-            Ok(None) => writeln!(out, "  created, with {with_keys}")?,
-            Ok(Some(_)) if session == Some(name.as_str()) => writeln!(
-                out,
-                "  existing account (the one you logged in as): gets sudo and {with_keys}"
-            )?,
-            Ok(Some(_)) => writeln!(out, "  existing account: gets sudo and {with_keys}")?,
+        let what = match user_admin::check_name(host.sys, &name) {
+            Ok(None) => format!("new account: logs in with {copied}; sudo without a password."),
+            Ok(Some(_)) => {
+                let who = if session == Some(name.as_str()) {
+                    "existing account (the one you logged in as)"
+                } else {
+                    "existing account"
+                };
+                // `user.admin` keeps the rules an account already has.
+                if user_admin::has_sudo_rules(host.sys, &name)? {
+                    format!("{who}: keeps its sudo rules and logs in with {from}")
+                } else {
+                    format!("{who}: gets sudo without a password and {from}")
+                }
+            }
             Err(ModuleError::Refused(why)) => {
-                writeln!(out, "  {why}")?;
+                say(out, "  ", &why)?;
                 continue;
             }
             Err(ModuleError::Resource(ResourceError::InvalidName { .. })) => {
-                writeln!(
+                say(
                     out,
-                    "  {name:?} is not a user name: start with a lowercase letter, then use \
-                     lowercase letters, digits, `-` or `_`"
+                    "  ",
+                    &format!(
+                        "{name:?} is not a user name: start with a lowercase letter, then use \
+                         lowercase letters, digits, `-` or `_`"
+                    ),
                 )?;
                 continue;
             }
             Err(e) => return Err(e.into()),
-        }
+        };
+        say(out, "  ", &what)?;
         break name;
     };
     let mut params = toml::Table::new();
@@ -256,6 +310,18 @@ fn ask_admin(
         );
     }
     builder.set_params("user.admin", params);
+    if builder.build(host.modules)?.params("ssh.server").is_some() {
+        let keys = if found.is_some_and(|k| k.keys.len() > 1) {
+            "these keys are"
+        } else {
+            "this key is"
+        };
+        say(
+            out,
+            "  ",
+            &format!("Root and password logins will be turned off, so {keys} how you log in."),
+        )?;
+    }
     Ok(())
 }
 
@@ -265,30 +331,34 @@ fn ask_key(
     prompt: &mut dyn Prompt,
     out: &mut dyn Write,
 ) -> anyhow::Result<String> {
-    match keys {
-        Some(k) if k.skipped > 0 => writeln!(
-            out,
-            "  {} has no key to copy ({} {} with options skipped).",
+    let none = match keys {
+        Some(k) if k.skipped > 0 => format!(
+            "{} has no key we can copy ({} {} with options skipped), so paste one.",
             k.path.display(),
             k.skipped,
             plural(k.skipped, "line")
-        )?,
-        Some(k) => writeln!(out, "  {} has no key to copy.", k.path.display())?,
-        None => writeln!(out, "  There is no SSH key to copy.")?,
-    }
+        ),
+        Some(k) => format!("{} has no key we can copy, so paste one.", k.path.display()),
+        None => "There is no SSH key we can copy, so paste one.".to_owned(),
+    };
+    say(out, "  ", &none)?;
+    say(
+        out,
+        "  ",
+        "Paste the public key from your own computer (the .pub file, e.g. \
+         ~/.ssh/id_ed25519.pub).",
+    )?;
     loop {
-        let key = prompt.input(
-            "Paste your public key (the line in ~/.ssh/id_ed25519.pub on your computer)",
-            "",
-        )?;
+        let key = prompt.input("Public key", "")?;
         let key = key.trim();
         if user_admin::is_plain_key(key) {
             return Ok(key.to_owned());
         }
-        writeln!(
+        say(
             out,
-            "  That is not a public key: it starts with ssh-ed25519, ssh-rsa, ecdsa- or sk-, \
-             then the key."
+            "  ",
+            "That is not a public key. It starts with ssh-ed25519, ssh-rsa, ecdsa- or sk-. \
+             Never paste a private key.",
         )?;
     }
 }
@@ -329,13 +399,15 @@ fn ask_ports(
         .filter(|t| !is_ssh(t))
         .map(|t| (t.clone(), t.clone(), true))
         .collect();
-    for l in &facts.listeners {
-        // Docker forwards its published ports before this firewall sees them.
-        if !public(&l.addr) || l.processes.iter().any(|p| p == "docker-proxy") {
-            continue;
-        }
+    let mut docker = false;
+    for l in facts.listeners.iter().filter(|l| public(&l.addr)) {
         let text = format!("{}/{}", l.port, l.proto);
         if is_ssh(&text) || offered.iter().any(|(t, ..)| *t == text) {
+            continue;
+        }
+        // Docker forwards its published ports before this firewall sees them.
+        if l.processes.iter().any(|p| p == "docker-proxy") {
+            docker = true;
             continue;
         }
         let label = if l.processes.is_empty() {
@@ -348,6 +420,15 @@ fn ask_ports(
 
     let ssh_list: Vec<String> = ssh.iter().map(u16::to_string).collect();
     let mut picked: Vec<String> = Vec::new();
+    writeln!(out, "All other incoming ports are blocked.")?;
+    if docker {
+        say(
+            out,
+            "",
+            "Ports published by Docker are not listed: Docker opens them itself, and this \
+             firewall does not block them.",
+        )?;
+    }
     if !offered.is_empty() {
         writeln!(out, "Unchecked ports will be blocked.")?;
         let items: Vec<Item> = offered
@@ -371,7 +452,10 @@ fn ask_ports(
         }
     }
     let typed = loop {
-        let text = prompt.input("Other ports to open, like 8080/tcp (Enter for none)", "")?;
+        let text = prompt.input(
+            "More ports to open, e.g. 8080/tcp or 53/udp (Enter for none)",
+            "",
+        )?;
         let parsed: Result<Vec<String>, String> = text
             .split([' ', ','])
             .filter(|t| !t.is_empty())
@@ -404,14 +488,14 @@ fn ask_ports(
 
 /// Every module, checked if the profile runs it. A list a module refuses
 /// to plan, e.g. `ssh.server` without an admin to log in with, is asked
-/// again.
+/// again. Returns whether the list changed.
 fn ask_modules(
     host: &Host,
     facts: &Facts,
     prompt: &mut dyn Prompt,
     out: &mut dyn Write,
     builder: &mut ProfileBuilder,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     let profile = builder.build(host.modules)?;
     let items: Vec<Item> = host
         .modules
@@ -419,7 +503,7 @@ fn ask_modules(
         .map(|m| {
             let mut label = format!("{}: {}", m.id(), m.title());
             if m.needs_deadman() {
-                label.push_str(" (arms the safety timer)");
+                label.push_str(" (can lock you out; undone unless you confirm)");
             }
             let reason = match m.applicable(facts) {
                 Applicability::NotApplicable { reason } => Some(reason),
@@ -438,24 +522,32 @@ fn ask_modules(
     loop {
         let checked = prompt.multi_select("Modules to run", &items)?;
         let mut changed = builder.clone();
+        let mut any = false;
         for (i, (m, item)) in host.modules.iter().zip(&items).enumerate() {
             match (checked.contains(&i), item.checked) {
                 (true, false) => changed.set_params(m.id(), toml::Table::new()),
                 (false, true) => changed.remove(m.id()),
                 _ => continue,
             };
+            any = true;
         }
         let profile = changed.build(host.modules)?;
         let selected = Selection::default().select(host.modules, Some(&profile))?;
         match engine::plan(&selected, facts, host.sys) {
             Ok(_) => {
                 *builder = changed;
-                return Ok(());
+                return Ok(any);
             }
             Err(EngineError::Module {
                 module,
-                error: ModuleError::Refused(why),
-            }) => writeln!(out, "  {module}: {why}")?,
+                error: ModuleError::Refused(mut why),
+            }) => {
+                // `ssh.server` found no other user with a key and sudo.
+                if module == "ssh.server" && why.starts_with("refusing to turn off") {
+                    why.push_str(". Keep user.admin checked, or add a sudo user first.");
+                }
+                say(out, "  ", &format!("{module}: {why}"))?;
+            }
             Err(e) => return Err(e.into()),
         }
     }
@@ -489,10 +581,10 @@ fn next_time(
         || prompt.confirm(&format!("{} exists. Replace it?", path.display()), false)?);
     let text = builder.to_toml();
     if !save {
-        writeln!(
+        write!(
             out,
-            "Not saved. To repeat this, save these lines to a file and run \
-             `sudo vps-ready apply --profile <file>`:\n\n{text}"
+            "Not saved. To repeat this, save these lines to a file and run:\n  \
+             sudo vps-ready apply --profile <file>\n\n{text}"
         )?;
         return Ok(());
     }
@@ -503,6 +595,7 @@ fn next_time(
     };
     host.sys.fs.write_atomic(&path, text.as_bytes(), owner)?;
     writeln!(out, "Saved {}.", path.display())?;
+    writeln!(out, "Review it before you use it on another server.")?;
     repeat(out, &path.display().to_string())?;
     Ok(())
 }

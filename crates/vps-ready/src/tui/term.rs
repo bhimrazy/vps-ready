@@ -8,7 +8,7 @@ use dialoguer::console::{Term, style};
 use dialoguer::theme::{ColorfulTheme, SimpleTheme, Theme};
 use dialoguer::{Confirm, Input, MultiSelect, Select};
 
-use super::{Item, Prompt, PromptError};
+use super::{Item, MULTI_HINT, Prompt, PromptError};
 
 /// Asks on stdout and reads keys from the terminal.
 ///
@@ -99,7 +99,7 @@ impl Prompt for Terminal {
         });
         self.ask(|term| {
             MultiSelect::with_theme(&*self.theme)
-                .with_prompt(question)
+                .with_prompt(format!("{question} {MULTI_HINT}"))
                 .items_checked(shown)
                 .interact_on(term)
         })

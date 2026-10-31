@@ -6,14 +6,21 @@ vps-ready <version> on Debian GNU/Linux 13 (trixie) (vm-other)
 Audit: 12 passed, 12 failed (1 high, 5 medium, 6 low), 4 unknown. vps-ready can fix 11 of them.
 
 ? What will this server run?
-  > Something else: SSH only (recommended: no Docker or web server found)
+  > Something else: only SSH is open (recommended: no Docker or web server found)
     Web apps or Docker: opens ports 80 and 443
-? Admin user (logs in with an SSH key, uses sudo): admin
-  a group named admin exists, but no user, so `useradd --user-group` cannot create admin; set `name` to another user
-? Admin user (logs in with an SSH key, uses sudo): deploy
-  created, with 1 key from /root/.ssh/authorized_keys
-? Other ports to open, like 8080/tcp (Enter for none): 
-? Change the module list? (y/N) no
+? Admin user for logging in: admin
+  a group named admin exists, but no user, so `useradd --user-group` cannot
+  create admin; set `name` to another user
+? Admin user for logging in: deploy
+  new account: logs in with 1 key copied from /root/.ssh/authorized_keys; sudo
+  without a password.
+  Root and password logins will be turned off, so this key is how you log in.
+All other incoming ports are blocked.
+? More ports to open, e.g. 8080/tcp or 53/udp (Enter for none): 
+? Pick which modules to run yourself? (y/N) no
+
+After you apply, you have 5 minutes to log in from a new terminal and confirm.
+If you don't, every change is undone.
 
 user.admin: Set up an admin account that logs in with an SSH key and uses sudo
   note: no `authorized_keys` given: copies 1 key from /root/.ssh/authorized_keys
@@ -116,12 +123,3 @@ updates.auto: Install security updates automatically (fixes UPD-001)
 partial: rollback removes a user it created but keeps its home directory.
 Apply 16 changes? [y/N] n
 Nothing was changed.
-
-? Save your answers to vps-ready.toml to repeat them later? (Y/n) no
-Not saved. To repeat this, save these lines to a file and run `sudo vps-ready apply --profile <file>`:
-
-schema = 1
-extends = "minimal"
-
-[modules."user.admin"]
-name = "deploy"

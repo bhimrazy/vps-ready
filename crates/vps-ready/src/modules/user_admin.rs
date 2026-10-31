@@ -446,7 +446,7 @@ fn group_exists(sys: Sys, name: &str) -> Result<bool, ModuleError> {
 }
 
 /// Whether `sudo -l -U <name>` lists rules for the existing account `name`.
-fn has_sudo_rules(sys: Sys, name: &str) -> Result<bool, ModuleError> {
+pub(crate) fn has_sudo_rules(sys: Sys, name: &str) -> Result<bool, ModuleError> {
     let cmd = Cmd::new("sudo")
         .args(["-n", "-l", "-U", name])
         .env("LC_ALL", "C");

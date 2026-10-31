@@ -103,9 +103,18 @@ fn pending_text(out: &str) -> String {
 fn apply_prints_the_confirm_command_and_ctrl_c_only_stops_waiting() {
     let fs = armable();
     let runner = dm_runner();
-    let host = lockout_host(&fs, &runner);
+    // As the wizard runs it: Ctrl-C ends the process until the wait catches
+    // it. This installs a SIGINT handler in the test process, which sets
+    // `stop`, already set.
+    let ends = Arc::new(AtomicBool::new(true));
+    let host = Host {
+        catch_sigint: true,
+        sigint_ends: Some(Arc::clone(&ends)),
+        ..lockout_host(&fs, &runner)
+    };
     let (code, out, err) = apply_lockout(&host);
     assert_eq!(code, EXIT_PENDING, "{err}");
+    assert!(!ends.load(Ordering::SeqCst));
     let txn = txn_ids(&fs).pop().unwrap();
     assert!(
         out.contains(&format!(
@@ -117,7 +126,8 @@ fn apply_prints_the_confirm_command_and_ctrl_c_only_stops_waiting() {
     assert_eq!(
         pending_text(&out),
         format!(
-            "Changes are live. Open a NEW terminal and run:
+            "Changes are live. To keep them, open a NEW terminal on your computer and run
+this to show you can still log in:
 
     ssh -t -o ControlPath=none -p 22 admin@10.0.2.15 sudo vps-ready confirm
     (or the address you connected to instead of 10.0.2.15)
@@ -432,7 +442,7 @@ fn the_ssh_line_names_the_planned_admin() {
         String::from_utf8(out)
             .unwrap()
             .lines()
-            .nth(2)
+            .nth(3)
             .unwrap()
             .to_owned()
     };

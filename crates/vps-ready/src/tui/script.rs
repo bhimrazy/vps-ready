@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::rc::Rc;
 
-use super::{Item, Prompt, PromptError};
+use super::{Item, MULTI_HINT, Prompt, PromptError};
 
 /// An answer to the next question.
 #[derive(Debug, Clone)]
@@ -104,7 +104,7 @@ impl Prompt for Script {
             Answer::Check(checked) => checked,
             other => panic!("{other:?} for multi_select {question:?}"),
         };
-        writeln!(self.log, "? {question}")?;
+        writeln!(self.log, "? {question} {MULTI_HINT}")?;
         for (i, item) in items.iter().enumerate() {
             let mark = if checked.contains(&i) { 'x' } else { ' ' };
             writeln!(self.log, "  [{mark}] {}", item.label)?;

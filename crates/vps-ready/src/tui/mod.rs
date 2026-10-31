@@ -10,6 +10,9 @@ mod term;
 
 pub use term::Terminal;
 
+/// Follows the question of a [`Prompt::multi_select`].
+const MULTI_HINT: &str = "(Space toggles, Enter continues)";
+
 /// Asks the user.
 pub trait Prompt {
     /// One of `items`, starting at `default`; returns its index.

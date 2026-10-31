@@ -104,7 +104,7 @@ fn round_trip(host: &Host, questions: Vec<Answer>) -> ProfileBuilder {
     let facts = (host.facts)(host.sys).unwrap();
     let log = Transcript::default();
     let mut script = Script::new(questions, &log);
-    let builder = ask(host, &facts, &mut script, &mut log.clone()).unwrap();
+    let (builder, _) = ask(host, &facts, &mut script, &mut log.clone()).unwrap();
     assert!(script.done());
     let built = builder.build(host.modules).unwrap();
     let parsed = Profile::parse(&builder.to_toml(), host.modules).unwrap();
@@ -118,15 +118,18 @@ fn round_trip(host: &Host, questions: Vec<Answer>) -> ProfileBuilder {
     builder
 }
 
-/// Runs `questions`, `n` at apply's question, then `after`; snapshots the
-/// transcript as `name` and checks the round trip. Returns the transcript.
-fn scenario(name: &str, host: &Host, questions: Vec<Answer>, after: Vec<Answer>) -> String {
-    let answers = questions.iter().cloned().chain(after).collect();
-    let (code, text) = wizard(host, answers, "n\n");
+/// Runs `questions` and `n` at apply's question, which ends the wizard;
+/// snapshots the transcript as `name` and checks the round trip. Returns
+/// the transcript and the profile file the answers make.
+fn scenario(name: &str, host: &Host, questions: Vec<Answer>) -> (String, String) {
+    let (code, text) = wizard(host, questions.clone(), "n\n");
     assert_eq!(code, 0, "{text}");
+    assert!(
+        text.ends_with("? [y/N] n\nNothing was changed.\n"),
+        "{text}"
+    );
     insta::assert_snapshot!(name, text);
-    round_trip(host, questions);
-    text
+    (text, round_trip(host, questions).to_toml())
 }
 
 fn saved(fs: &FakeFs) -> String {
@@ -157,21 +160,17 @@ fn a_docker_host_gets_web_without_its_published_ports() {
         },
         ..on(&fs, &runner)
     };
-    let text = scenario(
-        "docker",
-        &host,
-        vec![Enter, Enter, Enter, Enter, Enter],
-        vec![],
-    );
+    let (text, profile) = scenario("docker", &host, vec![Enter, Enter, Enter, Enter, Enter]);
     assert!(
         text.contains("(recommended: Docker is installed)"),
         "{text}"
     );
     assert!(!text.contains("3000"), "{text}");
     assert!(
-        text.ends_with("Next time, without questions:\n  sudo vps-ready apply --profile web\n"),
+        text.contains("Ports published by Docker are not listed"),
         "{text}"
     );
+    assert_eq!(profile, "schema = 1\nextends = \"web\"\n");
 }
 
 #[test]
@@ -179,14 +178,17 @@ fn a_host_with_nothing_listening_gets_minimal() {
     let fs = fs();
     let runner = runner(|r| r);
     let host = on(&fs, &runner);
-    let text = scenario(
-        "nothing-listening",
-        &host,
-        vec![Enter, Enter, Enter, Enter],
-        vec![],
+    let (text, profile) = scenario("nothing-listening", &host, vec![Enter, Enter, Enter, Enter]);
+    assert!(text.contains("only SSH is open (recommended: "), "{text}");
+    assert!(
+        text.contains("All other incoming ports are blocked.\n? More ports"),
+        "{text}"
     );
-    assert!(text.contains("SSH only (recommended: "), "{text}");
-    assert!(text.ends_with("apply --profile minimal\n"), "{text}");
+    assert!(
+        text.contains("After you apply, you have 5 minutes to log in"),
+        "{text}"
+    );
+    assert_eq!(profile, "schema = 1\nextends = \"minimal\"\n");
 }
 
 /// The SSH login the wizard runs in, as alice.
@@ -237,16 +239,11 @@ fn the_session_user_is_the_default_admin() {
         },
         ..on(&fs, &runner)
     };
-    let text = scenario(
-        "session-user",
-        &host,
-        vec![Enter, Enter, Enter, Enter],
-        vec![Enter],
-    );
+    let (text, profile) = scenario("session-user", &host, vec![Enter, Enter, Enter, Enter]);
     assert!(
         text.contains(
-            "  existing account (the one you logged in as): gets sudo and 1 key from \
-             /home/alice/.ssh/authorized_keys\n"
+            "  existing account (the one you logged in as): gets sudo without a password and\n  \
+             1 key from /home/alice/.ssh/authorized_keys\n"
         ),
         "{text}"
     );
@@ -258,13 +255,22 @@ fn the_session_user_is_the_default_admin() {
         "{text}"
     );
     assert_eq!(
-        saved(&fs),
+        profile,
         "schema = 1\nextends = \"minimal\"\n\n[modules.\"user.admin\"]\nname = \"alice\"\n"
     );
-    assert!(
-        text.ends_with("apply --profile /root/vps-ready.toml\n"),
-        "{text}"
-    );
+}
+
+/// An existing `admin` with or without sudo rules.
+fn existing_admin(sudo: &str) -> FakeRunner {
+    runner(|r| {
+        r.on(
+            "getent",
+            ["passwd", "admin"],
+            Output::success("admin:x:1001:1001::/home/admin:/bin/bash\n"),
+        )
+        .on("sudo", ["-n", "-l", "-U", "admin"], Output::success(sudo))
+        .on("id", ["-Gn", "admin"], Output::success("admin\n"))
+    })
 }
 
 #[test]
@@ -275,28 +281,24 @@ fn an_existing_admin_account_is_named() {
         gid: 1001,
     };
     let fs = fs().with_dir("/home/admin", home);
-    let runner = runner(|r| {
-        r.on(
-            "getent",
-            ["passwd", "admin"],
-            Output::success("admin:x:1001:1001::/home/admin:/bin/bash\n"),
-        )
-        .on(
-            "sudo",
-            ["-n", "-l", "-U", "admin"],
-            Output::success("User admin is not allowed to run sudo on vm.\n"),
-        )
-        .on("id", ["-Gn", "admin"], Output::success("admin\n"))
-    });
+    let runner = existing_admin("User admin is not allowed to run sudo on vm.\n");
     let host = on(&fs, &runner);
-    let text = scenario(
-        "existing-admin",
-        &host,
-        vec![Enter, Enter, Enter, Enter],
-        vec![],
-    );
+    let (text, _) = scenario("existing-admin", &host, vec![Enter, Enter, Enter, Enter]);
     assert!(
-        text.contains("  existing account: gets sudo and 1 key from /root/.ssh/authorized_keys\n"),
+        text.contains(
+            "  existing account: gets sudo without a password and 1 key from\n  \
+             /root/.ssh/authorized_keys\n"
+        ),
+        "{text}"
+    );
+
+    // Rules it has stay: the wizard does not say it gets sudo.
+    let runner =
+        existing_admin("User admin may run the following commands on vm:\n    (ALL) ALL\n");
+    let host = on(&fs, &runner);
+    let (_, text) = wizard(&host, vec![Enter, Enter, Enter, Enter], "n\n");
+    assert!(
+        text.contains("  existing account: keeps its sudo rules and logs in with 1 key from\n"),
         "{text}"
     );
 }
@@ -312,19 +314,19 @@ fn a_group_without_a_user_is_refused_and_asked_again() {
         )
     });
     let host = on(&fs, &runner);
-    let text = scenario(
+    let (text, profile) = scenario(
         "group-admin",
         &host,
         vec![Enter, Enter, Type("deploy".into()), Enter, Enter],
-        vec![Say(false)],
     );
     assert!(
         text.contains("  a group named admin exists, but no user"),
         "{text}"
     );
-    assert!(text.contains("  created, with 1 key from /root/.ssh/authorized_keys\n"));
-    assert!(text.contains("Not saved."), "{text}");
-    assert!(!fs.exists(&Path::new(CWD).join(SAVE_AS)));
+    assert!(text.contains(
+        "  new account: logs in with 1 key copied from /root/.ssh/authorized_keys; sudo\n"
+    ));
+    assert!(profile.contains("name = \"deploy\""), "{profile}");
 }
 
 #[test]
@@ -333,7 +335,7 @@ fn without_a_key_to_copy_one_is_pasted() {
     fs.remove(Path::new("/root/.ssh/authorized_keys")).unwrap();
     let runner = runner(|r| r);
     let host = on(&fs, &runner);
-    let text = scenario(
+    let (text, profile) = scenario(
         "paste-key",
         &host,
         vec![
@@ -344,12 +346,12 @@ fn without_a_key_to_copy_one_is_pasted() {
             Enter,
             Enter,
         ],
-        vec![Enter],
     );
-    assert!(text.contains("  created, with the public key you paste next\n"));
-    assert!(text.contains("  That is not a public key"), "{text}");
+    assert!(text.contains("  new account: logs in with the public key you paste next;"));
+    assert!(text.contains("has no key we can copy, so paste one.\n"));
+    assert!(text.contains("  That is not a public key."), "{text}");
     assert!(text.contains(&format!("+{KEY}\n")), "{text}");
-    assert!(saved(&fs).contains(&format!("authorized_keys = [\"{KEY}\"]")));
+    assert!(profile.contains(&format!("authorized_keys = [\"{KEY}\"]")));
 }
 
 #[test]
@@ -374,7 +376,7 @@ fn public_listeners_are_offered_unchecked_and_ports_can_be_typed() {
         },
         ..on(&fs, &runner)
     };
-    let text = scenario(
+    let (text, profile) = scenario(
         "listeners",
         &host,
         vec![
@@ -385,24 +387,29 @@ fn public_listeners_are_offered_unchecked_and_ports_can_be_typed() {
             Type("8080/tcp, 51820/udp".into()),
             Enter,
         ],
-        vec![Enter],
     );
     assert!(text.contains("(recommended: something listens on port 80)"));
     assert!(text.contains("  [ ] 5432/tcp (postgres)\n"), "{text}");
     assert!(text.contains("  [ ] 9090/tcp (cockpit)\n"), "{text}");
     assert!(text.contains("  [ ] 2049/tcp (systemd)\n"), "{text}");
-    for hidden in ["6379", "7000", "53/udp", "80/tcp (nginx)"] {
+    for hidden in [
+        "6379",
+        "7000",
+        "53/udp (systemd",
+        "80/tcp (nginx)",
+        "Docker are",
+    ] {
         assert!(!text.contains(hidden), "{hidden}: {text}");
     }
     assert!(text.contains("  \"8080\" is not `<port>/tcp` or `<port>/udp`\n"));
-    assert!(saved(&fs).contains(
+    assert!(profile.contains(
         "allow = [\"22/tcp\", \"80/tcp\", \"443/tcp\", \"443/udp\", \"8080/tcp\", \"51820/udp\"]"
     ));
 }
 
 #[test]
-fn a_customized_module_list_is_saved() {
-    let fs = fs().with_file(Path::new(CWD).join(SAVE_AS), "old\n");
+fn a_customized_module_list() {
+    let fs = fs();
     let runner = runner(|r| r);
     let host = on(&fs, &runner);
     let all = [
@@ -420,64 +427,125 @@ fn a_customized_module_list_is_saved() {
         modules(&host, &all[1..]),
         modules(&host, &[&all[..], &["ssh.bruteforce"]].concat()),
     ];
-    let text = scenario("customized", &host, questions, vec![Enter, Say(true)]);
+    let (text, profile) = scenario("customized", &host, questions);
     assert!(
         text.contains("  ssh.server: refusing to turn off"),
         "{text}"
     );
+    assert!(
+        text.contains("Keep user.admin checked, or add\n  a sudo user first.\n"),
+        "{text}"
+    );
     assert!(text.contains("updates.auto: Install security updates"));
     assert_eq!(
-        saved(&fs),
+        profile,
         "schema = 1\nextends = \"minimal\"\n\n\
          [modules.\"ssh.bruteforce\"]\n\n\
          [modules.\"updates.auto\"]\nenabled = false\n"
     );
+}
+
+/// Answers that differ from a built-in are saved to `vps-ready.toml` after
+/// asking, and a file there is replaced only after asking again.
+#[test]
+fn answers_are_saved_after_asking() {
+    let path = Path::new(CWD).join(SAVE_AS);
+    let fs = fs().with_file(&path, "old\n");
+    let runner = runner(|r| r);
+    let host = on(&fs, &runner);
+    let mut builder = ProfileBuilder::new("minimal").unwrap();
+    builder.remove("updates.auto");
+    let next = |answers: Vec<Answer>| {
+        let log = Transcript::default();
+        let mut script = Script::new(answers, &log);
+        next_time(
+            &host,
+            &builder,
+            &mut script,
+            Path::new(CWD),
+            &mut log.clone(),
+        )
+        .unwrap();
+        assert!(script.done());
+        log.text()
+    };
+
+    let text = next(vec![Enter, Enter]);
+    assert!(
+        text.contains("? /root/vps-ready.toml exists. Replace it? (y/N) no\nNot saved."),
+        "{text}"
+    );
+    assert!(text.ends_with(&builder.to_toml()), "{text}");
+    assert_eq!(saved(&fs), "old\n");
+
+    let text = next(vec![Enter, Say(true)]);
+    assert_eq!(saved(&fs), builder.to_toml());
     assert!(
         text.ends_with(
-            "Saved /root/vps-ready.toml.\n\nNext time, without questions:\n  \
-             sudo vps-ready apply --profile /root/vps-ready.toml\n"
+            "Saved /root/vps-ready.toml.\nReview it before you use it on another server.\n\n\
+             Next time, without questions:\n  sudo vps-ready apply --profile /root/vps-ready.toml\n"
         ),
         "{text}"
     );
+
+    fs.remove(&path).unwrap();
+    let text = next(vec![Say(false)]);
+    assert!(text.contains("\nNot saved."), "{text}");
+    assert!(!fs.exists(&path));
 }
 
 #[test]
-fn an_existing_file_is_kept_unless_replaced() {
-    let fs = fs().with_file(Path::new(CWD).join(SAVE_AS), "old\n");
-    let runner = runner(|r| r);
-    let host = on(&fs, &runner);
-    let answers = vec![Enter, Type("deploy".into()), Enter, Enter, Enter, Enter];
-    let (code, text) = wizard(&host, answers, "n\n");
-    assert_eq!(code, 0);
-    assert!(text.contains("? /root/vps-ready.toml exists. Replace it? (y/N) no\nNot saved."));
-    assert_eq!(saved(&fs), "old\n");
-}
-
-#[test]
-fn an_empty_plan_says_the_server_matches() {
+fn an_empty_plan_of_chosen_modules() {
     let fs = fs();
     let runner = runner(|r| r);
     let host = Host {
         facts: container,
         ..on(&fs, &runner)
     };
-    let text = scenario(
-        "empty-plan",
-        &host,
-        vec![
-            Enter,
-            Enter,
-            Enter,
-            Say(true),
-            modules(&host, &["kernel.sysctl"]),
-        ],
-        vec![Say(false)],
-    );
+    let questions = vec![
+        Enter,
+        Enter,
+        Enter,
+        Say(true),
+        modules(&host, &["kernel.sysctl"]),
+    ];
+    let answers = questions.iter().cloned().chain([Say(false)]).collect();
+    let (code, text) = wizard(&host, answers, "");
+    assert_eq!(code, 0, "{text}");
+    insta::assert_snapshot!("empty-plan", text);
+    round_trip(&host, questions);
     assert!(
-        text.contains("\nNothing to do: this server already matches.\n"),
+        text.contains("\nNothing to do with the modules you chose.\n"),
         "{text}"
     );
     assert!(!text.contains("Apply "), "{text}");
+    assert!(!text.contains("After you apply"), "{text}");
+    assert!(text.contains("Not saved."), "{text}");
+}
+
+/// A whole built-in profile with no change: the server matches it.
+#[test]
+fn an_empty_plan_of_a_profile_says_the_server_matches() {
+    let fs = fs();
+    let runner = runner(|r| r);
+    let host = Host {
+        facts: |sys| {
+            let mut facts = container(sys)?;
+            facts.os.family = OsFamily::Unknown;
+            Ok(facts)
+        },
+        ..on(&fs, &runner)
+    };
+    // Nothing applies: no admin or ports question.
+    let (code, text) = wizard(&host, vec![Enter, Enter], "");
+    assert_eq!(code, 0, "{text}");
+    assert!(
+        text.ends_with(
+            "\nNothing to do: this server already matches.\n\n\
+             Next time, without questions:\n  sudo vps-ready apply --profile minimal\n"
+        ),
+        "{text}"
+    );
 }
 
 #[test]
@@ -492,13 +560,14 @@ fn the_ports_question_is_skipped_without_the_firewall() {
         },
         ..on(&fs, &runner)
     };
-    let text = scenario("no-firewall", &host, vec![Enter, Enter, Enter], vec![]);
+    let (text, _) = scenario("no-firewall", &host, vec![Enter, Enter, Enter]);
     assert!(
         text.contains(
             "Open ports: skipped, ufw is enabled; vps-ready leaves the firewall to it.\n"
         ),
         "{text}"
     );
+    assert!(!text.contains("ports are blocked"), "{text}");
 }
 
 #[test]
@@ -507,9 +576,8 @@ fn the_other_profile_can_be_picked() {
     let runner = runner(|r| r);
     let host = on(&fs, &runner);
     let questions = vec![Pick(1), Enter, Enter, Enter, Enter];
-    let (code, text) = wizard(&host, questions.clone(), "n\n");
+    let (code, _) = wizard(&host, questions.clone(), "n\n");
     assert_eq!(code, 0);
-    assert!(text.ends_with("apply --profile web\n"), "{text}");
     assert_eq!(round_trip(&host, questions).base(), "web");
 }
 
@@ -521,9 +589,7 @@ fn ctrl_c_at_a_question_changes_nothing() {
     let (code, text) = wizard(&host, vec![Enter, CtrlC], "");
     assert_eq!(code, EXIT_INTERRUPTED);
     assert!(
-        text.ends_with(
-            "? Admin user (logs in with an SSH key, uses sudo) ^C\nNothing was changed.\n"
-        ),
+        text.ends_with("? Admin user for logging in ^C\nNothing was changed.\n"),
         "{text}"
     );
     assert!(txns(&fs).is_empty());
@@ -539,15 +605,15 @@ fn txns(fs: &FakeFs) -> Vec<String> {
         .collect()
 }
 
-/// `y` at apply's question applies; a failed apply exits with its code
-/// and skips "Next time".
+/// `y` at apply's question applies, then asks to save; Ctrl-C there saves
+/// nothing. A failed apply exits with its code and skips "Next time".
 #[test]
 fn yes_applies_the_answers() {
     let fs = fs();
     let runner = runner(|r| r);
     let host = on(&fs, &runner);
     let safe = modules(&host, &["kernel.sysctl", "updates.auto"]);
-    let answers = vec![Enter, Enter, Enter, Say(true), safe, Enter];
+    let answers = vec![Enter, Enter, Enter, Say(true), safe.clone(), Enter];
     let (code, text) = wizard(&host, answers, "y\n");
     assert_eq!(code, 0, "{text}");
     assert!(text.contains("Apply 8 changes? [y/N] y\n"), "{text}");
@@ -557,6 +623,14 @@ fn yes_applies_the_answers() {
         "{text}"
     );
     assert_eq!(txns(&fs).len(), 1);
+
+    let fs = self::fs();
+    let host = on(&fs, &runner);
+    let answers = vec![Enter, Enter, Enter, Say(true), safe, CtrlC];
+    let (code, text) = wizard(&host, answers, "y\n");
+    assert_eq!(code, EXIT_INTERRUPTED, "{text}");
+    assert!(text.ends_with("later? ^C\nNot saved.\n"), "{text}");
+    assert!(!fs.exists(&Path::new(CWD).join(SAVE_AS)));
 
     // The dead-man switch cannot be armed: /proc/uptime is missing.
     let fs = self::fs();

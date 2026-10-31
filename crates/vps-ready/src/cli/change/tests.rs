@@ -988,6 +988,30 @@ fn module_narrows_a_profile() {
     );
 }
 
+/// An empty plan of a whole profile says the server matches it; one
+/// narrowed by `--module` does not.
+#[test]
+fn an_empty_profile_plan_says_the_server_matches() {
+    let fs = fixture();
+    // No module of `minimal` applies outside the Debian family.
+    let host = Host {
+        facts: |sys| {
+            let mut facts = container(sys)?;
+            facts.os.family = crate::facts::OsFamily::Unknown;
+            Ok(facts)
+        },
+        ..host(&fs)
+    };
+    let (code, out, _) = plan_with(&host, &with_profile("minimal", &[]));
+    assert_eq!(code, 0);
+    assert!(
+        out.ends_with(")\n\nNothing to do: this server already matches.\n"),
+        "{out}"
+    );
+    let (_, out, _) = plan_with(&host, &with_profile("minimal", &["kernel.sysctl"]));
+    assert!(out.ends_with(")\n\nNothing to do.\n"), "{out}");
+}
+
 #[test]
 fn a_module_the_profile_does_not_enable_is_an_error() {
     let fs = fixture().with_file("/srv/p.toml", "schema = 1\n[modules.\"updates.auto\"]\n");

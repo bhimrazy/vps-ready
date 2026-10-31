@@ -6,26 +6,30 @@ vps-ready <version> on Debian GNU/Linux 13 (trixie) (docker container on vm-othe
 Audit: 5 passed, 5 failed (1 high, 3 medium, 1 low). vps-ready can fix all of them.
 
 ? What will this server run?
-  > Something else: SSH only (recommended: no Docker or web server found)
+  > Something else: only SSH is open (recommended: no Docker or web server found)
     Web apps or Docker: opens ports 80 and 443
-? Admin user (logs in with an SSH key, uses sudo): admin
-  created, with 1 key from /root/.ssh/authorized_keys
-? Other ports to open, like 8080/tcp (Enter for none): 
-? Change the module list? (y/N) yes
-? Modules to run
-  [ ] user.admin: Set up an admin account that logs in with an SSH key and uses sudo (arms the safety timer)
-  [ ] ssh.server: Turn off root and password logins over SSH (arms the safety timer)
-  [ ] firewall.inbound: Drop incoming traffic that no rule allows (arms the safety timer)
+? Admin user for logging in: admin
+  new account: logs in with 1 key copied from /root/.ssh/authorized_keys; sudo
+  without a password.
+  Root and password logins will be turned off, so this key is how you log in.
+All other incoming ports are blocked.
+? More ports to open, e.g. 8080/tcp or 53/udp (Enter for none): 
+? Pick which modules to run yourself? (y/N) yes
+? Modules to run (Space toggles, Enter continues)
+  [ ] user.admin: Set up an admin account that logs in with an SSH key and uses sudo (can lock you out; undone unless you confirm)
+  [ ] ssh.server: Turn off root and password logins over SSH (can lock you out; undone unless you confirm)
+  [ ] firewall.inbound: Drop incoming traffic that no rule allows (can lock you out; undone unless you confirm)
   [ ] ssh.bruteforce: Ban addresses that keep failing to log in over SSH
   [x] kernel.sysctl: Harden kernel settings (does not apply: kernel settings belong to the host inside a container)
   [ ] updates.auto: Install security updates automatically
 
 kernel.sysctl: not applicable (kernel settings belong to the host inside a container)
 
-Nothing to do: this server already matches.
+Nothing to do with the modules you chose.
 
 ? Save your answers to vps-ready.toml to repeat them later? (Y/n) no
-Not saved. To repeat this, save these lines to a file and run `sudo vps-ready apply --profile <file>`:
+Not saved. To repeat this, save these lines to a file and run:
+  sudo vps-ready apply --profile <file>
 
 schema = 1
 extends = "minimal"

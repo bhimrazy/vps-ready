@@ -53,7 +53,8 @@ On the server, as root. Installation is three steps on purpose: download, read, 
 With `--profile minimal` (or `web`), `apply` ends like this, with your own admin, address and port:
 
 ```text
-Changes are live. Open a NEW terminal and run:
+Changes are live. To keep them, open a NEW terminal on your computer and run
+this to show you can still log in:
 
     ssh -t -o ControlPath=none -p 22 admin@203.0.113.10 sudo vps-ready confirm
 
