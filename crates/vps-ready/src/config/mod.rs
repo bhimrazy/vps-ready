@@ -221,6 +221,19 @@ impl ProfileBuilder {
         self
     }
 
+    /// The name of the built-in profile it starts from.
+    #[must_use]
+    pub fn base(&self) -> &'static str {
+        self.base
+    }
+
+    /// Whether it still gives the base, so [`Self::to_toml`] would hold
+    /// only `schema` and `extends`.
+    #[must_use]
+    pub fn is_unchanged(&self) -> bool {
+        self.modules == self.base_modules
+    }
+
     /// The profile, as [`Profile::parse`] gives it for [`Self::to_toml`].
     ///
     /// # Errors

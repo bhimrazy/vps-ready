@@ -36,7 +36,8 @@ That one login also checks everything at once: the admin user exists, your key w
 3. **The confirm window starts** once the changes are live. `apply` prints the command to run, with your admin user, the server address and the SSH port filled in:
 
    ```text
-   Changes are live. Open a NEW terminal and run:
+   Changes are live. To keep them, open a NEW terminal on your computer and run
+   this to show you can still log in:
 
        ssh -t -o ControlPath=none -p 22 admin@203.0.113.10 sudo vps-ready confirm
 

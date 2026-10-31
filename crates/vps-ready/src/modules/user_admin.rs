@@ -45,8 +45,11 @@ struct Params {
     sudo: Sudo,
 }
 
+/// The admin's name when `name` is not given.
+pub(crate) const DEFAULT_NAME: &str = "admin";
+
 fn default_name() -> String {
-    "admin".to_owned()
+    DEFAULT_NAME.to_owned()
 }
 
 /// How an admin without sudo rules gets them.
@@ -128,21 +131,7 @@ impl Module for UserAdmin {
         let params: Params = cx.params()?;
         let name = params.name.as_str();
         let mut notes = Vec::new();
-        if name == "root" {
-            return refuse("`name` is root; the admin must be another account");
-        }
-        let existing = lookup(sys, name)?;
-        if let Some(entry) = &existing {
-            check_login_account(sys, name, entry)?;
-        }
-        if existing.is_none() && group_exists(sys, name)? {
-            // `useradd --user-group` fails then; joining that group instead
-            // could grant what it grants, e.g. Ubuntu's `%admin ALL=(ALL) ALL`.
-            return refuse(&format!(
-                "a group named {name} exists, but no user, so `useradd --user-group` \
-                 cannot create {name}; set `name` to another user"
-            ));
-        }
+        let existing = check_name(sys, name)?;
         if !sys.fs.exists(Path::new(SUDOERS_DIR)) {
             return refuse(&format!(
                 "sudo is not installed ({SUDOERS_DIR} is missing); \
@@ -383,6 +372,27 @@ pub(crate) fn is_plain_key(line: &str) -> bool {
     }) && fields.next().is_some()
 }
 
+/// The account `name`, if it exists. Refuses root, a group of that name
+/// without a user, and an existing account that is not a login user.
+pub(crate) fn check_name(sys: Sys, name: &str) -> Result<Option<Entry>, ModuleError> {
+    if name == "root" {
+        return refuse("`name` is root; the admin must be another account");
+    }
+    let existing = lookup(sys, name)?;
+    if let Some(entry) = &existing {
+        check_login_account(sys, name, entry)?;
+    }
+    if existing.is_none() && group_exists(sys, name)? {
+        // `useradd --user-group` fails then; joining that group instead
+        // could grant what it grants, e.g. Ubuntu's `%admin ALL=(ALL) ALL`.
+        return refuse(&format!(
+            "a group named {name} exists, but no user, so `useradd --user-group` \
+             cannot create {name}; set `name` to another user"
+        ));
+    }
+    Ok(existing)
+}
+
 /// Refuses an existing account that is not a login user: a system account,
 /// or one whose shell is not in `/etc/shells`, such as `www-data` or
 /// `nobody`, which must not get keys and sudo.
@@ -436,7 +446,7 @@ fn group_exists(sys: Sys, name: &str) -> Result<bool, ModuleError> {
 }
 
 /// Whether `sudo -l -U <name>` lists rules for the existing account `name`.
-fn has_sudo_rules(sys: Sys, name: &str) -> Result<bool, ModuleError> {
+pub(crate) fn has_sudo_rules(sys: Sys, name: &str) -> Result<bool, ModuleError> {
     let cmd = Cmd::new("sudo")
         .args(["-n", "-l", "-U", name])
         .env("LC_ALL", "C");

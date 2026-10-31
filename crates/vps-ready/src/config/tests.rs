@@ -191,7 +191,11 @@ fn builder(base: &str) -> ProfileBuilder {
 #[test]
 fn a_builder_without_changes_writes_the_built_in() {
     for (name, _) in BUILT_IN {
-        let b = builder(name);
+        let mut b = builder(name);
+        assert_eq!(b.base(), name);
+        // Setting a base's own value changes nothing.
+        b.set_params("kernel.sysctl", toml::Table::new());
+        assert!(b.is_unchanged());
         assert_eq!(b.to_toml(), format!("schema = 1\nextends = \"{name}\"\n"));
         let built_in = Profile::built_in(name, all()).unwrap().unwrap();
         assert_eq!(parse(&b.to_toml()).unwrap(), built_in);
@@ -209,6 +213,7 @@ fn a_builder_writes_only_what_differs() {
     .remove("ssh.bruteforce")
     .set_params("user.admin", table("name = \"alice\""))
     .set_params("kernel.sysctl", toml::Table::new());
+    assert!(!b.is_unchanged());
     assert_eq!(
         b.to_toml(),
         "schema = 1\nextends = \"web\"\n\n\

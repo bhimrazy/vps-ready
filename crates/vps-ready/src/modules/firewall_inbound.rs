@@ -63,9 +63,9 @@ struct Params {
 /// A port in `allow`: `<port>/tcp` or `<port>/udp`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "String")]
-struct Allow {
-    port: u16,
-    proto: Proto,
+pub(crate) struct Allow {
+    pub(crate) port: u16,
+    pub(crate) proto: Proto,
 }
 
 impl TryFrom<String> for Allow {
@@ -131,7 +131,7 @@ fn not_docker(facts: &Facts) -> Vec<String> {
 
 /// Every port SSH may be reached on now: [`crate::facts::Ssh::ports`], the
 /// applying session's and every port an sshd process listens on.
-fn ssh_ports(facts: &Facts) -> BTreeSet<u16> {
+pub(crate) fn ssh_ports(facts: &Facts) -> BTreeSet<u16> {
     let mut ports: BTreeSet<u16> = facts.ssh.ports().into_iter().collect();
     ports.extend(facts.session.as_ref().map(|s| s.server.port()));
     // Not every listener named sshd: any user can name a process so.
