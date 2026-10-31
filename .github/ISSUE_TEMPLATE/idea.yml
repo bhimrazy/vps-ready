@@ -1,0 +1,16 @@
+name: Idea or question
+description: Suggest a feature or a docs change, or ask how something works.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like?
+      description: The idea, the question, or what you were trying to do.
+    validations:
+      required: true
+  - type: input
+    id: page
+    attributes:
+      label: Docs page (optional)
+      description: The page this is about, if any.
