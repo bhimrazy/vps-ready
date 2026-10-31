@@ -51,6 +51,11 @@ fn armable() -> FakeFs {
 fn dm_runner() -> FakeRunner {
     FakeRunner::new()
         .on("systemd-run", Vec::<String>::new(), Output::success(""))
+        .on(
+            "/var/lib/vps-ready/bin/vps-ready",
+            ["version"],
+            Output::success(format!("{}\n", crate::VERSION_INFO)),
+        )
         .on("systemctl", Vec::<String>::new(), Output::success(""))
 }
 
@@ -433,6 +438,54 @@ fn rollback_last_undoes_a_pending_apply_and_disarms() {
         ]
     );
     assert!(history_text(&host).contains("rolled-back (manual)"));
+}
+
+#[test]
+fn a_rollback_from_another_binary_path_works_while_pending() {
+    let fs = armable();
+    let runner = dm_runner();
+    let host = lockout_host(&fs, &runner);
+    assert_eq!(apply_lockout(&host).0, EXIT_PENDING);
+    let copy = format!("{STATE}/bin/vps-ready");
+    assert!(
+        String::from_utf8(fs.read(Path::new(crate::engine::deadman::HOOK)).unwrap())
+            .unwrap()
+            .contains(&format!("ExecStart={copy} rollback")),
+    );
+
+    // The package installed elsewhere and the old binary is gone.
+    fs.remove(Path::new(BINARY)).unwrap();
+    let moved = Host {
+        binary: "/usr/bin/vps-ready".into(),
+        ..lockout_host(&fs, &runner)
+    };
+    let (code, _, err) = rollback_last(&moved);
+    assert_eq!(code, 0, "{err}");
+}
+
+#[test]
+fn confirm_extend_from_a_moved_binary_keeps_the_copy() {
+    let fs = armable();
+    let runner = dm_runner();
+    let host = lockout_host(&fs, &runner);
+    assert_eq!(apply_lockout(&host).0, EXIT_PENDING);
+    fs.remove(Path::new(BINARY)).unwrap();
+    set_uptime(&fs, 1100);
+    let moved = Host {
+        binary: "/usr/bin/vps-ready".into(),
+        ..lockout_host(&fs, &runner)
+    };
+    let (code, _, err) = confirm_cmd(&moved, Some(Duration::from_secs(600)));
+    assert_eq!(code, 0, "{err}");
+    let last = calls(&runner)
+        .into_iter()
+        .rev()
+        .find(|c| c.starts_with("systemd-run"))
+        .unwrap();
+    assert!(
+        last.contains("/var/lib/vps-ready/bin/vps-ready rollback"),
+        "{last}"
+    );
 }
 
 /// The printed line logs in as the plan's admin, not as root who ran it.

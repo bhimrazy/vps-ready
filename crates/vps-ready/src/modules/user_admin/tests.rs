@@ -185,6 +185,9 @@ impl Runner for Debian<'_> {
                 })
             }
             ("visudo" | "systemd-run" | "systemctl", _) => Output::success(""),
+            (p, ["version"]) if p.ends_with("/bin/vps-ready") => {
+                Output::success(format!("{}\n", crate::VERSION_INFO))
+            }
             (other, _) => return Err(SysError::NotFound(other.to_owned())),
         };
         Ok(out)

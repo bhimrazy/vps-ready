@@ -15,7 +15,7 @@ Debian 12/13 and Ubuntu 22.04/24.04 with systemd, as in M4.
 | Release | Contents |
 |---|---|
 | **v0.5.0 (M5)** | `deploy.docker` (with the `FW-002` fix), `deploy.proxy` (Caddy), `deploy.user`, vendor apt sources, a `.deb` package, an SBOM |
-| **v0.6.0 (M5, part 2)** | `net.tailscale` and closing public 22, `apply --deadman=off\|selftest`, `export cloud-init` |
+| **v0.6.0 (M5, part 2)** | Closing public 22 behind any private network, `net.tailscale`, `apply --deadman=off\|selftest`, `export cloud-init` |
 
 None of the v0.5.0 modules touches sshd, the firewall's SSH rule or the admin's login, so they do not arm the safety timer. They cannot lock out an admin who logs in through the host's own sshd. They can stop containers (see the Docker restart below), which matters only to someone who reaches the host through a container, and the plan says when that will happen. The v0.6.0 items all change the SSH path or turn the timer off, so they are reviewed together as one change to the safety model.
 
@@ -116,8 +116,8 @@ The release builds `vps-ready_<ver>_amd64.deb` and `_arm64.deb` with nFPM from t
 - The binary goes to `/usr/bin/vps-ready`, with the `vpsready` link. No maintainer scripts; installing the package changes nothing on the system.
 - The `.deb` is a release asset, listed in `checksums.txt`, covered by the cosign signature and the provenance attestation. There is no apt repository and no embedded deb signature (apt does not check those; it checks repository signatures). Install with `apt install ./vps-ready_0.5.0_amd64.deb` after the usual checksum step.
 - nFPM is installed in CI from a pinned release binary, checked against that release's `checksums.txt`.
-- **Moving from `install.sh` to the package.** `/usr/local/bin` comes first on `PATH`, so an old `install.sh` binary would shadow the package. The install page says to remove `/usr/local/bin/vps-ready` and `vpsready` first, and `vps-ready version` warns when another `vps-ready` comes earlier on `PATH`.
-- **Fix `#75` first.** The safety timer's boot hook names the binary's path, so switching between the two paths while a transaction is pending would break the hook. `apply` and `rollback` refuse when a pending transaction's hook names a different binary path, and say which. Looking in both places would weaken the binary check.
+- **Moving from `install.sh` to the package.** `/usr/local/bin` comes first on `PATH`, so an old `install.sh` binary would shadow the package. The install page says to remove `/usr/local/bin/vps-ready` and `vpsready` first, and `vps-ready version` warns when another `vps-ready` is on `PATH`.
+- **Fix `#75` first.** The safety timer's boot hook names the binary's path, so switching between the two paths while a transaction is pending would break the hook. When the switch is armed, `apply` now copies the running binary (after the usual checks) to `/var/lib/vps-ready/bin/vps-ready` and points the timer and the hook at that copy, so moving or upgrading the installed binary cannot break an unattended rollback, and nothing looks in several places. A transaction armed by v0.4.0 keeps its old hook.
 
 ### SBOM
 
@@ -131,13 +131,15 @@ This plan departs from earlier docs; PR 8 updates them:
 - `architecture.md`: `--deadman=off|selftest` and `export cloud-init` move from M5 to v0.6.0; the two new reloads.
 - `security-baseline.md`: `deploy.user`'s command is the user's choice, not fixed to `/usr/local/bin/deploy-app`; Nginx+certbot and rootless Docker/Podman are not offered in M5.
 - `m3-plan.md`: its pointers to M5 for Tailscale and `--deadman=off` now mean v0.6.0.
+- `decisions.md`: open question 4 (Tailscale or WireGuard) answered by the private-access direction above.
 - `decisions.md`: a new decision for the split.
 
 ### Not in M5
 
 | Planned before | M5 | When |
 |---|---|---|
-| `net.tailscale`, close public 22 | | v0.6.0, with a confirm that must arrive over `tailscale0` |
+| `net.tailscale`, close public 22 | | v0.6.0, see the direction below |
+| A WireGuard module (keys, peers, client config) | | When asked for; until then, a hand-made `wg0` works with the close-22 step |
 | `--deadman=off\|selftest` | | v0.6.0, with the export |
 | `export cloud-init` | | v0.6.0; a small `#cloud-config` that pins version and SHA256 (AWS limits user data to 16 KB) |
 | `.rpm`, `.apk` | `.deb` only | If vps-ready supports those distros |
@@ -146,6 +148,15 @@ This plan departs from earlier docs; PR 8 updates them:
 | Rootless Docker, Podman | Docker Engine | If asked for |
 | Nginx, Traefik | Caddy | Decision D12 |
 | `/etc/vps-ready/config.toml` | | M6, with `drift` |
+
+### Direction for v0.6.0: private access
+
+Recorded here so v0.5.0 does not paint it into a corner; v0.6.0 gets its own plan. Tailscale is one way to reach a server privately, not the only one (open question 4 in `decisions.md`). So v0.6.0 has two separate pieces:
+
+1. **Closing public 22 works with any private network.** A `firewall.inbound` parameter names the interface SSH must come through (`ssh_via = "tailscale0"`, `"wg0"`, `"nb0"` for NetBird, and so on). SSH stays open on that interface and closes everywhere else. It runs behind the safety timer, and only a confirm whose server address belongs to that interface counts. Refused at plan time: an interface that is down or has no address. A note when vps-ready cannot tell whether the interface comes back after a reboot (for `tailscale0` it checks that `tailscaled` is enabled; for `wg0`, that `wg-quick@wg0` is). The note also points to the provider's console as the way back in.
+2. **`net.tailscale` is the one install-and-join helper.** It installs Tailscale from its repository (a vendor source as above), joins with an auth key read from a file or the environment, never from the command line, and supports `login_server` for Headscale. Then the close-22 step uses `tailscale0`.
+
+A WireGuard module would generate keys, manage peers and print a client config: more to get right and more to support than Tailscale's join. It waits until someone asks. Until then, anyone who runs WireGuard, NetBird or ZeroTier sets up the interface themselves and uses piece 1.
 
 ## Testing
 
@@ -176,7 +187,7 @@ This plan departs from earlier docs; PR 8 updates them:
 3. **`feat(modules): deploy.docker`** (needs 2): the module, `DockerRestart`, the `daemon.json` merge, the `FW-002` hint, `firewall.inbound` planning for a Docker in the same profile, the `web` profile.
 4. **`feat(modules): deploy.proxy`** (needs 2 and 3): the module, `CaddyReload`, the wizard's domain question.
 5. **`feat(modules): deploy.user`**: the module and the sudoers drop-in.
-6. **`fix(deadman): refuse a binary path change while pending`** (`#75`), then **`ci(release): .deb and SBOM`**, with the `PATH` warning in `version`.
+6. **`fix(deadman): run the timer and boot hook from a private copy of the binary`** (`#75`), then **`ci(release): .deb and SBOM`**, with the `PATH` warning in `version`.
 7. **`test(vm): deploy cycle`** (needs 3 to 5): cycle 8.
 8. **`docs(site): deployment modules`** (needs 3 to 6): guides, `modules` reference, the install page with the `.deb`, and the doc changes listed above.
 9. **`chore: release v0.5.0`**.

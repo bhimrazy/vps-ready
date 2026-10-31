@@ -282,6 +282,33 @@ pub fn main() -> ExitCode {
 /// Whether notices print as `vps-ready: <notice>` instead of log lines.
 static PLAIN_NOTICES: AtomicBool = AtomicBool::new(false);
 
+/// The executables named `vps-ready` in the directories of `path` that are
+/// not `exe`, the running binary, nearest first and without repeats. An
+/// empty entry (the current directory), a directory or a file that is not
+/// executable does not count.
+fn other_binaries(exe: &Path, path: &std::ffi::OsStr) -> Vec<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    let Ok(exe) = exe.canonicalize() else {
+        return Vec::new();
+    };
+    let mut seen = vec![exe];
+    let mut found = Vec::new();
+    for dir in std::env::split_paths(path).filter(|d| !d.as_os_str().is_empty()) {
+        let file = dir.join("vps-ready");
+        let runs = file
+            .metadata()
+            .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0);
+        let Some(real) = file.canonicalize().ok().filter(|_| runs) else {
+            continue;
+        };
+        if !seen.contains(&real) {
+            seen.push(real);
+            found.push(file);
+        }
+    }
+    found
+}
+
 /// Logs go to stderr. `RUST_LOG` wins when set; otherwise `-v` raises the
 /// level from `warn` to `info`, `debug` and `trace`. Without either, notices
 /// are plain lines and only errors from the logs remain.
@@ -351,6 +378,15 @@ pub fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
                 writeln!(out)?;
             } else {
                 writeln!(out, "{VERSION_INFO}")?;
+            }
+            if let Some((exe, path)) = std::env::current_exe().ok().zip(std::env::var_os("PATH")) {
+                for other in other_binaries(&exe, &path) {
+                    eprintln!(
+                        "warning: another vps-ready is installed at {}; `vps-ready` runs the first one on \
+                         PATH, so remove one of them",
+                        other.display()
+                    );
+                }
             }
         }
         Command::Detect { root } => {
@@ -974,6 +1010,49 @@ fn ports_line(listeners: &[Listener]) -> String {
 mod tests {
     use super::*;
     use crate::facts::fixtures::{HOSTS, host};
+
+    #[test]
+    fn finds_other_vps_ready_binaries_on_path() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let sub = |d: &str| {
+            let dir = dir.path().join(d);
+            std::fs::create_dir(&dir).unwrap();
+            dir
+        };
+        let exec = |d: &Path| {
+            let file = d.join("vps-ready");
+            std::fs::write(&file, "x").unwrap();
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+            file
+        };
+        let (da, db, dc) = (sub("a"), sub("b"), sub("c"));
+        let (a, b) = (exec(&da), exec(&db));
+        let path = |dirs: &[&Path]| std::env::join_paths(dirs).unwrap();
+
+        // Only the running binary, wherever it is on PATH, or none.
+        assert!(other_binaries(&a, &path(&[&da])).is_empty());
+        assert!(other_binaries(&a, &path(&[&dc])).is_empty());
+        // Another copy, before or after the running one.
+        assert_eq!(other_binaries(&a, &path(&[&da, &db])), vec![b.clone()]);
+        assert_eq!(other_binaries(&a, &path(&[&db, &da])), vec![b.clone()]);
+        // The running binary is not on PATH at all.
+        assert_eq!(other_binaries(&a, &path(&[&dc, &db])), vec![b.clone()]);
+        // A link to the running binary, and a repeated directory, are not others.
+        std::fs::remove_file(&b).unwrap();
+        std::os::unix::fs::symlink(&a, &b).unwrap();
+        assert!(other_binaries(&a, &path(&[&db, &da])).is_empty());
+        std::fs::remove_file(&b).unwrap();
+        let b = exec(&db);
+        assert_eq!(other_binaries(&a, &path(&[&db, &da, &db])), vec![b.clone()]);
+
+        // Not executable, a directory, and an empty entry (the current
+        // directory) do not count.
+        std::fs::set_permissions(&b, std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::create_dir(dc.join("vps-ready")).unwrap();
+        assert!(other_binaries(&a, &path(&[&db, &dc, Path::new(""), &da])).is_empty());
+        assert!(other_binaries(&a, std::ffi::OsStr::new("")).is_empty());
+    }
 
     #[test]
     fn parses_dead_man_windows() {
