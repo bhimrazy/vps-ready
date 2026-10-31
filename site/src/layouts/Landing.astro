@@ -2,6 +2,10 @@
 import '../styles/landing.css';
 import FeedbackWidget from '../components/FeedbackWidget.astro';
 import { TAGLINE } from '../lib/site';
+// The hero's fonts, preloaded so the heading and terminal don't reflow when they arrive.
+import mono400 from '@fontsource/jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2?url';
+import mono700 from '@fontsource/jetbrains-mono/files/jetbrains-mono-latin-700-normal.woff2?url';
+import sans400 from '@fontsource/public-sans/files/public-sans-latin-400-normal.woff2?url';
 
 interface Props {
   title: string;
@@ -21,6 +25,7 @@ const ogImage = new URL('/og.png', Astro.site);
     <meta name="description" content={description} />
     <link rel="canonical" href={canonical} />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    {[mono400, mono700, sans400].map((href) => <link rel="preload" href={href} as="font" type="font/woff2" crossorigin />)}
     <meta name="theme-color" content="#ffffff" />
     <meta name="color-scheme" content="light" />
     <meta property="og:type" content="website" />

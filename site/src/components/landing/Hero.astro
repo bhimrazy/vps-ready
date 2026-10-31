@@ -124,10 +124,15 @@ const quick = `curl -fsSL ${INSTALL_URL} | sudo sh`;
     }),
   );
 
-  // Open on the audit's finished frame (rendered at build), hold it, then play on from plan.
-  if (!still)
-    hero.sleep(4000, hero.tok).then(
-      () => run(1, true),
-      () => {},
-    );
+  // The build-time frame shows the top of the audit. Glide down to its summary,
+  // hold, then play on from plan. A tab click cancels this.
+  if (still) hero.render(heroScenes.audit);
+  else
+    hero
+      .sleep(1500, hero.tok)
+      .then(() => (hero.render(heroScenes.audit), hero.sleep(2500, hero.tok)))
+      .then(
+        () => run(1, true),
+        () => {},
+      );
 </script>
