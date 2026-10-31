@@ -1,11 +1,41 @@
 ---
 title: Quick start
-description: Audit a server, read the plan, apply it behind the safety net, confirm from a new login, and undo it.
+description: Run the guided setup, or audit, plan, apply, confirm and undo step by step, behind the safety net.
 ---
 
 import { Aside, Steps } from '@astrojs/starlight/components';
 
-Run these on the server, as root or with `sudo`. The first two steps change nothing, so you can stop after either one.
+Run these on the server, as root or with `sudo`.
+
+## The guided way
+
+```sh
+sudo vps-ready
+```
+
+With no arguments on a terminal, vps-ready starts a short setup. It checks that you are root and that the binary can run from the safety timer, then looks at the server and asks:
+
+```text
+? What will this server run?
+  > Web apps or Docker: opens ports 80 and 443 (recommended: Docker is installed)
+    Something else: only SSH is open
+? Admin user for logging in: admin
+? Open ports besides SSH (22, always open) (Space toggles, Enter continues)
+  [x] 80/tcp
+  [x] 443/tcp
+  [x] 443/udp
+? Pick which modules to run yourself? (y/N) no
+```
+
+The recommended answer comes first and says why. The admin user line says whether the name is a new account or an existing one, and which SSH keys it gets; ports that something listens on are offered unchecked, and unchecked ports are blocked. Answering `y` to the module question lets you pick modules one by one.
+
+Then it prints the same plan as `apply`, asks `Apply N changes? [y/N]`, arms the safety timer and applies. Confirm from a new login as described below. It ends with `Next time, without questions:` and the `sudo vps-ready apply --profile ...` command that repeats the setup. If your answers differ from the `minimal` and `web` profiles, it offers to save them to `vps-ready.toml` first.
+
+Ctrl-C at a question stops with `Nothing was changed.` Without a terminal (a script, a pipe), `vps-ready` prints help instead. To read what a module does before you agree to it, run `vps-ready modules` or `vps-ready modules ssh.server` ([reference](/docs/reference/commands/#modules)).
+
+## Step by step
+
+The same flow without the questions. The first two steps change nothing, so you can stop after either one.
 
 <Steps>
 

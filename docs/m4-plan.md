@@ -1,5 +1,9 @@
 # M4 plan: the guided wizard (v0.4.0)
 
+> **Status: in progress.** PRs 2 to 4 have merged: `modules` (#71), the profile builder (#72) and the wizard (#73). The release is still to come. Where the code differs from this plan:
+> - `modules <ID>` does not list the files and services the module touches. There is no static source for them (they depend on the host's facts), so it would need a plan against a host.
+> - The flow lives in `src/cli/wizard.rs`; `src/tui` holds only the prompts (the `Prompt` trait and its `dialoguer` implementation), not the flow.
+
 M4 makes `sudo vps-ready` with no arguments a short guided setup for someone who has never hardened a server: it looks at the host, recommends a profile, asks three or four questions, shows the plan, applies it with the safety timer, and ends by printing the command that does the same thing without questions. It also adds `vps-ready modules`, which explains each module.
 
 The wizard is a front end, not a new path: it builds a profile and hands it to the same `plan` and `apply` code the commands use. Anything it does, `apply --profile <file>` can repeat. The engine, the modules and the safety timer do not change.

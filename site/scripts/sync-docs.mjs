@@ -38,7 +38,7 @@ const PAGES = {
     slug: 'project/m4-plan',
     label: 'Design notes: M4',
     order: 8,
-    note: 'This is a plan for the next release; nothing on this page has shipped yet.',
+    note: 'This is the plan for the next release. The wizard and `modules` are merged but not released yet; the status line below says where the code differs.',
   },
 };
 const DOCS_OUT = join(site, 'src/content/docs/docs');

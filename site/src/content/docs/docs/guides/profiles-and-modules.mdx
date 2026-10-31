@@ -25,6 +25,8 @@ vps-ready groups its changes into **modules**, and a **profile** picks which mod
 - **minimal** is for any server you log into over SSH.
 - **web** is minimal plus the web ports (UDP 443 is for HTTP/3) and fail2ban.
 
+`sudo vps-ready` with no arguments picks between these two for you and builds the profile from your answers: see the [quick start](/docs/quick-start/). To read what a module does before choosing, run `vps-ready modules` (or `vps-ready modules ssh.server` for one).
+
 Run `plan` with the same flags first to see exactly what would change on your server:
 
 ```sh

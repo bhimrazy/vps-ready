@@ -27,7 +27,7 @@ const dot = {
 <Section id="roadmap" alt>
   <SectionHead label="Roadmap">
     <Fragment slot="title">Built in small, safe releases.</Fragment>
-    Each release is tagged and signed. The guided setup is next.
+    Each release is tagged and signed. The guided setup is merged and ships next.
   </SectionHead>
 
   <div
@@ -54,12 +54,11 @@ const dot = {
 
   <div class="mt-9 grid grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] items-start gap-9 max-[920px]:grid-cols-1 max-[920px]:gap-5">
     <SubHead flush>
-      <Fragment slot="title">Preview: guided setup (v0.4.0)</Fragment>
-      Run <span class="font-mono">vps-ready</span> on its own: it suggests a profile, asks a few plain questions, then applies the plan
-      behind the same safety timer.
+      <Fragment slot="title">Guided setup (v0.4.0)</Fragment>
+      Run <span class="font-mono">sudo vps-ready</span> on its own: it suggests a profile, asks a few plain questions, then applies the
+      plan behind the same safety timer. <span class="font-mono">vps-ready modules</span> explains each module.
     </SubHead>
     <Terminal title="sudo vps-ready">
-      <Pill slot="status">Design preview</Pill>
       <div class:list={[SCREEN, 'px-[18px] text-[12.5px] max-[600px]:text-[11px]']} set:html={frameHtml(wizardSnippet)} />
     </Terminal>
   </div>
