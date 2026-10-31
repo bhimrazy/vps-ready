@@ -1,0 +1,68 @@
+#!/usr/bin/expect -f
+# Drives the wizard on a terminal for test/vm-cycle.sh: Enter at every
+# question, `y` to apply, then waits for a confirm from another session.
+#
+# Usage: expect vm-wizard.exp <admin> <command...>
+#   <admin> is the default the admin question must offer; <command> starts
+#   the wizard, e.g. over `ssh -tt`. The transcript goes to stdout. Exits
+#   with the command's exit code, or 1 when the wizard does not ask what the
+#   cycle expects.
+
+set admin [lindex $argv 0]
+set env(TERM) xterm
+set env(NO_COLOR) 1
+set timeout 60
+
+proc fail {why} {
+  puts "\nFAIL (expect): $why"
+  exit 1
+}
+
+# dialoguer prints a question again with its answer, so each is answered once.
+proc enter {question} {
+  global seen
+  if {![info exists seen($question)]} {
+    set seen($question) 1
+    send "\r"
+  }
+}
+
+# Wide, so no question wraps; ssh passes the size on.
+spawn -noecho sh -c {stty rows 50 columns 200; exec "$@"} sh {*}[lrange $argv 1 end]
+
+expect {
+  "What will this server run?" { enter run; exp_continue }
+  -ex "Admin user for logging in \[$admin\]: " {
+    if {[info exists seen(admin)]} { fail "the admin question was asked again" }
+    enter admin
+    exp_continue
+  }
+  -re {Admin user for logging in \[[^]]*\]: } { fail "the admin question does not offer $admin" }
+  "Public key" { fail "the wizard found no key to copy" }
+  "Open ports besides SSH" { enter ports; exp_continue }
+  "More ports to open" { enter more; exp_continue }
+  "Pick which modules to run yourself?" { enter pick; exp_continue }
+  -re {Apply [0-9]+ changes\? \[y/N\] } { send "y\r" }
+  "Nothing to do" { fail "the plan is empty" }
+  timeout { fail "no expected question within $timeout s" }
+  eof { fail "the wizard ended before apply's question" }
+}
+
+# The window is 5 minutes; the cycle confirms as soon as apply is pending.
+set timeout 330
+expect {
+  "Confirmed: the changes" {}
+  timeout { fail "not confirmed within $timeout s" }
+  eof { fail "the wizard ended without a confirm" }
+}
+
+set timeout 60
+expect {
+  "Save your answers to vps-ready.toml" { enter save; exp_continue }
+  "exists. Replace it?" { fail "vps-ready.toml exists already" }
+  -re {Next time, without questions:\r?\n  sudo vps-ready apply --profile [^\r\n]+\r?\n} {}
+  timeout { fail "no \"Next time\" line within $timeout s" }
+  eof { fail "the wizard ended without a \"Next time\" line" }
+}
+expect eof
+exit [lindex [wait] 3]
