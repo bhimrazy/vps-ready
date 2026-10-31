@@ -286,7 +286,7 @@ Planned:
         files/<n>.after              bytes vps-ready wrote
         files/<n>.during             an edit made during the confirm window, kept when the dead-man restored the file
 /etc/systemd/system/vps-ready-deadman.service    the boot hook; enabled only while a transaction is armed
-/var/lib/vps-ready/bin/vps-ready     the copy of the binary that the timer and the boot hook run
+/var/lib/vps-ready/bin/vps-ready     the copy of the binary that the timer and the boot hook run; not for running by hand
 /etc/vps-ready/firewall.nft           firewall.inbound's table, loaded by vps-ready-firewall.service
 /etc/vps-ready/config.toml            planned: last-applied profile (with `drift`)
 /var/lib/vps-ready/state.json         planned: managed-file hashes for drift detection (with `drift`)

@@ -382,7 +382,8 @@ pub fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
             if let Some((exe, path)) = std::env::current_exe().ok().zip(std::env::var_os("PATH")) {
                 for other in other_binaries(&exe, &path) {
                     eprintln!(
-                        "warning: another vps-ready is installed at {}; remove one of them",
+                        "warning: another vps-ready is installed at {}; `vps-ready` runs the first one on \
+                         PATH, so remove one of them",
                         other.display()
                     );
                 }

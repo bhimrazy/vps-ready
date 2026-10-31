@@ -49,9 +49,15 @@ fn locking() -> [Demo; 3] {
     ]
 }
 
+fn version_ok() -> Output {
+    Output::success(format!("{}\n", crate::VERSION_INFO))
+}
+
 /// Answers `systemd-run`, `systemctl` and every check with success.
 fn dm_runner() -> FakeRunner {
-    runner(Output::success("")).on("systemd-run", Vec::<String>::new(), Output::success(""))
+    runner(Output::success(""))
+        .on("systemd-run", Vec::<String>::new(), Output::success(""))
+        .on(COPY, ["version"], version_ok())
 }
 
 fn deadman_cfg() -> Deadman {
@@ -157,6 +163,7 @@ fn arms_before_the_first_change_and_waits_for_a_confirm() {
     assert_eq!(
         calls(&run),
         [
+            format!("{COPY} version"),
             "systemctl daemon-reload".to_owned(),
             "systemctl enable vps-ready-deadman.service".to_owned(),
             systemd_run(&txn, 1, first),
@@ -252,11 +259,13 @@ fn a_failed_systemd_run_ends_the_transaction_before_any_backup() {
     let before = host_without_hook(&fs);
     let [lock, ..] = locking();
     let plan = plan_of(&fs, &facts, &[&lock]);
-    let run = runner(Output::success("")).on(
-        "systemd-run",
-        Vec::<String>::new(),
-        failed("Failed to start transient timer unit"),
-    );
+    let run = runner(Output::success(""))
+        .on(COPY, ["version"], version_ok())
+        .on(
+            "systemd-run",
+            Vec::<String>::new(),
+            failed("Failed to start transient timer unit"),
+        );
     let outcome = apply_dm(&fs, &run, &plan).unwrap();
     let ApplyOutcome::RolledBack { txn, reason, cause } = outcome else {
         panic!("{outcome:?}");
@@ -855,11 +864,13 @@ fn a_copy_left_by_a_failed_arm_does_not_break_the_next_apply() {
     let facts = facts();
     let [lock, ..] = locking();
     let plan = plan_of(&fs, &facts, &[&lock]);
-    let failing = runner(Output::success("")).on(
-        "systemd-run",
-        Vec::<String>::new(),
-        failed("Failed to start transient timer unit"),
-    );
+    let failing = runner(Output::success(""))
+        .on(COPY, ["version"], version_ok())
+        .on(
+            "systemd-run",
+            Vec::<String>::new(),
+            failed("Failed to start transient timer unit"),
+        );
     let outcome = apply_dm(&fs, &failing, &plan).unwrap();
     assert!(
         matches!(outcome, ApplyOutcome::RolledBack { .. }),
@@ -879,6 +890,51 @@ fn a_copy_left_by_a_failed_arm_does_not_break_the_next_apply() {
     .unwrap();
     pending(&fs, &plan);
     assert_eq!(fs.read(Path::new(COPY)).unwrap(), b"\x7fELF-new");
+}
+
+/// A copy that cannot run, or a copy that cannot be written, is refused
+/// before a transaction: no backup, no hook, no timer, and no fallback to
+/// the installed binary.
+#[test]
+fn a_copy_that_cannot_run_or_be_written_is_refused_before_any_transaction() {
+    let [lock, ..] = locking();
+    let refused = |run: FakeRunner, break_fs: fn(&FakeFs), reason: &str| {
+        let fs = armable();
+        let facts = facts();
+        let plan = plan_of(&fs, &facts, &[&lock]);
+        let before = host(&fs);
+        break_fs(&fs);
+        let err = apply_dm(&fs, &run, &plan).unwrap_err();
+        assert!(matches!(err, EngineError::Deadman(_)), "{err:?}");
+        assert!(err.to_string().contains(reason), "{err}");
+        assert!(state(&fs).txns(&fs).unwrap().is_empty());
+        assert!(!fs.exists(Path::new(deadman::HOOK)));
+        assert!(
+            calls(&run).iter().all(|c| c.ends_with(" version")),
+            "{:?}",
+            calls(&run)
+        );
+        if reason.starts_with("copying") {
+            assert_eq!(host(&fs), before);
+        }
+    };
+    let base = || runner(Output::success(""));
+    refused(
+        base().on(COPY, ["version"], failed("Operation not permitted")),
+        |_| {},
+        &format!("the copy at {COPY} cannot run: `version` exited with status"),
+    );
+    refused(
+        base().on(COPY, ["version"], Output::success("vps-ready 0.0.1\n")),
+        |_| {},
+        "`version` printed \"vps-ready 0.0.1\", not ",
+    );
+    refused(base(), |_| {}, "; is /state mounted noexec?");
+    refused(
+        base().on(COPY, ["version"], version_ok()),
+        |fs| fs.fail_from(Op::Write, 1),
+        &format!("copying {BIN} to {COPY}: "),
+    );
 }
 
 #[test]

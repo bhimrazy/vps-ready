@@ -483,10 +483,9 @@ fn several_pending_transactions_need_txn() {
 }
 
 /// The caller's binary is not the one re-armed: the copy that applied is,
-/// even when the installed binary moved. A transaction armed before the copy
-/// existed has a hook naming the installed binary, which is kept.
+/// even when the installed binary moved.
 #[test]
-fn extend_keeps_the_copy_and_a_pre_copy_hook_keeps_its_binary() {
+fn extend_keeps_the_copy() {
     let fs = armable();
     let txn = applied(&fs);
     set_uptime(&fs, 1100);
@@ -497,10 +496,33 @@ fn extend_keeps_the_copy_and_a_pre_copy_hook_keeps_its_binary() {
         timer.contains(&format!("{COPY} rollback --txn {txn}")),
         "{timer}"
     );
+}
 
-    // As armed by v0.4.0: the hook runs the installed binary.
+#[test]
+fn extend_makes_a_missing_copy_again() {
     let fs = armable();
     let txn = applied(&fs);
+    fs.remove(Path::new(COPY)).unwrap();
+    set_uptime(&fs, 1100);
+    let run = dm_runner();
+    extend(&fs, &run, 600).unwrap();
+    assert!(fs.exists(Path::new(COPY)));
+    let calls = calls(&run);
+    assert_eq!(calls[0], format!("{COPY} version"));
+    assert!(
+        calls[1].contains(&format!("{COPY} rollback --txn {txn}")),
+        "{calls:?}"
+    );
+}
+
+/// A transaction armed by v0.4.0 has a hook that names the installed
+/// binary. Extending it moves the hook and the timer onto a copy, so a
+/// reboot in the extended window still rolls back.
+#[test]
+fn extend_moves_a_pre_copy_hook_onto_the_copy() {
+    let fs = armable();
+    let txn = applied(&fs);
+    fs.remove(Path::new(COPY)).unwrap();
     fs.write(
         Path::new(deadman::HOOK),
         deadman::hook_unit(Path::new(BIN)).as_bytes(),
@@ -509,16 +531,18 @@ fn extend_keeps_the_copy_and_a_pre_copy_hook_keeps_its_binary() {
     set_uptime(&fs, 1100);
     let run = dm_runner();
     extend(&fs, &run, 600).unwrap();
-    let timer = calls(&run).remove(0);
+    let calls = calls(&run);
+    assert_eq!(calls[0], format!("{COPY} version"));
+    assert_eq!(calls[1], "systemctl daemon-reload");
     assert!(
-        timer.contains(&format!("{BIN} rollback --txn {txn}")),
-        "{timer}"
+        calls[3].contains(&format!("{COPY} rollback --txn {txn}")),
+        "{calls:?}"
     );
-    // The hook was not rewritten.
     assert_eq!(
         fs.read(Path::new(deadman::HOOK)).unwrap(),
-        deadman::hook_unit(Path::new(BIN)).as_bytes()
+        deadman::hook_unit(Path::new(COPY)).as_bytes()
     );
+    assert!(fs.exists(Path::new(COPY)));
 }
 
 #[test]

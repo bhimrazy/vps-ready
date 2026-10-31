@@ -82,6 +82,9 @@ impl Runner for Host<'_> {
                 Output::success(format!("User {name} is not allowed to run sudo on vps.\n"))
             }
             ("systemd-run" | "systemctl", _) => Output::success(""),
+            (p, ["version"]) if p.ends_with("/bin/vps-ready") => {
+                Output::success(format!("{}\n", crate::VERSION_INFO))
+            }
             _ => return Err(SysError::NotFound(cmd.program.clone())),
         })
     }

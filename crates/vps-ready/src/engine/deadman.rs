@@ -236,7 +236,7 @@ WantedBy=multi-user.target
     )
 }
 
-/// Where [`install_copy`] puts the binary the timer and the boot hook run,
+/// Where `install_copy` puts the binary the timer and the boot hook run,
 /// for the state directory `state`.
 #[must_use]
 pub fn private_binary(state: &Path) -> std::path::PathBuf {
@@ -276,24 +276,89 @@ pub(super) fn install_copy(
     };
     fs.write_atomic(&dest, &bytes, owner)
         .map_err(|e| fail(e.to_string()))?;
-    check_binary(fs, &dest).map_err(|reason| EngineError::UnsafeBinary {
-        path: dest.display().to_string(),
-        reason,
-    })?;
+    check_copy(fs, state, &dest)?;
     Ok(dest)
 }
 
-/// The binary a re-arm of the pending transaction uses: the private copy if
-/// the boot hook runs it, so `confirm --extend` keeps the version that
-/// applied; otherwise `running`, for a transaction armed before the copy
-/// existed, whose hook names the installed binary.
-pub(super) fn rearm_binary(fs: &dyn Fs, state: &Path, running: &Path) -> std::path::PathBuf {
-    let copy = private_binary(state);
-    if hook_binary(fs).as_deref() == Some(copy.as_path()) {
-        copy
-    } else {
-        running.to_owned()
+/// [`check_binary`] on the copy, with advice for its own directory.
+fn check_copy(fs: &dyn Fs, state: &Path, dest: &Path) -> Result<(), EngineError> {
+    check_binary(fs, dest).map_err(|reason| {
+        EngineError::Deadman(format!(
+            "the copy at {}: {reason}; check the ownership and mode of {}",
+            dest.display(),
+            state.display()
+        ))
+    })
+}
+
+/// `install_copy`, then proof that the copy runs here (it can fail on a
+/// `noexec` mount or a damaged file): `<copy> version` must print what this
+/// binary prints. There is no fallback to the installed binary.
+pub(super) fn make_copy(
+    sys: Sys,
+    state: &Path,
+    src: &Path,
+) -> Result<std::path::PathBuf, EngineError> {
+    let copy = install_copy(sys.fs, state, src)?;
+    let cannot = |why: String| {
+        EngineError::Deadman(format!(
+            "the copy at {} cannot run: {why}; is {} mounted noexec?",
+            copy.display(),
+            state.display()
+        ))
+    };
+    let cmd = Cmd::new(copy.display().to_string())
+        .arg("version")
+        .timeout(Duration::from_secs(10));
+    let out = sys.runner.run(&cmd).map_err(|e| cannot(e.to_string()))?;
+    if !out.ok() {
+        return Err(cannot(format!(
+            "`version` exited with status {}: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
     }
+    let (got, want) = (
+        out.stdout_str().unwrap_or("").trim(),
+        crate::VERSION_INFO.to_string(),
+    );
+    if got != want {
+        return Err(cannot(format!("`version` printed {got:?}, not {want:?}")));
+    }
+    Ok(copy)
+}
+
+/// The binary a re-arm of the pending transaction uses, for `confirm
+/// --extend`. If the boot hook runs the private copy, that copy, so the
+/// version that applied keeps going; it is made again from `running` if it
+/// is gone. A hook that does not (armed before the copy existed) moves onto
+/// a new copy of `running`, so a reboot in the extended window still rolls
+/// back whatever happens to the installed binary.
+pub(super) fn prepare_rearm(
+    sys: Sys,
+    state: &Path,
+    running: &Path,
+) -> Result<std::path::PathBuf, EngineError> {
+    let copy = private_binary(state);
+    if hook_binary(sys.fs).as_deref() == Some(copy.as_path()) {
+        if sys.fs.exists(&copy) {
+            check_copy(sys.fs, state, &copy)?;
+            return Ok(copy);
+        }
+        checked(sys.fs, running)?;
+        return make_copy(sys, state, running);
+    }
+    checked(sys.fs, running)?;
+    let copy = make_copy(sys, state, running)?;
+    install_hook(sys, &copy).map_err(EngineError::Deadman)?;
+    Ok(copy)
+}
+
+fn checked(fs: &dyn Fs, binary: &Path) -> Result<(), EngineError> {
+    check_binary(fs, binary).map_err(|reason| EngineError::UnsafeBinary {
+        path: binary.display().to_string(),
+        reason,
+    })
 }
 
 /// The binary the installed boot hook runs, if the unit file is there and
