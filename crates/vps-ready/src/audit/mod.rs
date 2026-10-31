@@ -274,7 +274,7 @@ pub fn run(controls: Vec<Control>, facts: &Facts) -> Report {
             let outcome = evaluate(&control.check, facts);
             let mut manual_fix = None;
             if matches!(outcome, Outcome::Fail { .. })
-                && let Some(m) = sshd_match_override(&control.check, facts)
+                && let Some(m) = unfixable_override(&control.check, facts)
             {
                 control.fix = None;
                 manual_fix = Some(format!(
@@ -320,7 +320,7 @@ pub(crate) fn evaluate(check: &Check, facts: &Facts) -> Outcome {
                                 "{SSHD_CONFIG} could not be read to check its Match blocks"
                             ),
                         }
-                    } else if let Some(found) = sshd_match_override(check, facts) {
+                    } else if let Some(found) = facts.ssh.match_override(key, equals) {
                         Outcome::Fail {
                             found: found.to_string(),
                         }
@@ -805,16 +805,18 @@ fn apt_update_problems(apt: &AptUpdates) -> Vec<String> {
     problems
 }
 
-/// For an [`Check::SshdEffective`] whose `sshd -T` value passes, the first
-/// `Match` block line that sets the keyword to another value.
-fn sshd_match_override(check: &Check, facts: &Facts) -> Option<MatchOverride> {
+/// For a failed [`Check::SshdEffective`], the `Match` block line that no
+/// module can fix: any, when the `sshd -T` value passes; a `Match all` one
+/// otherwise, since plain `sshd -T` applies `Match all` and shows its value.
+fn unfixable_override(check: &Check, facts: &Facts) -> Option<MatchOverride> {
     let Check::SshdEffective { key, equals } = check else {
         return None;
     };
-    if facts.ssh.effective.as_ref()?.get(key) != Some(equals.as_str()) {
-        return None;
-    }
-    facts.ssh.match_override(key, equals)
+    let passes = facts.ssh.effective.as_ref()?.get(key) == Some(equals.as_str());
+    facts
+        .ssh
+        .match_override(key, equals)
+        .filter(|m| passes || m.criteria.eq_ignore_ascii_case("all"))
 }
 
 /// `["1", "2", "3"]` as `1, 2 or 3`.
@@ -1122,6 +1124,33 @@ mod tests {
             }
         );
         assert_eq!(finding.control.fix.as_deref(), Some("ssh.server"));
+    }
+
+    /// Plain `sshd -T` applies `Match all`, so its value is the effective
+    /// one, and ssh.server's drop-in cannot win over it.
+    #[test]
+    fn a_failing_match_all_is_not_claimed_by_a_module() {
+        let mut facts = with_sshd_config("Match ALL\n  X11Forwarding yes\n", &[]);
+        facts.ssh.effective = Some(SshdConfig::parse("x11forwarding yes\n"));
+        let finding = run(catalog().unwrap(), &facts)
+            .findings
+            .into_iter()
+            .find(|f| f.control.id == "SSH-005")
+            .unwrap();
+        assert_eq!(
+            finding.outcome,
+            Outcome::Fail {
+                found: "yes".to_owned()
+            }
+        );
+        assert_eq!(finding.control.fix, None);
+        assert_eq!(
+            finding.manual_fix.as_deref(),
+            Some(
+                "edit the Match block at /etc/ssh/sshd_config:2 by hand \
+                 (vps-ready does not edit Match blocks)"
+            )
+        );
     }
 
     #[test]

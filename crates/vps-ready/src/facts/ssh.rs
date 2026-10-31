@@ -5,7 +5,8 @@
 //! drop-ins. Reading the files ourselves would get those rules wrong, so
 //! `sshd -T` is the only source of truth for SSH checks. The files are read
 //! only to decide whether a drop-in is read early enough to win, and to find
-//! `Match` blocks, whose settings plain `sshd -T` does not show.
+//! `Match` blocks: one other than `Match all` is not in plain `sshd -T`'s
+//! output.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -83,8 +84,8 @@ impl fmt::Display for SshActivation {
 }
 
 /// A line in a `Match` block that sets an sshd keyword. It wins over the
-/// global value for the connections the block matches, and plain `sshd -T`
-/// does not show it.
+/// global value for the connections the block matches. A block other than
+/// `Match all` is not in plain `sshd -T`'s output.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MatchOverride {
     /// The value it sets, as written.

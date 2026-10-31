@@ -798,7 +798,8 @@ fn match_blocks_are_noted_and_not_claimed() {
         SshServer.notes(&overridden)[2..],
         ["PasswordAuthentication yes in a Match block \
           (/etc/ssh/sshd_config.d/50-cloud.conf:2, Match Address 203.0.113.0/24) stays as \
-          it is: vps-ready does not edit Match blocks"]
+          it is: vps-ready does not edit Match blocks; if it covers your own connection, \
+          apply will fail its check and undo the drop-in"]
     );
     let failed = failed(&overridden);
     assert_eq!(failed.len(), 1);

@@ -124,7 +124,9 @@ impl Module for SshServer {
         notes.extend(MANAGED.iter().filter_map(|&(key, keyword)| {
             let found = facts.ssh.match_override(key, VALUE)?;
             Some(format!(
-                "{keyword} {found} stays as it is: vps-ready does not edit Match blocks"
+                "{keyword} {found} stays as it is: vps-ready does not edit Match blocks; \
+                 if it covers your own connection, apply will fail its check and undo the \
+                 drop-in"
             ))
         }));
         notes
