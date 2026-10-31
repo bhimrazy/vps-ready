@@ -23,6 +23,15 @@ pub const PACKAGE: &str = "caddy";
 
 const CADDY_DIR: &str = "/etc/caddy";
 
+/// Where apt reads its sources.
+const SOURCES: &str = "/etc/apt/sources.list.d";
+
+/// The source `apt_source` writes for Caddy.
+const CADDY_SOURCES: &str = "/etc/apt/sources.list.d/caddy.sources";
+
+/// Caddy's repository, as any apt source names it.
+const CADDY_REPO: &str = "dl.cloudsmith.io/public/caddy/stable";
+
 /// The first line of a Caddyfile this module wrote. A Caddyfile that does
 /// not start with it is someone else's, and is never overwritten.
 const MARKER: &str = "# Written by vps-ready (deploy.proxy).";
@@ -211,9 +220,16 @@ impl Module for DeployProxy {
 
         let mut resources = Vec::new();
         let mut notes = Vec::new();
-        if installed {
-            notes.push("Caddy is already installed: only the Caddyfile is managed".to_owned());
-        } else {
+        // Planned for an installed Caddy too, where they have no change, so
+        // that it keeps a repository to get updates from.
+        if !configured_elsewhere(sys)? {
+            if installed && !sys.fs.exists(Path::new(CADDY_SOURCES)) {
+                notes.push(
+                    "caddy is installed without Caddy's repository; this adds it, so apt \
+                     updates Caddy from there"
+                        .to_owned(),
+                );
+            }
             resources.extend(apt_source(&AptSource::caddy(), &architecture(sys)?));
         }
         if ours {
@@ -235,8 +251,8 @@ impl Module for DeployProxy {
                  not used; move it away and plan again to have vps-ready write it"
             ));
         }
+        resources.push(package);
         if !installed {
-            resources.push(package);
             notes.push("rollback leaves Caddy installed".to_owned());
         }
         if !ours {
@@ -257,6 +273,29 @@ impl Module for DeployProxy {
             notes,
         })
     }
+}
+
+/// Whether an apt source other than [`CADDY_SOURCES`] already names Caddy's
+/// repository, e.g. `caddy-stable.list` from Caddy's install docs. A second
+/// one with another `Signed-By` makes `apt-get update` fail.
+fn configured_elsewhere(sys: Sys) -> Result<bool, ModuleError> {
+    let mut files = vec![Path::new("/etc/apt/sources.list").to_path_buf()];
+    match sys.fs.read_dir(Path::new(SOURCES)) {
+        Ok(paths) => files.extend(paths),
+        Err(SysError::NotFound(_)) => {}
+        Err(e) => return Err(e.into()),
+    }
+    for path in files
+        .iter()
+        .filter(|p| p.as_path() != Path::new(CADDY_SOURCES))
+    {
+        match sys.fs.read(path) {
+            Ok(bytes) if String::from_utf8_lossy(&bytes).contains(CADDY_REPO) => return Ok(true),
+            Ok(_) | Err(SysError::NotFound(_)) => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(false)
 }
 
 /// One block per site, after the header.

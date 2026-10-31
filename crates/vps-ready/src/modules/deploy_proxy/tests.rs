@@ -429,8 +429,8 @@ fn refuses_bad_upstreams() {
     }
 }
 
-/// A Caddyfile without the header is never overwritten: only Caddy is
-/// installed, with no reload, and nothing at all once it is.
+/// A Caddyfile without the header is never overwritten: only Caddy and its
+/// repository are planned, with no reload.
 #[test]
 fn leaves_a_hand_written_caddyfile_alone() {
     let fs = with_caddyfile("app.example.com {\n\tfile_server\n}\n");
@@ -459,22 +459,82 @@ fn leaves_a_hand_written_caddyfile_alone() {
 
     let runner = Host::default().with_caddy();
     let steps = steps_with(&params(ONE), &[], &fs, &runner).unwrap();
-    assert!(steps.resources.is_empty(), "{:?}", ids(&steps));
+    assert!(
+        !ids(&steps).contains(&format!("file:{CADDYFILE}")),
+        "{:?}",
+        ids(&steps)
+    );
+    assert!(steps.reloads.is_empty());
 }
 
-/// With Caddy installed, its own Caddyfile is rewritten, with no source.
+/// An installed Caddy keeps Caddy's repository: added when it is missing,
+/// with a note, left out when another source names it.
+#[test]
+fn keeps_caddys_repository_for_an_installed_caddy() {
+    let fs = fs();
+    let runner = Host::resolving(&["app.example.com"], &[HERE]).with_caddy();
+    let steps = steps(&params(ONE), &fs, &runner);
+    assert_eq!(
+        ids(&steps),
+        [
+            "directory:/etc/apt/keyrings",
+            "file:/etc/apt/keyrings/caddy.asc",
+            "file:/etc/apt/sources.list.d/caddy.sources",
+            "directory:/etc/caddy",
+            "file:/etc/caddy/Caddyfile",
+            "package:caddy",
+        ]
+    );
+    assert_eq!(
+        steps.notes[0],
+        "caddy is installed without Caddy's repository; this adds it, so apt updates Caddy \
+         from there"
+    );
+
+    // Caddy's install docs write `caddy-stable.list`.
+    let fs = fs.with_file(
+        "/etc/apt/sources.list.d/caddy-stable.list",
+        "deb [signed-by=/usr/share/keyrings/caddy-stable-archive-keyring.gpg] \
+         https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main\n",
+    );
+    let steps = steps_with(&params(ONE), &[], &fs, &runner).unwrap();
+    assert_eq!(
+        ids(&steps),
+        [
+            "directory:/etc/caddy",
+            "file:/etc/caddy/Caddyfile",
+            "package:caddy"
+        ]
+    );
+    assert_eq!(
+        steps.notes[0],
+        "rollback removes the Caddyfile and stops Caddy"
+    );
+}
+
+/// With Caddy and its repository in place, only its own Caddyfile changes.
 #[test]
 fn rewrites_its_own_caddyfile_when_caddy_is_installed() {
     let fs = with_caddyfile(&format!("{HEADER}\nold.example.com {{\n}}\n"));
     let runner = Host::resolving(&["app.example.com"], &[HERE]).with_caddy();
     let facts = facts();
     let params = params(ONE);
+    let state = StateDir::create(&fs, STATE, 0).unwrap();
+    let engine = Engine::lock(
+        &state,
+        Sys {
+            fs: &fs,
+            runner: &runner,
+        },
+    )
+    .unwrap();
     let first = plan(&fs, &runner, &facts, &params);
-    assert_eq!(change_ids(&first), ["file:/etc/caddy/Caddyfile"]);
-    assert_eq!(
-        first.modules[0].notes,
-        ["Caddy is already installed: only the Caddyfile is managed"]
-    );
+    engine
+        .apply(&first, &Deadman::default(), &mut |_| {})
+        .unwrap();
+    let params = self::params(SEVERAL);
+    let next = plan(&fs, &runner, &facts, &params);
+    assert_eq!(change_ids(&next), ["file:/etc/caddy/Caddyfile"]);
 }
 
 /// A domain that resolves elsewhere, or not at all, is a note; so is a
