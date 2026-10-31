@@ -2,6 +2,7 @@
 //! own nftables table, `inet vps_ready`, loaded by its own unit.
 
 use std::collections::BTreeSet;
+use std::path::Path;
 use std::time::Duration;
 
 use askama::Template;
@@ -13,7 +14,7 @@ use super::{
 use crate::engine::Reload;
 use crate::facts::{Facts, Init, OsFamily, Proto};
 use crate::resource::{Directory, File, Package, Resource, Service, Validate};
-use crate::sys::{Cmd, FileOwner, Sys};
+use crate::sys::{Cmd, FileOwner, Sys, SysError};
 
 /// Holds the ruleset. No package owns a directory it would fit in.
 pub const DIR: &str = "/etc/vps-ready";
@@ -440,6 +441,44 @@ fn proxied_note(facts: &Facts, ruleset: &Ruleset) -> Option<String> {
             show(&proxied, true)
         )
     })
+}
+
+/// The TCP ports this module accepts from anywhere: by the ruleset that a
+/// module before the caller plans, else by the one on disk from an earlier
+/// apply; `None` when there is neither.
+///
+/// # Errors
+///
+/// Reading the ruleset on disk.
+pub(crate) fn accepted_tcp(cx: &PlanCx, sys: Sys) -> Result<Option<BTreeSet<u16>>, ModuleError> {
+    let planned = cx.planned.iter().find_map(|r| match r {
+        Resource::File(f) if f.path == Path::new(RULESET) => Some(f.content.clone()),
+        _ => None,
+    });
+    let text = match planned {
+        Some(text) => text,
+        None => match sys.fs.read(Path::new(RULESET)) {
+            Ok(text) => text,
+            Err(SysError::NotFound(_)) => return Ok(None),
+            Err(e) => return Err(e.into()),
+        },
+    };
+    Ok(Some(tcp_ports(&String::from_utf8_lossy(&text))))
+}
+
+/// The ports of the `tcp dport { ... } accept` line that
+/// `templates/firewall.nft` renders.
+fn tcp_ports(ruleset: &str) -> BTreeSet<u16> {
+    ruleset
+        .lines()
+        .filter_map(|l| {
+            l.trim()
+                .strip_prefix("tcp dport {")?
+                .strip_suffix("} accept")
+        })
+        .flat_map(|ports| ports.split(','))
+        .filter_map(|p| p.trim().parse().ok())
+        .collect()
 }
 
 /// Whether `json`, the loaded table, has an input chain that drops by

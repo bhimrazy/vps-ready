@@ -53,6 +53,13 @@ expression: out
     "arms_safety_timer": false
   },
   {
+    "id": "deploy.proxy",
+    "title": "Serve sites over HTTPS with Caddy, proxied to their upstreams",
+    "applies": false,
+    "reason": "Caddy is installed only on Debian and Ubuntu so far",
+    "arms_safety_timer": false
+  },
+  {
     "id": "deploy.user",
     "title": "Set up a deploy account whose SSH keys are restricted",
     "applies": false,

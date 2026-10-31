@@ -13,8 +13,10 @@ use super::{EXIT_INTERRUPTED, wrap};
 use crate::VERSION_INFO;
 use crate::audit::{self, Outcome, Severity};
 use crate::config::{Profile, ProfileBuilder};
+use crate::engine::CADDYFILE;
 use crate::engine::{self, Engine, EngineError, StateDir};
 use crate::facts::{Facts, OsFamily, Proto, Virt};
+use crate::modules::deploy_proxy::{self, Caddyfile, Domain, Upstream};
 use crate::modules::firewall_inbound::{self, Allow};
 use crate::modules::user_admin::{self, SessionKeys};
 use crate::modules::{Applicability, Module, ModuleError};
@@ -187,6 +189,7 @@ fn ask(
     ask_ports(host, facts, prompt, out, &mut builder)?;
     let picked = prompt.confirm("Pick which modules to run yourself?", false)?
         && ask_modules(host, facts, prompt, out, &mut builder)?;
+    ask_sites(host, facts, prompt, out, &mut builder)?;
     Ok((builder, picked))
 }
 
@@ -504,6 +507,109 @@ fn ask_ports(
     Ok(())
 }
 
+/// Whether `profile` runs `deploy.proxy` with no sites yet: picked in the
+/// module list, for [`ask_sites`] to fill in.
+fn proxy_without_sites(profile: &Profile) -> bool {
+    profile.params("deploy.proxy").is_some_and(|p| {
+        p.get("sites")
+            .and_then(toml::Value::as_array)
+            .is_none_or(Vec::is_empty)
+    })
+}
+
+/// With `deploy.docker` still in the profile after the module list, or
+/// `deploy.proxy` picked there, the sites `deploy.proxy` serves: none is
+/// fine, and at least one adds the module.
+fn ask_sites(
+    host: &Host,
+    facts: &Facts,
+    prompt: &mut dyn Prompt,
+    out: &mut dyn Write,
+    builder: &mut ProfileBuilder,
+) -> anyhow::Result<()> {
+    let profile = builder.build(host.modules)?;
+    let picked = proxy_without_sites(&profile);
+    if profile.params("deploy.docker").is_none() && !picked {
+        return Ok(());
+    }
+    let Some(module) = find(host, "deploy.proxy") else {
+        return Ok(());
+    };
+    if let Applicability::NotApplicable { reason } = module.applicable(facts) {
+        writeln!(out, "HTTPS sites: skipped, {reason}.")?;
+        return Ok(());
+    }
+    say(
+        out,
+        "",
+        "Caddy can serve your apps over HTTPS and get their certificates. Each domain \
+         needs a DNS record for this server.",
+    )?;
+    if deploy_proxy::caddyfile_state(host.sys)? == Caddyfile::Other {
+        say(
+            out,
+            "  ",
+            &format!(
+                "{CADDYFILE} was not written by vps-ready, so these domains are not used \
+                 unless you move it away first."
+            ),
+        )?;
+    }
+    let mut sites: Vec<(String, String)> = Vec::new();
+    loop {
+        let question = if sites.is_empty() {
+            "Domain to serve, e.g. app.example.com (Enter for none)"
+        } else {
+            "Another domain (Enter for no more)"
+        };
+        let domain = prompt.input(question, "")?.trim().to_owned();
+        if domain.is_empty() {
+            break;
+        }
+        if let Err(why) = Domain::try_from(domain.clone()) {
+            say(out, "  ", &why)?;
+            continue;
+        }
+        if sites.iter().any(|(d, _)| *d == domain) {
+            say(out, "  ", &format!("{domain} is already listed"))?;
+            continue;
+        }
+        let upstream = loop {
+            let text = prompt.input(
+                &format!("Address of the app behind {domain}, e.g. 127.0.0.1:8080"),
+                "",
+            )?;
+            let text = text.trim().to_owned();
+            match Upstream::try_from(text.clone()) {
+                Ok(_) => break text,
+                Err(why) => say(out, "  ", &why)?,
+            }
+        };
+        sites.push((domain, upstream));
+    }
+    if sites.is_empty() {
+        if picked {
+            builder.remove("deploy.proxy");
+            writeln!(out, "  deploy.proxy is left out: it needs a domain.")?;
+        }
+        return Ok(());
+    }
+    let sites = sites
+        .into_iter()
+        .map(|(domain, upstream)| {
+            toml::Value::Table(toml::Table::from_iter([
+                ("domain".to_owned(), domain.into()),
+                ("upstream".to_owned(), upstream.into()),
+            ]))
+        })
+        .collect();
+    builder.set_params(
+        "deploy.proxy",
+        toml::Table::from_iter([("sites".to_owned(), toml::Value::Array(sites))]),
+    );
+    Ok(())
+}
+
 /// Every module, checked if the profile runs it. A list a module refuses
 /// to plan, e.g. `ssh.server` without an admin to log in with, is asked
 /// again. Returns whether the list changed.
@@ -549,7 +655,12 @@ fn ask_modules(
             };
             any = true;
         }
-        let profile = changed.build(host.modules)?;
+        // `deploy.proxy` picked here gets its sites from the next question.
+        let mut checked_builder = changed.clone();
+        if proxy_without_sites(&changed.build(host.modules)?) {
+            checked_builder.remove("deploy.proxy");
+        }
+        let profile = checked_builder.build(host.modules)?;
         let selected = Selection::default().select(host.modules, Some(&profile))?;
         match engine::plan(&selected, facts, host.sys) {
             Ok(_) => {

@@ -23,6 +23,7 @@ All other incoming ports are blocked.
   [ ] ssh.bruteforce: Ban addresses that keep failing to log in over SSH
   [x] kernel.sysctl: Harden kernel settings (does not apply: kernel settings belong to the host inside a container)
   [ ] updates.auto: Install security updates automatically
+  [ ] deploy.proxy: Serve sites over HTTPS with Caddy, proxied to their upstreams
   [ ] deploy.user: Set up a deploy account whose SSH keys are restricted
 
 kernel.sysctl: not applicable (kernel settings belong to the host inside a container)

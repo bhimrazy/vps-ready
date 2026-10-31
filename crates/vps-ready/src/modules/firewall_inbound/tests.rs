@@ -310,6 +310,41 @@ fn plans_the_bridges_with_deploy_docker_in_the_profile() {
     assert!(ruleset.contains("iifname \"br-*\" accept"), "{ruleset}");
 }
 
+/// The TCP ports a later module reads back: from the planned ruleset, else
+/// from the one on disk, else none.
+#[test]
+fn accepted_tcp_reads_the_planned_ruleset_then_the_one_on_disk() {
+    let facts = facts();
+    let web = steps(&facts, &params("allow = [\"80/tcp\", \"443/udp\"]")).unwrap();
+    let (fs, runner) = (FakeFs::new(), FakeRunner::new());
+    let sys = Sys {
+        fs: &fs,
+        runner: &runner,
+    };
+    let accepted = |planned: &[Resource], sys| {
+        let empty = toml::Table::new();
+        let cx = PlanCx {
+            facts: &facts,
+            params: &empty,
+            planned,
+        };
+        accepted_tcp(&cx, sys).unwrap()
+    };
+    let ssh: BTreeSet<u16> = ssh_ports(&facts);
+    let mut want = ssh.clone();
+    want.insert(80);
+    assert_eq!(accepted(&web.resources, sys), Some(want));
+    assert_eq!(accepted(&[], sys), None);
+
+    let minimal = steps(&facts, &toml::Table::new()).unwrap();
+    let fs = FakeFs::new().with_file(RULESET, ruleset_of(&minimal));
+    let sys = Sys {
+        fs: &fs,
+        runner: &runner,
+    };
+    assert_eq!(accepted(&[], sys), Some(ssh));
+}
+
 #[test]
 fn allow_takes_ports_with_a_protocol() {
     for good in ["22/tcp", "443/udp", "65535/tcp"] {
