@@ -11,6 +11,7 @@ The command is installed as `vps-ready` and also as `vpsready`. Run `vps-ready -
 
 | Command | What it does | Root | `--json` |
 |---|---|---|---|
+| [`vps-ready`](#vps-ready-with-no-command) | The guided setup, on a terminal | yes | no |
 | [`detect`](#detect) | Prints facts about the server | no | yes |
 | [`audit`](#audit) | Checks the server against the controls | for some checks | yes |
 | [`plan`](#plan) | Shows what `apply` would change | for some reads | yes |
@@ -18,6 +19,7 @@ The command is installed as `vps-ready` and also as `vpsready`. Run `vps-ready -
 | [`confirm`](#confirm) | Keeps changes that wait for a confirm | yes | no |
 | [`rollback`](#rollback) | Undoes a transaction | yes | no |
 | [`history`](#history) | Lists transactions | yes | yes |
+| [`modules`](#modules) | Lists the modules, or explains one | no | yes |
 | `version` | Prints version and build information | no | yes |
 
 ## Global flags
@@ -31,6 +33,23 @@ These work with every command.
 | `--no-color` | No colors. The `NO_COLOR` environment variable does the same, and colors are off when stdout is not a terminal |
 
 Exit code 2 always means an error, including a usage error.
+
+## vps-ready with no command
+
+```sh
+sudo vps-ready
+```
+
+The guided setup: it looks at the server, recommends the `web` or `minimal` profile, asks for the admin user and the open ports, shows the plan, applies it behind the [safety timer](/docs/guides/safety-net/) and prints the command that repeats it. It builds a profile and hands it to the same code as `apply`, so anything it does, `apply --profile` can repeat. The [quick start](/docs/quick-start/) shows the questions.
+
+It starts only when stdin and stdout are both terminals. Otherwise it prints help on stderr and exits 2, so scripts see no change. Before the first question it stops, with the message `apply` would give, when you are not root (`Run it with sudo: sudo vps-ready`), when the binary cannot be trusted to run from the safety timer, or when a transaction is pending or did not finish.
+
+| Exit code | Meaning |
+|---|---|
+| 0 | Applied, confirmed, nothing to do, or you answered no at `Apply N changes?` |
+| 1, 3, 4 | As for [`apply`](#apply) |
+| 2 | Error, or no terminal |
+| 130 | Ctrl-C at a question. Nothing was changed |
 
 ## detect
 
@@ -152,6 +171,16 @@ sudo vps-ready history
 ```
 
 Lists every transaction, newest first, with its state, modules and number of changes. Exits 0, or 2 on error.
+
+## modules
+
+```sh
+vps-ready modules [ID]
+```
+
+Without an ID, lists every module with its title, whether it applies to this server (and why not, when it does not) and whether it arms the safety timer. With an ID, such as `ssh.server`, it adds why the module matters, its params in the profile with their defaults, and the audit controls it fixes. It does not need root, and it uses the same facts as `detect` to decide what applies. `--json` works for both forms.
+
+Exits 0, or 2 on error, including an unknown ID.
 
 <Aside type="note">
 The state lives in `/var/lib/vps-ready` (root only): one directory per transaction under `txn/`, named after its UTC start time, such as `20261023T114246Z`.

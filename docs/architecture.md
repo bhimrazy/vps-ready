@@ -5,7 +5,7 @@
 | | Rust | Go | Bash | Python |
 |---|---|---|---|---|
 | Static binary incl. Alpine/musl + arm64 | Yes: `x86_64-` / `aarch64-unknown-linux-musl` targets; both targets link with `rust-lld` and the bundled musl CRT; no cross toolchain or arm64 runner needed | Yes: `CGO_ENABLED=0 GOARCH=arm64` | n/a (but bash is missing on Alpine; busybox vs GNU differences) | No: not present on Alpine/minimal Debian |
-| TUI | `inquire` (forms), `ratatui` (plan/diff view) | Charm `huh` (forms), `bubbletea` | whiptail (not everywhere) | textual (needs a runtime) |
+| TUI | `dialoguer` (prompts; `ratatui` plan/diff view deferred, see [the M4 plan](m4-plan.md#not-in-m4)) | Charm `huh` (forms), `bubbletea` | whiptail (not everywhere) | textual (needs a runtime) |
 | Who can read and contribute | Smaller among sysadmins, growing (sudo-rs, uutils coreutils) | Large infra crowd (Docker, k8s, Terraform, Tailscale, CrowdSec are Go) | Everyone, but quality varies | Ansible people |
 | Plan/diff/rollback/state machine | Best fit: exhaustive `match` means a new state or label doesn't compile until every use handles it | Comfortable, but a missing `switch` case compiles silently | Collapses at this size | Comfortable |
 | Release tooling | Hand-written workflow: `cargo build --locked`, cosign, attestation, `cargo-cyclonedx`; nFPM for packages | GoReleaser does build, nFPM packages, SBOM, cosign and attestations in one config | n/a | Painful |
@@ -32,7 +32,7 @@
 
 ```mermaid
 flowchart TB
-  cli["CLI / TUI<br/>src/cli (clap) · src/tui (inquire, ratatui) · src/report"]
+  cli["CLI / TUI<br/>src/cli (clap, wizard) · src/tui (dialoguer prompts) · src/report"]
   engine["Engine · src/engine<br/>order modules → collect resources → diff →<br/>snapshot → validate → apply → verify<br/>journal · deadman · rollback · lock"]
   modules["Modules (policy) · src/modules/*<br/>ssh, firewall, user, docker, ...<br/>+ templates/"]
   resources["Resources (idempotent primitives) · src/resource<br/>File, Directory, Sysctl, Package, Service, User, AuthorizedKeys"]
@@ -241,7 +241,7 @@ reboot:  the boot hook rolls back before sshd starts (reason deadman-reboot)
 - **New session, from the process tree.** sudo drops `SSH_CONNECTION`, so `confirm` walks `/proc` up to the nearest `sshd`/`sshd-session` process and compares its PID and start time with the session recorded at apply. tmux, screen, mosh, the console and `ControlMaster` connections all count as old.
 - **Deadlines** are `CLOCK_BOOTTIME` seconds plus the boot ID, so an NTP step during the window changes nothing.
 - **The boot hook** `/etc/systemd/system/vps-ready-deadman.service` (`DefaultDependencies=no`, `After=vps-ready-firewall.service`, `Before=ssh.service ssh.socket`, `TimeoutStartSec=120`) is written outside any transaction and enabled only while one is armed. It rolls back a transaction armed in an earlier boot, so sshd starts with the restored config; every command it runs has 20 s at most.
-- **The dead-man rollback is per resource.** Resources of a module with `force_restore` (`ssh.server`, `firewall.inbound`) are restored even if edited during the window; the edit is kept as `files/<n>.during`. Any other resource that changed is skipped and journaled with its by-hand step. Restores go first and the journal is best effort, so a full disk does not stop them. A manual `rollback` keeps the all-or-nothing check.
+- **The dead-man rollback is per resource.** Resources of a module with `force_restore` (`ssh.server`, `firewall.inbound`) are restored even if edited during the window; the edit is kept as `files/<n>.during`. Any other resource that changed is skipped and journaled with its by-hand step. Restores go first and the journal is best effort, so a full disk does not stop them. If a forced restore fails, the unforced ones after it (such as the admin `user.admin` set up) wait for a rerun, so the way in stays while the lock-down does. A manual `rollback` keeps the all-or-nothing check.
 - **Waiting.** `apply` counts down until the transaction leaves pending-confirm: exit 0 when confirmed, 1 when rolled back, 4 when Ctrl-C stopped the wait (the timer keeps running).
 
 ```mermaid
@@ -296,7 +296,7 @@ Commands that read this: `history`, `rollback [--txn|--last]`, `confirm`, later 
 Commands are `clap` derive structs in `src/cli`. Today `version`, `detect`, `audit`, `plan`, `apply`, `confirm`, `rollback` and `history` exist; the rest arrive with their milestones (see the GitHub milestones).
 
 ```
-vps-ready                      interactive wizard (default when a TTY)
+vps-ready                      the guided wizard on a terminal (stdin and stdout); help and exit 2 otherwise
 vps-ready detect               print facts (also --json)
 vps-ready audit [--all]         run controls → text | json | sarif | junit; non-zero exit on fail
                                text lists failed and unknown controls; --all adds passed and skipped
@@ -306,13 +306,17 @@ vps-ready confirm [--txn ID] [--extend [DUR]]
 vps-ready rollback [--last | --txn ID]
 vps-ready history | drift
 vps-ready export cloud-init --profile X > user-data.yaml
-vps-ready modules [ID]                  list modules; with an ID, what and why, params, controls fixed
+vps-ready modules [ID]                  list modules; with an ID, why, params and the controls fixed (no root; not the files touched: that needs a plan against a host)
 vps-ready version
 ```
 
+### The bare command: the wizard
+
+`Cli.command` is an `Option<Command>`. With no subcommand, `vps-ready` starts the wizard (`src/cli/wizard.rs`) when stdin and stdout are both terminals, and otherwise prints help on stderr and exits 2, so scripts and pipes see no change. The wizard is a front end, not a new path: it checks root, the binary path and pending transactions, asks its questions through `Prompt`, builds a `Profile` with a `ProfileBuilder` (which can also write it as TOML) and hands it to `apply_profile`, the code `apply` uses, so the plan, the confirm question and the safety timer are the ones `apply` has. Anything it does, `apply --profile <file>` can repeat. The design and its reasons are in [the M4 plan](m4-plan.md).
+
 ## Profile format: TOML
 
-TOML avoids YAML's foot-guns in a security config (`no` → `false`, the Norway problem, indentation surprises). Decoding is strict, with a `schema = 1` version field (planned: a JSON Schema for editor completion, with the wizard in M4):
+TOML avoids YAML's foot-guns in a security config (`no` → `false`, the Norway problem, indentation surprises). Decoding is strict, with a `schema = 1` version field (planned: a JSON Schema for editor completion, deferred from M4 to M6 with the config file, see [the M4 plan](m4-plan.md#not-in-m4)):
 - Every module's params struct has `#[serde(deny_unknown_fields)]`, and every section is checked when the profile is parsed, so a typo is an error that names the module, not a silently ignored line.
 - Planned: the same structs derive `schemars::JsonSchema`, so the published schema can't drift from the code.
 
@@ -347,7 +351,7 @@ Cargo.toml                 workspace: [workspace.package], [workspace.dependenci
 crates/
   vps-ready/                the app (lib + thin bin)
     src/main.rs  src/lib.rs
-    src/cli/               clap derive commands
+    src/cli/               clap derive commands; wizard.rs is the guided flow, module_docs.rs is `modules`
     src/sys/               Runner + Fs traits; RealRunner/RealFs; FakeRunner/FakeFs (feature "testing")
     src/facts/             read-only detection into a `Facts` struct (serde)
     src/platform/          PkgManager, ServiceManager, Firewall, Sshd traits + per-family data tables (planned)
@@ -358,7 +362,7 @@ crates/
     templates/             askama templates of the files modules write
     src/config/            TOML profiles (profiles/minimal.toml, web.toml), strict deserialize; JSON Schema via schemars (planned)
     src/report/            text | json | sarif | junit (planned)
-    src/tui/               (planned, M4) inquire forms, ratatui plan/diff view
+    src/tui/               the `Prompt` trait (select, multi-select, input, confirm) with a `dialoguer` implementation and a scripted one for tests; no flow logic. `ratatui` is deferred
   vpsready/                alias crate: the same command under the name `vpsready`
   sshd-config/             reader for sshd_config and its Includes, parser for `sshd -T`; published to crates.io
 profiles/                  README; the built-in profiles live in crates/vps-ready/src/config/profiles/ (paranoid planned)
@@ -375,4 +379,4 @@ README.md SECURITY.md CONTRIBUTING.md LICENSE-APACHE LICENSE-MIT CODE_OF_CONDUCT
 - **`sshd-config` as its own crate:** the parser is useful outside this tool, so it is its own crate, published on its own from v0.3.0. It has property tests; fuzz targets are planned.
 - Adding a module = adding one directory + registering it in one line.
 
-**Direct dependencies (keep it to roughly these):** `clap` (derive), `serde`, `serde_json`, `toml`, `thiserror` (library errors), `anyhow` (binary and CLI layer only), `similar` (unified diffs), `tracing` + `tracing-subscriber`, `askama` (templates), `owo-colors`, `rustix` (`*at` file calls that never follow a symlinked parent), `signal-hook` (Ctrl-C while apply waits for a confirm); later `schemars`. `std` covers `flock`, `fsync` and `fchown`. Dev-only: `insta` (snapshots), `proptest`, `tempfile`, `assert_cmd`, `predicates`. Later: `inquire` and `ratatui` (M4), `cargo-fuzz` targets. **No async runtime:** the tool is sequential (one transaction, a handful of subprocesses), so `std::process::Command` with timeouts is enough ([D18](decisions.md)).
+**Direct dependencies (keep it to roughly these):** `clap` (derive), `serde`, `serde_json`, `toml`, `thiserror` (library errors), `anyhow` (binary and CLI layer only), `similar` (unified diffs), `tracing` + `tracing-subscriber`, `askama` (templates), `owo-colors`, `rustix` (`*at` file calls that never follow a symlinked parent), `signal-hook` (Ctrl-C while apply waits for a confirm); `dialoguer` (the wizard's prompts, in `src/tui` only); later `schemars`. `std` covers `flock`, `fsync` and `fchown`. Dev-only: `insta` (snapshots), `proptest`, `tempfile`, `assert_cmd`, `predicates`. Later: `ratatui` (deferred, see [the M4 plan](m4-plan.md#not-in-m4)), `cargo-fuzz` targets. **No async runtime:** the tool is sequential (one transaction, a handful of subprocesses), so `std::process::Command` with timeouts is enough ([D18](decisions.md)).
