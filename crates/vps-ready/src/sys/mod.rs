@@ -289,6 +289,14 @@ pub trait Fs {
     /// [`SysError::NotFound`], [`SysError::Permission`] or [`SysError::Io`].
     fn metadata(&self, path: &Path) -> Result<FileMeta, SysError>;
 
+    /// The target of the symlink at `path`, such as `/proc/<pid>/exe`.
+    ///
+    /// # Errors
+    ///
+    /// [`SysError::NotFound`], [`SysError::Permission`] or [`SysError::Io`],
+    /// also when `path` is not a symlink.
+    fn read_link(&self, path: &Path) -> Result<PathBuf, SysError>;
+
     /// Replaces the file at `path` with `bytes`, `owner.mode`, `owner.uid`
     /// and `owner.gid`, so that after a crash it holds either the old or the
     /// new content, never a mix. Returns once the new file and its directory
@@ -651,6 +659,11 @@ impl Fs for RealFs {
             uid: meta.uid(),
             gid: meta.gid(),
         })
+    }
+
+    fn read_link(&self, path: &Path) -> Result<PathBuf, SysError> {
+        std::fs::read_link(self.host_path(path))
+            .map_err(|e| SysError::from_io(path.display().to_string(), e))
     }
 
     fn write_atomic(&self, path: &Path, bytes: &[u8], owner: FileOwner) -> Result<(), SysError> {

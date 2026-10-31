@@ -1,6 +1,7 @@
 //! `confirm` and `confirm --extend`: ending or moving the wait of a
 //! transaction pending a confirm, and watching that wait.
 
+use std::net::IpAddr;
 use std::path::Path;
 use std::time::Duration;
 
@@ -8,7 +9,7 @@ use super::deadman::{self, MAX_EXTEND, MAX_PENDING, unit_name};
 use super::journal::{self, Deadline, Event, Record, RollbackReason, TxnState};
 use super::run::{Engine, Open};
 use super::{EngineError, StateDir, Txn, id};
-use crate::facts::{Session, SessionId};
+use crate::facts::{Network, Session, SessionId};
 use crate::sys::Fs;
 
 /// Why `confirm` or `confirm --extend` refused.
@@ -61,6 +62,14 @@ pub enum Refusal {
     /// went live, so it proves nothing about them.
     #[error("this SSH session started before the changes went live")]
     OldSession,
+    /// The SSH login comes from the host itself (loopback) or from one of
+    /// its Docker networks, which the firewall accepts whatever its rules,
+    /// so it proves nothing about logins from outside.
+    #[error(
+        "this SSH login comes from {0}, on this server or one of its Docker networks, so \
+         it does not show that the server can still be reached from outside"
+    )]
+    Local(IpAddr),
     /// The SSH login came in through a port the host's sshd does not
     /// listen on: another sshd, which proves nothing about this one's config.
     #[error(
@@ -216,7 +225,8 @@ impl Engine<'_> {
     /// applied it, started after its changes went live, through one of
     /// `ports` (those the host's sshd listens on) or the port apply's
     /// session came in on, and as one of the users the plan named as
-    /// admins, if any. With no port known at all, it refuses.
+    /// admins, if any. With no port known at all, it refuses. A client on
+    /// loopback or in one of `docker` (Docker's networks) is refused too.
     /// Journals `confirmed` and
     /// the state, and only then stops its timers and disables the boot hook,
     /// best effort: a timer or a hook that runs anyway finds it confirmed.
@@ -231,6 +241,7 @@ impl Engine<'_> {
         id: Option<&str>,
         session: &Session,
         ports: &[u16],
+        docker: &[Network],
     ) -> Result<String, EngineError> {
         let w = self.waiting_txn(id)?;
         if w.session == Some(session.id) {
@@ -238,6 +249,11 @@ impl Engine<'_> {
         }
         if !session.is_new(w.session, w.live_since) {
             return Err(Refusal::OldSession.into());
+        }
+        // The firewall accepts all of loopback and Docker's bridges.
+        let client = session.client.ip().to_canonical();
+        if client.is_loopback() || docker.iter().any(|n| n.contains(client)) {
+            return Err(Refusal::Local(client).into());
         }
         // The firewall always accepts the port apply's session came in on.
         let mut ports = ports.to_vec();

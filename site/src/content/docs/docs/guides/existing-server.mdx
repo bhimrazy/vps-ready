@@ -69,7 +69,7 @@ vps-ready's rules do not show in `ufw status`. Use `sudo nft list table inet vps
 
 Docker and the firewall get along, with one thing you must know.
 
-- **Containers keep working.** When Docker is installed, traffic from `docker0` and `br-*` to the host is accepted, so containers can still reach services on the host. The plan notes the cost: a compromised container can reach every host service, as with no firewall.
+- **Containers keep working.** When Docker is installed, traffic from `docker0` and `br-*` to the host is accepted, so containers can still reach services on the host. A `br-*` interface that Docker did not name, such as a netplan or LXD bridge, is filtered like any other. The plan notes the cost: a compromised container can reach every host service, as with no firewall.
 - **Published ports skip the firewall.** Traffic to a port Docker publishes (`-p 5432:5432`) is forwarded to the container and never passes the input rules of any host firewall, ufw and firewalld included. The plan lists those ports, and the `FW-002` control fails while they are open to the world.
 - **Forwarding stays on.** `kernel.sysctl` never turns off IP forwarding, which Docker needs.
 

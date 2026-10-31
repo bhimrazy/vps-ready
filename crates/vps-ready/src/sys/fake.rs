@@ -390,6 +390,16 @@ impl Fs for FakeFs {
         })
     }
 
+    fn read_link(&self, path: &Path) -> Result<PathBuf, SysError> {
+        let state = self.lock();
+        match state.entries.get(path).map(|e| &e.node) {
+            Some(Node::Symlink(target)) => Ok(target.clone()),
+            Some(_) => Err(io_error(path, io::ErrorKind::InvalidInput)),
+            None if state.is_dir(path) => Err(io_error(path, io::ErrorKind::InvalidInput)),
+            None => Err(not_found(path)),
+        }
+    }
+
     fn write_atomic(&self, path: &Path, bytes: &[u8], owner: FileOwner) -> Result<(), SysError> {
         let mut state = self.lock();
         match state.entries.get(path).map(|e| &e.node) {

@@ -20,7 +20,12 @@ table inet vps_ready {
 {%- if docker %}
     # Containers reaching services on the host.
     iifname "docker0" accept
+{%- if not_docker.is_empty() %}
     iifname "br-*" accept
+{%- else %}
+    # Except the br-* interfaces that Docker did not name.
+    iifname "br-*"{% for name in not_docker %} iifname != "{{ name }}"{% endfor %} accept
+{%- endif %}
 {%- endif %}
     # The profile's `allow`, plus every current SSH port.
     tcp dport { {{ tcp|join(", ") }} } accept

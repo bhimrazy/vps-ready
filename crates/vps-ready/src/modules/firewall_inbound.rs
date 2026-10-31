@@ -50,9 +50,6 @@ WantedBy=sysinit.target
 /// Kill timeout of `nft -j list table` in [`Module::verify`].
 const NFT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Names sshd runs under: the listener, and on OpenSSH 9.8+ each session.
-const SSHD: [&str; 2] = ["sshd", "sshd-session"];
-
 /// The module's params.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -98,6 +95,8 @@ struct Ruleset {
     udp: Vec<u16>,
     /// Accept everything from Docker's bridges.
     docker: bool,
+    /// Interfaces named `br-*` that are not Docker's, which that leaves out.
+    not_docker: Vec<String>,
 }
 
 impl Ruleset {
@@ -114,8 +113,20 @@ impl Ruleset {
             tcp: tcp.into_iter().collect(),
             udp: udp.into_iter().collect(),
             docker: facts.docker,
+            not_docker: not_docker(facts),
         }
     }
+}
+
+/// The interfaces named `br-*` that Docker did not name. The ruleset keeps
+/// `br-*` so that Docker networks created later are covered too.
+fn not_docker(facts: &Facts) -> Vec<String> {
+    facts
+        .bridges
+        .iter()
+        .filter(|b| !b.docker)
+        .map(|b| b.name.clone())
+        .collect()
 }
 
 /// Every port SSH may be reached on now: [`crate::facts::Ssh::ports`], the
@@ -123,13 +134,8 @@ impl Ruleset {
 fn ssh_ports(facts: &Facts) -> BTreeSet<u16> {
     let mut ports: BTreeSet<u16> = facts.ssh.ports().into_iter().collect();
     ports.extend(facts.session.as_ref().map(|s| s.server.port()));
-    ports.extend(
-        facts
-            .listeners
-            .iter()
-            .filter(|l| l.proto == Proto::Tcp && l.processes.iter().any(|p| SSHD.contains(&&**p)))
-            .map(|l| l.port),
-    );
+    // Not every listener named sshd: any user can name a process so.
+    ports.extend(&facts.ssh.listening);
     ports
 }
 
@@ -228,6 +234,13 @@ impl Module for FirewallInbound {
                  can reach all of them, as with no firewall"
                     .to_owned(),
             );
+            let others = not_docker(facts);
+            if !others.is_empty() {
+                notes.push(format!(
+                    "filtered like any other interface, since Docker did not name them: {}",
+                    others.join(", ")
+                ));
+            }
         }
         let firewall = facts.firewall.as_ref();
         notes.extend(forwarded_note(facts));

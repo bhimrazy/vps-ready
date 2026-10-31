@@ -14,7 +14,7 @@ use crate::cli::{EXIT_PENDING, EXIT_ROLLED_BACK};
 use crate::engine::{
     self, Deadline, Engine, EngineError, Plan, Progress, Refusal, StateDir, TxnState, Watch,
 };
-use crate::facts::{Facts, NoSession, Session};
+use crate::facts::{Facts, Network, NoSession, Session};
 
 /// How long `confirm` waits for the lock, which a dead-man rollback may
 /// hold for a moment.
@@ -70,7 +70,13 @@ pub(in crate::cli) fn confirm(
             again(None)
         ),
     };
-    match engine.confirm(Some(&id), &session, &ports) {
+    let docker: Vec<Network> = facts
+        .bridges
+        .iter()
+        .filter(|b| b.docker)
+        .flat_map(|b| b.networks.iter().copied())
+        .collect();
+    match engine.confirm(Some(&id), &session, &ports, &docker) {
         Ok(txn) => {
             writeln!(
                 out,
@@ -86,6 +92,9 @@ pub(in crate::cli) fn confirm(
              and ssh connections shared through ControlMaster all count as old. {}",
             again(Some(&session))
         ),
+        Err(EngineError::Refused(r @ Refusal::Local(_))) => {
+            bail!("{r}. Confirm from your own computer. {}", again(None))
+        }
         Err(EngineError::Refused(r @ (Refusal::OtherSshd { .. } | Refusal::NotAdmin { .. }))) => {
             bail!("{r}. {}", again(Some(&session)))
         }

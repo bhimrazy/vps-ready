@@ -143,6 +143,7 @@ fn refuses_when_no_ssh_port_is_known() {
     let mut facts = facts();
     facts.session = None;
     facts.listeners.clear();
+    facts.ssh.listening.clear();
     facts.ssh.socket_ports.clear();
     facts.ssh.effective = None;
     assert!(reason(&facts).starts_with("the SSH port is unknown"));
@@ -197,15 +198,23 @@ fn ruleset_snapshots() {
         ruleset_of(&steps(&facts, &params("allow = [\"22/tcp\"]")).unwrap())
     );
     facts.docker = true;
+    let web = params("allow = [\"22/tcp\", \"80/tcp\", \"443/tcp\", \"443/udp\"]");
     insta::assert_snapshot!(
         "ruleset-web-docker",
-        ruleset_of(
-            &steps(
-                &facts,
-                &params("allow = [\"22/tcp\", \"80/tcp\", \"443/tcp\", \"443/udp\"]")
-            )
-            .unwrap()
-        )
+        ruleset_of(&steps(&facts, &web).unwrap())
+    );
+    // A bridge Docker did not name is left out of `br-*`.
+    facts.bridges = ["docker0", "br-0123456789ab", "br-lan", "br-wan"]
+        .iter()
+        .map(|name| crate::facts::Bridge {
+            name: (*name).to_owned(),
+            docker: !name.ends_with("an"),
+            networks: Vec::new(),
+        })
+        .collect();
+    insta::assert_snapshot!(
+        "ruleset-web-docker-other-bridges",
+        ruleset_of(&steps(&facts, &web).unwrap())
     );
     let unit = steps(&facts, &toml::Table::new()).unwrap();
     insta::assert_snapshot!(
@@ -253,6 +262,17 @@ fn listener(port: u16, process: &str) -> Listener {
     }
 }
 
+/// A listener's process name proves nothing: only the ports that the
+/// system's sshd, run by root, listens on count.
+#[test]
+fn a_listener_named_sshd_is_not_an_ssh_port() {
+    let mut facts = facts();
+    facts.listeners = vec![listener(2222, "sshd"), listener(2200, "sshd-session")];
+    facts.ssh.listening = vec![2022];
+    let model = Ruleset::new(&facts, &Params::default());
+    assert_eq!(model.tcp, [22, 2022]);
+}
+
 /// The ports of the `tcp dport` line of a rendered ruleset.
 fn rendered_tcp(text: &str) -> BTreeSet<u16> {
     let line = text
@@ -277,9 +297,8 @@ proptest! {
     ) {
         let mut facts = facts();
         facts.session = Some(session(&format!("198.51.100.5:{session_port}")));
-        facts.listeners = listen.iter().map(|p| listener(*p, "sshd-session"))
-            .chain(other.iter().map(|p| listener(*p, "postgres")))
-            .collect();
+        facts.ssh.listening = listen.clone();
+        facts.listeners = other.iter().map(|p| listener(*p, "postgres")).collect();
         facts.ssh.socket_ports = socket.clone();
         facts.ssh.activation = crate::facts::SshActivation::Socket;
         let sshd_t: String = config.iter().map(|p| format!("port {p}\n")).collect();
@@ -360,6 +379,11 @@ fn notes_what_it_leaves_alone() {
     // Docker's accept-policy INPUT is not worth a note; a dropping one is.
     fw.input_chains.push(chain("filter", "INPUT", false));
     fw.input_chains.push(chain("mine", "input", true));
+    facts.bridges.push(crate::facts::Bridge {
+        name: "br-lan".into(),
+        docker: false,
+        networks: Vec::new(),
+    });
     insta::assert_yaml_snapshot!(FirewallInbound.notes(&facts));
     // Over IPv6 only 5432/tcp is proxied, and only until `allow` has it.
     let plan_notes = |facts: &Facts, allow: &str| {

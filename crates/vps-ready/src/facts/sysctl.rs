@@ -224,6 +224,9 @@ mod tests {
         fn metadata(&self, path: &Path) -> Result<crate::sys::FileMeta, SysError> {
             self.inner.metadata(path)
         }
+        fn read_link(&self, path: &Path) -> Result<std::path::PathBuf, SysError> {
+            self.inner.read_link(path)
+        }
         fn write_atomic(
             &self,
             path: &Path,

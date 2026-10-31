@@ -36,6 +36,9 @@ pub struct Ssh {
     /// ssh.socket`, whether or not it is active. Under socket activation
     /// they, not `sshd -T`, are where sshd accepts connections.
     pub socket_ports: Vec<u16>,
+    /// TCP ports that the system's sshd listens on: `ss` listeners held by
+    /// a process that runs `/usr/sbin/sshd` as root. Empty without root.
+    pub listening: Vec<u16>,
     /// [`SSHD_CONFIG`] and the files it includes; `None` if it could not be
     /// read.
     #[serde(skip)]
@@ -102,12 +105,19 @@ impl Ssh {
     }
 }
 
-pub(super) fn detect(fs: &dyn Fs, runner: &dyn Runner, notices: &mut Vec<String>) -> Ssh {
+/// The SSH server, with `listening` from [`super::listeners::detect`].
+pub(super) fn detect(
+    fs: &dyn Fs,
+    runner: &dyn Runner,
+    listening: Vec<u16>,
+    notices: &mut Vec<String>,
+) -> Ssh {
     let ssh = Ssh {
         version: version(runner, notices),
         activation: activation(runner, notices),
         effective: effective(runner, notices),
         socket_ports: socket_ports(runner, notices),
+        listening,
         files: files(fs, notices),
         fail2ban: fail2ban(runner, notices),
     };
@@ -518,6 +528,7 @@ mod tests {
                 "port 22\nlistenaddress [::]:2222\nlistenaddress 0.0.0.0:22\n",
             )),
             socket_ports: vec![22, 2200],
+            listening: vec![2022],
             files: None,
             fail2ban: None,
         };

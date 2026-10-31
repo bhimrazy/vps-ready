@@ -32,8 +32,9 @@
 #       and the edit is in files/1.during.
 #     confirm: over real SSH logins as the cycle's user to the VM's own sshd,
 #       confirm is refused from the applying session, from a session opened
-#       before apply and through a ControlMaster connection; `--extend` works
-#       from any session; a new login confirms, apply exits 0, the hook and
+#       before apply, through a ControlMaster connection and from a new
+#       login to 127.0.0.1; `--extend` works from any session; a new login
+#       to the VM's own address confirms, apply exits 0, the hook and
 #       timers are off. (The admin and port rules are covered by unit tests;
 #       the admin rule gets a VM check with user.admin.)
 #     reboot: `systemd-analyze verify` of the boot hook finds no ordering
@@ -369,6 +370,10 @@ write_vr_ssh
 # local_ssh <ssh args...>: ssh from inside the VM to its own sshd.
 local_ssh() { vm sh /tmp/vr-ssh "$@"; }
 [ "$(local_ssh -o ControlPath=none "$user@127.0.0.1" id -un)" = "$user" ] || die "no SSH login to localhost as $user"
+# confirm refuses a client on loopback, so the confirming logins go to the
+# VM's own address on its default route instead.
+self_ip=$(vm ip -4 -o route get 192.0.2.1 | sed -n 's/.* src \([0-9.]*\).*/\1/p')
+[ -n "$self_ip" ] || die "no IPv4 address on the VM's default route"
 
 echo "== $distro: dead-man switch, confirm only from a new login"
 vm "rm -f /tmp/vr-go /tmp/vr-*.rc /tmp/vr-*.out /tmp/vr-cm"
@@ -415,7 +420,12 @@ rc=0; vr confirm --extend 3m || rc=$?
 [ "$rc" -eq 0 ] || die "confirm --extend exited $rc, expected 0"
 vr history
 
-rc=0; local_ssh -o ControlPath=none "$user@127.0.0.1" sudo vps-ready confirm || rc=$?
+rc=0; local_ssh -o ControlPath=none "$user@127.0.0.1" sudo vps-ready confirm >"$tmp/lo.out" 2>&1 || rc=$?
+cat "$tmp/lo.out"
+[ "$rc" -eq 2 ] || die "confirm from a login to 127.0.0.1 exited $rc, expected 2"
+grep -q 'comes from 127.0.0.1' "$tmp/lo.out" || die "the login to 127.0.0.1 was not refused as local"
+
+rc=0; local_ssh -o ControlPath=none "$user@$self_ip" sudo vps-ready confirm || rc=$?
 [ "$rc" -eq 0 ] || die "confirm from a new login exited $rc, expected 0"
 expect_newest confirmed
 expect_rc /tmp/vr-apply.rc 0
@@ -481,7 +491,7 @@ vm cat "$ssh_dropin"
 ! root_login || die "root still logs in over a new login during the window"
 password_methods
 ! password_methods | grep -q password || die "sshd still offers password logins"
-rc=0; local_ssh -o ControlPath=none "$admin@127.0.0.1" sudo vps-ready confirm || rc=$?
+rc=0; local_ssh -o ControlPath=none "$admin@$self_ip" sudo vps-ready confirm || rc=$?
 [ "$rc" -eq 0 ] || die "confirm as $admin exited $rc, expected 0"
 expect_newest confirmed
 expect_rc /tmp/vr-apply.rc 0

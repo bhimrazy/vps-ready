@@ -13,6 +13,7 @@ use serde::Serialize;
 
 use crate::sys::{Cmd, Fs, Output, Runner, SysError};
 
+pub mod bridges;
 pub mod firewall;
 pub mod listeners;
 pub mod os_release;
@@ -22,6 +23,7 @@ pub mod sysctl;
 pub mod updates;
 pub mod virt;
 
+pub use bridges::{Bridge, Network};
 pub use firewall::{Firewall, FirewallTools, InputChain, Ports, PublishedPort};
 pub use listeners::{Listener, Proto};
 pub use os_release::{OsFamily, OsRelease};
@@ -72,6 +74,9 @@ pub struct Facts {
     pub updates: Option<AptUpdates>,
     /// Whether Docker is installed. Docker changes firewall and sysctl rules.
     pub docker: bool,
+    /// `docker0` and the interfaces named `br-*`: Docker's bridges, and
+    /// others a firewall rule for `br-*` would also match.
+    pub bridges: Vec<Bridge>,
     /// Whether the kernel has AppArmor enabled. `None` when that could not
     /// be read.
     pub apparmor: Option<bool>,
@@ -129,8 +134,8 @@ pub fn collect(fs: &dyn Fs, runner: &dyn Runner, env: &Env) -> Result<Facts, Fac
     let os = detect_os(fs, &mut notices)?;
     let init = detect_init(fs, &mut notices)?;
     let virtualization = virt::detect(fs, runner, &mut notices);
-    let ssh = ssh::detect(fs, runner, &mut notices);
-    let listeners = listeners::detect(runner, &mut notices);
+    let (listeners, sshd_listening) = listeners::detect(fs, runner, &mut notices);
+    let ssh = ssh::detect(fs, runner, sshd_listening, &mut notices);
     let (firewall, nft) = firewall::detect(fs, runner, &mut notices);
     let firewall_tools = firewall::tools(fs, runner, nft, &mut notices);
     let ipv6 = firewall::has_ipv6(fs);
@@ -142,6 +147,7 @@ pub fn collect(fs: &dyn Fs, runner: &dyn Runner, env: &Env) -> Result<Facts, Fac
         None
     };
     let docker = DOCKER_PATHS.iter().any(|p| fs.exists(Path::new(p)));
+    let bridges = bridges::detect(fs, &mut notices);
     let apparmor = apparmor(fs, &mut notices);
     Ok(Facts {
         os,
@@ -156,6 +162,7 @@ pub fn collect(fs: &dyn Fs, runner: &dyn Runner, env: &Env) -> Result<Facts, Fac
         sysctl,
         updates,
         docker,
+        bridges,
         apparmor,
         notices,
     })
