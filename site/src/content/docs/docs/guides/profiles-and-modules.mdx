@@ -66,7 +66,7 @@ Every module reads the live state first, plans only what fails, and writes files
 
 `PermitRootLogin` · `PasswordAuthentication` · `KbdInteractiveAuthentication` · `PermitEmptyPasswords` · `X11Forwarding` · `HostbasedAuthentication` · `PermitUserEnvironment`
 
-It never touches `Port`, `ListenAddress`, `AllowGroups`, `AuthenticationMethods` or the crypto settings, and it never edits `sshd_config` itself. The SSH port stays 22. The `00-` name makes it win over cloud-init's `50-cloud-init.conf`, which turns passwords back on.
+It never touches `Port`, `ListenAddress`, `AllowGroups`, `AuthenticationMethods` or the crypto settings, and it never edits `sshd_config` itself or any `Match` block. A `Match` block that sets one of these keywords wins over the drop-in for the connections it matches: the plan notes it, and the audit keeps failing that control until you change the block. The SSH port stays 22. The `00-` name makes it win over cloud-init's `50-cloud-init.conf`, which turns passwords back on.
 
 **Checks first:** it refuses to turn off root or password logins unless a user other than root has an SSH key and sudo: the admin from `user.admin`, or the user you are logged in as. It also checks that `sshd_config` reads the drop-in before anything that could override it. After the reload, it verifies the effective config with `sshd -T` for the admin's own connection.
 

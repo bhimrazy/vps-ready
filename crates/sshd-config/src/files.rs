@@ -124,6 +124,9 @@ pub struct Directive {
     pub in_match: bool,
     /// How many `Include`s deep the file is; 0 for the main file.
     depth: usize,
+    /// The index of the `Match` line whose block holds this line (for a
+    /// `Match` line, the previous block's).
+    block: Option<usize>,
 }
 
 /// The answer to "is this drop-in read early enough".
@@ -167,7 +170,7 @@ impl Config {
     /// included file is skipped), a line is malformed, or includes nest too deep.
     pub fn read(source: &dyn Source, main: &Path) -> Result<Self, Error> {
         let mut directives = Vec::new();
-        load(source, main, 0, false, &mut directives)?;
+        load(source, main, 0, None, &mut directives)?;
         Ok(Self { directives })
     }
 
@@ -185,6 +188,19 @@ impl Config {
         self.directives
             .iter()
             .find(|d| !d.in_match && d.keyword.eq_ignore_ascii_case(keyword))
+    }
+
+    /// Every line inside a `Match` block that sets `keyword`, with the
+    /// `Match` line of its block, in the order sshd reads them. The block
+    /// may be in an including file, as for `Include` inside `Match`.
+    pub fn in_match_blocks<'a>(
+        &'a self,
+        keyword: &'a str,
+    ) -> impl Iterator<Item = (&'a Directive, &'a Directive)> + 'a {
+        self.directives.iter().filter_map(move |d| {
+            let block = self.directives.get(d.block?)?;
+            (d.keyword != "match" && d.keyword.eq_ignore_ascii_case(keyword)).then_some((d, block))
+        })
     }
 
     /// Whether `target`, a file that is or will be in an included directory,
@@ -213,8 +229,11 @@ impl Config {
             let Some(covering) = d.args.iter().position(|p| pattern_covers(p, target)) else {
                 continue;
             };
-            if d.in_match {
-                return self.enclosing_match(i);
+            if let Some(m) = d.block.and_then(|b| self.directives.get(b)) {
+                return IncludeCheck::AfterMatch {
+                    file: m.file.clone(),
+                    line: m.line,
+                };
             }
             // The files this Include reads before `target`, and what they
             // include: those of earlier patterns, then those of the covering
@@ -242,39 +261,20 @@ impl Config {
         }
         IncludeCheck::Missing
     }
-
-    /// The `Match` line whose block holds directive `i`: the nearest one
-    /// before it in the same file, else in the files that included it.
-    fn enclosing_match(&self, i: usize) -> IncludeCheck {
-        let before = &self.directives[..i];
-        let file = &self.directives[i].file;
-        let found = before
-            .iter()
-            .rev()
-            .find(|m| m.keyword == "match" && m.file == *file)
-            .or_else(|| before.iter().rev().find(|m| m.keyword == "match"));
-        match found {
-            Some(m) => IncludeCheck::AfterMatch {
-                file: m.file.clone(),
-                line: m.line,
-            },
-            None => IncludeCheck::Missing,
-        }
-    }
 }
 
 fn load(
     source: &dyn Source,
     path: &Path,
     depth: usize,
-    inherited_match: bool,
+    inherited: Option<usize>,
     out: &mut Vec<Directive>,
 ) -> Result<(), Error> {
     let text = source.read(path).map_err(|source| Error::Io {
         path: path.to_owned(),
         source,
     })?;
-    let mut in_match = inherited_match;
+    let mut block = inherited;
     for (i, raw) in text.lines().enumerate() {
         let line = i + 1;
         let parsed = split_line(raw).map_err(|reason| Error::Syntax {
@@ -290,11 +290,12 @@ fn load(
             line,
             keyword,
             args,
-            in_match,
+            in_match: block.is_some(),
             depth,
+            block,
         };
         match directive.keyword.as_str() {
-            "match" => in_match = true,
+            "match" => block = Some(out.len()),
             "include" => {
                 if depth >= MAX_DEPTH {
                     return Err(Error::TooDeep {
@@ -305,7 +306,7 @@ fn load(
                 out.push(directive);
                 for pattern in &patterns {
                     for file in expand(source, pattern)? {
-                        match load(source, &file, depth + 1, in_match, out) {
+                        match load(source, &file, depth + 1, block, out) {
                             Err(Error::Io { source, .. })
                                 if source.kind() == io::ErrorKind::NotFound => {}
                             result => result?,
