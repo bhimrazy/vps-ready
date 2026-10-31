@@ -303,21 +303,60 @@ fn an_existing_admin_account_is_named() {
     );
 }
 
+/// Groups named `names` without users, as `admin` on Ubuntu's cloud
+/// images.
+fn groups(names: &[&str]) -> FakeRunner {
+    runner(|r| {
+        names.iter().fold(r, |r, name| {
+            r.on(
+                "getent",
+                ["group", name],
+                Output::success(format!("{name}:x:118:\n")),
+            )
+        })
+    })
+}
+
+/// A root login with an `admin` group: `sysadmin` is offered.
+#[test]
+fn root_with_an_admin_group_is_offered_sysadmin() {
+    let fs = fs();
+    let runner = groups(&["admin"]);
+    let host = on(&fs, &runner);
+    let (text, profile) = scenario("admin-group", &host, vec![Enter, Enter, Enter, Enter]);
+    assert!(
+        text.contains("? Admin user for logging in: sysadmin\n  new account:"),
+        "{text}"
+    );
+    assert!(profile.contains("name = \"sysadmin\""), "{profile}");
+
+    // Neither is accepted: no default, so a name must be typed.
+    let runner = groups(&["admin", "sysadmin"]);
+    let host = on(&fs, &runner);
+    let answers = vec![Enter, Enter, Type("deploy".into()), Enter, Enter];
+    let (code, text) = wizard(&host, answers, "n\n");
+    assert_eq!(code, 0, "{text}");
+    assert!(
+        text.contains("? Admin user for logging in: \n  \"\" is not a user name"),
+        "{text}"
+    );
+}
+
 #[test]
 fn a_group_without_a_user_is_refused_and_asked_again() {
     let fs = fs();
-    let runner = runner(|r| {
-        r.on(
-            "getent",
-            ["group", "admin"],
-            Output::success("admin:x:118:\n"),
-        )
-    });
+    let runner = groups(&["admin"]);
     let host = on(&fs, &runner);
     let (text, profile) = scenario(
         "group-admin",
         &host,
-        vec![Enter, Enter, Type("deploy".into()), Enter, Enter],
+        vec![
+            Enter,
+            Type("admin".into()),
+            Type("deploy".into()),
+            Enter,
+            Enter,
+        ],
     );
     assert!(
         text.contains("  a group named admin exists, but no user"),

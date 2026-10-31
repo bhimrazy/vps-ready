@@ -259,7 +259,10 @@ fn ask_admin(
         .as_ref()
         .and_then(|s| s.user.as_deref())
         .filter(|u| *u != "root");
-    let default = session.unwrap_or(user_admin::DEFAULT_NAME);
+    let default = match session {
+        Some(user) => user,
+        None => root_default(host)?,
+    };
     let name = loop {
         let name = prompt.input("Admin user for logging in", default)?;
         let name = name.trim().to_owned();
@@ -323,6 +326,20 @@ fn ask_admin(
         )?;
     }
     Ok(())
+}
+
+/// The admin name offered to a root login: the first of `admin` and
+/// `sysadmin` that `user.admin` accepts, or none. Ubuntu's cloud images
+/// have an `admin` group and no such user, which `user.admin` refuses.
+fn root_default(host: &Host) -> anyhow::Result<&'static str> {
+    for name in [user_admin::DEFAULT_NAME, "sysadmin"] {
+        match user_admin::check_name(host.sys, name) {
+            Ok(_) => return Ok(name),
+            Err(ModuleError::Refused(_)) => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok("")
 }
 
 /// A pasted public key: `user.admin` would have no key to give the admin.
