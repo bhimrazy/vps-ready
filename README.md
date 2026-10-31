@@ -41,7 +41,7 @@ On the server, as root. Installation is three steps on purpose: download, read, 
 ```console
 # curl -fsSLO https://github.com/bhimrazy/vps-ready/releases/download/v0.4.0/install.sh
 # less install.sh
-# sh install.sh        # checks the SHA-256, verifies the signature if gh or cosign is installed (stops on failure; see --skip-verify)
+# sh install.sh        # checks the SHA-256, verifies the signature if cosign, or a logged-in gh, is installed (stops on failure; see --skip-verify)
 ```
 
 Then run `sudo vps-ready` with no arguments. This is the guided setup: it looks at the server, recommends a profile, asks three or four plain questions (what the server runs, the admin user, which ports to open), shows the plan, and applies it behind the safety timer. At the end it prints the command that repeats the same setup without questions. It needs a terminal; in a script or a pipe the bare command prints help.

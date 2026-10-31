@@ -25,7 +25,7 @@ Run these on the server. vps-ready is one static binary for Linux on x86_64 and 
 
 The install script downloads the release tarball for the machine, checks it against the SHA-256 embedded in the script, verifies the release signature when `gh` or `cosign` is installed, and copies the binary to `/usr/local/bin`. [View the install script](https://github.com/bhimrazy/vps-ready/releases/latest/download/install.sh).
 
-If `gh` or `cosign` is installed and the signature check fails, the install stops (use `--skip-verify` to override). With neither tool, the script says so and continues: the binary is then checked only against the checksums embedded in the script, so verify the script itself (below) if that matters to you.
+If `cosign`, or `gh` while logged in (`gh auth status`), is installed and the signature check fails, the install stops (use `--skip-verify` to override). A `gh` that is not logged in is skipped. With no usable tool, the script says so and continues: the binary is then checked only against the checksums embedded in the script, so verify the script itself (below) if that matters to you.
 
 | Option | What it does |
 |---|---|

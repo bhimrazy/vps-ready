@@ -79,7 +79,7 @@ Only the last two steps need `contents: write`, and they run in the `release` en
 3. **`install.sh`**, made "less bad":
    - POSIX sh, about 150 lines, wrapped in `main(){…}; main "$@"` so a truncated download can't half-run.
    - Attached to the immutable release, with the artifact hashes embedded.
-   - Verifies SHA256, and cosign/gh too if they're installed. A failed check stops the install unless `--skip-verify`; with neither tool it says so and relies on the embedded hashes. `--prefix` must not be group- or other-writable.
+   - Verifies SHA256, and cosign/gh too if they're installed. A failed check stops the install unless `--skip-verify`; a gh that is not logged in is skipped; with no usable tool it says so and relies on the embedded hashes. `--prefix` must not be group- or other-writable.
    - Has `--dry-run`.
    - The README shows download, read, run; `curl | sh` is not documented.
 

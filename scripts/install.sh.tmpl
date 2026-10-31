@@ -64,9 +64,11 @@ sha256() {
 
 # The SHA-256 check already happened; this proves the tarball came from
 # this repository's release workflow. A failing check is fatal; having no
-# tool to run it is not.
+# usable tool (gh counts only when logged in) is not.
 verify_signature() {
-	if has gh; then
+	if has gh && ! gh auth status >/dev/null 2>&1; then
+		say "gh is not logged in, skipping it"
+	elif has gh; then
 		if gh attestation verify "$tmp/$tarball" --repo "$REPO" \
 			--signer-workflow "$REPO/.github/workflows/release.yml" \
 			--source-ref "refs/tags/v$VERSION" >/dev/null 2>&1; then
@@ -74,7 +76,7 @@ verify_signature() {
 			return 0
 		fi
 		if ! has cosign; then
-			die "gh attestation verify failed (is gh logged in? try gh auth login); pass --skip-verify to install anyway"
+			die "gh attestation verify failed; pass --skip-verify to install anyway"
 		fi
 		say "gh attestation verify failed; trying cosign"
 	fi
@@ -90,7 +92,7 @@ verify_signature() {
 		say "signature verified with cosign"
 		return 0
 	fi
-	say "note: neither gh nor cosign is installed, so the binary was checked only against the checksums embedded in this script; install one and rerun to verify the signature (see docs/release.md)"
+	say "note: no usable gh (installed and logged in) or cosign, so the binary was checked only against the checksums embedded in this script; install one and rerun to verify the signature (see docs/release.md)"
 }
 
 # A group- or world-writable directory lets another user swap files in it.
