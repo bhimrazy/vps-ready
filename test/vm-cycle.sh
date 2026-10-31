@@ -581,7 +581,7 @@ wizard() {
 # exits 0 and printed the ssh line for <admin>. Sets $profile to what its
 # "Next time" line passes to --profile.
 wizard_done() {
-  rc=0; local_ssh -o ControlPath=none "$1@127.0.0.1" sudo vps-ready confirm || rc=$?
+  rc=0; local_ssh -o ControlPath=none "$1@$self_ip" sudo vps-ready confirm || rc=$?
   [ "$rc" -eq 0 ] || wizard_fail "confirm as $1 exited $rc, expected 0"
   expect_newest confirmed
   expect_rc /tmp/vr-wizard.rc 0
