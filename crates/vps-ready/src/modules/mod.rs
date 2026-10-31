@@ -13,6 +13,7 @@ use crate::sys::{Cmd, Sys, SysError};
 
 #[cfg(feature = "testing")]
 mod deadman_test;
+pub mod deploy_user;
 pub mod firewall_inbound;
 pub mod kernel_sysctl;
 pub mod ssh_bruteforce;
@@ -22,6 +23,7 @@ pub mod user_admin;
 
 #[cfg(feature = "testing")]
 pub use deadman_test::DeadmanTest;
+pub use deploy_user::DeployUser;
 pub use firewall_inbound::FirewallInbound;
 pub use kernel_sysctl::KernelSysctl;
 pub use ssh_bruteforce::SshBruteforce;
@@ -94,6 +96,16 @@ impl PlanCx<'_> {
     pub fn params<T: DeserializeOwned>(&self) -> Result<T, ModuleError> {
         parse_params(self.params)
     }
+}
+
+/// Docker Engine's package from Docker's repository, which creates the
+/// `docker` group: `deploy.user` with `docker = true` accepts a host
+/// without that group when a module before it plans this package.
+pub const DOCKER_PACKAGE: &str = "docker-ce";
+
+/// A [`ModuleError::Refused`] with `reason`.
+pub(crate) fn refuse<T>(reason: &str) -> Result<T, ModuleError> {
+    Err(ModuleError::Refused(reason.to_owned()))
 }
 
 /// Parses a module's table into its params `T`.
@@ -210,6 +222,8 @@ pub trait Module {
 }
 
 /// Every module, in the order the plan lists and applies them.
+/// `deploy.user` comes last, after any module that installs Docker and so
+/// creates the `docker` group.
 #[must_use]
 pub fn all() -> &'static [&'static dyn Module] {
     &[
@@ -219,6 +233,7 @@ pub fn all() -> &'static [&'static dyn Module] {
         &SshBruteforce::ROOT,
         &KernelSysctl::ROOT,
         &UpdatesAuto::ROOT,
+        &DeployUser,
     ]
 }
 
@@ -234,6 +249,7 @@ pub fn with_test() -> &'static [&'static dyn Module] {
         &SshBruteforce::ROOT,
         &KernelSysctl::ROOT,
         &UpdatesAuto::ROOT,
+        &DeployUser,
         &DeadmanTest,
     ]
 }

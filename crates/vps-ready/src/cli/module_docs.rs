@@ -180,7 +180,12 @@ mod tests {
     fn detail_snapshots() {
         let controls = audit::catalog().unwrap();
         let facts = host("debian-13", &[]);
-        for id in ["user.admin", "firewall.inbound", "kernel.sysctl"] {
+        for id in [
+            "user.admin",
+            "firewall.inbound",
+            "kernel.sysctl",
+            "deploy.user",
+        ] {
             let module = modules::all().iter().find(|m| m.id() == id).unwrap();
             for (kind, json) in [("text", false), ("json", true)] {
                 let out = text(|o| show(*module, &facts, &controls, json, o));

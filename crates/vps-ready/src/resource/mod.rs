@@ -12,6 +12,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::sys::{Cmd, FileKind, FileOwner, Output, Sys, SysError};
+use authorized_keys::gives_a_shell;
 
 pub(crate) mod authorized_keys;
 pub(crate) mod directory;
@@ -418,13 +419,15 @@ impl From<FileCopy> for FileOwner {
     }
 }
 
-/// The users other than root that `resources` give a non-empty
-/// `authorized_keys`, in order, each once.
+/// The users other than root that `resources` give at least one key line
+/// that can open a shell (`gives_a_shell`), in order, each once. A user
+/// whose every line has `restrict` or `command=`, such as `deploy.user`'s,
+/// is not taken for an admin who can log in and confirm.
 pub fn keyed_users<'a>(resources: impl IntoIterator<Item = &'a Resource>) -> Vec<String> {
     let mut users: Vec<String> = Vec::new();
     for resource in resources {
         if let Resource::AuthorizedKeys(keys) = resource
-            && !keys.keys.is_empty()
+            && keys.keys.iter().any(|k| gives_a_shell(k))
             && keys.user != "root"
             && !users.contains(&keys.user)
         {
@@ -537,10 +540,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn keyed_users_are_those_given_keys_other_than_root() {
+    fn keyed_users_are_those_given_plain_keys_other_than_root() {
         let keys = |user: &str, keys: &[&str]| {
             Resource::AuthorizedKeys(AuthorizedKeys {
                 user: user.into(),
+                exact: false,
                 keys: keys.iter().map(|k| (*k).to_owned()).collect(),
             })
         };
@@ -549,14 +553,38 @@ mod tests {
                 name: "nokeys".into(),
                 groups: Vec::new(),
                 password: Password::Locked,
+                comment: None,
             }),
             keys("root", &["ssh-ed25519 AAAA root"]),
             keys("empty", &[]),
             keys("admin", &["ssh-ed25519 AAAA a"]),
             keys("deploy", &["ssh-ed25519 AAAA d"]),
+            keys(
+                "ci",
+                &[
+                    "restrict ssh-ed25519 AAAA c",
+                    "command=\"/bin/true\" ssh-ed25519 AAAA e",
+                ],
+            ),
+            keys(
+                "mixed",
+                &["restrict ssh-ed25519 AAAA m", "ssh-ed25519 AAAA n"],
+            ),
+            keys(
+                "from",
+                &["from=\"203.0.113.0/24\",no-agent-forwarding ssh-ed25519 AAAA f"],
+            ),
+            keys(
+                "forced",
+                &["no-pty,COMMAND=\"echo \\\"a,b c\\\"\" ssh-ed25519 AAAA g"],
+            ),
+            keys("restricted-pty", &["Restrict,pty ssh-ed25519 AAAA h"]),
             keys("admin", &["ssh-ed25519 AAAA b"]),
         ];
-        assert_eq!(keyed_users(&resources), ["admin", "deploy"]);
+        assert_eq!(
+            keyed_users(&resources),
+            ["admin", "deploy", "mixed", "from"]
+        );
         assert!(keyed_users(&[]).is_empty());
     }
 

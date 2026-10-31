@@ -30,4 +30,8 @@ updates.auto
   Install security updates automatically
   Applies to this host.
 
+deploy.user
+  Set up a deploy account whose SSH keys are restricted
+  Applies to this host.
+
 Details: vps-ready modules <ID>

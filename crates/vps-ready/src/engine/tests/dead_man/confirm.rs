@@ -350,6 +350,7 @@ fn admins_are_the_keyed_users_else_the_applying_user() {
     let keys = |user: &str| {
         Resource::AuthorizedKeys(crate::resource::AuthorizedKeys {
             user: user.into(),
+            exact: false,
             keys: vec![KEY.into()],
         })
     };
