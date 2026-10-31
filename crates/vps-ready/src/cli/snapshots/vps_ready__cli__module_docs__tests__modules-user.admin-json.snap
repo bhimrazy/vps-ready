@@ -1,0 +1,29 @@
+---
+source: crates/vps-ready/src/cli/module_docs.rs
+expression: out
+---
+{
+  "id": "user.admin",
+  "title": "Set up an admin account that logs in with an SSH key and uses sudo",
+  "applies": true,
+  "arms_safety_timer": true,
+  "why": "Root and password logins are what attacks on SSH try first. A named account with a key and sudo is what lets ssh.server turn both off without locking you out.",
+  "params": [
+    {
+      "name": "name",
+      "default": "\"admin\"",
+      "help": "Login name of the admin account."
+    },
+    {
+      "name": "authorized_keys",
+      "default": "[]",
+      "help": "Public keys the account accepts; empty uses the keys of the user this session logged in as."
+    },
+    {
+      "name": "sudo",
+      "default": "\"nopasswd\"",
+      "help": "\"nopasswd\" or \"password\" (the sudo group, for an account with a password)."
+    }
+  ],
+  "controls": []
+}

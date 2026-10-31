@@ -112,6 +112,17 @@ pub fn parse_params<T: DeserializeOwned>(params: &toml::Table) -> Result<T, Modu
 #[serde(deny_unknown_fields)]
 struct NoParams {}
 
+/// One param of a module, for `vps-ready modules <ID>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct ParamDoc {
+    /// The key in the module's profile table.
+    pub name: &'static str,
+    /// The value used when the key is absent, as written in TOML.
+    pub default: &'static str,
+    /// One line.
+    pub help: &'static str,
+}
+
 /// What a module plans: its resources and the reloads they need.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ModuleSteps {
@@ -150,6 +161,10 @@ pub trait Module {
     /// changed since apply, since leaving them is the lockout.
     fn force_restore(&self) -> bool {
         false
+    }
+    /// The params its profile table accepts; empty for a module with none.
+    fn params_doc(&self) -> &'static [ParamDoc] {
+        &[]
     }
     /// Whether it can run on this host.
     fn applicable(&self, facts: &Facts) -> Applicability;
@@ -263,6 +278,20 @@ mod tests {
                     "{}: {err}",
                     m.id()
                 );
+            }
+        }
+    }
+
+    /// Each documented param, set to its documented default, is accepted.
+    #[test]
+    fn documented_params_are_accepted() {
+        for m in all() {
+            for p in m.params_doc() {
+                let params: toml::Table = toml::from_str(&format!("{} = {}", p.name, p.default))
+                    .unwrap_or_else(|e| panic!("{}.{}: {e}", m.id(), p.name));
+                if let Err(e) = m.check_params(&params) {
+                    panic!("{}.{}: {e}", m.id(), p.name);
+                }
             }
         }
     }

@@ -46,6 +46,14 @@ pub enum SysError {
     /// A write was refused because the target is a symlink.
     #[error("refusing to write through a symlink: {0}")]
     Symlink(String),
+    /// A read was refused because the target is not a regular file.
+    #[error("{path} is not a regular file ({kind:?})")]
+    NotRegular {
+        /// The path.
+        path: String,
+        /// What it is instead.
+        kind: FileKind,
+    },
     /// A lock is held through another open file, usually by another process.
     #[error("{0} is locked by another process")]
     Locked(String),
@@ -217,6 +225,8 @@ pub struct FileMeta {
     pub uid: u32,
     /// Owner group id.
     pub gid: u32,
+    /// Number of hard links.
+    pub nlink: u64,
 }
 
 impl FileMeta {
@@ -271,6 +281,18 @@ pub trait Fs {
     ///
     /// [`SysError::NotFound`], [`SysError::Permission`] or [`SysError::Io`].
     fn read(&self, path: &Path) -> Result<Vec<u8>, SysError>;
+
+    /// Reads the regular file at `path` and returns its metadata, both from
+    /// one open file, so that checks of the metadata hold for the bytes.
+    /// Follows no symlink at `path`, nor on [`RealFs`] at a parent below
+    /// its root, and does not wait on a FIFO.
+    ///
+    /// # Errors
+    ///
+    /// [`SysError::Symlink`] if `path` or a parent is a symlink;
+    /// [`SysError::NotRegular`] if it is a directory or special file;
+    /// [`SysError::NotFound`], [`SysError::Permission`] or [`SysError::Io`].
+    fn read_nofollow(&self, path: &Path) -> Result<(Vec<u8>, FileMeta), SysError>;
 
     /// Whether `path` exists (following symlinks).
     fn exists(&self, path: &Path) -> bool;
@@ -483,8 +505,8 @@ fn join(handle: Drain, program: &str) -> Result<Vec<u8>, SysError> {
 /// a convenience, not a security boundary: absolute symlinks inside it still
 /// resolve against the host when read.
 ///
-/// [`Fs::write_atomic`], [`Fs::remove`], [`Fs::create_dir`] and
-/// [`Fs::remove_dir`] open the parent directory one component at a time
+/// [`Fs::read_nofollow`], [`Fs::write_atomic`], [`Fs::remove`],
+/// [`Fs::create_dir`] and [`Fs::remove_dir`] open the parent directory one component at a time
 /// without following symlinks, then work on that fd with `*at` calls. A
 /// directory on the path that its owner swaps for a symlink, even after the
 /// caller checked it, makes them fail rather than act elsewhere.
@@ -614,6 +636,51 @@ impl Fs for RealFs {
             .map_err(|e| SysError::from_io(path.display().to_string(), e))
     }
 
+    fn read_nofollow(&self, path: &Path) -> Result<(Vec<u8>, FileMeta), SysError> {
+        let subject = || path.display().to_string();
+        let (dir, name) = self.open_parent(path)?;
+        // Without O_NONBLOCK, opening a FIFO waits for a writer.
+        let flags =
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::NOCTTY | OFlags::CLOEXEC;
+        let not_regular = |kind| SysError::NotRegular {
+            path: subject(),
+            kind,
+        };
+        let fd = match rfs::openat(&dir, name, flags, Mode::empty()) {
+            Ok(fd) => fd,
+            // What opening a socket fails with (`EOPNOTSUPP` on macOS).
+            Err(rustix::io::Errno::NXIO | rustix::io::Errno::OPNOTSUPP) => {
+                return Err(not_regular(FileKind::Other));
+            }
+            Err(e) => return Err(errno(subject(), e)),
+        };
+        let mut file = File::from(fd);
+        let meta = file
+            .metadata()
+            .map_err(|e| SysError::from_io(subject(), e))?;
+        let ft = meta.file_type();
+        if !ft.is_file() {
+            let kind = if ft.is_dir() {
+                FileKind::Dir
+            } else {
+                FileKind::Other
+            };
+            return Err(not_regular(kind));
+        }
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)
+            .map_err(|e| SysError::from_io(subject(), e))?;
+        let meta = FileMeta {
+            kind: FileKind::File,
+            len: bytes.len() as u64,
+            mode: meta.mode() & 0o7777,
+            uid: meta.uid(),
+            gid: meta.gid(),
+            nlink: meta.nlink(),
+        };
+        Ok((bytes, meta))
+    }
+
     fn exists(&self, path: &Path) -> bool {
         self.host_path(path).exists()
     }
@@ -650,6 +717,7 @@ impl Fs for RealFs {
             mode: meta.mode() & 0o7777,
             uid: meta.uid(),
             gid: meta.gid(),
+            nlink: meta.nlink(),
         })
     }
 
@@ -985,6 +1053,71 @@ mod tests {
                 gid: 0,
             },
         );
+    }
+
+    /// The [`Fs::read_nofollow`] behavior shared by [`RealFs`] and
+    /// [`fake::FakeFs`]. `fs` has `/etc/real`, which holds `real\n`, a
+    /// symlink `/etc/link` to it, a symlink `/lnk` to `/etc`, a FIFO
+    /// `/etc/fifo` and a file `/etc/linked` with two hard links.
+    fn read_nofollow_contract(fs: &dyn Fs) {
+        let (bytes, meta) = fs.read_nofollow(Path::new("/etc/real")).unwrap();
+        assert_eq!(bytes, b"real\n");
+        assert_eq!((meta.kind, meta.len, meta.nlink), (FileKind::File, 5, 1));
+        let (_, meta) = fs.read_nofollow(Path::new("/etc/linked")).unwrap();
+        assert_eq!(meta.nlink, 2);
+        for path in ["/etc/link", "/lnk/real"] {
+            let err = fs.read_nofollow(Path::new(path)).unwrap_err();
+            assert!(matches!(err, SysError::Symlink(_)), "{path}: {err:?}");
+        }
+        // A FIFO without a writer is refused, not waited on.
+        for (path, kind) in [("/etc/fifo", FileKind::Other), ("/etc", FileKind::Dir)] {
+            let err = fs.read_nofollow(Path::new(path)).unwrap_err();
+            assert!(
+                matches!(err, SysError::NotRegular { kind: k, .. } if k == kind),
+                "{path}: {err:?}"
+            );
+        }
+        let err = fs.read_nofollow(Path::new("/etc/nope")).unwrap_err();
+        assert!(matches!(err, SysError::NotFound(_)), "{err:?}");
+    }
+
+    #[test]
+    fn real_fs_reads_without_following() {
+        let (dir, _) = real_root();
+        let etc = dir.path().join("etc");
+        std::fs::write(etc.join("linked"), "x\n").unwrap();
+        std::fs::hard_link(etc.join("linked"), etc.join("only/other-name")).unwrap();
+        std::os::unix::fs::symlink(&etc, dir.path().join("lnk")).unwrap();
+        let out = Command::new("mkfifo")
+            .arg(etc.join("fifo"))
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        let fs = RealFs::new(dir.path());
+        read_nofollow_contract(&fs);
+        let _socket = std::os::unix::net::UnixListener::bind(etc.join("sock")).unwrap();
+        let err = fs.read_nofollow(Path::new("/etc/sock")).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                SysError::NotRegular {
+                    kind: FileKind::Other,
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn fake_fs_reads_without_following() {
+        let fs = fake::FakeFs::new()
+            .with_file("/etc/real", "real\n")
+            .with_symlink("/etc/link", "/etc/real")
+            .with_symlink("/lnk", "/etc")
+            .with_fifo("/etc/fifo")
+            .with_linked_file("/etc/linked", "x\n", 2);
+        read_nofollow_contract(&fs);
     }
 
     /// The lock behavior shared by [`RealFs`] and [`fake::FakeFs`]. `fs` has

@@ -7,7 +7,7 @@ use std::time::Duration;
 use askama::Template;
 use serde::Deserialize;
 
-use super::{Applicability, Module, ModuleError, ModuleSteps, PlanCx, parse_params};
+use super::{Applicability, Module, ModuleError, ModuleSteps, ParamDoc, PlanCx, parse_params};
 use crate::engine::Reload;
 use crate::facts::{Facts, Init, OsFamily, Proto};
 use crate::resource::{Directory, File, Package, Resource, Service, Validate};
@@ -66,9 +66,9 @@ struct Params {
 /// A port in `allow`: `<port>/tcp` or `<port>/udp`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "String")]
-struct Allow {
-    port: u16,
-    proto: Proto,
+pub(crate) struct Allow {
+    pub(crate) port: u16,
+    pub(crate) proto: Proto,
 }
 
 impl TryFrom<String> for Allow {
@@ -120,7 +120,7 @@ impl Ruleset {
 
 /// Every port SSH may be reached on now: [`crate::facts::Ssh::ports`], the
 /// applying session's and every port an sshd process listens on.
-fn ssh_ports(facts: &Facts) -> BTreeSet<u16> {
+pub(crate) fn ssh_ports(facts: &Facts) -> BTreeSet<u16> {
     let mut ports: BTreeSet<u16> = facts.ssh.ports().into_iter().collect();
     ports.extend(facts.session.as_ref().map(|s| s.server.port()));
     ports.extend(
@@ -162,6 +162,14 @@ impl Module for FirewallInbound {
          database left at its defaults, is reachable from the internet. This one \
          accepts SSH, the ports the profile allows and replies to the server's own \
          connections, and drops the rest."
+    }
+
+    fn params_doc(&self) -> &'static [ParamDoc] {
+        &[ParamDoc {
+            name: "allow",
+            default: "[]",
+            help: "Ports to accept from anywhere, e.g. [\"443/tcp\", \"443/udp\"]; the SSH ports are always accepted.",
+        }]
     }
 
     fn needs_deadman(&self) -> bool {

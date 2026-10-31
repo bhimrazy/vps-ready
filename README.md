@@ -42,18 +42,28 @@ On the server, as root. Installation is three steps on purpose: download, read, 
 # curl -fsSLO https://github.com/bhimrazy/vps-ready/releases/download/v0.3.0/install.sh
 # less install.sh
 # sh install.sh        # checks the SHA-256, verifies the signature if gh or cosign is installed
+```
+
+Then run `sudo vps-ready` with no arguments (new in v0.4). This is the guided setup: it looks at the server, recommends a profile, asks three or four plain questions (what the server runs, the admin user, which ports to open), shows the plan, and applies it behind the safety timer. At the end it prints the command that repeats the same setup without questions. It needs a terminal; in a script or a pipe the bare command prints help.
+
+The same steps without the questions, each of which you can run on its own:
+
+```console
 # vps-ready detect
 # vps-ready audit                 # failures and unknowns; --all also lists the passing controls
 # vps-ready plan                  # what would change, and why; nothing is written
 # vps-ready apply                 # kernel settings and automatic updates: shows the plan, asks, then applies
 # vps-ready apply --profile minimal   # also an admin user, SSH hardening and a firewall; waits for a confirm
+# vps-ready confirm               # from a NEW SSH login, to keep the changes
 # vps-ready rollback --last       # restores the previous state
+# vps-ready modules               # what each module does; `modules ssh.server` explains one
 ```
 
-With `--profile minimal` (or `web`), `apply` ends like this, with your own admin, address and port:
+With `--profile minimal` (or `web`), and in the wizard, `apply` ends like this, with your own admin, address and port:
 
 ```text
-Changes are live. Open a NEW terminal and run:
+Changes are live. To keep them, open a NEW terminal on your computer and run
+this to show you can still log in:
 
     ssh -t -o ControlPath=none -p 22 admin@203.0.113.10 sudo vps-ready confirm
 
@@ -74,12 +84,14 @@ The command is also installed as `vpsready`, without the hyphen. With Rust insta
 
 | Command | What happens | Status |
 |---|---|---|
+| `vps-ready` | The guided setup on a terminal: recommends a profile, asks a few questions, then plans and applies it like `apply`. Prints help when stdin or stdout is not a terminal | v0.4 |
 | `vps-ready detect` | Read-only facts: distro, init system, virtualization, effective SSH config, listening ports, whether Docker is present | available |
 | `vps-ready audit` | Checks the host against controls with stable IDs (for example `SSH-002`), each with the reason it matters. Lists only failed and unknown controls, and `--all` adds the rest. Text or JSON (`--json`, always complete); exits 0 only when no control fails or is unknown | available |
 | `vps-ready plan` | A diff of every file and setting that would change, with a one-line reason for each | available |
 | `vps-ready apply` | Snapshots originals, validates, writes atomically and rolls back if anything fails. Changes that could lock you out arm a dead-man timer first and wait for a confirm. Exit codes: 0 applied or confirmed, 1 failed or rolled back, 2 error, 3 rollback did not complete, 4 still pending (you pressed Ctrl-C while it waited; the timer keeps running) | available |
 | `vps-ready confirm` | Run from a **new** SSH login, as the admin, to prove the new configuration works (no code to type). Without it, the change reverts automatically. `--extend` adds time | available |
 | `vps-ready rollback` | Restores the previous state from the transaction journal (`--last` or `--txn ID`); `vps-ready history` lists transactions | available |
+| `vps-ready modules [ID]` | Lists the modules and whether each applies to this server; with an ID, why it matters, its params and the audit controls it fixes. No root needed. `--json` too | v0.4 |
 | `vps-ready export cloud-init` | Turns the profile you chose into `user-data` for your next servers | M5 |
 
 Hardening is grouped into modules:
@@ -139,7 +151,7 @@ Architectures: x86_64 and aarch64, as static musl binaries. Windows, BSD, Kubern
 | [Testing strategy](docs/testing.md) | Unit tests with fakes, systemd containers, real VMs, nightly cloud runs |
 | [Decisions](docs/decisions.md) | What is decided and why, and what is still open |
 
-The roadmap lives in the [GitHub milestones](https://github.com/bhimrazy/vps-ready/milestones): M0 skeleton, M1 read-only `detect` and `audit` (v0.1.0), M2 engine and safe modules (v0.2.0), M3 SSH, firewall and dead-man switch (v0.3.0), M4 interactive wizard, M5 deployment readiness, M6 more distros.
+The roadmap lives in the [GitHub milestones](https://github.com/bhimrazy/vps-ready/milestones): M0 skeleton, M1 read-only `detect` and `audit` (v0.1.0), M2 engine and safe modules (v0.2.0), M3 SSH, firewall and dead-man switch (v0.3.0), M4 interactive wizard (merged, in the next release), M5 deployment readiness, M6 more distros.
 
 ## Development
 
