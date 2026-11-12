@@ -5,5 +5,6 @@ expression: facts.os
 id: fedora
 id_like: []
 version_id: "42"
+codename: ~
 pretty_name: Fedora Linux 42 (Server Edition)
 family: rhel

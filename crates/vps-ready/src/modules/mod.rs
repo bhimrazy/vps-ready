@@ -13,6 +13,7 @@ use crate::sys::{Cmd, Sys, SysError};
 
 #[cfg(feature = "testing")]
 mod deadman_test;
+pub mod deploy_docker;
 pub mod deploy_user;
 pub mod firewall_inbound;
 pub mod kernel_sysctl;
@@ -23,6 +24,7 @@ pub mod user_admin;
 
 #[cfg(feature = "testing")]
 pub use deadman_test::DeadmanTest;
+pub use deploy_docker::DeployDocker;
 pub use deploy_user::DeployUser;
 pub use firewall_inbound::FirewallInbound;
 pub use kernel_sysctl::KernelSysctl;
@@ -99,8 +101,9 @@ impl PlanCx<'_> {
 }
 
 /// Docker Engine's package from Docker's repository, which creates the
-/// `docker` group: `deploy.user` with `docker = true` accepts a host
-/// without that group when a module before it plans this package.
+/// `docker` group. `deploy.docker` plans it when Docker is not installed
+/// yet; a module after it that sees it planned, such as `deploy.user` with
+/// `docker = true` or `firewall.inbound`, plans as if Docker were present.
 pub const DOCKER_PACKAGE: &str = "docker-ce";
 
 /// A [`ModuleError::Refused`] with `reason`.
@@ -222,13 +225,15 @@ pub trait Module {
 }
 
 /// Every module, in the order the plan lists and applies them.
-/// `deploy.user` comes last, after any module that installs Docker and so
-/// creates the `docker` group.
+/// `deploy.docker` comes before `firewall.inbound`, which then accepts
+/// input from the bridges of a Docker it installs, and `deploy.user` last,
+/// after it, since Docker creates the `docker` group.
 #[must_use]
 pub fn all() -> &'static [&'static dyn Module] {
     &[
         &UserAdmin,
         &SshServer,
+        &DeployDocker,
         &FirewallInbound,
         &SshBruteforce::ROOT,
         &KernelSysctl::ROOT,
@@ -245,6 +250,7 @@ pub fn with_test() -> &'static [&'static dyn Module] {
     &[
         &UserAdmin,
         &SshServer,
+        &DeployDocker,
         &FirewallInbound,
         &SshBruteforce::ROOT,
         &KernelSysctl::ROOT,

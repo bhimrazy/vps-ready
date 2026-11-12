@@ -6,7 +6,7 @@ expression: "hook_unit(Path::new(\"/usr/local/bin/vps-ready\"))"
 Description=vps-ready: roll back an unconfirmed change after a reboot
 DefaultDependencies=no
 After=local-fs.target vps-ready-firewall.service
-Before=ssh.service ssh.socket shutdown.target
+Before=ssh.service ssh.socket docker.service shutdown.target
 Conflicts=shutdown.target
 [Service]
 Type=oneshot

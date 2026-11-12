@@ -5,5 +5,6 @@ expression: facts.os
 id: debian
 id_like: []
 version_id: "13"
+codename: trixie
 pretty_name: Debian GNU/Linux 13 (trixie)
 family: debian

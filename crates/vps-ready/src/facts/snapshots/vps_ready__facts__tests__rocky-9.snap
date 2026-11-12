@@ -8,5 +8,6 @@ id_like:
   - centos
   - fedora
 version_id: "9.6"
+codename: ~
 pretty_name: Rocky Linux 9.6 (Blue Onyx)
 family: rhel

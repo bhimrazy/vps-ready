@@ -49,6 +49,29 @@ ssh.server: Turn off root and password logins over SSH (fixes SSH-001, SSH-002, 
       +PermitRootLogin no
       +PasswordAuthentication no
       +X11Forwarding no
+deploy.docker: Install Docker with logs capped and ports on loopback by default
+  note: Docker is installed, but not from Docker's package: only /etc/docker/daemon.json is managed
+  note: ports published without an address bind to 127.0.0.1 only, not to ::1: point a reverse proxy at 127.0.0.1:<port>, not localhost
+  note: docker.service is not running; Docker reads the new daemon.json when it starts
+  + directory /etc/docker (mode 0755, root:root)                          reversible
+  + /etc/docker/daemon.json (mode 0644, root:root)                        reversible
+      @@ -0,0 +1,16 @@
+      +{
+      +  "log-driver": "local",
+      +  "log-opts": {
+      +    "max-size": "10m",
+      +    "max-file": "3"
+      +  },
+      +  "live-restore": true,
+      +  "no-new-privileges": true,
+      +  "userland-proxy": false,
+      +  "ip": "127.0.0.1",
+      +  "default-network-opts": {
+      +    "bridge": {
+      +      "com.docker.network.bridge.host_binding_ipv4": "127.0.0.1"
+      +    }
+      +  }
+      +}
 firewall.inbound: Drop incoming traffic that no rule allows (fixes FW-001)
   note: always accepts TCP 22, the current SSH ports (this session's, root's sshd listeners and `Port`), whatever `allow` says
   note: Docker is installed: input from docker0 and br-* is accepted, so containers can reach services on the host; a compromised container can reach all of them, as with no firewall
@@ -143,7 +166,7 @@ updates.auto: Install security updates automatically (fixes UPD-001)
       +APT::Periodic::Update-Package-Lists "1";
       +APT::Periodic::Unattended-Upgrade "1";
 
-18 changes in 6 modules: 8 files, 1 directory, 6 kernel settings, 2 services, 1 user.
+20 changes in 7 modules: 9 files, 2 directories, 6 kernel settings, 2 services, 1 user.
 partial: rollback removes a user it created but keeps its home directory.
-Apply 18 changes? [y/N] n
+Apply 20 changes? [y/N] n
 Nothing was changed.

@@ -37,6 +37,7 @@ fn runner(rules: impl FnOnce(FakeRunner) -> FakeRunner) -> FakeRunner {
     };
     rules(FakeRunner::new())
         .on("dpkg-query", ["-W"], Output::success("installed"))
+        .on("dpkg", ["--print-architecture"], Output::success("amd64\n"))
         .on("apt-config", ["-c"], Output::success(""))
         .on(
             "getent",
@@ -153,6 +154,12 @@ fn a_docker_host_gets_web_without_its_published_ports() {
         facts: |sys| {
             let mut facts = vm(sys)?;
             facts.docker = true;
+            if let Some(engine) = facts.docker_engine.as_mut() {
+                engine.service = Some(crate::facts::DockerService {
+                    loaded: true,
+                    active: false,
+                });
+            }
             facts
                 .listeners
                 .push(listener(Proto::Tcp, "0.0.0.0", 3000, "docker-proxy"));

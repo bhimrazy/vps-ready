@@ -1,0 +1,25 @@
+---
+source: crates/vps-ready/src/modules/deploy_docker/tests.rs
+expression: daemon_json(&fs)
+---
+{
+    "registry-mirrors": [
+        "https://mirror.example.com"
+    ],
+    "log-driver": "local",
+    "log-opts": {
+        "max-size": "10m",
+        "max-file": "3"
+    },
+    "ip": "127.0.0.1",
+    "default-network-opts": {
+        "bridge": {
+            "com.docker.network.driver.mtu": "1450",
+            "com.docker.network.bridge.host_binding_ipv4": "127.0.0.1"
+        }
+    },
+    "debug": false,
+    "live-restore": true,
+    "no-new-privileges": true,
+    "userland-proxy": false
+}

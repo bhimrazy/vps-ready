@@ -1,0 +1,86 @@
+name: apt-keys
+
+# Checks the vendor apt keys embedded in the binary (crates/vps-ready/keys)
+# against the ones the vendors publish, and opens an issue when they differ:
+# a new or extended subkey needs a vps-ready release.
+on:
+  schedule:
+    - cron: "37 6 * * 1"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "crates/vps-ready/keys/**"
+      - ".github/workflows/apt-keys.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write # open or update the mismatch issue
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Compare the embedded keys with the vendors'
+        id: compare
+        run: |
+          set -eu
+          export GNUPGHOME="$(mktemp -d)"
+          # Primary and subkeys with their fingerprints, capabilities and
+          # expiry dates; user IDs and signatures do not matter to apt.
+          keys() { gpg --batch --show-keys --with-colons "$1" | grep -E '^(pub|sub|fpr):'; }
+          : >report.md
+          for pair in \
+            "docker https://download.docker.com/linux/debian/gpg" \
+            "docker https://download.docker.com/linux/ubuntu/gpg" \
+            "caddy https://dl.cloudsmith.io/public/caddy/stable/gpg.key"; do
+            set -- $pair
+            curl -fsSL --proto '=https' --tlsv1.2 -o vendor.asc "$2"
+            if ! diff -u --label embedded --label vendor <(keys "crates/vps-ready/keys/$1.asc") <(keys vendor.asc) >diff.txt; then
+              {
+                echo "### \`$1\` differs from $2"
+                echo
+                echo '```diff'
+                cat diff.txt
+                echo '```'
+                echo
+              } >>report.md
+            fi
+          done
+          if [ -s report.md ]; then
+            cat report.md
+            echo "mismatch=true" >>"$GITHUB_OUTPUT"
+          fi
+      - name: Open or update the issue
+        if: steps.compare.outputs.mismatch == 'true' && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -eu
+          title="Vendor apt key changed"
+          {
+            echo "The keys in \`crates/vps-ready/keys\` differ from the vendors' ($RUN_URL)."
+            echo "Check the new key against the vendor's documented fingerprint, then update the file and the constant in \`src/resource/apt_source.rs\`."
+            echo
+            cat report.md
+          } >body.md
+          number="$(gh issue list --state open --search "in:title \"$title\"" --json number,title \
+            --jq "map(select(.title == \"$title\")) | .[0].number // empty")"
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body-file body.md
+          else
+            gh issue create --title "$title" --body-file body.md
+          fi
+      - name: Fail on a mismatch
+        if: steps.compare.outputs.mismatch == 'true'
+        run: exit 1
