@@ -82,9 +82,9 @@ It never touches `Port`, `ListenAddress`, `AllowGroups`, `AuthenticationMethods`
 
 ### `ssh.bruteforce`: fail2ban (web profile)
 
-**Changes:** installs `nftables`, `python3-systemd` and `fail2ban`, writes `/etc/fail2ban/jail.d/90-vps-ready.local` to turn on the `sshd` jail (reading the systemd journal, banning in nftables), and restarts fail2ban.
+**Changes:** installs `nftables`, `python3-systemd` and `fail2ban`, writes `/etc/fail2ban/jail.d/90-vps-ready.local` to turn on the `sshd` jail (reading the systemd journal, banning in nftables on the ports sshd listens on), and restarts fail2ban. It sets nothing for your other jails.
 
-**Checks first:** the address of the SSH session running `apply` is never banned, nor is localhost.
+**Checks first:** the address of the SSH session running `apply` is never banned, nor is localhost. For the `sshd` jail, this list replaces any `ignoreip` your `jail.local` sets.
 
 **Undo:** the jail file is restored, but packages are never removed, so fail2ban stays installed and enabled and runs the distro's own jails. `systemctl disable --now fail2ban` turns it off.
 

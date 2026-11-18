@@ -10,9 +10,9 @@ use crate::facts::Facts;
 use crate::resource::{File, Resource, Sysctl};
 use crate::sys::{FileOwner, Sys, SysError};
 
-/// The drop-in. It sorts after the distros' defaults; a `99-*` file or
-/// `/etc/sysctl.conf` (read through Debian's `99-sysctl.conf`) can still
-/// override it at boot.
+/// The drop-in. It sorts after the distros' defaults; a `99-*` file can
+/// still override it at boot, and so can `/etc/sysctl.conf` on Debian 12 and
+/// Ubuntu, through their `99-sysctl.conf` link (Debian 13 has neither).
 pub const DROP_IN: &str = "/etc/sysctl.d/90-vps-ready.conf";
 
 /// The value written for each key, in drop-in order. Each is in its
