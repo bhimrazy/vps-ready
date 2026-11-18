@@ -481,6 +481,25 @@ fn docker_ce_with_its_repository_in_another_file() {
     assert_eq!(steps.notes, [PORTS_NOTE]);
 }
 
+/// With Docker not installed, a stale `docker.list` is reused too: a second
+/// source with another `Signed-By` would break `apt-get update`.
+#[test]
+fn fresh_host_with_its_repository_in_another_file() {
+    let fs = fs().with_file(
+        "/etc/apt/sources.list.d/docker.list",
+        "deb [arch=arm64 signed-by=/etc/apt/keyrings/docker.gpg] \
+         https://download.docker.com/linux/debian trixie stable\n",
+    );
+    let (runner, facts) = (Apt::with_docker(), with_docker(None));
+    let steps = steps(&facts, &fs, &runner);
+    let ids = ids(&steps);
+    assert!(
+        !ids.iter().any(|id| id.contains("docker.sources")),
+        "{ids:?}"
+    );
+    assert!(ids.contains(&"package:docker-ce".to_owned()), "{ids:?}");
+}
+
 #[test]
 fn docker_before_23_is_refused() {
     let (fs, runner) = (docker_fs(), Apt::with_docker());

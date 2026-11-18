@@ -144,7 +144,10 @@ impl Module for DeployDocker {
         } else {
             // Planned for an installed docker-ce too, where they have no
             // change, so that it keeps a repository to get updates from.
-            if !(from_package && configured_elsewhere(sys, "docker", DOCKER_REPO)?) {
+            // Checked even when Docker is not installed: a second source with
+            // another `Signed-By` breaks every `apt-get update`.
+            let reuse = configured_elsewhere(sys, "docker", DOCKER_REPO)?;
+            if !reuse {
                 let Some(source) = docker_source(facts) else {
                     return refuse("Docker's repository has no packages for this release");
                 };
@@ -169,11 +172,13 @@ impl Module for DeployDocker {
                      own forward rules"
                         .to_owned(),
                 );
-                notes.push(
-                    "rollback leaves Docker's packages installed, and removes the repository \
-                     they update from"
-                        .to_owned(),
-                );
+                if !reuse {
+                    notes.push(
+                        "rollback leaves Docker's packages installed, and removes the \
+                         repository they update from"
+                            .to_owned(),
+                    );
+                }
             }
         }
 
