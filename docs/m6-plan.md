@@ -1,6 +1,6 @@
 # M6 plan: private access (v0.6.0)
 
-> **Status: proposed.** Nothing below is built yet. The open questions are at the end, each with a recommendation.
+> **Status: accepted (2026-11-18).** Nothing below is built yet. The owner accepted every recommendation in [Decisions](#decisions-for-the-owner).
 
 M6 lets an admin reach SSH through a private network and then close it to the internet. It has three parts: `net.tailscale`, which installs Tailscale and joins a tailnet; `net.wireguard`, a WireGuard server on the host for admin access to the host itself; and `ssh_via`, a `firewall.inbound` parameter that accepts SSH only on one named interface (`tailscale0`, `wg0`, or any interface the admin set up, such as NetBird's). It also brings `export cloud-init`, moved here by the [M5 plan](m5-plan.md#direction-for-v060-private-access): a server hardened at first boot, before anyone logs in, is the other half of "never exposed". With a VPN for SSH and, later, a tunnel for the web, a server can end with no public TCP port at all; this plan says what that looks like, adds a `private` profile for it, and says why the web tunnel waits.
 
@@ -486,6 +486,8 @@ Checked against upstream docs while writing this plan; items marked VM are check
 | `runcmd` runs after the network and sshd are up; multipart user-data parts merge; `curl` on all four images | VM (the `cloud-init` cycle) |
 
 ## Decisions for the owner
+
+All 23 recommendations were accepted on 2026-11-18.
 
 1. **Both VPN modules in M6, Tailscale before WireGuard,** in separate waves after the export. Recommended: the owner wants both; Tailscale's module is small, WireGuard's has more to get right (keys, reloads), and `ssh_via` is tested with a hand-made `wg0` before either lands.
 2. **`ssh_via` only from a session that already comes through the interface**, so closing public SSH is always a second apply. Recommended: the private path carries a real login before anything closes. Alternative: allow one apply that brings up the VPN and closes 22, relying on the timer alone.
