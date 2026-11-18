@@ -92,6 +92,10 @@ pub enum Check {
         key: String,
         /// Accepted values.
         one_of: Vec<String>,
+        /// A kernel without the setting passes: it lacks the feature the
+        /// setting turns off.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        absent_ok: bool,
     },
     /// Security updates are installed automatically: `unattended-upgrades`
     /// is installed, apt's `APT::Periodic` settings run it, and systemd
@@ -99,6 +103,12 @@ pub enum Check {
     /// masked). Debian and Ubuntu only so far, where it is unknown without
     /// systemd; skipped on other distros.
     AutoUpdates,
+    /// No reboot is pending: `/run/reboot-required` is absent and no
+    /// installed kernel of the running flavor is newer than the running one
+    /// or was written over the running one's image after boot.
+    /// Debian and Ubuntu only; skipped inside a container and when `/boot`
+    /// holds no kernel image.
+    RebootRequired,
     /// The firewall drops incoming packets that no rule accepted, for IPv4
     /// and, when the host has a global IPv6 address, for IPv6. Read from
     /// the nftables ruleset, which needs root.
@@ -178,13 +188,14 @@ impl Finding {
             (Outcome::Fail { found }, Check::SshdEffective { key, equals }) => {
                 Some(format!("{key} is {found}, expected {equals}"))
             }
-            (Outcome::Fail { found }, Check::Sysctl { key, one_of }) => {
+            (Outcome::Fail { found }, Check::Sysctl { key, one_of, .. }) => {
                 Some(format!("{key} is {found}, expected {}", or_list(one_of)))
             }
             (
                 Outcome::Fail { found },
                 Check::SshRateLimited
                 | Check::AutoUpdates
+                | Check::RebootRequired
                 | Check::InboundDefaultDeny
                 | Check::PublishedPorts
                 | Check::Apparmor
@@ -337,7 +348,11 @@ pub(crate) fn evaluate(check: &Check, facts: &Facts) -> Outcome {
             }
         }
         Check::SshRateLimited => ssh_rate_limited(facts),
-        Check::Sysctl { key, one_of } => {
+        Check::Sysctl {
+            key,
+            one_of,
+            absent_ok,
+        } => {
             if facts.virtualization.in_container() {
                 return Outcome::Skip {
                     reason: "kernel settings are not checked inside a container".to_owned(),
@@ -353,11 +368,13 @@ pub(crate) fn evaluate(check: &Check, facts: &Facts) -> Outcome {
                 Some(found) => Outcome::Fail {
                     found: found.to_owned(),
                 },
+                None if *absent_ok && facts.sysctl.is_some() => Outcome::Pass,
                 None => Outcome::Unknown {
                     reason: format!("{key} not found under /proc/sys"),
                 },
             }
         }
+        Check::RebootRequired => reboot_required(facts),
         Check::AutoUpdates => match &facts.updates {
             Some(apt) => {
                 let problems = apt_update_problems(apt);
@@ -777,6 +794,56 @@ fn ssh_rate_limited(facts: &Facts) -> Outcome {
     }
 }
 
+/// A pending reboot: the flag file, or a newer kernel in `/boot` than the one
+/// running.
+fn reboot_required(facts: &Facts) -> Outcome {
+    if facts.virtualization.in_container() {
+        return Outcome::Skip {
+            reason: "kernel settings are not checked inside a container".to_owned(),
+        };
+    }
+    if facts.os.family != OsFamily::Debian {
+        return Outcome::Skip {
+            reason: "pending reboots are checked only on Debian and Ubuntu so far".to_owned(),
+        };
+    }
+    let Some(reboot) = &facts.reboot else {
+        return Outcome::Unknown {
+            reason: "pending reboots could not be checked".to_owned(),
+        };
+    };
+    let mut problems = Vec::new();
+    if reboot.flagged {
+        problems.push("/run/reboot-required exists".to_owned());
+    }
+    if let (Some(newest), Some(running)) = (reboot.newer_kernel(), &reboot.running) {
+        problems.push(format!(
+            "running kernel {running}, newest installed {newest}"
+        ));
+    }
+    if let (Some(true), Some(running)) = (reboot.image_replaced, &reboot.running) {
+        problems.push(format!(
+            "the running kernel's image was replaced after boot ({running})"
+        ));
+    }
+    if !problems.is_empty() {
+        return Outcome::Fail {
+            found: problems.join("; "),
+        };
+    }
+    if reboot.running.is_none() {
+        Outcome::Unknown {
+            reason: "the running kernel's release could not be read".to_owned(),
+        }
+    } else if reboot.installed.is_empty() {
+        Outcome::Skip {
+            reason: "no kernel image in /boot to compare with".to_owned(),
+        }
+    } else {
+        Outcome::Pass
+    }
+}
+
 /// What keeps apt from installing updates on its own, e.g.
 /// `unattended-upgrades is not installed`. Empty when nothing does.
 fn apt_update_problems(apt: &AptUpdates) -> Vec<String> {
@@ -868,7 +935,7 @@ mod tests {
                 Check::SshdEffective { key, .. } => {
                     assert!(config.get(key).is_some(), "{}: {key}", c.id);
                 }
-                Check::Sysctl { key, one_of } => {
+                Check::Sysctl { key, one_of, .. } => {
                     assert!(sysctl::KEYS.contains(&key.as_str()), "{}: {key}", c.id);
                     assert!(!one_of.is_empty(), "{}", c.id);
                 }
@@ -878,6 +945,8 @@ mod tests {
                     assert!(facts.firewall.is_some(), "{}", c.id);
                 }
                 Check::Apparmor => assert!(facts.apparmor.is_some(), "{}", c.id),
+                // The captured hosts are containers, which have no `reboot` fact.
+                Check::RebootRequired => {}
                 // The captured hosts are containers, which do not read
                 // `/proc/sys`; the `evaluates_*` tests below cover these.
                 Check::ReversePathFilter
@@ -1222,6 +1291,7 @@ mod tests {
         let check = |key: &str, one_of: &[&str]| Check::Sysctl {
             key: key.to_owned(),
             one_of: one_of.iter().map(|v| (*v).to_owned()).collect(),
+            absent_ok: false,
         };
         let facts = vm(&[("/proc/sys/kernel/kptr_restrict", "1\n")]);
         let eval = |key, one_of| evaluate(&check(key, one_of), &facts);
@@ -1243,6 +1313,98 @@ mod tests {
             evaluate(&check("kernel.kptr_restrict", &["2"]), &container),
             Outcome::Skip { .. }
         ));
+    }
+
+    #[test]
+    fn absent_setting_passes_when_allowed() {
+        let check = Check::Sysctl {
+            key: "net.mptcp.enabled".to_owned(),
+            one_of: vec!["0".to_owned()],
+            absent_ok: true,
+        };
+        let facts = vm(&[("/proc/sys/kernel/kptr_restrict", "1\n")]);
+        assert_eq!(evaluate(&check, &facts), Outcome::Pass);
+        let on = vm(&[("/proc/sys/net/mptcp/enabled", "1\n")]);
+        assert_eq!(
+            evaluate(&check, &on),
+            Outcome::Fail {
+                found: "1".to_owned()
+            }
+        );
+        let off = vm(&[("/proc/sys/net/mptcp/enabled", "0\n")]);
+        assert_eq!(evaluate(&check, &off), Outcome::Pass);
+    }
+
+    /// Facts of a Debian VM with the given reboot state.
+    fn rebooting(flagged: bool, running: Option<&str>, installed: &[&str]) -> Facts {
+        let mut facts = host("debian-13", &[]);
+        facts.virtualization.container = Virt::None;
+        facts.reboot = Some(crate::facts::Reboot {
+            flagged,
+            running: running.map(str::to_owned),
+            installed: installed.iter().map(|s| (*s).to_owned()).collect(),
+            image_replaced: Some(false),
+        });
+        facts
+    }
+
+    #[test]
+    fn evaluates_reboot_required() {
+        let eval = |facts: &Facts| evaluate(&Check::RebootRequired, facts);
+        let same = ["6.12.57+deb13-amd64"];
+        let run = Some("6.12.57+deb13-amd64");
+        assert_eq!(eval(&rebooting(false, run, &same)), Outcome::Pass);
+
+        assert_eq!(
+            eval(&rebooting(true, run, &same)),
+            Outcome::Fail {
+                found: "/run/reboot-required exists".to_owned()
+            }
+        );
+        // Debian without the flag file: only the kernel comparison sees it.
+        assert_eq!(
+            eval(&rebooting(
+                false,
+                run,
+                &["6.12.57+deb13-amd64", "6.12.117+deb13-amd64"]
+            )),
+            Outcome::Fail {
+                found: "running kernel 6.12.57+deb13-amd64, newest installed \
+                        6.12.117+deb13-amd64"
+                    .to_owned()
+            }
+        );
+        let both = eval(&rebooting(true, run, &["6.12.117+deb13-amd64"]));
+        assert!(matches!(both, Outcome::Fail { found } if found.contains("; running kernel")));
+
+        // Same release name, image overwritten by an update.
+        let mut replaced = rebooting(false, run, &same);
+        replaced.reboot.as_mut().unwrap().image_replaced = Some(true);
+        assert_eq!(
+            eval(&replaced),
+            Outcome::Fail {
+                found: "the running kernel's image was replaced after boot \
+                        (6.12.57+deb13-amd64)"
+                    .to_owned()
+            }
+        );
+
+        // No kernel image, as on a VPS that boots a provider kernel.
+        assert!(matches!(
+            eval(&rebooting(false, run, &[])),
+            Outcome::Skip { .. }
+        ));
+        assert!(matches!(
+            eval(&rebooting(false, None, &same)),
+            Outcome::Unknown { .. }
+        ));
+
+        let mut facts = rebooting(false, run, &same);
+        facts.reboot = None;
+        assert!(matches!(eval(&facts), Outcome::Unknown { .. }));
+        let mut container = rebooting(true, run, &same);
+        container.virtualization.container = Virt::Detected("lxc".to_owned());
+        assert!(matches!(eval(&container), Outcome::Skip { .. }));
     }
 
     #[test]
@@ -1548,8 +1710,8 @@ mod tests {
             .filter(|f| reads_proc_sys(&f.control.check))
             .count();
         assert!(sysctl_controls > 0);
-        // Plus MAC-001 (in a container) and FW-002 (no Docker).
-        assert_eq!(report.summary.skipped, sysctl_controls + 2);
+        // Plus MAC-001 and UPD-002 (in a container) and FW-002 (no Docker).
+        assert_eq!(report.summary.skipped, sysctl_controls + 3);
         assert!(report.all_passed(), "{:?}", report.summary);
     }
 
@@ -1962,6 +2124,6 @@ mod tests {
             .filter(|f| reads_proc_sys(&f.control.check))
             .count();
         let summary = serde_json::to_value(report.summary).unwrap();
-        assert_eq!(summary["skipped"], sysctl_controls + 2);
+        assert_eq!(summary["skipped"], sysctl_controls + 3);
     }
 }

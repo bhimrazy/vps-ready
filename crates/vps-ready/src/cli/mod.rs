@@ -624,7 +624,7 @@ fn root_would_help(report: &Report, facts: &Facts) -> bool {
                     facts.sysctl.as_ref().is_some_and(|s| s.is_unreadable(key))
                 }
                 // `apt-config` and `systemctl show` work without root.
-                Check::AutoUpdates => false,
+                Check::AutoUpdates | Check::RebootRequired => false,
                 // Sudo helps only when nft was refused for lack of privileges.
                 Check::InboundDefaultDeny | Check::PublishedPorts => {
                     facts.firewall.is_none()
