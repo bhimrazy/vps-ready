@@ -56,7 +56,7 @@ Every module reads the live state first, plans only what fails, and writes files
 
 **Keys:** without keys in a profile, it copies the keys of the account you logged in with. Key lines with options such as `command=` are skipped, since they would restrict the admin too.
 
-**Checks first:** it refuses when the name is `root`, when an existing account is a system account (uid below 1000, or a shell not listed in `/etc/shells`), when sudo is not installed, or when there are no keys to copy. An account that already has sudo rules keeps them, and no sudoers file is written.
+**Checks first:** it refuses when the name is `root`, when an existing account is a system account (uid below 1000, or a shell not listed in `/etc/shells`), when sudo is not installed, when there are no keys to copy, or when sshd's `AuthorizedKeysFile` does not include `.ssh/authorized_keys`, where it writes the keys (sshd would ignore them). An account that already has sudo rules keeps them, and no sudoers file is written.
 
 **Undo:** rollback removes a user it created but keeps its home directory, so the change is labeled `partial`. Keys it added and the sudoers file are restored exactly.
 

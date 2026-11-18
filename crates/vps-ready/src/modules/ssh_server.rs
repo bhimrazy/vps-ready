@@ -464,6 +464,34 @@ fn has_keys(cx: &PlanCx, sys: Sys, name: &str) -> Result<bool, ModuleError> {
     Ok(false)
 }
 
+/// Refuses when sshd's `AuthorizedKeysFile` leaves out `~/.ssh/authorized_keys`
+/// of `name`, the only file vps-ready writes keys to: sshd would ignore them.
+/// A value that cannot be read counts as sshd's default.
+pub(crate) fn check_keys_file(facts: &Facts, sys: Sys, name: &str) -> Result<(), ModuleError> {
+    let Some(files) = facts
+        .ssh
+        .effective
+        .as_ref()
+        .and_then(|e| e.get("authorizedkeysfile"))
+    else {
+        return Ok(());
+    };
+    // A new account gets useradd's default home.
+    let home = user::lookup(sys, name)?.map_or_else(|| Path::new("/home").join(name), |e| e.home);
+    let default = home.join(".ssh/authorized_keys");
+    if files
+        .split_whitespace()
+        .any(|p| keys_path(p, &home, name) == default)
+    {
+        return Ok(());
+    }
+    Err(ModuleError::Refused(format!(
+        "sshd's AuthorizedKeysFile is `{files}`, which does not include \
+         `.ssh/authorized_keys`, where vps-ready writes {name}'s keys, so sshd would \
+         ignore them; add `.ssh/authorized_keys` to AuthorizedKeysFile first"
+    )))
+}
+
 /// An `AuthorizedKeysFile` entry with `%h`, `%u` and `%%` expanded; a
 /// relative one is under the home directory.
 fn keys_path(pattern: &str, home: &Path, user: &str) -> PathBuf {
