@@ -505,7 +505,7 @@ fn fresh_host_with_its_repository_in_another_file() {
         !ids.iter().any(|id| id.contains("docker.sources")),
         "{ids:?}"
     );
-    assert!(ids.contains(&"package:docker-ce".to_owned()), "{ids:?}");
+    assert!(ids.contains(&PACKAGE_ID.to_owned()), "{ids:?}");
 }
 
 #[test]
