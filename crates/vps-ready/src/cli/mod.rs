@@ -262,7 +262,6 @@ impl Cli {
 /// Runs the command line of this process: parses arguments, sets up logging
 /// and maps the result to an exit code. Both the `vps-ready` and `vpsready`
 /// binaries are this one call.
-#[must_use]
 pub fn main() -> ExitCode {
     // Usage errors are reported by clap itself, also with exit code 2.
     let cli = Cli::parse();
