@@ -59,3 +59,12 @@ severity = "low"
 title = "IPv4 ICMP redirects not sent"
 why = "ICMP redirects tell other hosts on the network to change their routes. A server that forwards packets only for its own containers or tunnels is not the network's router, so it has no reason to send them."
 check = { kind = "icmp_redirects_not_sent" }
+
+# Absent on a kernel built without MPTCP, which has nothing to turn off.
+[[control]]
+id = "NET-007"
+severity = "low"
+title = "Multipath TCP disabled"
+why = "Multipath TCP is rarely needed on a server and adds kernel code to every TCP handshake. Go 1.24+ programs such as Caddy, Docker and tailscaled open MPTCP listeners by default, so a flaw in it is reachable from the network without any setup."
+check = { kind = "sysctl", key = "net.mptcp.enabled", one_of = ["0"], absent_ok = true }
+fix = "kernel.sysctl"

@@ -17,7 +17,7 @@ export const heroScenes: Record<'audit' | 'plan' | 'apply' | 'confirm', Step[]> 
   audit: [
     ...root,
     { c: 'sudo vps-ready audit' },
-    { o: sp('b', 'Audit of Debian GNU/Linux 13 (trixie): 29 controls'), d: 200 },
+    { o: sp('b', 'Audit of Debian GNU/Linux 13 (trixie): 31 controls'), d: 200 },
     { o: '' },
     { o: sp('dim', 'STATUS   ID       SEVERITY  CONTROL') },
     { o: `${sp('badb', 'FAIL')}     KRN-004  medium    ptrace scope restricted` },

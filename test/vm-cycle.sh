@@ -498,6 +498,19 @@ apply_session() {
   expect_pending
 }
 
+# ipopts_connect: whether a TCP connection to sshd on 127.0.0.1 whose SYN
+# carries IPv4 options (four NOPs) gets through, within 3 s.
+ipopts_connect() {
+  vm python3 - <<'PY'
+import socket
+c = socket.socket()
+c.settimeout(3)
+c.setsockopt(socket.IPPROTO_IP, socket.IP_OPTIONS, b"\x01\x01\x01\x01")
+c.connect(("127.0.0.1", 22))
+PY
+}
+ipopts_connect || die "a SYN with IP options does not connect before apply"
+
 echo "== $distro: profile minimal, confirmed by the new admin"
 root_login || die "root cannot log in before apply"
 vm test ! -e "$ssh_dropin" || die "$ssh_dropin exists before apply"
@@ -520,6 +533,9 @@ jq -r ".findings[] | select($fixed) | \"\(.id) \(.status)\"" "$tmp/audit.json"
 jq -e "[.findings[] | select(($fixed) and .status != \"pass\")] | length == 0" \
   "$tmp/audit.json" >/dev/null || die "an ssh.server or firewall.inbound control does not pass after the confirm"
 expect_empty_plan ssh.server
+vm sudo nft list chain inet vps_ready prerouting | grep -q 'ip hdrlength > 5 .*drop' ||
+  die "the prerouting chain does not drop IPv4 TCP with IP options"
+! ipopts_connect 2>/dev/null || die "a SYN with IP options connects after apply"
 ! root_login || die "root logs in after the confirm"
 local_ssh -o ControlPath=none "$admin@127.0.0.1" true || die "$admin cannot log in after the confirm"
 # `userdel` fails while the admin has processes, e.g. its systemd --user.
@@ -532,6 +548,7 @@ rc=0; vr rollback --last || rc=$?
 [ "$rc" -eq 0 ] || die "rollback of the confirmed transaction exited $rc, expected 0"
 vm test ! -e "$ssh_dropin" || die "$ssh_dropin still exists after rollback"
 ! vm sudo nft list table inet vps_ready >/dev/null 2>&1 || die "the vps_ready table is still loaded after rollback"
+ipopts_connect || die "a SYN with IP options does not connect after rollback"
 ! vm id "$admin" >/dev/null 2>&1 || die "$admin still exists after rollback"
 root_login || die "root cannot log in after the rollback"
 

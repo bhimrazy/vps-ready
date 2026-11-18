@@ -2,7 +2,7 @@
 source: crates/vps-ready/src/cli/mod.rs
 expression: "String::from_utf8(text).unwrap()"
 ---
-Audit of a Debian 13 VM: 17 controls
+Audit of a Debian 13 VM: 18 controls
 
 STATUS   ID       SEVERITY  CONTROL
 FAIL     KRN-004  medium    ptrace scope restricted
@@ -29,7 +29,7 @@ FAIL     NET-004  low       IPv4 reverse path filtering enabled
          server has no route back to, which stops many spoofed packets.
          fix: not automated yet
 
-13 passed, 4 failed (2 medium, 2 low), 0 unknown
+14 passed, 4 failed (2 medium, 2 low), 0 unknown
 vps-ready can fix 2 of the 4 (KRN-004, KRN-001): run `sudo vps-ready plan`.
 The other 2 need a manual fix for now; each says so above.
-Run `vps-ready audit --all` to list the 13 passing controls too.
+Run `vps-ready audit --all` to list the 14 passing controls too.

@@ -148,6 +148,10 @@ fn not_docker(facts: &Facts) -> Vec<String> {
         .collect()
 }
 
+/// Why a module that needs [`ssh_ports`] does not apply when it is empty.
+pub(crate) const SSH_PORT_UNKNOWN: &str =
+    "the SSH port is unknown: no SSH session, sshd listener, `sshd -T` or ssh.socket shows it";
+
 /// Every port SSH may be reached on now: [`crate::facts::Ssh::ports`], the
 /// applying session's and every port an sshd process listens on.
 pub(crate) fn ssh_ports(facts: &Facts) -> BTreeSet<u16> {
@@ -226,8 +230,7 @@ impl Module for FirewallInbound {
         } else if !tools.nft && facts.updates.is_none() {
             "nft is not installed, and apt was not found to install it"
         } else if ssh_ports(facts).is_empty() {
-            "the SSH port is unknown: no SSH session, sshd listener, `sshd -T` or \
-             ssh.socket shows it"
+            SSH_PORT_UNKNOWN
         } else {
             return Applicability::Applicable;
         };
@@ -242,10 +245,16 @@ impl Module for FirewallInbound {
             .map(u16::to_string)
             .collect::<Vec<_>>()
             .join(", ");
-        let mut notes = vec![format!(
-            "always accepts TCP {ports}, the current SSH ports (this session's, root's sshd \
-             listeners and `Port`), whatever `allow` says"
-        )];
+        let mut notes = vec![
+            format!(
+                "always accepts TCP {ports}, the current SSH ports (this session's, root's sshd \
+                 listeners and `Port`), whatever `allow` says"
+            ),
+            "drops incoming IPv4 TCP that carries IP options, also to containers, to blunt \
+             CVE-2026-98432 until the kernel is updated and rebooted; TCP labeled with \
+             CIPSO (NetLabel) stops working"
+                .to_owned(),
+        ];
         if facts.docker {
             notes.extend(docker_notes(facts, "Docker is installed"));
         }
