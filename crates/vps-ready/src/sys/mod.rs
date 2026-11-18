@@ -227,6 +227,8 @@ pub struct FileMeta {
     pub gid: u32,
     /// Number of hard links.
     pub nlink: u64,
+    /// Modification time, in seconds since the Unix epoch.
+    pub mtime: i64,
 }
 
 impl FileMeta {
@@ -699,6 +701,7 @@ impl Fs for RealFs {
             uid: meta.uid(),
             gid: meta.gid(),
             nlink: meta.nlink(),
+            mtime: meta.mtime(),
         };
         Ok((bytes, meta))
     }
@@ -740,6 +743,7 @@ impl Fs for RealFs {
             uid: meta.uid(),
             gid: meta.gid(),
             nlink: meta.nlink(),
+            mtime: meta.mtime(),
         })
     }
 

@@ -136,7 +136,7 @@ Also make sure **needrestart ≥ 3.8**, because older versions have local-root C
 ### Kernel / sysctl (`/etc/sysctl.d/90-vps-ready.conf`)
 
 **Safe set (all profiles):**
-- no ICMP redirects or source routing, `tcp_syncookies=1`;
+- no ICMP redirects or source routing, `tcp_syncookies=1`, `net.mptcp.enabled=0`;
 - `rp_filter=2` (loose: `1` breaks Tailscale routing);
 - `kptr_restrict=2`, `dmesg_restrict=1`, `unprivileged_bpf_disabled=1`, `bpf_jit_harden=2`, `yama.ptrace_scope=1`;
 - `fs.protected_*`, `fs.suid_dumpable=0`.

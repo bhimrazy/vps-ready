@@ -9,3 +9,10 @@ title = "Security updates installed automatically"
 why = "Attackers scan for a flaw soon after its fix is published. Unattended upgrades install security fixes on their own, so a server nobody logs into still gets them."
 check = { kind = "auto_updates" }
 fix = "updates.auto"
+
+[[control]]
+id = "UPD-002"
+severity = "medium"
+title = "No reboot pending"
+why = "A kernel fix does not protect the server until it boots the fixed kernel, so installed security updates can leave a known flaw open until the next reboot."
+check = { kind = "reboot_required" }
