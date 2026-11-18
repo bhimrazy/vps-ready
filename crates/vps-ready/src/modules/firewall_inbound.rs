@@ -244,10 +244,16 @@ impl Module for FirewallInbound {
             .map(u16::to_string)
             .collect::<Vec<_>>()
             .join(", ");
-        let mut notes = vec![format!(
-            "always accepts TCP {ports}, the current SSH ports (this session's, root's sshd \
-             listeners and `Port`), whatever `allow` says"
-        )];
+        let mut notes = vec![
+            format!(
+                "always accepts TCP {ports}, the current SSH ports (this session's, root's sshd \
+                 listeners and `Port`), whatever `allow` says"
+            ),
+            "drops incoming IPv4 TCP that carries IP options, also to containers, to blunt \
+             CVE-2026-98432 until the kernel is updated and rebooted; TCP labeled with \
+             CIPSO (NetLabel) stops working"
+                .to_owned(),
+        ];
         if facts.docker {
             notes.extend(docker_notes(facts, "Docker is installed"));
         }

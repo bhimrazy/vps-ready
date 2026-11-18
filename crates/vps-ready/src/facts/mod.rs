@@ -18,6 +18,7 @@ pub mod docker;
 pub mod firewall;
 pub mod listeners;
 pub mod os_release;
+pub mod reboot;
 pub mod session;
 pub mod ssh;
 pub mod sysctl;
@@ -29,6 +30,7 @@ pub use docker::{DaemonJson, DockerDaemon, DockerEngine, DockerService};
 pub use firewall::{Firewall, FirewallTools, InputChain, Ports, PublishedPort};
 pub use listeners::{Listener, Proto};
 pub use os_release::{OsFamily, OsRelease};
+pub use reboot::Reboot;
 pub use session::{Env, NoSession, Session, SessionId};
 pub use ssh::{SSHD_CONFIG, Ssh, SshActivation};
 pub use sshd_config::SshdConfig;
@@ -74,6 +76,9 @@ pub struct Facts {
     /// Automatic updates through apt. `None` outside the Debian family, or
     /// when apt's settings could not be read.
     pub updates: Option<AptUpdates>,
+    /// Whether a reboot is pending. `None` outside the Debian family and
+    /// inside a container, whose kernel belongs to the host.
+    pub reboot: Option<Reboot>,
     /// Whether Docker is installed. Docker changes firewall and sysctl rules.
     pub docker: bool,
     /// Docker's packages, its `daemon.json` and its daemon. `None` outside
@@ -151,6 +156,8 @@ pub fn collect(fs: &dyn Fs, runner: &dyn Runner, env: &Env) -> Result<Facts, Fac
     } else {
         None
     };
+    let reboot = (os.family == OsFamily::Debian && !virtualization.in_container())
+        .then(|| reboot::detect(fs, &mut notices));
     let docker = DOCKER_PATHS.iter().any(|p| fs.exists(Path::new(p)));
     let docker_engine = if os.family == OsFamily::Debian {
         docker::detect(fs, runner, docker, &mut notices)
@@ -171,6 +178,7 @@ pub fn collect(fs: &dyn Fs, runner: &dyn Runner, env: &Env) -> Result<Facts, Fac
         session,
         sysctl,
         updates,
+        reboot,
         docker,
         docker_engine,
         bridges,

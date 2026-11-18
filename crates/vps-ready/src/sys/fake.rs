@@ -148,6 +148,7 @@ struct Entry {
     uid: u32,
     gid: u32,
     nlink: u64,
+    mtime: i64,
 }
 
 impl Entry {
@@ -169,6 +170,7 @@ impl Entry {
             uid: owner.uid,
             gid: owner.gid,
             nlink: 1,
+            mtime: 0,
         }
     }
 
@@ -186,6 +188,7 @@ impl Entry {
             uid: self.uid,
             gid: self.gid,
             nlink: self.nlink,
+            mtime: self.mtime,
         }
     }
 }
@@ -306,6 +309,15 @@ impl FakeFs {
     pub fn with_file(self, path: impl Into<PathBuf>, contents: impl Into<Vec<u8>>) -> Self {
         let entry = Entry::new(Node::File(contents.into()), 0o644);
         self.lock().entries.insert(path.into(), entry);
+        self
+    }
+
+    /// Sets the modification time of an existing entry, in Unix seconds.
+    #[must_use]
+    pub fn with_mtime(self, path: impl AsRef<Path>, mtime: i64) -> Self {
+        if let Some(e) = self.lock().entries.get_mut(path.as_ref()) {
+            e.mtime = mtime;
+        }
         self
     }
 

@@ -11,7 +11,19 @@
       "table": {
         "family": "inet",
         "name": "vps_ready",
-        "handle": 11
+        "handle": 2
+      }
+    },
+    {
+      "chain": {
+        "family": "inet",
+        "table": "vps_ready",
+        "name": "prerouting",
+        "handle": 1,
+        "type": "filter",
+        "hook": "prerouting",
+        "prio": -300,
+        "policy": "accept"
       }
     },
     {
@@ -19,7 +31,7 @@
         "family": "inet",
         "table": "vps_ready",
         "name": "input",
-        "handle": 1,
+        "handle": 2,
         "type": "filter",
         "hook": "input",
         "prio": 0,
@@ -30,8 +42,51 @@
       "rule": {
         "family": "inet",
         "table": "vps_ready",
+        "chain": "prerouting",
+        "handle": 3,
+        "expr": [
+          {
+            "match": {
+              "op": "==",
+              "left": {
+                "payload": {
+                  "protocol": "ip",
+                  "field": "protocol"
+                }
+              },
+              "right": "tcp"
+            }
+          },
+          {
+            "match": {
+              "op": ">",
+              "left": {
+                "payload": {
+                  "protocol": "ip",
+                  "field": "hdrlength"
+                }
+              },
+              "right": 5
+            }
+          },
+          {
+            "counter": {
+              "packets": 0,
+              "bytes": 0
+            }
+          },
+          {
+            "drop": null
+          }
+        ]
+      }
+    },
+    {
+      "rule": {
+        "family": "inet",
+        "table": "vps_ready",
         "chain": "input",
-        "handle": 2,
+        "handle": 4,
         "expr": [
           {
             "match": {
@@ -58,7 +113,7 @@
         "family": "inet",
         "table": "vps_ready",
         "chain": "input",
-        "handle": 3,
+        "handle": 5,
         "expr": [
           {
             "match": {
@@ -82,7 +137,7 @@
         "family": "inet",
         "table": "vps_ready",
         "chain": "input",
-        "handle": 4,
+        "handle": 6,
         "expr": [
           {
             "match": {
@@ -106,7 +161,7 @@
         "family": "inet",
         "table": "vps_ready",
         "chain": "input",
-        "handle": 5,
+        "handle": 7,
         "expr": [
           {
             "match": {
@@ -130,7 +185,7 @@
         "family": "inet",
         "table": "vps_ready",
         "chain": "input",
-        "handle": 6,
+        "handle": 8,
         "expr": [
           {
             "match": {
@@ -154,7 +209,7 @@
         "family": "inet",
         "table": "vps_ready",
         "chain": "input",
-        "handle": 7,
+        "handle": 9,
         "expr": [
           {
             "match": {
@@ -191,7 +246,7 @@
         "family": "inet",
         "table": "vps_ready",
         "chain": "input",
-        "handle": 8,
+        "handle": 10,
         "expr": [
           {
             "match": {
@@ -233,7 +288,7 @@
         "family": "inet",
         "table": "vps_ready",
         "chain": "input",
-        "handle": 9,
+        "handle": 11,
         "expr": [
           {
             "match": {
