@@ -54,9 +54,10 @@ ssh.server: Turn off root and password logins over SSH (fixes SSH-001, SSH-002, 
       +X11Forwarding no
 firewall.inbound: Drop incoming traffic that no rule allows (fixes FW-001)
   note: always accepts TCP 22, the current SSH ports (this session's, root's sshd listeners and `Port`), whatever `allow` says
+  note: drops incoming IPv4 TCP that carries IP options, also to containers, to blunt CVE-2026-98432 until the kernel is updated and rebooted; TCP labeled with CIPSO (NetLabel) stops working
   + directory /etc/vps-ready (mode 0755, root:root)                       reversible
   + /etc/vps-ready/firewall.nft (mode 0644, root:root)                    reversible
-      @@ -0,0 +1,24 @@
+      @@ -0,0 +1,32 @@
       +# Written by vps-ready (firewall.inbound). `vps-ready rollback --last`
       +# restores the previous state; edits here are replaced by the next apply.
       +# vps-ready-firewall.service loads it. It replaces only the table
@@ -64,6 +65,14 @@ firewall.inbound: Drop incoming traffic that no rule allows (fixes FW-001)
       +table inet vps_ready {}
       +delete table inet vps_ready
       +table inet vps_ready {
+      +  # Mitigates CVE-2026-98432, a kernel use-after-free of the IP options of
+      +  # a TCP handshake; the fix is a kernel update. Runs before conntrack and
+      +  # also sees traffic forwarded to containers. TCP only: IGMP and RSVP use
+      +  # the Router Alert option.
+      +  chain prerouting {
+      +    type filter hook prerouting priority raw; policy accept;
+      +    ip protocol tcp ip hdrlength > 5 counter drop
+      +  }
       +  chain input {
       +    type filter hook input priority filter; policy drop;
       +    ct state established,related accept

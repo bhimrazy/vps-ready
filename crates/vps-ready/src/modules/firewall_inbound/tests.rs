@@ -331,7 +331,10 @@ fn notes_what_it_leaves_alone() {
         notes,
         [
             "always accepts TCP 22, the current SSH ports (this session's, root's sshd listeners \
-          and `Port`), whatever `allow` says"
+          and `Port`), whatever `allow` says",
+            "drops incoming IPv4 TCP that carries IP options, also to containers, to blunt \
+          CVE-2026-98432 until the kernel is updated and rebooted; TCP labeled with CIPSO \
+          (NetLabel) stops working"
         ]
     );
     facts.docker = true;
@@ -407,6 +410,17 @@ fn verify_reads_back_the_loaded_table() {
     let json = std::fs::read(testdata(LOADED)).unwrap();
     let want = Ruleset::new(&facts(), &Params::default());
     assert_eq!(check_loaded(&json, &want), Ok(()));
+    // The prerouting chain, listed first, is not an input chain.
+    let text = String::from_utf8(json.clone()).unwrap();
+    assert!(text.find("\"prerouting\"").unwrap() < text.find("\"hook\": \"input\"").unwrap());
+    let fw = crate::facts::firewall::parse_json(&json).unwrap();
+    let names: Vec<_> = fw.input_chains.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, ["input"]);
+    let no_input = text.replace("\"hook\": \"input\"", "\"hook\": \"output\"");
+    assert_eq!(
+        check_loaded(no_input.as_bytes(), &want),
+        Err("the table has no input chain".to_owned())
+    );
 
     let mut more = want.clone();
     more.tcp.push(2222);
