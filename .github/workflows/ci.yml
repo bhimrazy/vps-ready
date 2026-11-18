@@ -178,6 +178,8 @@ jobs:
         run: test/container-admin.sh "$DISTRO" bin/vps-ready
       - name: Apply and roll back deploy.docker in the container
         run: test/container-docker.sh "$DISTRO" bin/vps-ready
+      - name: Apply and roll back deploy.proxy in the container
+        run: test/container-proxy.sh "$DISTRO" bin/vps-ready
 
   # Single required check for branch protection.
   ci-ok:

@@ -12,7 +12,7 @@ use crate::engine::Reload;
 use crate::facts::docker::{DAEMON_JSON, parse_daemon_json};
 use crate::facts::{DaemonJson, DockerEngine, Facts, Init, OsFamily};
 use crate::resource::{AptSource, Directory, File, Package, Resource, Validate};
-use crate::resource::{apt_source, architecture};
+use crate::resource::{apt_source, architecture, configured_elsewhere};
 use crate::sys::{FileOwner, Sys, SysError};
 
 /// Docker Engine's packages, as Docker's install docs list them.
@@ -31,13 +31,11 @@ const LOG_DRIVER: &str = "local";
 /// The first release with `dockerd --validate` and `default-network-opts`.
 const MIN_MAJOR: u32 = 23;
 
-/// Where apt reads its sources.
-const SOURCES: &str = "/etc/apt/sources.list.d";
-
 /// The source `apt_source` writes for Docker.
 const DOCKER_SOURCES: &str = "/etc/apt/sources.list.d/docker.sources";
 
-/// Docker's repository, as any apt source names it.
+/// Docker's repository, as any apt source names it, whatever the
+/// distribution in its path.
 const DOCKER_REPO: &str = "download.docker.com";
 
 /// The keys this module sets. Ports published without an address bind to
@@ -148,7 +146,7 @@ impl Module for DeployDocker {
             // change, so that it keeps a repository to get updates from.
             // Checked even when Docker is not installed: a second source with
             // another `Signed-By` breaks every `apt-get update`.
-            let reuse = configured_elsewhere(sys)?;
+            let reuse = configured_elsewhere(sys, "docker", DOCKER_REPO)?;
             if !reuse {
                 let Some(source) = docker_source(facts) else {
                     return refuse("Docker's repository has no packages for this release");
@@ -287,29 +285,6 @@ fn docker_reason(facts: &Facts) -> Option<String> {
         ));
     }
     None
-}
-
-/// Whether an apt source other than [`DOCKER_SOURCES`] already names
-/// Docker's repository, e.g. `docker.list` from Docker's older install
-/// docs. A second one with another `Signed-By` makes `apt-get update` fail.
-fn configured_elsewhere(sys: Sys) -> Result<bool, ModuleError> {
-    let mut files = vec![Path::new("/etc/apt/sources.list").to_path_buf()];
-    match sys.fs.read_dir(Path::new(SOURCES)) {
-        Ok(paths) => files.extend(paths),
-        Err(SysError::NotFound(_)) => {}
-        Err(e) => return Err(e.into()),
-    }
-    for path in files
-        .iter()
-        .filter(|p| p.as_path() != Path::new(DOCKER_SOURCES))
-    {
-        match sys.fs.read(path) {
-            Ok(bytes) if String::from_utf8_lossy(&bytes).contains(DOCKER_REPO) => return Ok(true),
-            Ok(_) | Err(SysError::NotFound(_)) => {}
-            Err(e) => return Err(e.into()),
-        }
-    }
-    Ok(false)
 }
 
 /// What changing a value of the existing `daemon.json` means, beyond the

@@ -25,7 +25,7 @@ pub(crate) mod user;
 
 pub use apt_source::{
     AptSource, CADDY_FINGERPRINT, CADDY_KEY, DOCKER_FINGERPRINT, DOCKER_KEY, apt_source,
-    architecture,
+    architecture, configured_elsewhere,
 };
 pub use authorized_keys::AuthorizedKeys;
 pub use directory::Directory;

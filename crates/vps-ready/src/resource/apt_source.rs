@@ -6,10 +6,10 @@
 //! `apt-keys` workflow checks them weekly against the vendors' published
 //! keys.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::{Directory, File, Resource, ResourceError, run};
-use crate::sys::{Cmd, FileOwner, Sys};
+use crate::sys::{Cmd, FileOwner, Sys, SysError};
 
 /// Where the keys go. apt 2.4 and later ship it; it is planned anyway.
 pub const KEYRINGS: &str = "/etc/apt/keyrings";
@@ -78,6 +78,56 @@ impl AptSource {
             component: "main",
         }
     }
+
+    /// Where [`apt_source`] writes this source.
+    #[must_use]
+    pub fn path(&self) -> PathBuf {
+        sources_path(self.name)
+    }
+
+    /// Whether another apt source already names this repository by its
+    /// URI; see [`configured_elsewhere`].
+    ///
+    /// # Errors
+    ///
+    /// Any [`crate::sys::SysError`] from reading the sources.
+    pub fn configured_elsewhere(&self, sys: Sys) -> Result<bool, ResourceError> {
+        let repo = self
+            .uri
+            .split_once("://")
+            .map_or(self.uri, |(_, rest)| rest);
+        configured_elsewhere(sys, self.name, repo)
+    }
+}
+
+fn sources_path(name: &str) -> PathBuf {
+    Path::new(SOURCES).join(format!("{name}.sources"))
+}
+
+/// Whether an apt source other than the one [`apt_source`] writes for
+/// `name` already contains `repo`, e.g. `docker.list` from Docker's older
+/// install docs. A second source with another `Signed-By` makes `apt-get
+/// update` fail, so the vendor source is then left out.
+///
+/// # Errors
+///
+/// Any [`crate::sys::SysError`] from reading the sources.
+pub fn configured_elsewhere(sys: Sys, name: &str, repo: &str) -> Result<bool, ResourceError> {
+    let own = sources_path(name);
+    let mut files = vec![PathBuf::from("/etc/apt/sources.list")];
+    match sys.fs.read_dir(Path::new(SOURCES)) {
+        Ok(paths) => files.extend(paths),
+        Err(SysError::NotFound(_)) => {}
+        Err(e) => return Err(e.into()),
+    }
+    for path in files.iter().filter(|p| **p != own) {
+        match sys.fs.read(path) {
+            Ok(bytes) if String::from_utf8_lossy(&bytes).contains(repo) => return Ok(true),
+            Ok(_) | Err(SysError::NotFound(_)) => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(false)
 }
 
 /// The resources that add `source` for the dpkg architecture `arch`, e.g.
@@ -113,7 +163,7 @@ pub fn apt_source(source: &AptSource, arch: &str) -> Vec<Resource> {
             validate: None,
         }),
         Resource::File(File {
-            path: Path::new(SOURCES).join(format!("{}.sources", source.name)),
+            path: source.path(),
             content: list.into_bytes(),
             owner: root(0o644),
             validate: None,

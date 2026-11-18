@@ -184,6 +184,7 @@ mod tests {
             "user.admin",
             "firewall.inbound",
             "kernel.sysctl",
+            "deploy.proxy",
             "deploy.user",
         ] {
             let module = modules::all().iter().find(|m| m.id() == id).unwrap();

@@ -1435,6 +1435,9 @@ fn every_command_of_the_boot_hook_is_bounded() {
         rec(Event::Reloaded {
             reload: Reload::DockerRestart,
         }),
+        rec(Event::Reloaded {
+            reload: Reload::CaddyReload,
+        }),
     ];
     for r in &records {
         txn.append(&fs, r).unwrap();
@@ -1466,8 +1469,13 @@ fn every_command_of_the_boot_hook_is_bounded() {
     ] {
         assert!(calls.iter().any(|c| c == expected), "{expected}: {calls:?}");
     }
-    // Docker starts after the hook and reads the restored daemon.json.
-    assert!(!calls.iter().any(|c| c.contains("docker")), "{calls:?}");
+    // Docker and Caddy start after the hook and read their restored config.
+    assert!(
+        !calls
+            .iter()
+            .any(|c| c.contains("docker") || c.contains("caddy")),
+        "{calls:?}"
+    );
     let unbounded: Vec<String> = run
         .calls()
         .iter()

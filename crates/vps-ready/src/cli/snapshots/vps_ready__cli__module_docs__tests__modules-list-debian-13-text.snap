@@ -34,6 +34,10 @@ updates.auto
   Install security updates automatically
   Applies to this host.
 
+deploy.proxy
+  Serve sites over HTTPS with Caddy, proxied to their upstreams
+  Applies to this host.
+
 deploy.user
   Set up a deploy account whose SSH keys are restricted
   Applies to this host.
