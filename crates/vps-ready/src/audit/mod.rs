@@ -9,8 +9,9 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::facts::ssh::MatchOverride;
 use crate::facts::sysctl::Ipv4Conf;
-use crate::facts::{AptUpdates, Facts, Firewall, OsFamily};
+use crate::facts::{AptUpdates, Facts, Firewall, OsFamily, SSHD_CONFIG};
 
 /// The embedded catalog, as `(file name, contents)`.
 const CATALOG: [(&str, &str); 6] = [
@@ -68,7 +69,11 @@ impl fmt::Display for Severity {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Check {
-    /// A keyword of the effective sshd config (`sshd -T`) has this value.
+    /// A keyword of the effective sshd config (`sshd -T`) has this value,
+    /// and no `Match` block in `sshd_config` or its includes sets another.
+    /// A `Match` block that does fails the control whatever its criteria,
+    /// and its `fix` module is not named: no module edits `Match` blocks.
+    /// [`Finding::manual_fix`] says to edit the block by hand instead.
     SshdEffective {
         /// Keyword in lowercase, as `sshd -T` prints it.
         key: String,
@@ -87,6 +92,10 @@ pub enum Check {
         key: String,
         /// Accepted values.
         one_of: Vec<String>,
+        /// A kernel without the setting passes: it lacks the feature the
+        /// setting turns off.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        absent_ok: bool,
     },
     /// Security updates are installed automatically: `unattended-upgrades`
     /// is installed, apt's `APT::Periodic` settings run it, and systemd
@@ -94,6 +103,12 @@ pub enum Check {
     /// masked). Debian and Ubuntu only so far, where it is unknown without
     /// systemd; skipped on other distros.
     AutoUpdates,
+    /// No reboot is pending: `/run/reboot-required` is absent and no
+    /// installed kernel of the running flavor is newer than the running one
+    /// or was written over the running one's image after boot.
+    /// Debian and Ubuntu only; skipped inside a container and when `/boot`
+    /// holds no kernel image.
+    RebootRequired,
     /// The firewall drops incoming packets that no rule accepted, for IPv4
     /// and, when the host has a global IPv6 address, for IPv6. Read from
     /// the nftables ruleset, which needs root.
@@ -157,6 +172,10 @@ pub struct Finding {
     /// What the check found.
     #[serde(flatten)]
     pub outcome: Outcome,
+    /// How to fix a failure no module fixes, for the text report, e.g. for
+    /// a `Match` block. Not in the JSON, where `found` names the same line.
+    #[serde(skip)]
+    pub manual_fix: Option<String>,
 }
 
 impl Finding {
@@ -169,13 +188,14 @@ impl Finding {
             (Outcome::Fail { found }, Check::SshdEffective { key, equals }) => {
                 Some(format!("{key} is {found}, expected {equals}"))
             }
-            (Outcome::Fail { found }, Check::Sysctl { key, one_of }) => {
+            (Outcome::Fail { found }, Check::Sysctl { key, one_of, .. }) => {
                 Some(format!("{key} is {found}, expected {}", or_list(one_of)))
             }
             (
                 Outcome::Fail { found },
                 Check::SshRateLimited
                 | Check::AutoUpdates
+                | Check::RebootRequired
                 | Check::InboundDefaultDeny
                 | Check::PublishedPorts
                 | Check::Apparmor
@@ -261,15 +281,31 @@ pub fn run(controls: Vec<Control>, facts: &Facts) -> Report {
     let mut summary = Summary::default();
     let findings = controls
         .into_iter()
-        .map(|control| {
+        .map(|mut control| {
             let outcome = evaluate(&control.check, facts);
+            let mut manual_fix = None;
+            if matches!(outcome, Outcome::Fail { .. })
+                && let Some(m) = unfixable_override(&control.check, facts)
+            {
+                control.fix = None;
+                manual_fix = Some(format!(
+                    "edit the Match block at {}:{} by hand (vps-ready does not edit Match \
+                     blocks)",
+                    m.file.display(),
+                    m.line
+                ));
+            }
             match outcome {
                 Outcome::Pass => summary.passed += 1,
                 Outcome::Fail { .. } => summary.failed += 1,
                 Outcome::Unknown { .. } => summary.unknown += 1,
                 Outcome::Skip { .. } => summary.skipped += 1,
             }
-            Finding { control, outcome }
+            Finding {
+                control,
+                outcome,
+                manual_fix,
+            }
         })
         .collect();
     Report {
@@ -288,7 +324,21 @@ pub(crate) fn evaluate(check: &Check, facts: &Facts) -> Outcome {
                 };
             };
             match config.get(key) {
-                Some(found) if found == equals => Outcome::Pass,
+                Some(found) if found == equals => {
+                    if facts.ssh.files.is_none() {
+                        Outcome::Unknown {
+                            reason: format!(
+                                "{SSHD_CONFIG} could not be read to check its Match blocks"
+                            ),
+                        }
+                    } else if let Some(found) = facts.ssh.match_override(key, equals) {
+                        Outcome::Fail {
+                            found: found.to_string(),
+                        }
+                    } else {
+                        Outcome::Pass
+                    }
+                }
                 Some(found) => Outcome::Fail {
                     found: found.to_owned(),
                 },
@@ -298,7 +348,11 @@ pub(crate) fn evaluate(check: &Check, facts: &Facts) -> Outcome {
             }
         }
         Check::SshRateLimited => ssh_rate_limited(facts),
-        Check::Sysctl { key, one_of } => {
+        Check::Sysctl {
+            key,
+            one_of,
+            absent_ok,
+        } => {
             if facts.virtualization.in_container() {
                 return Outcome::Skip {
                     reason: "kernel settings are not checked inside a container".to_owned(),
@@ -314,11 +368,13 @@ pub(crate) fn evaluate(check: &Check, facts: &Facts) -> Outcome {
                 Some(found) => Outcome::Fail {
                     found: found.to_owned(),
                 },
+                None if *absent_ok && facts.sysctl.is_some() => Outcome::Pass,
                 None => Outcome::Unknown {
                     reason: format!("{key} not found under /proc/sys"),
                 },
             }
         }
+        Check::RebootRequired => reboot_required(facts),
         Check::AutoUpdates => match &facts.updates {
             Some(apt) => {
                 let problems = apt_update_problems(apt);
@@ -742,6 +798,56 @@ fn ssh_rate_limited(facts: &Facts) -> Outcome {
     }
 }
 
+/// A pending reboot: the flag file, or a newer kernel in `/boot` than the one
+/// running.
+fn reboot_required(facts: &Facts) -> Outcome {
+    if facts.virtualization.in_container() {
+        return Outcome::Skip {
+            reason: "kernel settings are not checked inside a container".to_owned(),
+        };
+    }
+    if facts.os.family != OsFamily::Debian {
+        return Outcome::Skip {
+            reason: "pending reboots are checked only on Debian and Ubuntu so far".to_owned(),
+        };
+    }
+    let Some(reboot) = &facts.reboot else {
+        return Outcome::Unknown {
+            reason: "pending reboots could not be checked".to_owned(),
+        };
+    };
+    let mut problems = Vec::new();
+    if reboot.flagged {
+        problems.push("/run/reboot-required exists".to_owned());
+    }
+    if let (Some(newest), Some(running)) = (reboot.newer_kernel(), &reboot.running) {
+        problems.push(format!(
+            "running kernel {running}, newest installed {newest}"
+        ));
+    }
+    if let (Some(true), Some(running)) = (reboot.image_replaced, &reboot.running) {
+        problems.push(format!(
+            "the running kernel's image was replaced after boot ({running})"
+        ));
+    }
+    if !problems.is_empty() {
+        return Outcome::Fail {
+            found: problems.join("; "),
+        };
+    }
+    if reboot.running.is_none() {
+        Outcome::Unknown {
+            reason: "the running kernel's release could not be read".to_owned(),
+        }
+    } else if reboot.installed.is_empty() {
+        Outcome::Skip {
+            reason: "no kernel image in /boot to compare with".to_owned(),
+        }
+    } else {
+        Outcome::Pass
+    }
+}
+
 /// What keeps apt from installing updates on its own, e.g.
 /// `unattended-upgrades is not installed`. Empty when nothing does.
 fn apt_update_problems(apt: &AptUpdates) -> Vec<String> {
@@ -768,6 +874,20 @@ fn apt_update_problems(apt: &AptUpdates) -> Vec<String> {
         }
     }
     problems
+}
+
+/// For a failed [`Check::SshdEffective`], the `Match` block line that no
+/// module can fix: any, when the `sshd -T` value passes; a `Match all` one
+/// otherwise, since plain `sshd -T` applies `Match all` and shows its value.
+fn unfixable_override(check: &Check, facts: &Facts) -> Option<MatchOverride> {
+    let Check::SshdEffective { key, equals } = check else {
+        return None;
+    };
+    let passes = facts.ssh.effective.as_ref()?.get(key) == Some(equals.as_str());
+    facts
+        .ssh
+        .match_override(key, equals)
+        .filter(|m| passes || m.criteria.eq_ignore_ascii_case("all"))
 }
 
 /// `["1", "2", "3"]` as `1, 2 or 3`.
@@ -819,7 +939,7 @@ mod tests {
                 Check::SshdEffective { key, .. } => {
                     assert!(config.get(key).is_some(), "{}: {key}", c.id);
                 }
-                Check::Sysctl { key, one_of } => {
+                Check::Sysctl { key, one_of, .. } => {
                     assert!(sysctl::KEYS.contains(&key.as_str()), "{}: {key}", c.id);
                     assert!(!one_of.is_empty(), "{}", c.id);
                 }
@@ -829,6 +949,8 @@ mod tests {
                     assert!(facts.firewall.is_some(), "{}", c.id);
                 }
                 Check::Apparmor => assert!(facts.apparmor.is_some(), "{}", c.id),
+                // The captured hosts are containers, which have no `reboot` fact.
+                Check::RebootRequired => {}
                 // The captured hosts are containers, which do not read
                 // `/proc/sys`; the `evaluates_*` tests below cover these.
                 Check::ReversePathFilter
@@ -935,6 +1057,188 @@ mod tests {
         ));
     }
 
+    /// Facts whose `sshd -T` passes SSH-001 to SSH-007 and whose
+    /// `sshd_config` is `main`, with `files` beside it.
+    fn with_sshd_config(main: &str, files: &[(&str, &str)]) -> Facts {
+        use sshd_config::Config;
+
+        use crate::facts::SSHD_CONFIG;
+        use crate::facts::ssh::FsSource;
+
+        let mut facts = host("debian-13", &[]);
+        let keys = catalog()
+            .unwrap()
+            .into_iter()
+            .filter_map(|c| match c.check {
+                Check::SshdEffective { key, equals } => Some(format!("{key} {equals}\n")),
+                _ => None,
+            });
+        facts.ssh.effective = Some(SshdConfig::parse(&keys.collect::<String>()));
+        let fs = files
+            .iter()
+            .fold(FakeFs::new().with_file(SSHD_CONFIG, main), |fs, (p, c)| {
+                fs.with_file(*p, *c)
+            });
+        facts.ssh.files =
+            Some(Config::read(&FsSource(&fs), std::path::Path::new(SSHD_CONFIG)).unwrap());
+        facts
+    }
+
+    /// The SSH-001 to SSH-007 findings that are not a pass.
+    fn sshd_findings(facts: &Facts) -> Vec<Finding> {
+        run(catalog().unwrap(), facts)
+            .findings
+            .into_iter()
+            .filter(|f| {
+                matches!(f.control.check, Check::SshdEffective { .. }) && f.outcome != Outcome::Pass
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_match_block_with_a_failing_value_fails() {
+        let facts = with_sshd_config(
+            "Include /etc/ssh/sshd_config.d/*.conf\nPasswordAuthentication no\n",
+            &[(
+                "/etc/ssh/sshd_config.d/50-cloud.conf",
+                "# cloud\nMatch Address *\n    passwordauthentication YES\n",
+            )],
+        );
+        let findings = sshd_findings(&facts);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].control.id, "SSH-002");
+        assert_eq!(
+            findings[0].detail().unwrap(),
+            "passwordauthentication is YES in a Match block \
+             (/etc/ssh/sshd_config.d/50-cloud.conf:3, Match Address *), expected no"
+        );
+        // ssh.server writes only global settings, so it is not the fix.
+        assert_eq!(findings[0].control.fix, None);
+        assert_eq!(
+            findings[0].manual_fix.as_deref(),
+            Some(
+                "edit the Match block at /etc/ssh/sshd_config.d/50-cloud.conf:3 by hand \
+                 (vps-ready does not edit Match blocks)"
+            )
+        );
+    }
+
+    #[test]
+    fn a_match_block_with_a_passing_value_changes_nothing() {
+        let facts = with_sshd_config(
+            "PermitRootLogin no\nMatch User bob\n  PermitRootLogin No\n  X11Forwarding no\n\
+             Match all\n  AllowTcpForwarding yes\n",
+            &[],
+        );
+        assert_eq!(sshd_findings(&facts), []);
+    }
+
+    #[test]
+    fn match_blocks_are_followed_through_includes() {
+        let facts = with_sshd_config(
+            "Include /etc/ssh/sshd_config.d/*.conf\nMatch Group admins\n\
+             Include /etc/ssh/match.conf\n",
+            &[
+                // A Match block in a drop-in ends with it.
+                (
+                    "/etc/ssh/sshd_config.d/10-x.conf",
+                    "Match User deploy\nX11Forwarding yes\n",
+                ),
+                ("/etc/ssh/sshd_config.d/20-y.conf", "X11Forwarding no\n"),
+                ("/etc/ssh/match.conf", "Include /etc/ssh/nested.conf\n"),
+                (
+                    "/etc/ssh/nested.conf",
+                    "ChallengeResponseAuthentication yes\nPermitRootLogin=prohibit-password\n",
+                ),
+            ],
+        );
+        let found: Vec<(String, String)> = sshd_findings(&facts)
+            .iter()
+            .map(|f| (f.control.id.clone(), f.detail().unwrap()))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                (
+                    "SSH-001".to_owned(),
+                    "permitrootlogin is prohibit-password in a Match block \
+                     (/etc/ssh/nested.conf:2, Match Group admins), expected no"
+                        .to_owned()
+                ),
+                (
+                    "SSH-003".to_owned(),
+                    "kbdinteractiveauthentication is yes in a Match block \
+                     (/etc/ssh/nested.conf:1, Match Group admins), expected no"
+                        .to_owned()
+                ),
+                (
+                    "SSH-005".to_owned(),
+                    "x11forwarding is yes in a Match block \
+                     (/etc/ssh/sshd_config.d/10-x.conf:2, Match User deploy), expected no"
+                        .to_owned()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_failing_global_value_is_reported_first_and_keeps_its_fix() {
+        let mut facts = with_sshd_config("Match User bob\nX11Forwarding yes\n", &[]);
+        facts.ssh.effective = Some(SshdConfig::parse("x11forwarding yes\n"));
+        let finding = run(catalog().unwrap(), &facts)
+            .findings
+            .into_iter()
+            .find(|f| f.control.id == "SSH-005")
+            .unwrap();
+        assert_eq!(
+            finding.outcome,
+            Outcome::Fail {
+                found: "yes".to_owned()
+            }
+        );
+        assert_eq!(finding.control.fix.as_deref(), Some("ssh.server"));
+    }
+
+    /// Plain `sshd -T` applies `Match all`, so its value is the effective
+    /// one, and ssh.server's drop-in cannot win over it.
+    #[test]
+    fn a_failing_match_all_is_not_claimed_by_a_module() {
+        let mut facts = with_sshd_config("Match ALL\n  X11Forwarding yes\n", &[]);
+        facts.ssh.effective = Some(SshdConfig::parse("x11forwarding yes\n"));
+        let finding = run(catalog().unwrap(), &facts)
+            .findings
+            .into_iter()
+            .find(|f| f.control.id == "SSH-005")
+            .unwrap();
+        assert_eq!(
+            finding.outcome,
+            Outcome::Fail {
+                found: "yes".to_owned()
+            }
+        );
+        assert_eq!(finding.control.fix, None);
+        assert_eq!(
+            finding.manual_fix.as_deref(),
+            Some(
+                "edit the Match block at /etc/ssh/sshd_config:2 by hand \
+                 (vps-ready does not edit Match blocks)"
+            )
+        );
+    }
+
+    #[test]
+    fn unreadable_sshd_config_leaves_match_blocks_unknown() {
+        let mut facts = with_sshd_config("", &[]);
+        facts.ssh.files = None;
+        let findings = sshd_findings(&facts);
+        assert_eq!(findings.len(), 7);
+        assert!(
+            findings
+                .iter()
+                .all(|f| matches!(f.outcome, Outcome::Unknown { .. }))
+        );
+    }
+
     #[test]
     fn evaluates_ssh_rate_limited() {
         let eval = |facts: &Facts| evaluate(&Check::SshRateLimited, facts);
@@ -991,6 +1295,7 @@ mod tests {
         let check = |key: &str, one_of: &[&str]| Check::Sysctl {
             key: key.to_owned(),
             one_of: one_of.iter().map(|v| (*v).to_owned()).collect(),
+            absent_ok: false,
         };
         let facts = vm(&[("/proc/sys/kernel/kptr_restrict", "1\n")]);
         let eval = |key, one_of| evaluate(&check(key, one_of), &facts);
@@ -1012,6 +1317,98 @@ mod tests {
             evaluate(&check("kernel.kptr_restrict", &["2"]), &container),
             Outcome::Skip { .. }
         ));
+    }
+
+    #[test]
+    fn absent_setting_passes_when_allowed() {
+        let check = Check::Sysctl {
+            key: "net.mptcp.enabled".to_owned(),
+            one_of: vec!["0".to_owned()],
+            absent_ok: true,
+        };
+        let facts = vm(&[("/proc/sys/kernel/kptr_restrict", "1\n")]);
+        assert_eq!(evaluate(&check, &facts), Outcome::Pass);
+        let on = vm(&[("/proc/sys/net/mptcp/enabled", "1\n")]);
+        assert_eq!(
+            evaluate(&check, &on),
+            Outcome::Fail {
+                found: "1".to_owned()
+            }
+        );
+        let off = vm(&[("/proc/sys/net/mptcp/enabled", "0\n")]);
+        assert_eq!(evaluate(&check, &off), Outcome::Pass);
+    }
+
+    /// Facts of a Debian VM with the given reboot state.
+    fn rebooting(flagged: bool, running: Option<&str>, installed: &[&str]) -> Facts {
+        let mut facts = host("debian-13", &[]);
+        facts.virtualization.container = Virt::None;
+        facts.reboot = Some(crate::facts::Reboot {
+            flagged,
+            running: running.map(str::to_owned),
+            installed: installed.iter().map(|s| (*s).to_owned()).collect(),
+            image_replaced: Some(false),
+        });
+        facts
+    }
+
+    #[test]
+    fn evaluates_reboot_required() {
+        let eval = |facts: &Facts| evaluate(&Check::RebootRequired, facts);
+        let same = ["6.12.57+deb13-amd64"];
+        let run = Some("6.12.57+deb13-amd64");
+        assert_eq!(eval(&rebooting(false, run, &same)), Outcome::Pass);
+
+        assert_eq!(
+            eval(&rebooting(true, run, &same)),
+            Outcome::Fail {
+                found: "/run/reboot-required exists".to_owned()
+            }
+        );
+        // Debian without the flag file: only the kernel comparison sees it.
+        assert_eq!(
+            eval(&rebooting(
+                false,
+                run,
+                &["6.12.57+deb13-amd64", "6.12.117+deb13-amd64"]
+            )),
+            Outcome::Fail {
+                found: "running kernel 6.12.57+deb13-amd64, newest installed \
+                        6.12.117+deb13-amd64"
+                    .to_owned()
+            }
+        );
+        let both = eval(&rebooting(true, run, &["6.12.117+deb13-amd64"]));
+        assert!(matches!(both, Outcome::Fail { found } if found.contains("; running kernel")));
+
+        // Same release name, image overwritten by an update.
+        let mut replaced = rebooting(false, run, &same);
+        replaced.reboot.as_mut().unwrap().image_replaced = Some(true);
+        assert_eq!(
+            eval(&replaced),
+            Outcome::Fail {
+                found: "the running kernel's image was replaced after boot \
+                        (6.12.57+deb13-amd64)"
+                    .to_owned()
+            }
+        );
+
+        // No kernel image, as on a VPS that boots a provider kernel.
+        assert!(matches!(
+            eval(&rebooting(false, run, &[])),
+            Outcome::Skip { .. }
+        ));
+        assert!(matches!(
+            eval(&rebooting(false, None, &same)),
+            Outcome::Unknown { .. }
+        ));
+
+        let mut facts = rebooting(false, run, &same);
+        facts.reboot = None;
+        assert!(matches!(eval(&facts), Outcome::Unknown { .. }));
+        let mut container = rebooting(true, run, &same);
+        container.virtualization.container = Virt::Detected("lxc".to_owned());
+        assert!(matches!(eval(&container), Outcome::Skip { .. }));
     }
 
     #[test]
@@ -1317,8 +1714,8 @@ mod tests {
             .filter(|f| reads_proc_sys(&f.control.check))
             .count();
         assert!(sysctl_controls > 0);
-        // Plus MAC-001 (in a container) and FW-002 (no Docker).
-        assert_eq!(report.summary.skipped, sysctl_controls + 2);
+        // Plus MAC-001 and UPD-002 (in a container) and FW-002 (no Docker).
+        assert_eq!(report.summary.skipped, sysctl_controls + 3);
         assert!(report.all_passed(), "{:?}", report.summary);
     }
 
@@ -1733,6 +2130,6 @@ mod tests {
             .filter(|f| reads_proc_sys(&f.control.check))
             .count();
         let summary = serde_json::to_value(report.summary).unwrap();
-        assert_eq!(summary["skipped"], sysctl_controls + 2);
+        assert_eq!(summary["skipped"], sysctl_controls + 3);
     }
 }

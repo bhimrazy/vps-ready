@@ -5,6 +5,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Deserializer};
 
+use super::ssh_server::check_keys_file;
 use super::user_admin::{
     account, check_not_locked, group_exists, has_sudo_rules, sudoers_user, usepam_off,
 };
@@ -145,6 +146,7 @@ impl Module for DeployUser {
             );
         }
         let existing = check_name(cx, sys, name)?;
+        check_keys_file(cx.facts, sys, name)?;
 
         let mut groups = Vec::new();
         if params.docker {

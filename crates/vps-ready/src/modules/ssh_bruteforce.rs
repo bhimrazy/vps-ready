@@ -3,14 +3,16 @@
 
 use std::net::IpAddr;
 
+use super::firewall_inbound::{SSH_PORT_UNKNOWN, ssh_ports};
 use super::{Applicability, Module, ModuleError, ModuleSteps, NoParams, PlanCx};
 use crate::engine::Reload;
 use crate::facts::{Facts, Init, OsFamily};
 use crate::resource::{File, Package, Resource, Service};
 use crate::sys::{FileOwner, Sys};
 
-/// The drop-in. fail2ban reads `jail.d/*.local` after `jail.d/*.conf`, so
-/// it wins over the package's `defaults-debian.conf`.
+/// The drop-in. fail2ban reads `jail.d/*.local` last, after `jail.local`,
+/// so it wins over the package's `defaults-debian.conf` and the admin's
+/// `jail.local`.
 pub const DROP_IN: &str = "/etc/fail2ban/jail.d/90-vps-ready.local";
 
 /// In install order. Debian 12+ has no `auth.log`, so the sshd jail reads the
@@ -21,18 +23,16 @@ const PACKAGES: [&str; 3] = ["nftables", "python3-systemd", "fail2ban"];
 
 const UNIT: &str = "fail2ban.service";
 
-/// The packaged defaults already set `banaction` and `backend` (Debian 13
-/// under `[sshd]`, Ubuntu 24.04 under `[DEFAULT]`); they are set again in
-/// case another release differs.
+/// Only `[sshd]`: a `[DEFAULT]` here would override the admin's defaults
+/// for every jail. `banaction` and `backend` are set because Debian 12's
+/// packaged defaults set neither.
 const HEADER: &str = "\
 # Written by vps-ready (ssh.bruteforce). `vps-ready rollback --last`
 # restores the previous state; edits here are replaced by the next apply.
-[DEFAULT]
-banaction = nftables
-backend = systemd
-
 [sshd]
 enabled = true
+banaction = nftables
+backend = systemd
 ";
 
 /// Never banned: loopback, plus the address of the applying session.
@@ -80,6 +80,8 @@ impl Module for SshBruteforce {
             "the sshd jail reads the systemd journal, and systemd is not running"
         } else if facts.updates.is_none() {
             "apt not found, or `apt-config` failed"
+        } else if ssh_ports(facts).is_empty() {
+            SSH_PORT_UNKNOWN
         } else {
             return Applicability::Applicable;
         };
@@ -97,6 +99,7 @@ impl Module for SshBruteforce {
         // its state, so rollback sees it as enabled already.
         vec![
             exempt,
+            "the jail's ignoreip replaces any that jail.local sets".to_owned(),
             "if this installs fail2ban, rollback leaves it installed and enabled, as the \
              package sets it up, so it runs the distro's own jails after a reboot; \
              `systemctl disable --now fail2ban` turns it off"
@@ -113,7 +116,7 @@ impl Module for SshBruteforce {
         })];
         resources.push(Resource::File(File {
             path: DROP_IN.into(),
-            content: drop_in(client(cx.facts)).into_bytes(),
+            content: drop_in(cx.facts).into_bytes(),
             owner: FileOwner {
                 mode: 0o644,
                 uid: self.uid,
@@ -140,12 +143,20 @@ fn client(facts: &Facts) -> Option<IpAddr> {
     facts.session.as_ref().map(|s| s.client.ip().to_canonical())
 }
 
-fn drop_in(client: Option<IpAddr>) -> String {
+/// `port` lists sshd's ports: the inherited `port = ssh` bans only 22.
+/// `ignoreip` does not extend the inherited list with `%(known/ignoreip)s`:
+/// that fails the whole configuration when nothing else sets `ignoreip`.
+fn drop_in(facts: &Facts) -> String {
+    let ports = ssh_ports(facts)
+        .iter()
+        .map(u16::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
     let mut ignore = IGNORE.to_owned();
-    if let Some(ip) = client {
+    if let Some(ip) = client(facts) {
         ignore.push_str(&format!(" {ip}"));
     }
-    format!("{HEADER}ignoreip = {ignore}\n")
+    format!("{HEADER}port = {ports}\nignoreip = {ignore}\n")
 }
 
 #[cfg(test)]

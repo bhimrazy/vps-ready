@@ -205,6 +205,11 @@ fn applies_only_on_debian_with_systemd_and_apt() {
         Applicability::NotApplicable { reason } => reason,
         Applicability::Applicable => panic!("applies"),
     };
+    facts.session = None;
+    facts.ssh.listening.clear();
+    facts.ssh.socket_ports.clear();
+    facts.ssh.effective = None;
+    assert!(reason(&facts).starts_with("the SSH port is unknown"));
     facts.updates = None;
     assert_eq!(reason(&facts), "apt not found, or `apt-config` failed");
     facts.init = Init::OpenRc;
@@ -249,6 +254,21 @@ fn ignores_the_session_address_only_when_there_is_one() {
         SshBruteforce::ROOT.notes(&facts)[0],
         "no SSH session found, so only localhost is exempt from bans"
     );
+}
+
+/// The jail bans on every port sshd can be reached on, not only 22.
+#[test]
+fn bans_on_the_ssh_ports() {
+    let mut facts = facts();
+    facts.session = Some(Session {
+        server: "198.51.100.5:2222".parse().unwrap(),
+        ..session("192.0.2.10:51234")
+    });
+    facts.ssh.listening = vec![2222, 22];
+    let drop_in = drop_in_of(&steps(&facts, &toml::Table::new()).unwrap());
+    assert!(drop_in.contains("\n[sshd]\n"), "{drop_in}");
+    assert!(!drop_in.contains("[DEFAULT]"), "{drop_in}");
+    assert!(drop_in.contains("\nport = 22,2222\n"), "{drop_in}");
 }
 
 #[test]
