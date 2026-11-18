@@ -349,14 +349,10 @@ mod tests {
             .diff(sys)
             .unwrap()
             .unwrap();
-        assert!(
-            change.summary.starts_with(
-                "update /etc/apt/keyrings/caddy.asc (0644 0:0): PGP public key, fingerprint \
+        assert!(change.summary.starts_with(
+            "update /etc/apt/keyrings/caddy.asc (0644 0:0): PGP public key, fingerprint \
                  6576 0C51 EDEA 2017 CEA2 CA15 155B 6D79 CA56 EA34 ("
-            ),
-            "{}",
-            change.summary
-        );
+        ));
         assert_eq!(change.diff, None);
     }
 
