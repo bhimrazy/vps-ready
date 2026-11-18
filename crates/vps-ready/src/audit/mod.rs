@@ -104,7 +104,8 @@ pub enum Check {
     /// systemd; skipped on other distros.
     AutoUpdates,
     /// No reboot is pending: `/run/reboot-required` is absent and no
-    /// installed kernel of the running flavor is newer than the running one.
+    /// installed kernel of the running flavor is newer than the running one
+    /// or was written over the running one's image after boot.
     /// Debian and Ubuntu only; skipped inside a container and when `/boot`
     /// holds no kernel image.
     RebootRequired,
@@ -820,6 +821,11 @@ fn reboot_required(facts: &Facts) -> Outcome {
             "running kernel {running}, newest installed {newest}"
         ));
     }
+    if let (Some(true), Some(running)) = (reboot.image_replaced, &reboot.running) {
+        problems.push(format!(
+            "the running kernel's image was replaced after boot ({running})"
+        ));
+    }
     if !problems.is_empty() {
         return Outcome::Fail {
             found: problems.join("; "),
@@ -1337,6 +1343,7 @@ mod tests {
             flagged,
             running: running.map(str::to_owned),
             installed: installed.iter().map(|s| (*s).to_owned()).collect(),
+            image_replaced: Some(false),
         });
         facts
     }
@@ -1369,6 +1376,18 @@ mod tests {
         );
         let both = eval(&rebooting(true, run, &["6.12.117+deb13-amd64"]));
         assert!(matches!(both, Outcome::Fail { found } if found.contains("; running kernel")));
+
+        // Same release name, image overwritten by an update.
+        let mut replaced = rebooting(false, run, &same);
+        replaced.reboot.as_mut().unwrap().image_replaced = Some(true);
+        assert_eq!(
+            eval(&replaced),
+            Outcome::Fail {
+                found: "the running kernel's image was replaced after boot \
+                        (6.12.57+deb13-amd64)"
+                    .to_owned()
+            }
+        );
 
         // No kernel image, as on a VPS that boots a provider kernel.
         assert!(matches!(

@@ -3,7 +3,10 @@
 //! Two signals, both read from files. `/run/reboot-required` is written by
 //! `update-notifier-common` (Ubuntu) and by the kernel hook of
 //! `unattended-upgrades` (Debian). The hook is absent without that package,
-//! so the running kernel is also compared with the images in `/boot`.
+//! so the running kernel is also compared with the images in `/boot`. A
+//! security update often keeps the same release name and overwrites its
+//! image, so the running kernel's own image is also checked for a change
+//! after boot.
 
 use std::path::Path;
 
@@ -12,6 +15,10 @@ use serde::Serialize;
 use crate::sys::{Fs, SysError};
 
 const FLAG: &str = "/run/reboot-required";
+
+/// Seconds an image may be newer than boot time before it counts as
+/// replaced, for clock steps at boot.
+const SLACK: i64 = 60;
 
 /// What the host says about a pending reboot.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -23,6 +30,9 @@ pub struct Reboot {
     pub running: Option<String>,
     /// Releases of the kernel images in `/boot` (`vmlinuz-*`), sorted.
     pub installed: Vec<String>,
+    /// Whether `/boot/vmlinuz-<running>` was modified after the system
+    /// booted. `None` when that could not be told.
+    pub image_replaced: Option<bool>,
 }
 
 impl Reboot {
@@ -110,11 +120,28 @@ pub(super) fn detect(fs: &dyn Fs, notices: &mut Vec<String>) -> Reboot {
             Vec::new()
         }
     };
+    let image_replaced = running.as_deref().and_then(|r| image_replaced(fs, r));
     Reboot {
         flagged: fs.exists(Path::new(FLAG)),
         running,
         installed,
+        image_replaced,
     }
+}
+
+/// Compares the image's mtime with `btime` in `/proc/stat`.
+fn image_replaced(fs: &dyn Fs, running: &str) -> Option<bool> {
+    let stat = fs.read(Path::new("/proc/stat")).ok()?;
+    let btime: i64 = String::from_utf8_lossy(&stat)
+        .lines()
+        .find_map(|l| l.strip_prefix("btime "))?
+        .trim()
+        .parse()
+        .ok()?;
+    let image = fs
+        .metadata(Path::new(&format!("/boot/vmlinuz-{running}")))
+        .ok()?;
+    Some(image.mtime > btime + SLACK)
 }
 
 #[cfg(test)]
@@ -127,6 +154,7 @@ mod tests {
             flagged: false,
             running: Some(running.to_owned()),
             installed: installed.iter().map(|s| (*s).to_owned()).collect(),
+            image_replaced: None,
         }
     }
 
@@ -193,5 +221,25 @@ mod tests {
         assert!(notices.is_empty(), "{notices:?}");
         assert!(!r.flagged);
         assert!(r.installed.is_empty());
+    }
+
+    #[test]
+    fn detects_a_replaced_running_image() {
+        let host = |mtime| {
+            let fs = FakeFs::new()
+                .with_file("/proc/sys/kernel/osrelease", "6.1.0-28-amd64\n")
+                .with_file("/proc/stat", "cpu 1 2 3\nbtime 1000000\nprocesses 5\n")
+                .with_file("/boot/vmlinuz-6.1.0-28-amd64", "")
+                .with_mtime("/boot/vmlinuz-6.1.0-28-amd64", mtime);
+            detect(&fs, &mut Vec::new()).image_replaced
+        };
+        assert_eq!(host(900_000), Some(false));
+        // Within the slack of boot time.
+        assert_eq!(host(1_000_030), Some(false));
+        assert_eq!(host(1_000_061), Some(true));
+
+        // No /proc/stat or no image: unknown, not a failure.
+        let fs = FakeFs::new().with_file("/proc/sys/kernel/osrelease", "6.1.0-28-amd64\n");
+        assert_eq!(detect(&fs, &mut Vec::new()).image_replaced, None);
     }
 }
