@@ -228,7 +228,7 @@ pub fn check_binary(fs: &dyn Fs, path: &Path) -> Result<(), String> {
 pub fn hook_unit(binary: &Path) -> String {
     format!(
         "# Written by vps-ready. It is not part of a transaction, so `vps-ready rollback`
-# leaves it in place; edits here are replaced the next time a switch is armed.
+# leaves it in place; edits here are replaced the next time the safety timer is armed.
 [Unit]
 Description=vps-ready: roll back an unconfirmed change after a reboot
 DefaultDependencies=no
