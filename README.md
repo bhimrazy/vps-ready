@@ -26,7 +26,7 @@
 </div>
 
 > [!NOTE]
-> vps-ready is at **v0.4**. `detect` and `audit` (31 controls), and `plan`, `apply`, `confirm` and `rollback` for six modules work today on Debian 12/13 and Ubuntu 22.04/24.04 with systemd: an admin user, SSH hardening and an inbound firewall behind a dead-man switch, plus fail2ban, kernel settings and automatic updates. There may be breaking changes before 1.0.
+> vps-ready is at **v0.5**. `detect` and `audit` (31 controls), and `plan`, `apply`, `confirm` and `rollback` for nine modules work today on Debian 12/13 and Ubuntu 22.04/24.04 with systemd: an admin user, SSH hardening and an inbound firewall behind a dead-man switch, plus fail2ban, kernel settings and automatic updates, and Docker, a Caddy reverse proxy and a deploy user for CI. There may be breaking changes before 1.0.
 
 ## Why
 
@@ -39,7 +39,7 @@ Auditors like Lynis tell you what is wrong but fix nothing. Ansible roles fix th
 On the server, as root. Installation is three steps on purpose: download, read, run.
 
 ```console
-# curl -fsSLO https://github.com/bhimrazy/vps-ready/releases/download/v0.4.0/install.sh
+# curl -fsSLO https://github.com/bhimrazy/vps-ready/releases/download/v0.5.0/install.sh
 # less install.sh
 # sh install.sh        # checks the SHA-256, verifies the signature if cosign, or a logged-in gh, is installed (stops on failure; see --skip-verify)
 ```
@@ -78,7 +78,7 @@ Run that command from a new terminal. If the new login works, `confirm` succeeds
   <br><sub>A real session in a Debian 13 VM: the end of <code>audit</code>, all of <code>plan</code>, and <code>apply</code> from its prompt on (it prints the same plan first).</sub>
 </p>
 
-The command is also installed as `vpsready`, without the hyphen. With Rust installed you can build from source instead: `cargo install vps-ready --locked`. Signed packages for apt, dnf and apk are planned for v0.5. The trust model of each install channel is in [the release doc](docs/release.md).
+The command is also installed as `vpsready`, without the hyphen. With Rust installed you can build from source instead: `cargo install vps-ready --locked`. Each release also has `.deb` packages for Debian and Ubuntu (checked against `checksums.txt`) and an SBOM; a signed apt repository, and dnf and apk packages, wait until they are needed. The trust model of each install channel is in [the release doc](docs/release.md).
 
 ## What it does
 
@@ -104,8 +104,11 @@ Hardening is grouped into modules:
 | `ssh.bruteforce` | fail2ban's `sshd` jail, reading the journal and banning in nftables | `SSH-008` | no |
 | `kernel.sysctl` | Safer kernel and network settings | `KRN-*`, `NET-*` | no |
 | `updates.auto` | Automatic security updates with `unattended-upgrades` | `UPD-001` | no |
+| `deploy.docker` | Docker Engine from Docker's own apt repository, with safer defaults: published ports bind to 127.0.0.1, `live-restore`, local log rotation | `FW-002` | no |
+| `deploy.proxy` | Caddy from its official apt repository as a reverse proxy with automatic HTTPS for the sites you list | none | no |
+| `deploy.user` | A login for CI that can run one command, with your keys | none | no |
 
-Profiles pick the modules: **minimal** is `user.admin`, `ssh.server`, `firewall.inbound` (SSH only), `kernel.sysctl` and `updates.auto`; **web** adds ports 80 and 443 (TCP, and UDP for HTTP/3) and `ssh.bruteforce`. A profile file can extend either and set your own admin name and keys. A plain `apply`, without `--profile` or `--module`, leaves the modules that can lock you out (and `ssh.bruteforce`, which installs packages) out, so it changes only kernel settings and automatic updates. Logging, a **paranoid** profile and deployment readiness (Docker done right, deploy user, reverse proxy, Tailscale, backups) come later.
+Profiles pick the modules: **minimal** is `user.admin`, `ssh.server`, `firewall.inbound` (SSH only), `kernel.sysctl` and `updates.auto`; **web** adds ports 80 and 443 (TCP, and UDP for HTTP/3) and `ssh.bruteforce` and `deploy.docker`. A profile file can extend either and set your own admin name and keys. A plain `apply`, without `--profile` or `--module`, leaves the modules that can lock you out (and `ssh.bruteforce`, which installs packages) out, so it changes only kernel settings and automatic updates. `deploy.proxy` and `deploy.user` are in no profile: they need settings (sites, keys), so you add them in a profile file. Logging, a **paranoid** profile, private access (Tailscale, WireGuard) and backups come later.
 
 ## How a run works
 
@@ -135,8 +138,8 @@ The engine is built around these rules, so they hold for every module rather tha
 | Family | Distros | Firewall | Init | Status |
 |---|---|---|---|---|
 | Debian | Ubuntu 22.04, 24.04; Debian 12, 13 (26.04 next) | nftables (its own table; not applied while ufw or firewalld is active) | systemd | since v0.2 |
-| RHEL | Rocky and Alma 9, 10; Fedora | firewalld | systemd | v0.6 |
-| Alpine | 3.2x | nftables | OpenRC | v0.6 |
+| RHEL | Rocky and Alma 9, 10; Fedora | firewalld | systemd | v0.7 |
+| Alpine | 3.2x | nftables | OpenRC | v0.7 |
 
 Architectures: x86_64 and aarch64, as static musl binaries. Windows, BSD, Kubernetes nodes and fleet management are out of scope.
 
@@ -151,7 +154,7 @@ Architectures: x86_64 and aarch64, as static musl binaries. Windows, BSD, Kubern
 | [Testing strategy](docs/testing.md) | Unit tests with fakes, systemd containers, real VMs, nightly cloud runs |
 | [Decisions](docs/decisions.md) | What is decided and why, and what is still open |
 
-The roadmap lives in the [GitHub milestones](https://github.com/bhimrazy/vps-ready/milestones): M0 skeleton, M1 read-only `detect` and `audit` (v0.1.0), M2 engine and safe modules (v0.2.0), M3 SSH, firewall and dead-man switch (v0.3.0), M4 interactive wizard (v0.4.0), M5 deployment readiness, M6 more distros.
+The roadmap lives in the [GitHub milestones](https://github.com/bhimrazy/vps-ready/milestones): M0 skeleton, M1 read-only `detect` and `audit` (v0.1.0), M2 engine and safe modules (v0.2.0), M3 SSH, firewall and dead-man switch (v0.3.0), M4 interactive wizard (v0.4.0), M5 deployment readiness (v0.5.0), M6 private access, M7 more distros and depth.
 
 ## Development
 

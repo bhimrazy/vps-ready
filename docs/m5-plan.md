@@ -1,6 +1,6 @@
 # M5 plan: deployment readiness (v0.5.0)
 
-> **Status: in progress.** The owner decided the open questions on 2026-10-31 (see the end). The modules, the `.deb` and the SBOM are in review or merged; v0.5.0 is not released yet.
+> **Status: done for v0.5.0.** The modules, vendor apt sources, the `.deb` and the SBOM shipped in v0.5.0. The plan is kept as the design record. The v0.6.0 direction at the end moved to the [M6 plan](m6-plan.md), which is not built yet.
 
 M5 takes a server that M3 and M4 hardened and gets it ready to run an app: Docker installed with safe defaults, a reverse proxy with automatic HTTPS, a deploy user for CI, and a way to install vps-ready itself as a package. The milestone as written also had Tailscale with public port 22 closed, and a cloud-init export. Those two change the safety model (a confirm that must arrive over the tailnet, and an apply with no one to confirm at all), so this plan moves them to a second release, v0.6.0, where they get their own design and VM time.
 

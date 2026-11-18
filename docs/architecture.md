@@ -272,8 +272,8 @@ sequenceDiagram
 ```
 
 Planned:
-- **OpenRC:** a double-forked `setsid` watchdog plus a `local.d` boot hook (M6; today the dead-man modules need systemd).
-- **firewalld:** runtime-only rules as a second safety net (M6).
+- **OpenRC:** a double-forked `setsid` watchdog plus a `local.d` boot hook (M7; today the dead-man modules need systemd).
+- **firewalld:** runtime-only rules as a second safety net (M7).
 - **Non-interactive (cloud-init):** `--deadman=off` with the invariants still enforced, or `--deadman=selftest` (probe the new config via `ssh-keyscan localhost:<port>`) (v0.6.0, with `export cloud-init`).
 
 ## State layout
@@ -336,7 +336,7 @@ vps-ready version
 
 ## Profile format: TOML
 
-TOML avoids YAML's foot-guns in a security config (`no` → `false`, the Norway problem, indentation surprises). Decoding is strict, with a `schema = 1` version field (planned: a JSON Schema for editor completion, deferred from M4 to M6 with the config file, see [the M4 plan](m4-plan.md#not-in-m4)):
+TOML avoids YAML's foot-guns in a security config (`no` → `false`, the Norway problem, indentation surprises). Decoding is strict, with a `schema = 1` version field (planned: a JSON Schema for editor completion, deferred from M4 to M7 with the config file, see [the M4 plan](m4-plan.md#not-in-m4)):
 - Every module's params struct has `#[serde(deny_unknown_fields)]`, and every section is checked when the profile is parsed, so a typo is an error that names the module, not a silently ignored line.
 - Planned: the same structs derive `schemars::JsonSchema`, so the published schema can't drift from the code.
 

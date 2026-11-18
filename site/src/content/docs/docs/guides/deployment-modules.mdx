@@ -10,7 +10,7 @@ import { Aside } from '@astrojs/starlight/components';
 Hardening a server is half the job; the other half is getting an app onto it. Three modules do that: `deploy.docker` installs Docker with safe defaults, `deploy.proxy` puts Caddy in front of your apps with HTTPS, and `deploy.user` gives your CI a login that can do one thing. They work like every other module: `plan` shows the diff, `apply` journals it, `rollback` undoes it.
 
 <Aside type="note" title="New in v0.5.0">
-These modules ship with v0.5.0, which is not released yet. Until then, they are on `main` only.
+These modules ship from v0.5.0.
 </Aside>
 
 On their own, the three do not touch the SSH server, the firewall's SSH rule or the admin's login, so they do not arm the [safety timer](/docs/guides/safety-net/). In a run with a guarded module, as in the `web` profile, they share its transaction: confirm it, or the timer undoes them too (and Docker restarts again). They can restart Docker, which matters if you reach the server through a container (see [Docker restarts](#what-a-rollback-leaves-behind)).
