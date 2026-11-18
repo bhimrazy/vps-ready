@@ -152,7 +152,7 @@ This plan departs from earlier docs; PR 8 updates them:
 
 ### Direction for v0.6.0: private access
 
-Recorded here so v0.5.0 does not paint it into a corner; v0.6.0 gets its own plan. Tailscale is one way to reach a server privately, not the only one (open question 4 in `decisions.md`). So v0.6.0 has two separate pieces:
+Recorded here so v0.5.0 does not paint it into a corner. v0.6.0 now has its own plan, [the M6 plan](m6-plan.md), which also adds a built-in WireGuard module; where the two differ, that plan wins. Tailscale is one way to reach a server privately, not the only one (open question 4 in `decisions.md`). So v0.6.0 has two separate pieces:
 
 1. **Closing public 22 works with any private network.** A `firewall.inbound` parameter names the interface SSH must come through (`ssh_via = "tailscale0"`, `"wg0"`, `"nb0"` for NetBird, and so on). SSH stays open on that interface and closes everywhere else. It runs behind the safety timer, and only a confirm whose server address belongs to that interface counts. Refused at plan time: an interface that is down or has no address. A note when vps-ready cannot tell whether the interface comes back after a reboot (for `tailscale0` it checks that `tailscaled` is enabled; for `wg0`, that `wg-quick@wg0` is). The note also points to the provider's console as the way back in.
 2. **`net.tailscale` is the one install-and-join helper.** It installs Tailscale from its repository (a vendor source as above), joins with an auth key read from a file or the environment, never from the command line, and supports `login_server` for Headscale. Then the close-22 step uses `tailscale0`.

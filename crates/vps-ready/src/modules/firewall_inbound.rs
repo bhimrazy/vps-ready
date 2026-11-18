@@ -147,6 +147,10 @@ fn not_docker(facts: &Facts) -> Vec<String> {
         .collect()
 }
 
+/// Why a module that needs [`ssh_ports`] does not apply when it is empty.
+pub(crate) const SSH_PORT_UNKNOWN: &str =
+    "the SSH port is unknown: no SSH session, sshd listener, `sshd -T` or ssh.socket shows it";
+
 /// Every port SSH may be reached on now: [`crate::facts::Ssh::ports`], the
 /// applying session's and every port an sshd process listens on.
 pub(crate) fn ssh_ports(facts: &Facts) -> BTreeSet<u16> {
@@ -225,8 +229,7 @@ impl Module for FirewallInbound {
         } else if !tools.nft && facts.updates.is_none() {
             "nft is not installed, and apt was not found to install it"
         } else if ssh_ports(facts).is_empty() {
-            "the SSH port is unknown: no SSH session, sshd listener, `sshd -T` or \
-             ssh.socket shows it"
+            SSH_PORT_UNKNOWN
         } else {
             return Applicability::Applicable;
         };

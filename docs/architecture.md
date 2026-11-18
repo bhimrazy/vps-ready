@@ -294,6 +294,23 @@ Planned:
 ```
 Commands that read this: `history`, `rollback [--txn|--last]`, `confirm`, later `drift`.
 
+## Files vps-ready writes
+
+vps-ready never edits a distro's main config file. It adds its own small file to the program's drop-in directory, so the change stays separate, is easy to see, and rollback only has to remove that file. The program reads the directory in name order, and the number in front of the name sets where the file sits in that order. What the order means depends on the program:
+
+| Program | File | Merge rule | So the name |
+|---|---|---|---|
+| sshd | `/etc/ssh/sshd_config.d/00-vps-ready.conf` | the first value read for a keyword wins ([sshd_config(5)](https://man.openbsd.org/sshd_config)); the `Include` at the top of `sshd_config` reads `*.conf` in name order | starts low, `00-`, to come before cloud-init's `50-cloud-init.conf`. The plan refuses when that `Include` is missing, sits in a `Match` block, or comes after a line that sets the same keyword |
+| sysctl | `/etc/sysctl.d/90-vps-ready.conf` | the last file read wins; files from all directories are sorted by name ([sysctl.d(5)](https://www.freedesktop.org/software/systemd/man/latest/sysctl.d.html)) | `90-`, the top of the 60 to 90 range systemd recommends for `/etc`. `99-*` files still come later; on Debian 12 and Ubuntu, `/etc/sysctl.conf` is read through `99-sysctl.conf` and can override it |
+| sudo | `/etc/sudoers.d/90-vps-ready-admin` | the last matching rule wins; `@includedir` skips names that contain a `.` or end in `~` ([sudoers(5)](https://www.sudo.ws/docs/man/sudoers.man/)) | `90-` to come after the distro's rules, with no dot. Written through `visudo -cf`, mode 0440 |
+| apt | `/etc/apt/apt.conf.d/52vps-ready` | files are read in name order and later values win; names are letters, digits, `_`, `-` and `.` only ([apt.conf(5)](https://manpages.debian.org/apt.conf.5)) | apt's own style, no dash and no extension; `52` comes after `20auto-upgrades` and `50unattended-upgrades` |
+| fail2ban | `/etc/fail2ban/jail.d/90-vps-ready.local` | read order is `jail.conf`, `jail.d/*.conf`, `jail.local`, `jail.d/*.local`, later wins ([jail.conf(5)](https://manpages.debian.org/jail.conf.5)) | `.local` so it is read last; it sets only the `[sshd]` jail, never `[DEFAULT]`, so other jails keep the admin's settings |
+| systemd | `/etc/systemd/system/vps-ready-*.service` | `/etc/systemd/system` is for units the admin adds ([systemd.unit(5)](https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html)) | prefixed `vps-ready-` so they are easy to find and never clash with a package's unit |
+
+Everything vps-ready owns that is not a drop-in lives under its own name: settings in `/etc/vps-ready/` and state in `/var/lib/vps-ready/` (see [State layout](#state-layout)), as the [FHS](https://refspecs.linuxfoundation.org/FHS_3.0/fhs/index.html) puts them. Every config file it writes starts with a `# Written by vps-ready` comment that names the module and says how to undo it.
+
+A new module follows the same rules: use the program's drop-in directory when it has one, pick the number from that program's merge rule (low when the first value wins, high when the last value wins), follow the directory's own naming style, and check that the program actually reads the name (extension, allowed characters).
+
 ## CLI surface (v1)
 
 Commands are `clap` derive structs in `src/cli`. Today `version`, `detect`, `audit`, `plan`, `apply`, `confirm`, `rollback` and `history` exist; the rest arrive with their milestones (see the GitHub milestones).
