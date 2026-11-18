@@ -140,6 +140,7 @@ impl Module for KernelSysctl {
                 gid: self.gid,
             },
             validate: None,
+            describe: None,
         });
         let resources: Vec<Resource> = std::iter::once(file).chain(runtime).collect();
         Ok(resources.into())

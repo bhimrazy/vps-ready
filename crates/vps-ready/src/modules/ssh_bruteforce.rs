@@ -111,14 +111,9 @@ impl Module for SshBruteforce {
     /// is written, before the restart: it cannot check one file on its own.
     fn plan(&self, cx: &PlanCx, _: Sys) -> Result<ModuleSteps, ModuleError> {
         let NoParams {} = cx.params()?;
-        let mut resources: Vec<Resource> = PACKAGES
-            .iter()
-            .map(|name| {
-                Resource::Package(Package {
-                    name: (*name).to_owned(),
-                })
-            })
-            .collect();
+        let mut resources = vec![Resource::Package(Package {
+            names: PACKAGES.iter().map(|name| (*name).to_owned()).collect(),
+        })];
         resources.push(Resource::File(File {
             path: DROP_IN.into(),
             content: drop_in(cx.facts).into_bytes(),
@@ -128,6 +123,7 @@ impl Module for SshBruteforce {
                 gid: self.gid,
             },
             validate: None,
+            describe: None,
         }));
         resources.push(Resource::Service(Service {
             unit: UNIT.to_owned(),

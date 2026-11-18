@@ -247,7 +247,7 @@ fn accepts_the_bridges_of_a_docker_planned_before_it() {
             .unwrap()
     };
     let docker = [Resource::Package(Package {
-        name: DOCKER_PACKAGE.to_owned(),
+        names: vec!["containerd.io".to_owned(), DOCKER_PACKAGE.to_owned()],
     })];
     let steps = plan_after(&docker);
     let mut with_docker = facts.clone();
@@ -265,7 +265,7 @@ fn accepts_the_bridges_of_a_docker_planned_before_it() {
     );
 
     let other = [Resource::Package(Package {
-        name: "nftables".to_owned(),
+        names: vec!["nftables".to_owned()],
     })];
     let steps = plan_after(&other);
     assert!(!ruleset_of(&steps).contains("docker0"));

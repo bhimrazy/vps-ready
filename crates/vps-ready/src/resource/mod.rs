@@ -155,7 +155,7 @@ pub enum Resource {
     Directory(Directory),
     /// A kernel parameter under `/proc/sys`.
     Sysctl(Sysctl),
-    /// An apt package that must be installed.
+    /// Apt packages that must be installed.
     Package(Package),
     /// A systemd unit that must be enabled or disabled, active or not.
     Service(Service),
@@ -168,7 +168,8 @@ pub enum Resource {
 impl Resource {
     /// A stable identifier, e.g. `file:/etc/sysctl.d/90-vps-ready.conf`,
     /// `directory:/etc/vps-ready`,
-    /// `sysctl:kernel.kptr_restrict`, `package:unattended-upgrades`,
+    /// `sysctl:kernel.kptr_restrict`, `package:unattended-upgrades` (or
+    /// `package:docker-ce,containerd.io` for several),
     /// `service:fail2ban.service`, `user:admin` or `authorized-keys:admin`.
     #[must_use]
     pub fn id(&self) -> String {
@@ -176,7 +177,7 @@ impl Resource {
             Self::File(f) => format!("file:{}", f.path.display()),
             Self::Directory(d) => format!("directory:{}", d.path.display()),
             Self::Sysctl(s) => format!("sysctl:{}", s.key),
-            Self::Package(p) => format!("package:{}", p.name),
+            Self::Package(p) => format!("package:{}", p.names.join(",")),
             Self::Service(s) => format!("service:{}", s.unit),
             Self::User(u) => format!("user:{}", u.name),
             Self::AuthorizedKeys(k) => format!("authorized-keys:{}", k.user),
@@ -205,7 +206,7 @@ impl Resource {
         match self {
             Self::File(f) if f.validate.is_some() => Cmd::DEFAULT_TIMEOUT,
             Self::File(_) | Self::Directory(_) | Self::Sysctl(_) => Duration::ZERO,
-            Self::Package(_) => package::TIMEOUT,
+            Self::Package(p) => p.timeout(),
             Self::Service(_) => service::TIMEOUT,
             // `getent`, `id`, then `useradd` or `usermod`.
             Self::User(_) => Cmd::DEFAULT_TIMEOUT * 4,
@@ -220,8 +221,9 @@ impl Resource {
     pub fn diff_timeout(&self) -> Duration {
         match self {
             Self::File(_) | Self::Directory(_) | Self::Sysctl(_) => Duration::ZERO,
-            // `dpkg-query`; `systemctl show`; `getent`.
-            Self::Package(_) | Self::Service(_) | Self::AuthorizedKeys(_) => Cmd::DEFAULT_TIMEOUT,
+            Self::Package(p) => p.diff_timeout(),
+            // `systemctl show`; `getent`.
+            Self::Service(_) | Self::AuthorizedKeys(_) => Cmd::DEFAULT_TIMEOUT,
             // `getent`, then `id`.
             Self::User(_) => Cmd::DEFAULT_TIMEOUT * 2,
         }
@@ -345,11 +347,12 @@ pub enum Backup {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         boot_id: Option<String>,
     },
-    /// An apt package.
+    /// Apt packages.
     Package {
-        /// Package name.
+        /// Package names, separated by spaces; one name in journals from
+        /// before 0.5.0.
         name: String,
-        /// Whether it was installed.
+        /// Whether all of them were installed.
         was_installed: bool,
     },
     /// A systemd unit.
@@ -647,6 +650,13 @@ mod tests {
                     was_installed: false,
                 },
                 r#"{"kind":"package","name":"unattended-upgrades","was_installed":false}"#,
+            ),
+            (
+                Backup::Package {
+                    name: "docker-ce containerd.io".into(),
+                    was_installed: false,
+                },
+                r#"{"kind":"package","name":"docker-ce containerd.io","was_installed":false}"#,
             ),
             (
                 Backup::Service {
