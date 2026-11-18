@@ -4,9 +4,11 @@
 //! sshd has applied its own first-match-wins rules across `sshd_config` and its
 //! drop-ins. Reading the files ourselves would get those rules wrong, so
 //! `sshd -T` is the only source of truth for SSH checks. The files are read
-//! only to decide whether a drop-in is read early enough to win.
+//! only to decide whether a drop-in is read early enough to win, and to find
+//! `Match` blocks: one other than `Match all` is not in plain `sshd -T`'s
+//! output.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use std::{fmt, io};
 
@@ -18,6 +20,12 @@ use crate::sys::{Cmd, Fs, Runner, SysError};
 
 /// The main server configuration file.
 pub const SSHD_CONFIG: &str = "/etc/ssh/sshd_config";
+
+/// Older names sshd still reads for a keyword, as `(keyword, alias)`.
+const ALIASES: [(&str, &str); 1] = [(
+    "kbdinteractiveauthentication",
+    "challengeresponseauthentication",
+)];
 
 /// Units queried to find out how sshd is started. Debian and Ubuntu call them
 /// `ssh.*`; Fedora and RHEL call them `sshd.*`.
@@ -75,7 +83,61 @@ impl fmt::Display for SshActivation {
     }
 }
 
+/// A line in a `Match` block that sets an sshd keyword. It wins over the
+/// global value for the connections the block matches. A block other than
+/// `Match all` is not in plain `sshd -T`'s output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MatchOverride {
+    /// The value it sets, as written.
+    pub value: String,
+    /// The file the line is in.
+    pub file: PathBuf,
+    /// Its 1-based line number.
+    pub line: usize,
+    /// The criteria of its `Match` line, e.g. `Address *`.
+    pub criteria: String,
+}
+
+impl fmt::Display for MatchOverride {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} in a Match block ({}:{}, Match {})",
+            self.value,
+            self.file.display(),
+            self.line,
+            self.criteria
+        )
+    }
+}
+
 impl Ssh {
+    /// The first line in a `Match` block of [`Ssh::files`] that sets `key`
+    /// (lowercase, as `sshd -T` prints it) to something other than `value`.
+    /// Which connections the block matches is not evaluated: its criteria
+    /// can name any user, host or address.
+    #[must_use]
+    pub fn match_override(&self, key: &str, value: &str) -> Option<MatchOverride> {
+        let files = self.files.as_ref()?;
+        let names = std::iter::once(key).chain(
+            ALIASES
+                .iter()
+                .filter(|(k, _)| *k == key)
+                .map(|&(_, alias)| alias),
+        );
+        names
+            .flat_map(|name| files.in_match_blocks(name))
+            .find_map(|(d, m)| {
+                let set = d.args.first()?;
+                (!set.eq_ignore_ascii_case(value)).then(|| MatchOverride {
+                    value: set.clone(),
+                    file: d.file.clone(),
+                    line: d.line,
+                    criteria: m.args.join(" "),
+                })
+            })
+    }
+
     /// Every port sshd accepts connections on now: `port` and
     /// `listenaddress` from `sshd -T`, and `ssh.socket`'s while it is the
     /// running unit. Sorted, without duplicates.
