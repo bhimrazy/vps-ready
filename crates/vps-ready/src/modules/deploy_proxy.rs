@@ -203,7 +203,7 @@ impl Module for DeployProxy {
             );
         }
         let package = Resource::Package(Package {
-            name: PACKAGE.to_owned(),
+            names: vec![PACKAGE.to_owned()],
         });
         let installed = package.diff(sys)?.is_none();
         let current = caddyfile_state(sys)?;
@@ -242,6 +242,7 @@ impl Module for DeployProxy {
                     content: caddyfile(&params.sites).into_bytes(),
                     owner: root(0o644),
                     validate: None,
+                    describe: None,
                 }),
             ]);
         } else {

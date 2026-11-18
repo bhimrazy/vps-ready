@@ -82,6 +82,7 @@ fn file(path: &str, content: &str, mode: u32) -> Resource {
         content: content.into(),
         owner: owner(mode),
         validate: None,
+        describe: None,
     })
 }
 

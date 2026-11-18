@@ -160,10 +160,8 @@ impl Module for DeployDocker {
                 }
                 resources.extend(apt_source(&source, &architecture(sys)?));
             }
-            resources.extend(PACKAGES.iter().map(|name| {
-                Resource::Package(Package {
-                    name: (*name).to_owned(),
-                })
+            resources.push(Resource::Package(Package {
+                names: PACKAGES.iter().map(|name| (*name).to_owned()).collect(),
             }));
             if !from_package {
                 notes.push(
@@ -229,6 +227,7 @@ impl Module for DeployDocker {
                     "dockerd",
                     ["--validate", "--config-file", Validate::PATH],
                 )),
+                describe: None,
             }),
         ]);
         Ok(ModuleSteps {
