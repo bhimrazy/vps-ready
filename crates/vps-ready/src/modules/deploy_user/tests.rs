@@ -425,7 +425,7 @@ fn a_command_root_does_not_own_alone_is_refused() {
         ),
     ] {
         let reason = refusal(plan_steps(&fs, &runner, &[], &with(command)));
-        assert!(reason.contains(why), "{command}: {reason}");
+        assert!(reason.contains(why), "{command}");
     }
 }
 
