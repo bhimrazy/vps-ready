@@ -1,0 +1,37 @@
+# nFPM config for the .deb. The release workflow sets ARCH (amd64 or arm64),
+# VERSION and BINARY (the musl binary for that architecture).
+# No maintainer scripts: installing the package changes nothing else.
+name: vps-ready
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+section: admin
+priority: optional
+maintainer: Bhimraj Yadav <bhimrajyadav977@gmail.com>
+description: |-
+  Harden a Debian or Ubuntu VPS with a journaled, reversible apply.
+  Each change is recorded and can be rolled back; a dead-man timer undoes
+  changes that are not confirmed.
+homepage: https://github.com/bhimrazy/vps-ready
+license: MIT OR Apache-2.0
+contents:
+  - src: ${BINARY}
+    dst: /usr/bin/vps-ready
+    expand: true
+    file_info:
+      mode: 0755
+  - src: vps-ready
+    dst: /usr/bin/vpsready
+    type: symlink
+  - src: packaging/copyright
+    dst: /usr/share/doc/vps-ready/copyright
+    file_info:
+      mode: 0644
+  - src: LICENSE-APACHE
+    dst: /usr/share/doc/vps-ready/LICENSE-APACHE
+    file_info:
+      mode: 0644
+  - src: LICENSE-MIT
+    dst: /usr/share/doc/vps-ready/LICENSE-MIT
+    file_info:
+      mode: 0644
