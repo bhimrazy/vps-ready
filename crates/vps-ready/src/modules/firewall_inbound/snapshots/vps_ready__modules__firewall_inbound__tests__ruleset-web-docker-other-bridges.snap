@@ -9,6 +9,14 @@ expression: "ruleset_of(&steps(&facts, &web).unwrap())"
 table inet vps_ready {}
 delete table inet vps_ready
 table inet vps_ready {
+  # Mitigates CVE-2026-98432, a kernel use-after-free of the IP options of
+  # a TCP handshake; the fix is a kernel update. Runs before conntrack and
+  # also sees traffic forwarded to containers. TCP only: IGMP and RSVP use
+  # the Router Alert option.
+  chain prerouting {
+    type filter hook prerouting priority raw; policy accept;
+    ip protocol tcp ip hdrlength > 5 counter drop
+  }
   chain input {
     type filter hook input priority filter; policy drop;
     ct state established,related accept

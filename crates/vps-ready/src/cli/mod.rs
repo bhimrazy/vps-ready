@@ -262,7 +262,6 @@ impl Cli {
 /// Runs the command line of this process: parses arguments, sets up logging
 /// and maps the result to an exit code. Both the `vps-ready` and `vpsready`
 /// binaries are this one call.
-#[must_use]
 pub fn main() -> ExitCode {
     // Usage errors are reported by clap itself, also with exit code 2.
     let cli = Cli::parse();
@@ -625,7 +624,7 @@ fn root_would_help(report: &Report, facts: &Facts) -> bool {
                     facts.sysctl.as_ref().is_some_and(|s| s.is_unreadable(key))
                 }
                 // `apt-config` and `systemctl show` work without root.
-                Check::AutoUpdates => false,
+                Check::AutoUpdates | Check::RebootRequired => false,
                 // Sudo helps only when nft was refused for lack of privileges.
                 Check::InboundDefaultDeny | Check::PublishedPorts => {
                     facts.firewall.is_none()
@@ -755,11 +754,16 @@ fn print_report(
                     writeln!(out, "{INDENT}{line}")?;
                 }
             }
-            match &control.fix {
-                Some(module) => {
+            match (&control.fix, &finding.manual_fix) {
+                (Some(module), _) => {
                     writeln!(out, "{INDENT}fix: sudo vps-ready apply --module {module}")?;
                 }
-                None => writeln!(out, "{INDENT}fix: not automated yet")?,
+                (None, Some(how)) => {
+                    for line in wrap(&format!("fix: {how}"), WIDTH - INDENT.len()) {
+                        writeln!(out, "{INDENT}{line}")?;
+                    }
+                }
+                (None, None) => writeln!(out, "{INDENT}fix: not automated yet")?,
             }
         }
     }
@@ -1100,6 +1104,44 @@ mod tests {
         print_report(&mut text, &report, "this host", false, false, false).unwrap();
         let text = String::from_utf8(text).unwrap();
         assert!(!text.contains("Run it with sudo"), "{text}");
+    }
+
+    /// A Match block that no module edits gets a hint to edit it by hand.
+    #[test]
+    fn audit_text_points_to_a_match_block() {
+        use crate::facts::SSHD_CONFIG;
+        use crate::facts::ssh::FsSource;
+        use crate::sys::fake::FakeFs;
+
+        let mut facts = host("debian-13", &[]);
+        facts.ssh.effective = Some(crate::facts::SshdConfig::parse(
+            "passwordauthentication no\n",
+        ));
+        let fs = FakeFs::new().with_file(
+            SSHD_CONFIG,
+            "Match Address 198.51.100.0/24\n  PasswordAuthentication yes\n",
+        );
+        facts.ssh.files = Some(
+            sshd_config::Config::read(&FsSource(&fs), std::path::Path::new(SSHD_CONFIG)).unwrap(),
+        );
+        let controls = audit::catalog()
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.id == "SSH-002")
+            .collect();
+        let report = audit::run(controls, &facts);
+        let mut text = Vec::new();
+        print_report(&mut text, &report, "this host", false, false, false).unwrap();
+        let text = String::from_utf8(text).unwrap();
+        let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            flat.contains(
+                "fix: edit the Match block at /etc/ssh/sshd_config:2 by hand \
+                 (vps-ready does not edit Match blocks)"
+            ),
+            "{text}"
+        );
+        assert!(!text.contains("vps-ready can fix"), "{text}");
     }
 
     /// With a fixable failure the output ends with the next step; a failure

@@ -17,7 +17,7 @@ use crate::sys::{Fs, SysError};
 
 /// The settings that are read, by their `sysctl` name. The audit catalog may
 /// only use names listed here.
-pub const KEYS: [&str; 14] = [
+pub const KEYS: [&str; 15] = [
     "fs.protected_fifos",
     "fs.protected_hardlinks",
     "fs.protected_regular",
@@ -32,6 +32,7 @@ pub const KEYS: [&str; 14] = [
     "net.ipv4.conf.all.accept_source_route",
     "net.ipv4.icmp_echo_ignore_broadcasts",
     "net.ipv4.tcp_syncookies",
+    "net.mptcp.enabled",
 ];
 
 /// The IPv4 settings read from each directory under `/proc/sys/net/ipv4/conf`.

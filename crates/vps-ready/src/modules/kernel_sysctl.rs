@@ -10,9 +10,9 @@ use crate::facts::Facts;
 use crate::resource::{File, Resource, Sysctl};
 use crate::sys::{FileOwner, Sys, SysError};
 
-/// The drop-in. It sorts after the distros' defaults; a `99-*` file or
-/// `/etc/sysctl.conf` (read through Debian's `99-sysctl.conf`) can still
-/// override it at boot.
+/// The drop-in. It sorts after the distros' defaults; a `99-*` file can
+/// still override it at boot, and so can `/etc/sysctl.conf` on Debian 12 and
+/// Ubuntu, through their `99-sysctl.conf` link (Debian 13 has neither).
 pub const DROP_IN: &str = "/etc/sysctl.d/90-vps-ready.conf";
 
 /// The value written for each key, in drop-in order. Each is in its
@@ -20,7 +20,7 @@ pub const DROP_IN: &str = "/etc/sysctl.d/90-vps-ready.conf";
 /// so rollback can restore it: not `unprivileged_bpf_disabled=1` or
 /// `ptrace_scope=3`. `kptr_restrict=2` would hide `/proc/kallsyms` from root
 /// too and break `perf` and `bpftrace`.
-pub const VALUES: [(&str, &str); 14] = [
+pub const VALUES: [(&str, &str); 15] = [
     ("kernel.kptr_restrict", "1"),
     ("kernel.dmesg_restrict", "1"),
     ("kernel.unprivileged_bpf_disabled", "2"),
@@ -35,6 +35,7 @@ pub const VALUES: [(&str, &str); 14] = [
     ("net.ipv4.tcp_syncookies", "1"),
     ("net.ipv4.conf.all.accept_source_route", "0"),
     ("net.ipv4.icmp_echo_ignore_broadcasts", "1"),
+    ("net.mptcp.enabled", "0"),
 ];
 
 const HEADER: &str = "# Written by vps-ready (kernel.sysctl). `vps-ready rollback --last`\n\
@@ -69,7 +70,8 @@ impl Module for KernelSysctl {
 
     fn why(&self) -> &'static str {
         "Hides kernel addresses and logs from normal users, restricts BPF, ptrace and \
-         perf, protects shared directories such as /tmp, and turns on SYN cookies."
+         perf, protects shared directories such as /tmp, turns on SYN cookies and turns \
+         off Multipath TCP."
     }
 
     fn applicable(&self, facts: &Facts) -> Applicability {
@@ -101,7 +103,7 @@ impl Module for KernelSysctl {
         let mut runtime = Vec::new();
         for (key, value) in VALUES {
             let Some(one_of) = controls.iter().find_map(|c| match &c.check {
-                Check::Sysctl { key: k, one_of }
+                Check::Sysctl { key: k, one_of, .. }
                     if k == key && c.fix.as_deref() == Some(self.id()) =>
                 {
                     Some(one_of)
@@ -147,25 +149,35 @@ impl Module for KernelSysctl {
         let Some(running) = &facts.sysctl else {
             return Vec::new();
         };
+        let mut notes = Vec::new();
+        if running.get("net.mptcp.enabled") == Some("1") {
+            notes.push(
+                "Turning off Multipath TCP does not affect sockets already open: restart the \
+                 services that listen with it (Caddy, Docker, tailscaled and other Go 1.24+ \
+                 programs do by default). Software that needs Multipath TCP stops working."
+                    .to_owned(),
+            );
+        }
         let skipped: Vec<&str> = VALUES
             .iter()
             .map(|(key, _)| *key)
             .filter(|key| running.is_unreadable(key))
             .collect();
         if skipped.is_empty() {
-            return Vec::new();
+            return notes;
         }
         let (noun, verb, them) = if skipped.len() == 1 {
             ("setting", "is", "it")
         } else {
             ("settings", "are", "them")
         };
-        vec![format!(
+        notes.push(format!(
             "{} kernel {noun} {verb} readable only by root on this kernel ({}), so the plan \
              skips {them}; run with sudo to plan {them}",
             skipped.len(),
             skipped.join(", ")
-        )]
+        ));
+        notes
     }
 }
 

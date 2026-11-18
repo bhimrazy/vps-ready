@@ -8,7 +8,7 @@ expression: out
   "applies": false,
   "reason": "kernel settings belong to the host inside a container",
   "arms_safety_timer": false,
-  "why": "Hides kernel addresses and logs from normal users, restricts BPF, ptrace and perf, protects shared directories such as /tmp, and turns on SYN cookies.",
+  "why": "Hides kernel addresses and logs from normal users, restricts BPF, ptrace and perf, protects shared directories such as /tmp, turns on SYN cookies and turns off Multipath TCP.",
   "params": [],
   "controls": [
     {
@@ -80,6 +80,11 @@ expression: out
       "id": "NET-003",
       "severity": "low",
       "title": "Broadcast pings ignored"
+    },
+    {
+      "id": "NET-007",
+      "severity": "low",
+      "title": "Multipath TCP disabled"
     }
   ]
 }

@@ -1,6 +1,6 @@
 ---
 source: crates/vps-ready/src/modules/firewall_inbound/tests.rs
-expression: "ruleset_of(&steps(&facts,\n&params(\"allow = [\\\"22/tcp\\\", \\\"80/tcp\\\", \\\"443/tcp\\\", \\\"443/udp\\\"]\")).unwrap())"
+expression: "ruleset_of(&steps(&facts, &web).unwrap())"
 ---
 # Written by vps-ready (firewall.inbound). `vps-ready rollback --last`
 # restores the previous state; edits here are replaced by the next apply.
@@ -9,6 +9,14 @@ expression: "ruleset_of(&steps(&facts,\n&params(\"allow = [\\\"22/tcp\\\", \\\"8
 table inet vps_ready {}
 delete table inet vps_ready
 table inet vps_ready {
+  # Mitigates CVE-2026-98432, a kernel use-after-free of the IP options of
+  # a TCP handshake; the fix is a kernel update. Runs before conntrack and
+  # also sees traffic forwarded to containers. TCP only: IGMP and RSVP use
+  # the Router Alert option.
+  chain prerouting {
+    type filter hook prerouting priority raw; policy accept;
+    ip protocol tcp ip hdrlength > 5 counter drop
+  }
   chain input {
     type filter hook input priority filter; policy drop;
     ct state established,related accept

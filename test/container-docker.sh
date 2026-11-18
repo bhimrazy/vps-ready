@@ -3,8 +3,9 @@
 #
 # Usage: test/container-docker.sh <distro> [binary]      e.g. ubuntu-24.04
 #   Same binary and image requirements as test/container-audit.sh. Needs docker
-#   and jq. `apply` installs Docker from download.docker.com and `docker run`
-#   pulls busybox from public.ecr.aws, so the container needs network access.
+#   and jq. `apply` installs Docker from download.docker.com and the test app
+#   is the distro's busybox-static, so the container needs network access to
+#   both. No image is pulled from a registry, whose pull limits made runs fail.
 #
 # Cycle: apply --yes -> plan has no changes -> Docker runs with live-restore
 # and publishes a port without an address on 127.0.0.1 only: it answers there
@@ -56,8 +57,6 @@ die() { echo "FAIL [$distro]: $*" >&2; exit 1; }
 http() {
   ct timeout 3 bash -c 'exec 3<>"/dev/tcp/$1/$2" && printf "GET / HTTP/1.0\r\n\r\n" >&3 && head -c 8 <&3' _ "$1" "$2"
 }
-# busybox 1.37 by digest, from a mirror without Docker Hub's pull limits.
-busybox=public.ecr.aws/docker/library/busybox@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec
 managed="/etc/apt/sources.list.d/docker.sources /etc/apt/keyrings/docker.asc /etc/docker/daemon.json"
 
 for f in $managed; do ct test ! -e "$f" || die "$f exists before apply"; done
@@ -76,7 +75,15 @@ echo "== $distro: Docker after apply"
 ct docker version --format 'docker {{.Server.Version}}'
 [ "$(ct docker info --format '{{.LiveRestoreEnabled}}')" = true ] ||
   die "live-restore is not on"
-ct docker run -d --name web -p 8080:80 "$busybox" httpd -f -p 80 >/dev/null ||
+# The app image is a static busybox from the distro's archive, imported
+# rather than pulled.
+ct apt-get install -y -q --no-install-recommends busybox-static >/dev/null ||
+  die "cannot install busybox-static"
+# shellcheck disable=SC2016 # expanded in the container
+ct sh -c 'd=$(mktemp -d) && cp "$(command -v busybox)" "$d/" &&
+  tar -C "$d" -c . | docker import - vr-app >/dev/null && rm -rf "$d"' ||
+  die "cannot build the app image"
+ct docker run -d --name web -p 8080:80 vr-app /busybox httpd -f -p 80 >/dev/null ||
   die "docker run failed"
 ports=$(ct docker port web 80/tcp)
 echo "$ports"

@@ -124,10 +124,11 @@ deploy.docker: Install Docker with logs capped and ports on loopback by default
       +}
 firewall.inbound: Drop incoming traffic that no rule allows (fixes FW-001)
   note: always accepts TCP 22, the current SSH ports (this session's, root's sshd listeners and `Port`), whatever `allow` says
+  note: drops incoming IPv4 TCP that carries IP options, also to containers, to blunt CVE-2026-98432 until the kernel is updated and rebooted; TCP labeled with CIPSO (NetLabel) stops working
   note: deploy.docker installs Docker: input from docker0 and br-* is accepted, so containers can reach services on the host; a compromised container can reach all of them, as with no firewall
   + directory /etc/vps-ready (mode 0755, root:root)                       reversible
   + /etc/vps-ready/firewall.nft (mode 0644, root:root)                    reversible
-      @@ -0,0 +1,27 @@
+      @@ -0,0 +1,35 @@
       +# Written by vps-ready (firewall.inbound). `vps-ready rollback --last`
       +# restores the previous state; edits here are replaced by the next apply.
       +# vps-ready-firewall.service loads it. It replaces only the table
@@ -135,6 +136,14 @@ firewall.inbound: Drop incoming traffic that no rule allows (fixes FW-001)
       +table inet vps_ready {}
       +delete table inet vps_ready
       +table inet vps_ready {
+      +  # Mitigates CVE-2026-98432, a kernel use-after-free of the IP options of
+      +  # a TCP handshake; the fix is a kernel update. Runs before conntrack and
+      +  # also sees traffic forwarded to containers. TCP only: IGMP and RSVP use
+      +  # the Router Alert option.
+      +  chain prerouting {
+      +    type filter hook prerouting priority raw; policy accept;
+      +    ip protocol tcp ip hdrlength > 5 counter drop
+      +  }
       +  chain input {
       +    type filter hook input priority filter; policy drop;
       +    ct state established,related accept
@@ -179,17 +188,17 @@ firewall.inbound: Drop incoming traffic that no rule allows (fixes FW-001)
   ~ enable and start vps-ready-firewall.service                           reversible
 ssh.bruteforce: Ban addresses that keep failing to log in over SSH
   note: no SSH session found, so only localhost is exempt from bans
+  note: the jail's ignoreip replaces any that jail.local sets
   note: if this installs fail2ban, rollback leaves it installed and enabled, as the package sets it up, so it runs the distro's own jails after a reboot; `systemctl disable --now fail2ban` turns it off
   + /etc/fail2ban/jail.d/90-vps-ready.local (mode 0644, root:root)        reversible
-      @@ -0,0 +1,9 @@
+      @@ -0,0 +1,8 @@
       +# Written by vps-ready (ssh.bruteforce). `vps-ready rollback --last`
       +# restores the previous state; edits here are replaced by the next apply.
-      +[DEFAULT]
-      +banaction = nftables
-      +backend = systemd
-      +
       +[sshd]
       +enabled = true
+      +banaction = nftables
+      +backend = systemd
+      +port = 22
       +ignoreip = 127.0.0.1/8 ::1
   ~ enable and start fail2ban.service                                     reversible
 kernel.sysctl: Harden kernel settings (fixes KRN-001, KRN-002, KRN-003, KRN-007, KRN-008, NET-002)

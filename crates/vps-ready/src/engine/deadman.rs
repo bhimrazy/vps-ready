@@ -228,7 +228,9 @@ pub fn check_binary(fs: &dyn Fs, path: &Path) -> Result<(), String> {
 #[must_use]
 pub fn hook_unit(binary: &Path) -> String {
     format!(
-        "[Unit]
+        "# Written by vps-ready. It is not part of a transaction, so `vps-ready rollback`
+# leaves it in place; edits here are replaced the next time the safety timer is armed.
+[Unit]
 Description=vps-ready: roll back an unconfirmed change after a reboot
 DefaultDependencies=no
 After=local-fs.target vps-ready-firewall.service

@@ -41,6 +41,12 @@ const PAGES = {
     order: 9,
     note: 'This is the plan for v0.5.0, which is in progress and not released yet. The private-access direction for v0.6.0 at the end is not built.',
   },
+  'm6-plan.md': {
+    slug: 'project/m6-plan',
+    label: 'Design notes: M6',
+    order: 10,
+    note: 'This is a proposed plan for a later release. Nothing in it is built yet.',
+  },
 };
 const DOCS_OUT = join(site, 'src/content/docs/docs');
 const CONTROLS_SLUG = 'reference/security-controls';
