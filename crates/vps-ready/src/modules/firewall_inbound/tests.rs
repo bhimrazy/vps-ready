@@ -222,6 +222,94 @@ fn ruleset_snapshots() {
     );
 }
 
+/// On a host without Docker, `deploy.docker` before it in the same plan
+/// installs Docker: the bridges are accepted as if Docker were present.
+#[test]
+fn accepts_the_bridges_of_a_docker_planned_before_it() {
+    let facts = facts();
+    assert!(!facts.docker);
+    let web = params("allow = [\"22/tcp\", \"80/tcp\", \"443/tcp\", \"443/udp\"]");
+    let (fs, runner) = (FakeFs::new(), FakeRunner::new());
+    let sys = Sys {
+        fs: &fs,
+        runner: &runner,
+    };
+    let plan_after = |planned: &[Resource]| {
+        FirewallInbound
+            .plan(
+                &PlanCx {
+                    facts: &facts,
+                    params: &web,
+                    planned,
+                },
+                sys,
+            )
+            .unwrap()
+    };
+    let docker = [Resource::Package(Package {
+        name: DOCKER_PACKAGE.to_owned(),
+    })];
+    let steps = plan_after(&docker);
+    let mut with_docker = facts.clone();
+    with_docker.docker = true;
+    assert_eq!(
+        ruleset_of(&steps),
+        ruleset_of(&self::steps(&with_docker, &web).unwrap())
+    );
+    assert!(ruleset_of(&steps).contains("iifname \"docker0\" accept"));
+    assert!(
+        steps.notes[0]
+            .starts_with("deploy.docker installs Docker: input from docker0 and br-* is accepted"),
+        "{:?}",
+        steps.notes
+    );
+
+    let other = [Resource::Package(Package {
+        name: "nftables".to_owned(),
+    })];
+    let steps = plan_after(&other);
+    assert!(!ruleset_of(&steps).contains("docker0"));
+    assert!(steps.notes.is_empty(), "{:?}", steps.notes);
+}
+
+/// Both modules from a profile, through the engine.
+#[test]
+fn plans_the_bridges_with_deploy_docker_in_the_profile() {
+    let fs = FakeFs::new();
+    let runner = FakeRunner::new()
+        .on("dpkg-query", ["-W"], Output::success("not-installed"))
+        .on("dpkg", ["--print-architecture"], Output::success("amd64\n"))
+        .on(
+            "systemctl",
+            ["show"],
+            Output::success("LoadState=not-found\nActiveState=inactive\nUnitFileState=\n"),
+        );
+    let facts = facts();
+    let modules = [
+        Selected::new(&crate::modules::DeployDocker),
+        Selected::new(&FirewallInbound),
+    ];
+    let plan = engine::plan(
+        &modules,
+        &facts,
+        Sys {
+            fs: &fs,
+            runner: &runner,
+        },
+    )
+    .unwrap();
+    let ruleset = plan
+        .steps()
+        .find_map(|s| match &s.resource {
+            Resource::File(f) if f.path == Path::new(RULESET) => {
+                Some(String::from_utf8(f.content.clone()).unwrap())
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert!(ruleset.contains("iifname \"br-*\" accept"), "{ruleset}");
+}
+
 #[test]
 fn allow_takes_ports_with_a_protocol() {
     for good in ["22/tcp", "443/udp", "65535/tcp"] {

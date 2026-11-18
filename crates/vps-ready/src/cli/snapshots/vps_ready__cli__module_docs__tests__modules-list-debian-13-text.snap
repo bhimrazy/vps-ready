@@ -12,6 +12,10 @@ ssh.server
   Applies to this host.
   Arms the safety timer: confirm from a new SSH session.
 
+deploy.docker
+  Install Docker with logs capped and ports on loopback by default
+  Applies to this host.
+
 firewall.inbound
   Drop incoming traffic that no rule allows
   Applies to this host.

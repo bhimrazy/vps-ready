@@ -624,6 +624,10 @@ fn docker_absent() -> Outcome {
     }
 }
 
+/// After the ports FW-002 fails on.
+const LOOPBACK_HINT: &str = "with deploy.docker, a port published without an address binds to \
+     127.0.0.1; one published with an address, or on a network created before, keeps it";
+
 /// Fails on ports Docker publishes that an input chain would otherwise block.
 fn published_ports(firewall: &Firewall, ipv6: bool, docker: bool) -> Outcome {
     if firewall.published.is_empty() && !docker {
@@ -655,7 +659,7 @@ fn published_ports(firewall: &Firewall, ipv6: bool, docker: bool) -> Outcome {
     if !bypassing.is_empty() {
         Outcome::Fail {
             found: format!(
-                "Docker publishes ports the firewall would otherwise block: {}",
+                "Docker publishes ports the firewall would otherwise block: {}; {LOOPBACK_HINT}",
                 port_list(&bypassing)
             ),
         }
@@ -2019,9 +2023,10 @@ mod tests {
                 true
             ),
             Outcome::Fail {
-                found: "Docker publishes ports the firewall would otherwise block: \
-                        tcp/5432, tcp/9000-9001"
-                    .to_owned()
+                found: format!(
+                    "Docker publishes ports the firewall would otherwise block: \
+                     tcp/5432, tcp/9000-9001; {LOOPBACK_HINT}"
+                )
             }
         );
         // A private address may be a cloud server's primary one, so it counts.
@@ -2030,9 +2035,10 @@ mod tests {
         assert_eq!(
             eval(vec![bound], false),
             Outcome::Fail {
-                found: "Docker publishes ports the firewall would otherwise block: \
-                        tcp/5432 on 10.8.0.1"
-                    .to_owned()
+                found: format!(
+                    "Docker publishes ports the firewall would otherwise block: \
+                     tcp/5432 on 10.8.0.1; {LOOPBACK_HINT}"
+                )
             }
         );
         // IPv6 counts only when the host has a global IPv6 address.

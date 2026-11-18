@@ -1432,6 +1432,9 @@ fn every_command_of_the_boot_hook_is_bounded() {
         rec(Event::Reloaded {
             reload: Reload::Fail2banRestart,
         }),
+        rec(Event::Reloaded {
+            reload: Reload::DockerRestart,
+        }),
     ];
     for r in &records {
         txn.append(&fs, r).unwrap();
@@ -1463,6 +1466,8 @@ fn every_command_of_the_boot_hook_is_bounded() {
     ] {
         assert!(calls.iter().any(|c| c == expected), "{expected}: {calls:?}");
     }
+    // Docker starts after the hook and reads the restored daemon.json.
+    assert!(!calls.iter().any(|c| c.contains("docker")), "{calls:?}");
     let unbounded: Vec<String> = run
         .calls()
         .iter()

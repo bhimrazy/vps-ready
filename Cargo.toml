@@ -23,7 +23,7 @@ dialoguer = { version = "0.12.0", default-features = false }
 owo-colors = "4.4.0"
 rustix = { version = "1.1.5", default-features = false, features = ["std", "fs"] }
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.152"
+serde_json = { version = "1.0.152", features = ["preserve_order"] }
 signal-hook = { version = "0.4.5", default-features = false }
 similar = "3.2.0"
 thiserror = "2.0.21"

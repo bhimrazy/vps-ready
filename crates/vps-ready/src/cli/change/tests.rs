@@ -90,6 +90,7 @@ pub(in crate::cli) fn host(fs: &FakeFs) -> Host<'_> {
         };
         FakeRunner::new()
             .on("dpkg-query", ["-W"], Output::success("installed"))
+            .on("dpkg", ["--print-architecture"], Output::success("amd64\n"))
             .on("apt-config", ["-c"], Output::success(""))
             .on(
                 "getent",
@@ -954,7 +955,8 @@ fn a_profile_file_is_read_and_checked() {
     );
     let (code, out, _) = plan_with(&host(&fs), &with_profile("/srv/mine.toml", &[]));
     assert_eq!(code, 0);
-    assert!(out.starts_with("firewall.inbound:"), "{out}");
+    assert!(out.starts_with("deploy.docker:"), "{out}");
+    assert!(out.contains("firewall.inbound:"), "{out}");
     assert!(out.contains("ssh.bruteforce:"), "{out}");
     assert!(out.contains("kernel.sysctl:"), "{out}");
     assert!(!out.contains("updates.auto"), "{out}");

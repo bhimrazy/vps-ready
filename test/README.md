@@ -44,6 +44,12 @@ with a forced command: the drop-in passes `visudo -cf`, the deploy key runs
 only that command, a second apply with another command leaves only the key
 forced to it, and two `rollback --last` runs restore the first and then remove
 the account.
+`test/container-docker.sh <distro> [binary]` installs Docker with
+`deploy.docker` from Docker's repository: the next plan is empty, live-restore
+is on, `docker run -p 8080:80` answers on 127.0.0.1 and not on the container's
+own address, and `rollback --last` removes the source, the key and
+`daemon.json`, keeps the packages and restarts Docker with its defaults. It
+needs network access.
 
 ```sh
 cargo build --release --target aarch64-unknown-linux-musl   # x86_64-... on Intel

@@ -176,6 +176,8 @@ jobs:
         run: test/container-bruteforce.sh "$DISTRO" bin/vps-ready
       - name: Apply and roll back user.admin in the container
         run: test/container-admin.sh "$DISTRO" bin/vps-ready
+      - name: Apply and roll back deploy.docker in the container
+        run: test/container-docker.sh "$DISTRO" bin/vps-ready
 
   # Single required check for branch protection.
   ci-ok:

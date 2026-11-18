@@ -71,6 +71,9 @@ pub struct OsRelease {
     pub id_like: Vec<String>,
     /// `VERSION_ID`, e.g. `24.04`.
     pub version_id: Option<String>,
+    /// The release's codename, e.g. `noble`: `UBUNTU_CODENAME`, else
+    /// `VERSION_CODENAME`, as Docker's install docs read it.
+    pub codename: Option<String>,
     /// `PRETTY_NAME`, e.g. `Ubuntu 24.04.3 LTS`. Defaults to `Linux`.
     pub pretty_name: String,
     /// Family derived from `ID`, then `ID_LIKE` in order.
@@ -92,10 +95,15 @@ impl OsRelease {
             .chain(&id_like)
             .find_map(|i| OsFamily::from_id(i))
             .unwrap_or(OsFamily::Unknown);
+        let version_codename = vars.remove("VERSION_CODENAME");
         Self {
             id,
             id_like,
             version_id: vars.remove("VERSION_ID"),
+            codename: vars
+                .remove("UBUNTU_CODENAME")
+                .or(version_codename)
+                .filter(|c| !c.is_empty()),
             pretty_name: vars
                 .remove("PRETTY_NAME")
                 .unwrap_or_else(|| "Linux".to_owned()),
@@ -110,6 +118,7 @@ impl OsRelease {
             id: "unknown".to_owned(),
             id_like: Vec::new(),
             version_id: None,
+            codename: None,
             pretty_name: "unknown".to_owned(),
             family: OsFamily::Unknown,
         }
@@ -236,6 +245,22 @@ mod tests {
         assert_eq!(os.pretty_name, "Linux");
         assert_eq!(os.version_id, None);
         assert!(os.id_like.is_empty());
+    }
+
+    #[test]
+    fn reads_the_codename() {
+        let codename = |input| OsRelease::parse(input).codename;
+        assert_eq!(
+            codename("VERSION_CODENAME=trixie").as_deref(),
+            Some("trixie")
+        );
+        // Ubuntu's own key wins, as in Docker's install docs.
+        assert_eq!(
+            codename("UBUNTU_CODENAME=noble\nVERSION_CODENAME=other").as_deref(),
+            Some("noble")
+        );
+        assert_eq!(codename("VERSION_CODENAME="), None);
+        assert_eq!(codename("ID=debian"), None);
     }
 
     #[test]

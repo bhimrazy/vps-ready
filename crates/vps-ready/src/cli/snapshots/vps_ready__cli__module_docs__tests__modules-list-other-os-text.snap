@@ -13,6 +13,11 @@ ssh.server
   Does not apply to this host: sshd is set up only on Debian and Ubuntu so far.
   Arms the safety timer: confirm from a new SSH session.
 
+deploy.docker
+  Install Docker with logs capped and ports on loopback by default
+  Does not apply to this host: Docker is installed only on Debian and Ubuntu so
+  far.
+
 firewall.inbound
   Drop incoming traffic that no rule allows
   Does not apply to this host: the firewall is set up only on Debian and Ubuntu
