@@ -746,3 +746,63 @@ fn a_missing_sudo_is_a_refusal() {
         other => panic!("{other:?}"),
     }
 }
+
+/// The drop-in has no Match block, so with it in place SSH-001 to SSH-007
+/// pass and there is nothing to note. A Match block it cannot change is
+/// noted, and the audit does not name ssh.server as its fix.
+#[test]
+fn match_blocks_are_noted_and_not_claimed() {
+    use crate::audit::{self, Outcome};
+
+    let all: Vec<Setting> = MANAGED
+        .iter()
+        .map(|&(_, keyword)| Setting {
+            keyword,
+            value: VALUE,
+        })
+        .collect();
+    let drop_in = DropIn { settings: &all }.render().unwrap();
+    let main = "Include /etc/ssh/sshd_config.d/*.conf\n";
+    let effective: String = MANAGED
+        .iter()
+        .map(|(key, _)| format!("{key} no\n"))
+        .collect();
+    let config = |files: &[(&str, &str)]| {
+        let mut facts = with_config(main, files);
+        facts.ssh.effective = Some(SshdConfig::parse(&effective));
+        facts
+    };
+    let failed = |facts: &Facts| {
+        audit::run(audit::catalog().unwrap(), facts)
+            .findings
+            .into_iter()
+            .filter(|f| {
+                matches!(f.control.check, audit::Check::SshdEffective { .. })
+                    && f.outcome != Outcome::Pass
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let hardened = config(&[(DROP_IN, &drop_in)]);
+    assert_eq!(failed(&hardened), []);
+    assert_eq!(SshServer.notes(&hardened).len(), 2);
+
+    let overridden = config(&[
+        (DROP_IN, &drop_in),
+        (
+            "/etc/ssh/sshd_config.d/50-cloud.conf",
+            "Match Address 203.0.113.0/24\n  PasswordAuthentication yes\n",
+        ),
+    ]);
+    assert_eq!(
+        SshServer.notes(&overridden)[2..],
+        ["PasswordAuthentication yes in a Match block \
+          (/etc/ssh/sshd_config.d/50-cloud.conf:2, Match Address 203.0.113.0/24) stays as \
+          it is: vps-ready does not edit Match blocks; if it covers your own connection, \
+          apply will fail its check and undo the drop-in"]
+    );
+    let failed = failed(&overridden);
+    assert_eq!(failed.len(), 1);
+    assert_eq!(failed[0].control.id, "SSH-002");
+    assert_eq!(failed[0].control.fix, None);
+}

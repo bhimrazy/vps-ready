@@ -112,14 +112,24 @@ impl Module for SshServer {
         Applicability::NotApplicable { reason }
     }
 
-    fn notes(&self, _facts: &Facts) -> Vec<String> {
-        vec![
+    fn notes(&self, facts: &Facts) -> Vec<String> {
+        let mut notes = vec![
             "SSH sessions that are open now stay open; the new settings apply to new logins"
                 .to_owned(),
             "Port, ListenAddress, AllowGroups, AuthenticationMethods and the crypto settings \
              stay as they are"
                 .to_owned(),
-        ]
+        ];
+        // A Match block wins over the drop-in for the connections it matches.
+        notes.extend(MANAGED.iter().filter_map(|&(key, keyword)| {
+            let found = facts.ssh.match_override(key, VALUE)?;
+            Some(format!(
+                "{keyword} {found} stays as it is: vps-ready does not edit Match blocks; \
+                 if it covers your own connection, apply will fail its check and undo the \
+                 drop-in"
+            ))
+        }));
+        notes
     }
 
     /// `sshd -t -f` checks the drop-in on its own before it is written; the
