@@ -105,17 +105,17 @@ firewall.inbound: Drop incoming traffic that no rule allows (fixes FW-001)
   ~ enable and start vps-ready-firewall.service                           reversible
 ssh.bruteforce: Ban addresses that keep failing to log in over SSH
   note: no SSH session found, so only localhost is exempt from bans
+  note: the jail's ignoreip replaces any that jail.local sets
   note: if this installs fail2ban, rollback leaves it installed and enabled, as the package sets it up, so it runs the distro's own jails after a reboot; `systemctl disable --now fail2ban` turns it off
   + /etc/fail2ban/jail.d/90-vps-ready.local (mode 0644, root:root)        reversible
-      @@ -0,0 +1,9 @@
+      @@ -0,0 +1,8 @@
       +# Written by vps-ready (ssh.bruteforce). `vps-ready rollback --last`
       +# restores the previous state; edits here are replaced by the next apply.
-      +[DEFAULT]
-      +banaction = nftables
-      +backend = systemd
-      +
       +[sshd]
       +enabled = true
+      +banaction = nftables
+      +backend = systemd
+      +port = 22
       +ignoreip = 127.0.0.1/8 ::1
   ~ enable and start fail2ban.service                                     reversible
 kernel.sysctl: Harden kernel settings (fixes KRN-001, KRN-002, KRN-003, KRN-007, KRN-008, NET-002)

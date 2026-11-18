@@ -58,6 +58,7 @@ Legend: **Risk** = chance of lockout or breakage (L/M/H). **Profile** = M(inimal
 - So `00-` beats cloud-init's `50-cloud-init.conf` (which sets `PasswordAuthentication yes`).
 - `/etc/cloud/cloud.cfg.d/99-vps-ready.cfg` with `ssh_pwauth: false` is not needed: cloud-init only writes `50-cloud-init.conf`, which `00-` already beats (v0.3.0 does not write it).
 - If there's no `Include` line (check Alpine/Arch), add one as the first line.
+- A `Match` block beats the drop-in for the connections it matches, and one other than `Match all` is not in plain `sshd -T`'s output (without `-C`). The audit reads `sshd_config` and its includes for `Match` blocks that set a checked keyword to another value and fails the control, naming the file and line. vps-ready does not edit `Match` blocks, so such a failure names no module to fix it.
 
 ```sshconfig
 PermitRootLogin no

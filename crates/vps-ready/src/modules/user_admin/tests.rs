@@ -866,3 +866,27 @@ fn verify_fails_without_sudo_rules() {
     );
     assert!(runner.accounts().users.is_empty());
 }
+
+#[test]
+fn keys_need_sshd_to_read_authorized_keys() {
+    let fs = fs();
+    let runner = Debian::new(&fs, Accounts::default());
+    let plan_with = |value: &str| {
+        let mut facts = facts();
+        facts.ssh.effective = Some(SshdConfig::parse(&format!("authorizedkeysfile {value}\n")));
+        plan_steps(&fs, &runner, &facts, "")
+    };
+    assert_eq!(
+        refusal(plan_with("/etc/ssh/keys/%u")),
+        "sshd's AuthorizedKeysFile is `/etc/ssh/keys/%u`, which does not include \
+         `.ssh/authorized_keys`, where vps-ready writes admin's keys, so sshd would \
+         ignore them; add `.ssh/authorized_keys` to AuthorizedKeysFile first"
+    );
+    for ok in [
+        ".ssh/authorized_keys",
+        "%h/.ssh/authorized_keys",
+        "/etc/ssh/keys/%u .ssh/authorized_keys .ssh/authorized_keys2",
+    ] {
+        plan_with(ok).unwrap();
+    }
+}

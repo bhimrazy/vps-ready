@@ -4,10 +4,9 @@ expression: drop_in
 ---
 # Written by vps-ready (ssh.bruteforce). `vps-ready rollback --last`
 # restores the previous state; edits here are replaced by the next apply.
-[DEFAULT]
-banaction = nftables
-backend = systemd
-
 [sshd]
 enabled = true
+banaction = nftables
+backend = systemd
+port = 22
 ignoreip = 127.0.0.1/8 ::1 192.0.2.10
