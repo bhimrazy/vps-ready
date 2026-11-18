@@ -9,7 +9,8 @@ kernel.sysctl
 
 Why
   Hides kernel addresses and logs from normal users, restricts BPF, ptrace and
-  perf, protects shared directories such as /tmp, and turns on SYN cookies.
+  perf, protects shared directories such as /tmp, turns on SYN cookies and turns
+  off Multipath TCP.
 
 Params (in the module's profile table)
   none
@@ -29,3 +30,4 @@ Fixes these audit controls
   NET-001 [low] TCP SYN cookies enabled
   NET-002 [low] Source-routed packets rejected
   NET-003 [low] Broadcast pings ignored
+  NET-007 [low] Multipath TCP disabled

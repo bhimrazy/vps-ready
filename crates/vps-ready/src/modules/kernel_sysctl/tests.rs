@@ -219,7 +219,7 @@ const START: [(&str, &str); 13] = [
 ];
 
 /// Every key failing its control.
-const FAILING: [(&str, &str); 14] = [
+const FAILING: [(&str, &str); 15] = [
     ("kernel.kptr_restrict", "0"),
     ("kernel.dmesg_restrict", "0"),
     ("kernel.unprivileged_bpf_disabled", "0"),
@@ -234,6 +234,7 @@ const FAILING: [(&str, &str); 14] = [
     ("net.ipv4.tcp_syncookies", "0"),
     ("net.ipv4.conf.all.accept_source_route", "1"),
     ("net.ipv4.icmp_echo_ignore_broadcasts", "0"),
+    ("net.mptcp.enabled", "1"),
 ];
 
 /// The first plan as the CLI would list it: summaries, diffs and notes.
@@ -380,7 +381,7 @@ fn values_match_the_catalog() {
         if c.fix.as_deref() != Some("kernel.sysctl") {
             continue;
         }
-        let Check::Sysctl { key, one_of } = &c.check else {
+        let Check::Sysctl { key, one_of, .. } = &c.check else {
             panic!("{}: fix = kernel.sysctl on a check of another kind", c.id);
         };
         let (_, value) = VALUES
@@ -548,5 +549,33 @@ impl Host {
         if !state.txns(&self.fs).unwrap().is_empty() {
             self.rollback();
         }
+    }
+}
+
+#[test]
+fn mptcp_is_turned_off_with_a_note_and_left_alone_when_absent() {
+    let host = Host::new(&[("net.mptcp.enabled", "1")], None);
+    let mut running = crate::facts::Sysctl::default();
+    running
+        .values
+        .insert("net.mptcp.enabled".into(), "1".into());
+    let facts = facts_with(running);
+    assert_eq!(
+        emitted(&resources(&host, &facts)),
+        vec![("net.mptcp.enabled".to_owned(), "0".to_owned()); 2]
+    );
+    let notes = host.module.notes(&facts);
+    assert_eq!(notes.len(), 1);
+    assert!(notes[0].contains("sockets already open") && notes[0].contains("needs Multipath"));
+
+    // Off already, or a kernel without MPTCP: nothing to plan or to say.
+    for running in [Some("0"), None] {
+        let mut sysctl = crate::facts::Sysctl::default();
+        if let Some(v) = running {
+            sysctl.values.insert("net.mptcp.enabled".into(), v.into());
+        }
+        let facts = facts_with(sysctl);
+        assert!(resources(&host, &facts).is_empty());
+        assert!(host.module.notes(&facts).is_empty());
     }
 }

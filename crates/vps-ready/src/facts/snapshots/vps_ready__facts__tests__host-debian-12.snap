@@ -235,6 +235,7 @@ updates:
     apt-daily-upgrade.timer: ok
     apt-daily.service: ok
     apt-daily.timer: ok
+reboot: ~
 docker: false
 bridges: []
 apparmor: false
