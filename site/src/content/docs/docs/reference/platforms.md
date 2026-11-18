@@ -9,8 +9,8 @@ sidebar:
 | Family | Distros | Firewall | Init | Status |
 |---|---|---|---|---|
 | Debian | Ubuntu 22.04, 24.04; Debian 12, 13 | nftables, its own table | systemd | since v0.2 |
-| RHEL | Rocky and Alma 9, 10; Fedora | firewalld | systemd | planned, v0.6 |
-| Alpine | 3.2x | nftables | OpenRC | planned, v0.6 |
+| RHEL | Rocky and Alma 9, 10; Fedora | firewalld | systemd | planned, v0.7 |
+| Alpine | 3.2x | nftables | OpenRC | planned, v0.7 |
 
 Ubuntu 26.04 is next for the Debian family.
 
