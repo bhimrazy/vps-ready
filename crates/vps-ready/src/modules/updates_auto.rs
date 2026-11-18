@@ -86,7 +86,7 @@ impl Module for UpdatesAuto {
         let NoParams {} = cx.params()?;
         Ok(ModuleSteps::from(vec![
             Resource::Package(Package {
-                name: "unattended-upgrades".to_owned(),
+                names: vec!["unattended-upgrades".to_owned()],
             }),
             Resource::File(File {
                 path: DROP_IN.into(),
@@ -97,6 +97,7 @@ impl Module for UpdatesAuto {
                     gid: self.gid,
                 },
                 validate: Some(Validate::new("apt-config", ["-c", Validate::PATH, "dump"])),
+                describe: None,
             }),
         ]))
     }
