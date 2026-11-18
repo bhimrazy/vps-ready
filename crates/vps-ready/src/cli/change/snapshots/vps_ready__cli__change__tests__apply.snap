@@ -29,11 +29,11 @@ updates.auto: Install security updates automatically (fixes UPD-001)
 8 changes in 2 modules: 2 files, 6 kernel settings.
 Applied 8 changes (transaction <txn-1>, journal /var/lib/vps-ready/txn/<txn-1>). Undo with `sudo vps-ready rollback --last`.
 
-Audit of this host after apply: 15 controls
+Audit of this host after apply: 16 controls
 
 STATUS   ID       SEVERITY  CONTROL
 UNKNOWN  KRN-004  medium    ptrace scope restricted
          kernel.yama.ptrace_scope not found under /proc/sys
 
-14 passed, 0 failed, 1 unknown
-Run `vps-ready audit --all` to list the 14 passing controls too.
+15 passed, 0 failed, 1 unknown
+Run `vps-ready audit --all` to list the 15 passing controls too.

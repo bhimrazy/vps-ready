@@ -76,6 +76,8 @@ It never touches `Port`, `ListenAddress`, `AllowGroups`, `AuthenticationMethods`
 
 **Changes:** installs `nftables` if it is missing, writes its own table `inet vps_ready` to `/etc/vps-ready/firewall.nft`, and loads it with its own `vps-ready-firewall.service`. The table drops incoming traffic that no rule allows and accepts replies, loopback, ICMP (including all of ICMPv6), DHCP, and the profile's ports.
 
+It also drops incoming IPv4 TCP packets that carry IP options, in a `prerouting` chain that runs before connection tracking and also covers traffic forwarded to containers. This blunts [CVE-2026-98432](https://ubuntu.com/security/CVE-2026-98432), a kernel use-after-free in the TCP handshake; the fix is a kernel update and a reboot ([Debian](https://security-tracker.debian.org/tracker/CVE-2026-98432), [Ubuntu](https://ubuntu.com/security/CVE-2026-98432)). Other IPv4 protocols keep their options (IGMP uses one), and IPv6 is not affected by the bug. If you label traffic with CIPSO (NetLabel), TCP over IPv4 stops working. A host that keeps ufw or firewalld gets no such rule; follow your distro's guidance linked above instead.
+
 **Checks first:** it always accepts every SSH port in use (your session's, the SSH server's listeners and its `Port`), whatever the profile says. It is not applied while ufw or firewalld is active, or when it cannot read the current rules. See [Use it on a server that's already running things](/docs/guides/existing-server/).
 
 **Undo:** rollback deletes only the `inet vps_ready` table and its unit, so Docker's and fail2ban's rules stay. If it installed `nftables`, the package stays installed.
@@ -94,7 +96,7 @@ Once SSH takes keys only, brute-force attempts are mostly log noise, and OpenSSH
 
 ### `kernel.sysctl`: kernel settings
 
-**Changes:** sets safer kernel and network settings at runtime and keeps them across reboots in `/etc/sysctl.d/90-vps-ready.conf`: hidden kernel pointers and logs, restricted BPF, ptrace and perf, protected links, FIFOs and files in shared directories such as `/tmp`, full address space randomization, no setuid core dumps, SYN cookies, no source-routed packets, and ignored broadcast pings.
+**Changes:** sets safer kernel and network settings at runtime and keeps them across reboots in `/etc/sysctl.d/90-vps-ready.conf`: hidden kernel pointers and logs, restricted BPF, ptrace and perf, protected links, FIFOs and files in shared directories such as `/tmp`, full address space randomization, no setuid core dumps, SYN cookies, no source-routed packets, ignored broadcast pings, and Multipath TCP off.
 
 **Checks first:** only failing settings are changed, so a stricter value your distro already uses stays. It never sets `ip_forward=0`, which would break Docker. Inside a container it does nothing, since the settings belong to the host.
 

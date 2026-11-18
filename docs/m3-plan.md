@@ -66,6 +66,10 @@ The registry order is `user.admin`, `ssh.server`, `firewall.inbound`, `ssh.brute
 
 ```
 table inet vps_ready {
+  chain prerouting {
+    type filter hook prerouting priority raw; policy accept;
+    ip protocol tcp ip hdrlength > 5 counter drop  # IPv4 TCP with IP options (CVE-2026-98432)
+  }
   chain input {
     type filter hook input priority filter; policy drop;
     ct state established,related accept
@@ -83,7 +87,8 @@ table inet vps_ready {
 
 - **Never cut the current SSH port.** The accepted TCP ports always include the port of the applying session, every port sshd listens on (facts, including `ssh.socket`'s `Listen`) and `port` from `sshd -T`, whatever the profile says. A unit test renders the ruleset for hosts with different SSH ports and checks this on the rendered model. Verify reads back `nft -j list table inet vps_ready` and checks the ports again.
 - Why the port rule and not only `ct state established`: in a VM test, loading this table kept the live session, but a flow that predates conntrack and has no accept rule for its port can be dropped (checked on Debian 13 and Ubuntu 24.04). Always accepting the current SSH ports is what protects the open session; `established` covers everything else.
-- **Docker:** the table filters only the `input` hook. Traffic to a published port is DNATed and goes through `forward`, so this module neither breaks Docker nor fixes `FW-002`; the plan prints the published ports from facts with the `FW-002` advice. When Docker is present, input from `docker0` and `br-*` is accepted, so containers that reach host services keep working (ufw's default breaks this). The cost: a compromised container can reach every host service, the same as with no firewall; the plan says so when it adds the rule. `FW-002` waits for `deploy.docker` (M5).
+- **IP options (added after M3):** the `prerouting` chain drops inbound IPv4 TCP whose header carries options (`ip hdrlength > 5`), to blunt CVE-2026-98432, a use-after-free of a TCP handshake's IP options; the fix is a kernel update and reboot ([Debian](https://security-tracker.debian.org/tracker/CVE-2026-98432), [Ubuntu](https://ubuntu.com/security/CVE-2026-98432), [oss-security](https://www.openwall.com/lists/oss-security/2026/10/30/1)). At priority `raw` (-300) it runs before conntrack, so the input chain's `established` accept cannot let such a packet in, and on prerouting it also sees traffic DNATed to containers. TCP only: IGMP and RSVP carry Router Alert. IPv6 is not affected. CIPSO (NetLabel) users lose labeled IPv4 TCP; the plan says so. A host left to ufw or firewalld gets nothing from this; Ubuntu's CVE page has ufw, iptables and nftables variants. It has no hook on `input`, so the facts, `verify` and `FW-001`/`FW-002` ignore it, and rollback deletes it with the table. `test/vm-cycle.sh` checks that a SYN with IP options to sshd is dropped after apply and connects after rollback.
+- **Docker:** apart from the IP options rule, the table filters only the `input` hook. Traffic to a published port is DNATed and goes through `forward`, so this module neither breaks Docker nor fixes `FW-002`; the plan prints the published ports from facts with the `FW-002` advice. When Docker is present, input from `docker0` and `br-*` is accepted, so containers that reach host services keep working (ufw's default breaks this). The cost: a compromised container can reach every host service, the same as with no firewall; the plan says so when it adds the rule. `FW-002` waits for `deploy.docker` (M5).
 - Other base chains on the input hook (ufw inactive leftovers, an admin's own table) still apply: in nftables a packet must be accepted by every base chain on a hook. The plan lists them.
 - Outbound is not filtered, so cloud metadata (169.254.169.254) stays reachable.
 
