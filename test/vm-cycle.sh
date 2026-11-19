@@ -93,7 +93,8 @@
 #       through wg0;
 #     not confirmed: during the window a new public login fails, and at the
 #       deadline public SSH works again;
-#     confirmed: applied through wg0; a new public login fails, a public
+#     confirmed: firewall.inbound without ssh_via applied first, from the
+#       public session; then ssh_via through wg0: a new public login fails, a public
 #       session opened before stays up, a confirm from a login to the VM's
 #       own address is refused as not through wg0, and one through wg0
 #       confirms; SSH-009 and FW-003 pass;
@@ -435,6 +436,20 @@ private_access_cycle() {
   grep -q 'ssh -t ci@10.77.0.1 sudo vps-ready apply' "$tmp/public.out" ||
     die "the refusal does not give the command through wg0"
   [ -z "$(vm sudo ls /var/lib/vps-ready/txn 2>/dev/null)" ] || die "the refused apply left a transaction"
+
+  # As in the two-apply flow, the firewall is loaded before ssh_via. Then
+  # conntrack tracks the public sessions opened since, so they stay up when
+  # ssh_via closes new ones.
+  echo "== $distro: the firewall with wg0's port, from the public session"
+  printf '%s\n' 'schema = 1' '[modules."firewall.inbound"]' 'allow = ["51820/udp"]' |
+    pvm 'cat >/tmp/fw.toml'
+  pvm sudo vps-ready apply --yes --profile /tmp/fw.toml --deadman 2m </dev/null >"$tmp/apply.out" 2>&1 &
+  apply_pid=$!
+  expect_pending
+  rc=0; pvm sudo vps-ready confirm || rc=$?
+  [ "$rc" -eq 0 ] || die "confirm from a new public login exited $rc, expected 0"
+  rc=0; wait "$apply_pid" || rc=$?
+  [ "$rc" -eq 0 ] || { cat "$tmp/apply.out"; die "the firewall apply exited $rc, expected 0"; }
 
   echo "== $distro: ssh_via through wg0, not confirmed"
   vm sudo vps-ready apply --yes --profile /tmp/via.toml --deadman 1m </dev/null >"$tmp/apply.out" 2>&1 &
