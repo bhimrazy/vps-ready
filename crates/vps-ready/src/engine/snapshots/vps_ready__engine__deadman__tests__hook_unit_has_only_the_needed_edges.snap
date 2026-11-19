@@ -2,11 +2,13 @@
 source: crates/vps-ready/src/engine/deadman.rs
 expression: "hook_unit(Path::new(\"/usr/local/bin/vps-ready\"))"
 ---
+# Written by vps-ready. It is not part of a transaction, so `vps-ready rollback`
+# leaves it in place; edits here are replaced the next time the safety timer is armed.
 [Unit]
 Description=vps-ready: roll back an unconfirmed change after a reboot
 DefaultDependencies=no
 After=local-fs.target vps-ready-firewall.service
-Before=ssh.service ssh.socket shutdown.target
+Before=ssh.service ssh.socket docker.service caddy.service shutdown.target
 Conflicts=shutdown.target
 [Service]
 Type=oneshot

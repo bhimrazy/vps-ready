@@ -5,6 +5,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Deserializer};
 
+use super::ssh_server::check_keys_file;
 use super::user_admin::{
     account, check_not_locked, group_exists, has_sudo_rules, sudoers_user, usepam_off,
 };
@@ -145,13 +146,14 @@ impl Module for DeployUser {
             );
         }
         let existing = check_name(cx, sys, name)?;
+        check_keys_file(cx.facts, sys, name)?;
 
         let mut groups = Vec::new();
         if params.docker {
             let planned = cx
                 .planned
                 .iter()
-                .any(|r| matches!(r, Resource::Package(p) if p.name == DOCKER_PACKAGE));
+                .any(|r| matches!(r, Resource::Package(p) if p.names.iter().any(|n| n == DOCKER_PACKAGE)));
             if !planned && !group_exists(sys, "docker")? {
                 return refuse(
                     "`docker = true`, but there is no docker group; install Docker first",
@@ -240,6 +242,7 @@ impl Module for DeployUser {
                     gid: 0,
                 },
                 validate: Some(Validate::new("visudo", ["-cf", Validate::PATH])),
+                describe: None,
             }));
         }
         Ok(ModuleSteps {

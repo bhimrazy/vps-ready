@@ -112,14 +112,24 @@ impl Module for SshServer {
         Applicability::NotApplicable { reason }
     }
 
-    fn notes(&self, _facts: &Facts) -> Vec<String> {
-        vec![
+    fn notes(&self, facts: &Facts) -> Vec<String> {
+        let mut notes = vec![
             "SSH sessions that are open now stay open; the new settings apply to new logins"
                 .to_owned(),
             "Port, ListenAddress, AllowGroups, AuthenticationMethods and the crypto settings \
              stay as they are"
                 .to_owned(),
-        ]
+        ];
+        // A Match block wins over the drop-in for the connections it matches.
+        notes.extend(MANAGED.iter().filter_map(|&(key, keyword)| {
+            let found = facts.ssh.match_override(key, VALUE)?;
+            Some(format!(
+                "{keyword} {found} stays as it is: vps-ready does not edit Match blocks; \
+                 if it covers your own connection, apply will fail its check and undo the \
+                 drop-in"
+            ))
+        }));
+        notes
     }
 
     /// `sshd -t -f` checks the drop-in on its own before it is written; the
@@ -163,6 +173,7 @@ impl Module for SshServer {
                     gid: 0,
                 },
                 validate: Some(Validate::new("sshd", ["-t", "-f", Validate::PATH])),
+                describe: None,
             })],
             reloads: vec![Reload::SshdReload],
             notes: Vec::new(),
@@ -462,6 +473,34 @@ fn has_keys(cx: &PlanCx, sys: Sys, name: &str) -> Result<bool, ModuleError> {
         }
     }
     Ok(false)
+}
+
+/// Refuses when sshd's `AuthorizedKeysFile` leaves out `~/.ssh/authorized_keys`
+/// of `name`, the only file vps-ready writes keys to: sshd would ignore them.
+/// A value that cannot be read counts as sshd's default.
+pub(crate) fn check_keys_file(facts: &Facts, sys: Sys, name: &str) -> Result<(), ModuleError> {
+    let Some(files) = facts
+        .ssh
+        .effective
+        .as_ref()
+        .and_then(|e| e.get("authorizedkeysfile"))
+    else {
+        return Ok(());
+    };
+    // A new account gets useradd's default home.
+    let home = user::lookup(sys, name)?.map_or_else(|| Path::new("/home").join(name), |e| e.home);
+    let default = home.join(".ssh/authorized_keys");
+    if files
+        .split_whitespace()
+        .any(|p| keys_path(p, &home, name) == default)
+    {
+        return Ok(());
+    }
+    Err(ModuleError::Refused(format!(
+        "sshd's AuthorizedKeysFile is `{files}`, which does not include \
+         `.ssh/authorized_keys`, where vps-ready writes {name}'s keys, so sshd would \
+         ignore them; add `.ssh/authorized_keys` to AuthorizedKeysFile first"
+    )))
 }
 
 /// An `AuthorizedKeysFile` entry with `%h`, `%u` and `%%` expanded; a

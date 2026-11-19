@@ -1,6 +1,6 @@
 ---
 title: Profiles and modules
-description: What the minimal and web profiles change, what each of the six modules writes, what it checks first, and how to undo it.
+description: What the minimal and web profiles change, what each of the nine modules writes, what it checks first, and how to undo it.
 sidebar:
   order: 2
 ---
@@ -17,13 +17,15 @@ vps-ready groups its changes into **modules**, and a **profile** picks which mod
 | SSH server config (`ssh.server`) | | yes | yes |
 | Firewall (`firewall.inbound`) | | SSH only | SSH, 80/tcp, 443/tcp, 443/udp |
 | fail2ban (`ssh.bruteforce`) | | | yes |
+| Docker (`deploy.docker`) | | | yes |
 | Kernel settings (`kernel.sysctl`) | yes | yes | yes |
 | Automatic updates (`updates.auto`) | yes | yes | yes |
 | Asks for a confirm | no | yes | yes |
 
 - **Plain `apply`**, with no `--profile` or `--module`, only changes kernel settings and automatic updates. Nothing in it can lock you out, so a future version can never make a plain `apply` start changing SSH or the firewall.
 - **minimal** is for any server you log into over SSH.
-- **web** is minimal plus the web ports (UDP 443 is for HTTP/3) and fail2ban.
+- **web** is minimal plus the web ports (UDP 443 is for HTTP/3), fail2ban and Docker with safe defaults.
+- **`deploy.proxy` (Caddy) and `deploy.user` are in no built-in profile.** They need values only you have (domains, deploy keys), so you add them in your own profile, or the guided setup adds Caddy when you give it a domain. See [Deploy an app](/docs/guides/deployment-modules/).
 
 `sudo vps-ready` with no arguments picks between these two for you and builds the profile from your answers: see the [quick start](/docs/quick-start/). To read what a module does before choosing, run `vps-ready modules` (or `vps-ready modules ssh.server` for one).
 
@@ -39,12 +41,15 @@ sudo vps-ready plan --profile web
 |---|---|---|---|
 | 1 | `user.admin` | yes | Creates the way in that is not root |
 | 2 | `ssh.server` | yes | Turns off root and password logins, and refuses unless that way in exists |
-| 3 | `firewall.inbound` | yes | Drops unsolicited traffic, always allowing the SSH ports in use |
-| 4 | `ssh.bruteforce` | no | Can only ban an address, and never yours |
-| 5 | `kernel.sysctl` | no | Cannot lock you out |
-| 6 | `updates.auto` | no | Cannot lock you out |
+| 3 | `deploy.docker` | no | Before the firewall, so the firewall knows Docker's bridges |
+| 4 | `firewall.inbound` | yes | Drops unsolicited traffic, always allowing the SSH ports in use |
+| 5 | `ssh.bruteforce` | no | Can only ban an address, and never yours |
+| 6 | `kernel.sysctl` | no | Cannot lock you out |
+| 7 | `updates.auto` | no | Cannot lock you out |
+| 8 | `deploy.proxy` | no | After the firewall, so it can read whether ports 80 and 443 are open |
+| 9 | `deploy.user` | no | Last: a login for CI, separate from the admin |
 
-The order is fixed. The admin user comes first because turning off root and password logins is only safe once there is another way in, and the firewall comes last so it can allow the SSH port your login really uses. The three guarded modules share one transaction, so a single new login confirms all of them together. To see which part fails on a tricky server, apply `--module user.admin` on its own first, then the rest.
+The order is fixed. The admin user comes first because turning off root and password logins is only safe once there is another way in, and the firewall comes after the admin user and SSH so it can allow the SSH port your login really uses. On their own, the three deployment modules do not touch the SSH server, the firewall's SSH rule or the admin's login, so they do not arm the safety timer. In a run with a guarded module, as in the `web` profile, they share its transaction: confirm it, or the timer undoes them too. The three guarded modules share one transaction, so a single new login confirms all of them together. To see which part fails on a tricky server, apply `--module user.admin` on its own first, then the rest.
 
 ## The modules
 
@@ -56,7 +61,7 @@ Every module reads the live state first, plans only what fails, and writes files
 
 **Keys:** without keys in a profile, it copies the keys of the account you logged in with. Key lines with options such as `command=` are skipped, since they would restrict the admin too.
 
-**Checks first:** it refuses when the name is `root`, when an existing account is a system account (uid below 1000, or a shell not listed in `/etc/shells`), when sudo is not installed, or when there are no keys to copy. An account that already has sudo rules keeps them, and no sudoers file is written.
+**Checks first:** it refuses when the name is `root`, when an existing account is a system account (uid below 1000, or a shell not listed in `/etc/shells`), when sudo is not installed, when there are no keys to copy, or when sshd's `AuthorizedKeysFile` does not include `.ssh/authorized_keys`, where it writes the keys (sshd would ignore them). An account that already has sudo rules keeps them, and no sudoers file is written.
 
 **Undo:** rollback removes a user it created but keeps its home directory, so the change is labeled `partial`. Keys it added and the sudoers file are restored exactly.
 
@@ -66,7 +71,7 @@ Every module reads the live state first, plans only what fails, and writes files
 
 `PermitRootLogin` · `PasswordAuthentication` · `KbdInteractiveAuthentication` · `PermitEmptyPasswords` · `X11Forwarding` · `HostbasedAuthentication` · `PermitUserEnvironment`
 
-It never touches `Port`, `ListenAddress`, `AllowGroups`, `AuthenticationMethods` or the crypto settings, and it never edits `sshd_config` itself. The SSH port stays 22. The `00-` name makes it win over cloud-init's `50-cloud-init.conf`, which turns passwords back on.
+It never touches `Port`, `ListenAddress`, `AllowGroups`, `AuthenticationMethods` or the crypto settings, and it never edits `sshd_config` itself or any `Match` block. A `Match` block that sets one of these keywords wins over the drop-in for the connections it matches: the plan notes it, and the audit keeps failing that control until you change the block. The SSH port stays 22. The `00-` name makes it win over cloud-init's `50-cloud-init.conf`, which turns passwords back on.
 
 **Checks first:** it refuses to turn off root or password logins unless a user other than root has an SSH key and sudo: the admin from `user.admin`, or the user you are logged in as. It also checks that `sshd_config` reads the drop-in before anything that could override it. After the reload, it verifies the effective config with `sshd -T` for the admin's own connection.
 
@@ -76,15 +81,17 @@ It never touches `Port`, `ListenAddress`, `AllowGroups`, `AuthenticationMethods`
 
 **Changes:** installs `nftables` if it is missing, writes its own table `inet vps_ready` to `/etc/vps-ready/firewall.nft`, and loads it with its own `vps-ready-firewall.service`. The table drops incoming traffic that no rule allows and accepts replies, loopback, ICMP (including all of ICMPv6), DHCP, and the profile's ports.
 
+It also drops incoming IPv4 TCP packets that carry IP options, in a `prerouting` chain that runs before connection tracking and also covers traffic forwarded to containers. This blunts [CVE-2026-98432](https://ubuntu.com/security/CVE-2026-98432), a kernel use-after-free in the TCP handshake; the fix is a kernel update and a reboot ([Debian](https://security-tracker.debian.org/tracker/CVE-2026-98432), [Ubuntu](https://ubuntu.com/security/CVE-2026-98432)). Other IPv4 protocols keep their options (IGMP uses one), and IPv6 is not affected by the bug. If you label traffic with CIPSO (NetLabel), TCP over IPv4 stops working. A host that keeps ufw or firewalld gets no such rule; follow your distro's guidance linked above instead.
+
 **Checks first:** it always accepts every SSH port in use (your session's, the SSH server's listeners and its `Port`), whatever the profile says. It is not applied while ufw or firewalld is active, or when it cannot read the current rules. See [Use it on a server that's already running things](/docs/guides/existing-server/).
 
 **Undo:** rollback deletes only the `inet vps_ready` table and its unit, so Docker's and fail2ban's rules stay. If it installed `nftables`, the package stays installed.
 
 ### `ssh.bruteforce`: fail2ban (web profile)
 
-**Changes:** installs `nftables`, `python3-systemd` and `fail2ban`, writes `/etc/fail2ban/jail.d/90-vps-ready.local` to turn on the `sshd` jail (reading the systemd journal, banning in nftables), and restarts fail2ban.
+**Changes:** installs `nftables`, `python3-systemd` and `fail2ban`, writes `/etc/fail2ban/jail.d/90-vps-ready.local` to turn on the `sshd` jail (reading the systemd journal, banning in nftables on the ports sshd listens on), and restarts fail2ban. It sets nothing for your other jails.
 
-**Checks first:** the address of the SSH session running `apply` is never banned, nor is localhost.
+**Checks first:** the address of the SSH session running `apply` is never banned, nor is localhost. For the `sshd` jail, this list replaces any `ignoreip` your `jail.local` sets.
 
 **Undo:** the jail file is restored, but packages are never removed, so fail2ban stays installed and enabled and runs the distro's own jails. `systemctl disable --now fail2ban` turns it off.
 
@@ -94,7 +101,7 @@ Once SSH takes keys only, brute-force attempts are mostly log noise, and OpenSSH
 
 ### `kernel.sysctl`: kernel settings
 
-**Changes:** sets safer kernel and network settings at runtime and keeps them across reboots in `/etc/sysctl.d/90-vps-ready.conf`: hidden kernel pointers and logs, restricted BPF, ptrace and perf, protected links, FIFOs and files in shared directories such as `/tmp`, full address space randomization, no setuid core dumps, SYN cookies, no source-routed packets, and ignored broadcast pings.
+**Changes:** sets safer kernel and network settings at runtime and keeps them across reboots in `/etc/sysctl.d/90-vps-ready.conf`: hidden kernel pointers and logs, restricted BPF, ptrace and perf, protected links, FIFOs and files in shared directories such as `/tmp`, full address space randomization, no setuid core dumps, SYN cookies, no source-routed packets, ignored broadcast pings, and Multipath TCP off.
 
 **Checks first:** only failing settings are changed, so a stricter value your distro already uses stays. It never sets `ip_forward=0`, which would break Docker. Inside a container it does nothing, since the settings belong to the host.
 
@@ -107,6 +114,16 @@ Once SSH takes keys only, brute-force attempts are mostly log noise, and OpenSSH
 **Checks first:** Debian and Ubuntu only. If apt's systemd timers are turned off, the plan says so and leaves them off.
 
 **Undo:** the drop-in is removed; the package stays installed.
+
+### `deploy.docker`, `deploy.proxy` and `deploy.user`: deployment
+
+**Changes:** `deploy.docker` installs Docker Engine from Docker's repository and writes `/etc/docker/daemon.json`; `deploy.proxy` installs Caddy and writes a `Caddyfile` with one block per site; `deploy.user` creates a login account for CI whose keys are restricted. `deploy.docker` is in the `web` profile; the other two need your domains or keys.
+
+**Checks first:** each says in the plan what it will do and refuses what it cannot do safely, for example Docker from the distro's `docker.io` package, or a `Caddyfile` you wrote by hand.
+
+**Undo:** config files are restored or removed and package sources removed, and packages stay installed. `deploy.user`'s account is removed, and its home directory stays. Caddy is stopped and disabled when there was no `Caddyfile` before.
+
+The details, with the commands and what to expect, are in [Deploy an app](/docs/guides/deployment-modules/).
 
 ## Write your own profile
 
@@ -126,6 +143,9 @@ allow = ["22/tcp", "443/tcp"]
 
 [modules."ssh.bruteforce"]
 enabled = false
+
+[modules."deploy.proxy"]
+sites = [{ domain = "app.example.com", upstream = "127.0.0.1:8080" }]
 ```
 
 ```sh

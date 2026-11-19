@@ -1,0 +1,10 @@
+---
+source: crates/vps-ready/src/modules/deploy_proxy/tests.rs
+expression: text
+---
+# Written by vps-ready (deploy.proxy). `vps-ready rollback --last`
+# restores the previous state; edits here are replaced by the next apply.
+
+app.example.com {
+	reverse_proxy 127.0.0.1:8080
+}

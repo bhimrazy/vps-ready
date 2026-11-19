@@ -385,7 +385,7 @@ fn docker_adds_the_group_and_says_it_is_root() {
     );
     // Docker installed by the same plan creates the group first.
     let docker = [Resource::Package(Package {
-        name: "docker-ce".into(),
+        names: vec!["containerd.io".into(), "docker-ce".into()],
     })];
     plan_steps(&fs, &runner, &docker, &params("docker = true")).unwrap();
 }
@@ -425,7 +425,7 @@ fn a_command_root_does_not_own_alone_is_refused() {
         ),
     ] {
         let reason = refusal(plan_steps(&fs, &runner, &[], &with(command)));
-        assert!(reason.contains(why), "{command}: {reason}");
+        assert!(reason.contains(why), "{command}");
     }
 }
 
@@ -828,4 +828,39 @@ fn docker_on_an_existing_account_and_rollback() {
     assert_eq!(runner.calls("gpasswd"), [["--delete", "deploy", "docker"]]);
     assert!(runner.accounts().users["deploy"].2.is_empty());
     assert!(runner.calls("userdel").is_empty());
+}
+
+#[test]
+fn keys_need_sshd_to_read_authorized_keys() {
+    let fs = fs();
+    let runner = Debian::new(&fs, Accounts::default());
+    let plan_with = |value: &str| {
+        let mut facts = facts();
+        facts.ssh.effective = Some(SshdConfig::parse(&format!("authorizedkeysfile {value}\n")));
+        let params = params("");
+        DeployUser.plan(
+            &PlanCx {
+                facts: &facts,
+                params: &params,
+                planned: &[],
+            },
+            Sys {
+                fs: &fs,
+                runner: &runner,
+            },
+        )
+    };
+    assert_eq!(
+        refusal(plan_with("/etc/ssh/keys/%u")),
+        "sshd's AuthorizedKeysFile is `/etc/ssh/keys/%u`, which does not include \
+         `.ssh/authorized_keys`, where vps-ready writes deploy's keys, so sshd would \
+         ignore them; add `.ssh/authorized_keys` to AuthorizedKeysFile first"
+    );
+    for ok in [
+        ".ssh/authorized_keys",
+        "%h/.ssh/authorized_keys",
+        "/etc/ssh/keys/%u .ssh/authorized_keys .ssh/authorized_keys2",
+    ] {
+        plan_with(ok).unwrap();
+    }
 }

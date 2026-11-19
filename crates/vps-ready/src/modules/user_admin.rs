@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use super::ssh_server::check_keys_file;
 use super::{Applicability, Module, ModuleError, ModuleSteps, ParamDoc, PlanCx, refuse};
 use crate::facts::{Facts, Init, OsFamily};
 use crate::resource::authorized_keys::is_plain_key;
@@ -139,6 +140,7 @@ impl Module for UserAdmin {
                  install it with `apt-get install sudo` first"
             ));
         }
+        check_keys_file(cx.facts, sys, name)?;
         let keys = if params.authorized_keys.is_empty() {
             copied_keys(cx.facts, sys, &mut notes)?
         } else {
@@ -166,6 +168,7 @@ impl Module for UserAdmin {
                 gid: 0,
             },
             validate: Some(Validate::new("visudo", ["-cf", Validate::PATH])),
+            describe: None,
         };
         let mut groups = Vec::new();
         let mut drop_in = None;

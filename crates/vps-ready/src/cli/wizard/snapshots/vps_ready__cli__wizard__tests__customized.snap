@@ -3,7 +3,7 @@ source: crates/vps-ready/src/cli/wizard/tests.rs
 expression: text
 ---
 vps-ready <version> on Debian GNU/Linux 13 (trixie) (vm-other)
-Audit: 12 passed, 12 failed (1 high, 5 medium, 6 low), 4 unknown. vps-ready can fix 11 of them.
+Audit: 13 passed, 12 failed (1 high, 5 medium, 6 low), 5 unknown. vps-ready can fix 11 of them.
 
 ? What will this server run?
   > Something else: only SSH is open (recommended: no Docker or web server found)
@@ -18,10 +18,12 @@ All other incoming ports are blocked.
 ? Modules to run (Space toggles, Enter continues)
   [ ] user.admin: Set up an admin account that logs in with an SSH key and uses sudo (can lock you out; undone unless you confirm)
   [x] ssh.server: Turn off root and password logins over SSH (can lock you out; undone unless you confirm)
+  [ ] deploy.docker: Install Docker with logs capped and ports on loopback by default
   [x] firewall.inbound: Drop incoming traffic that no rule allows (can lock you out; undone unless you confirm)
   [ ] ssh.bruteforce: Ban addresses that keep failing to log in over SSH
   [x] kernel.sysctl: Harden kernel settings
   [ ] updates.auto: Install security updates automatically
+  [ ] deploy.proxy: Serve sites over HTTPS with Caddy, proxied to their upstreams
   [ ] deploy.user: Set up a deploy account whose SSH keys are restricted
   ssh.server: refusing to turn off root login and password login: no user other
   than root has an SSH key and sudo to log in with afterwards (there is no SSH
@@ -31,10 +33,12 @@ All other incoming ports are blocked.
 ? Modules to run (Space toggles, Enter continues)
   [x] user.admin: Set up an admin account that logs in with an SSH key and uses sudo (can lock you out; undone unless you confirm)
   [x] ssh.server: Turn off root and password logins over SSH (can lock you out; undone unless you confirm)
+  [ ] deploy.docker: Install Docker with logs capped and ports on loopback by default
   [x] firewall.inbound: Drop incoming traffic that no rule allows (can lock you out; undone unless you confirm)
   [x] ssh.bruteforce: Ban addresses that keep failing to log in over SSH
   [x] kernel.sysctl: Harden kernel settings
   [ ] updates.auto: Install security updates automatically
+  [ ] deploy.proxy: Serve sites over HTTPS with Caddy, proxied to their upstreams
   [ ] deploy.user: Set up a deploy account whose SSH keys are restricted
 
 After you apply, you have 5 minutes to log in from a new terminal and confirm.
@@ -65,9 +69,10 @@ ssh.server: Turn off root and password logins over SSH (fixes SSH-001, SSH-002, 
       +X11Forwarding no
 firewall.inbound: Drop incoming traffic that no rule allows (fixes FW-001)
   note: always accepts TCP 22, the current SSH ports (this session's, root's sshd listeners and `Port`), whatever `allow` says
+  note: drops incoming IPv4 TCP that carries IP options, also to containers, to blunt CVE-2026-98432 until the kernel is updated and rebooted; TCP labeled with CIPSO (NetLabel) stops working
   + directory /etc/vps-ready (mode 0755, root:root)                       reversible
   + /etc/vps-ready/firewall.nft (mode 0644, root:root)                    reversible
-      @@ -0,0 +1,23 @@
+      @@ -0,0 +1,31 @@
       +# Written by vps-ready (firewall.inbound). `vps-ready rollback --last`
       +# restores the previous state; edits here are replaced by the next apply.
       +# vps-ready-firewall.service loads it. It replaces only the table
@@ -75,6 +80,14 @@ firewall.inbound: Drop incoming traffic that no rule allows (fixes FW-001)
       +table inet vps_ready {}
       +delete table inet vps_ready
       +table inet vps_ready {
+      +  # Mitigates CVE-2026-98432, a kernel use-after-free of the IP options of
+      +  # a TCP handshake; the fix is a kernel update. Runs before conntrack and
+      +  # also sees traffic forwarded to containers. TCP only: IGMP and RSVP use
+      +  # the Router Alert option.
+      +  chain prerouting {
+      +    type filter hook prerouting priority raw; policy accept;
+      +    ip protocol tcp ip hdrlength > 5 counter drop
+      +  }
       +  chain input {
       +    type filter hook input priority filter; policy drop;
       +    ct state established,related accept
@@ -115,17 +128,17 @@ firewall.inbound: Drop incoming traffic that no rule allows (fixes FW-001)
   ~ enable and start vps-ready-firewall.service                           reversible
 ssh.bruteforce: Ban addresses that keep failing to log in over SSH
   note: no SSH session found, so only localhost is exempt from bans
+  note: the jail's ignoreip replaces any that jail.local sets
   note: if this installs fail2ban, rollback leaves it installed and enabled, as the package sets it up, so it runs the distro's own jails after a reboot; `systemctl disable --now fail2ban` turns it off
   + /etc/fail2ban/jail.d/90-vps-ready.local (mode 0644, root:root)        reversible
-      @@ -0,0 +1,9 @@
+      @@ -0,0 +1,8 @@
       +# Written by vps-ready (ssh.bruteforce). `vps-ready rollback --last`
       +# restores the previous state; edits here are replaced by the next apply.
-      +[DEFAULT]
-      +banaction = nftables
-      +backend = systemd
-      +
       +[sshd]
       +enabled = true
+      +banaction = nftables
+      +backend = systemd
+      +port = 22
       +ignoreip = 127.0.0.1/8 ::1
   ~ enable and start fail2ban.service                                     reversible
 kernel.sysctl: Harden kernel settings (fixes KRN-001, KRN-002, KRN-003, KRN-007, KRN-008, NET-002)

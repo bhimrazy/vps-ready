@@ -14,9 +14,11 @@ use serde::Serialize;
 use crate::sys::{Cmd, Fs, Output, Runner, SysError};
 
 pub mod bridges;
+pub mod docker;
 pub mod firewall;
 pub mod listeners;
 pub mod os_release;
+pub mod reboot;
 pub mod session;
 pub mod ssh;
 pub mod sysctl;
@@ -24,9 +26,11 @@ pub mod updates;
 pub mod virt;
 
 pub use bridges::Bridge;
+pub use docker::{DaemonJson, DockerDaemon, DockerEngine, DockerService};
 pub use firewall::{Firewall, FirewallTools, InputChain, Ports, PublishedPort};
 pub use listeners::{Listener, Proto};
 pub use os_release::{OsFamily, OsRelease};
+pub use reboot::Reboot;
 pub use session::{Env, NoSession, Session, SessionId};
 pub use ssh::{SSHD_CONFIG, Ssh, SshActivation};
 pub use sshd_config::SshdConfig;
@@ -72,8 +76,14 @@ pub struct Facts {
     /// Automatic updates through apt. `None` outside the Debian family, or
     /// when apt's settings could not be read.
     pub updates: Option<AptUpdates>,
+    /// Whether a reboot is pending. `None` outside the Debian family and
+    /// inside a container, whose kernel belongs to the host.
+    pub reboot: Option<Reboot>,
     /// Whether Docker is installed. Docker changes firewall and sysctl rules.
     pub docker: bool,
+    /// Docker's packages, its `daemon.json` and its daemon. `None` outside
+    /// the Debian family, or when dpkg could not be asked.
+    pub docker_engine: Option<DockerEngine>,
     /// `docker0` and the interfaces named `br-*`: Docker's bridges, and
     /// others a firewall rule for `br-*` would also match.
     pub bridges: Vec<Bridge>,
@@ -146,7 +156,14 @@ pub fn collect(fs: &dyn Fs, runner: &dyn Runner, env: &Env) -> Result<Facts, Fac
     } else {
         None
     };
+    let reboot = (os.family == OsFamily::Debian && !virtualization.in_container())
+        .then(|| reboot::detect(fs, &mut notices));
     let docker = DOCKER_PATHS.iter().any(|p| fs.exists(Path::new(p)));
+    let docker_engine = if os.family == OsFamily::Debian {
+        docker::detect(fs, runner, docker, &mut notices)
+    } else {
+        None
+    };
     let bridges = bridges::detect(fs, &mut notices);
     let apparmor = apparmor(fs, &mut notices);
     Ok(Facts {
@@ -161,7 +178,9 @@ pub fn collect(fs: &dyn Fs, runner: &dyn Runner, env: &Env) -> Result<Facts, Fac
         session,
         sysctl,
         updates,
+        reboot,
         docker,
+        docker_engine,
         bridges,
         apparmor,
         notices,
@@ -344,8 +363,10 @@ mod tests {
     /// runs exactly these read-only commands. A new probe has to be added
     /// here, where review sees it. `iptables-save -t filter` and
     /// `ip6tables-save -t filter` run only when nft shows a multiport rule,
-    /// so they are pinned in `firewall`'s tests.
-    const READ_ONLY_COMMANDS: [&[&str]; 12] = [
+    /// so they are pinned in `firewall`'s tests; `systemctl show docker.service`,
+    /// `docker info`, `docker ps` and `docker network ls` run only on a host
+    /// with Docker, so they are pinned in `docker`'s.
+    const READ_ONLY_COMMANDS: [&[&str]; 13] = [
         &["systemd-detect-virt", "--container"],
         &["systemd-detect-virt", "--vm"],
         &["ssh", "-V"],
@@ -379,6 +400,16 @@ mod tests {
             "apt-daily-upgrade.timer",
             "apt-daily.service",
             "apt-daily-upgrade.service",
+        ],
+        &[
+            "dpkg-query",
+            "-W",
+            "--showformat=${Package} ${db:Status-Status} ${Version}\\n",
+            "docker-ce",
+            "docker.io",
+            "podman-docker",
+            "containerd",
+            "runc",
         ],
     ];
 

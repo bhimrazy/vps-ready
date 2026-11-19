@@ -975,6 +975,7 @@ mod tests {
                 uid: 1001,
                 gid: 1001,
                 nlink: 1,
+                mtime: 0,
             })
         }
         fn write_atomic(

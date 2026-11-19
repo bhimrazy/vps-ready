@@ -1,0 +1,21 @@
+---
+source: crates/vps-ready/src/cli/module_docs.rs
+expression: out
+---
+deploy.proxy
+  Serve sites over HTTPS with Caddy, proxied to their upstreams
+  Applies to this host.
+
+Why
+  An app published on 127.0.0.1 is safe from the internet but also out of its
+  reach. Caddy in front of it serves it over HTTPS, gets and renews the
+  certificates by itself, and redirects HTTP to HTTPS.
+
+Params (in the module's profile table)
+  sites (default [])
+      Required: the sites Caddy serves, e.g. [{ domain = "app.example.com",
+      upstream = "127.0.0.1:8080" }]. Each domain needs a DNS record for this
+      host and ports 80 and 443 open.
+
+Fixes these audit controls
+  none

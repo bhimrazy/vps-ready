@@ -1,6 +1,7 @@
 //! Reloads: what makes a daemon pick up the files a module changed.
 
 use std::fmt;
+use std::path::Path;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -23,7 +24,22 @@ pub enum Reload {
     Fail2banRestart,
     /// `systemctl daemon-reload`, with no check.
     DaemonReload,
+    /// `dockerd --validate`, then `systemctl try-restart docker.service`:
+    /// the `daemon.json` keys vps-ready sets are not reloaded on SIGHUP.
+    /// The check reads the default config file, `/etc/docker/daemon.json`,
+    /// and also passes when there is none, as after a rollback that removed
+    /// it; with `--config-file` it would fail then and skip the restart.
+    DockerRestart,
+    /// `caddy validate`, then `systemctl reload-or-restart caddy.service`:
+    /// also a stopped Caddy, e.g. after a rollback, so that apply leaves it
+    /// serving. A rollback that removed the Caddyfile stops and disables
+    /// Caddy instead (see [`Reload::rollback_steps`]).
+    CaddyReload,
 }
+
+/// The Caddyfile [`Reload::CaddyReload`] checks, and the one Caddy's unit
+/// reads.
+pub const CADDYFILE: &str = "/etc/caddy/Caddyfile";
 
 /// Longer than systemd's default start and stop timeout (90 s), so systemd
 /// reports a hung unit before the command is killed.
@@ -38,6 +54,8 @@ impl Reload {
             Self::FirewallReload => "firewall-reload",
             Self::Fail2banRestart => "fail2ban-restart",
             Self::DaemonReload => "daemon-reload",
+            Self::DockerRestart => "docker-restart",
+            Self::CaddyReload => "caddy-reload",
         }
     }
 
@@ -51,6 +69,14 @@ impl Reload {
             }
             Self::Fail2banRestart => Some(Cmd::new("fail2ban-client").arg("-t")),
             Self::DaemonReload => None,
+            Self::DockerRestart => Some(Cmd::new("dockerd").arg("--validate")),
+            Self::CaddyReload => Some(Cmd::new("caddy").args([
+                "validate",
+                "--config",
+                CADDYFILE,
+                "--adapter",
+                "caddyfile",
+            ])),
         }
     }
 
@@ -62,10 +88,29 @@ impl Reload {
             Self::FirewallReload => &["try-reload-or-restart", "vps-ready-firewall.service"],
             Self::Fail2banRestart => &["try-restart", "fail2ban.service"],
             Self::DaemonReload => &["daemon-reload"],
+            Self::DockerRestart => &["try-restart", "docker.service"],
+            Self::CaddyReload => &["reload-or-restart", "caddy.service"],
         };
         Cmd::new("systemctl")
             .args(args.iter().copied())
             .timeout(SYSTEMCTL_TIMEOUT)
+    }
+
+    /// The check and the command a rollback runs. Caddy cannot start or
+    /// reload without its Caddyfile, and the check would fail and leave it
+    /// serving the removed one, so once a rollback removed the file,
+    /// `systemctl disable --now caddy.service` runs instead, with no check,
+    /// and the next boot does not try to start it either. Others are
+    /// [`Reload::check`] and [`Reload::command`].
+    #[must_use]
+    pub fn rollback_steps(self, sys: Sys) -> (Option<Cmd>, Cmd) {
+        if self == Self::CaddyReload && !sys.fs.exists(Path::new(CADDYFILE)) {
+            let stop = Cmd::new("systemctl")
+                .args(["disable", "--now", "caddy.service"])
+                .timeout(SYSTEMCTL_TIMEOUT);
+            return (None, stop);
+        }
+        (self.check(), self.command())
     }
 
     /// The longest the check and the reload may run, by their timeouts.
@@ -141,11 +186,13 @@ mod tests {
         assert_eq!(check("out", "err\n"), format!("{cmd}: err"));
     }
 
-    const ALL: [Reload; 4] = [
+    const ALL: [Reload; 6] = [
         Reload::SshdReload,
         Reload::FirewallReload,
         Reload::Fail2banRestart,
         Reload::DaemonReload,
+        Reload::DockerRestart,
+        Reload::CaddyReload,
     ];
 
     #[test]
@@ -180,7 +227,49 @@ mod tests {
                     "systemctl try-restart fail2ban.service".into()
                 ),
                 (None, "systemctl daemon-reload".into()),
+                (
+                    Some("dockerd --validate".into()),
+                    "systemctl try-restart docker.service".into()
+                ),
+                (
+                    Some("caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile".into()),
+                    "systemctl reload-or-restart caddy.service".into()
+                ),
             ]
         );
+    }
+
+    /// Without its Caddyfile, a rollback stops and disables Caddy; with one,
+    /// it checks and reloads as apply does.
+    #[test]
+    fn caddy_rollback_stops_caddy_without_its_caddyfile() {
+        let runner = FakeRunner::new();
+        let steps = |fs: &FakeFs| {
+            let (check, command) = Reload::CaddyReload.rollback_steps(Sys {
+                fs,
+                runner: &runner,
+            });
+            (check.as_ref().map(line), line(&command))
+        };
+        assert_eq!(
+            steps(&FakeFs::new()),
+            (None, "systemctl disable --now caddy.service".into())
+        );
+        let fs = FakeFs::new().with_file(CADDYFILE, "app.example.com {\n}\n");
+        assert_eq!(
+            steps(&fs),
+            (
+                Reload::CaddyReload.check().as_ref().map(line),
+                line(&Reload::CaddyReload.command())
+            )
+        );
+        for reload in ALL.into_iter().filter(|r| *r != Reload::CaddyReload) {
+            let (check, command) = reload.rollback_steps(Sys {
+                fs: &FakeFs::new(),
+                runner: &runner,
+            });
+            assert_eq!(check, reload.check());
+            assert_eq!(command, reload.command());
+        }
     }
 }

@@ -77,6 +77,7 @@ Detection runs once, read-only, into a typed `Facts` struct (`serde` `Serialize`
 - virtualization and container (`systemd-detect-virt`, `/.dockerenv`, DMI (planned))
 - cloud provider (`cloud-id`, `/run/cloud-init/instance-data.json`, DMI vendor strings) (planned)
 - effective sshd config (`sshd -T`), the `sshd_config` files and their `Include`s (the `sshd-config` crate), `ssh.socket`'s `Listen` ports, listening sockets, Docker present
+- Docker on Debian and Ubuntu: Docker's and the distro's conflicting packages and `docker-ce`'s version (`dpkg-query`), `docker.service` (`systemctl show`), whether `/etc/docker/daemon.json` is a JSON object, and, only while `docker.service` is active (so that `docker` does not start it through its socket), the daemon's live-restore and swarm state, running containers and user-defined bridge networks (`docker info`, `docker ps`, `docker network ls`)
 - the SSH session of the user running vps-ready, from the process tree: the nearest `sshd` or `sshd-session` ancestor (`sshd: admin@pts/0`), identified by PID plus start time, with the client and server address from that process's child's `environ` and the login user from its real uid. Our own `SSH_CONNECTION` is not used: sudo's `env_reset` drops it
 - the firewall: input chains of the live nftables ruleset (`nft -j list ruleset`, root only), which also holds ufw, firewalld and iptables-nft rules, with the ports each accepts from any source (`iptables-save -t filter` adds the ports of iptables `multiport` rules, which nft does not show); whether the `filter` table of iptables-legacy is loaded, for IPv4 and IPv6 each (`/proc/net/ip_tables_names`, `ip6_tables_names`), whose rules are not read; the ports Docker publishes beyond loopback and link-local, from its DNAT rules; whether the host has a global IPv6 address (`/proc/net/if_inet6`)
 - whether the kernel has AppArmor enabled (`/sys/module/apparmor/parameters/enabled`)
@@ -109,7 +110,7 @@ pub enum Reversibility { Reversible, Partial, Irreversible }
 ```
 `Result<T>` here is `std::result::Result<T, ResourceError>`. Restore depends only on the `Backup` written to the journal, so `rollback` works in a later process without rebuilding any module's plan. The plan renderer matches on `Reversibility` without a `_ =>` arm, so if a fourth label is ever added, the code that prints the plan doesn't compile until it shows that label to the user.
 
-A drop-in is a `File` whose whole content we own (preferred). `Directory` creates a missing directory (`/etc/vps-ready`) and removes it on rollback only if it is empty. `Service` is a systemd unit's enabled and active state; `User` is an account created with `useradd` or groups added to an existing one (`Partial`: a created user's home directory stays); `AuthorizedKeys` appends missing key lines and never removes one. The firewall is two `File`s and a `Service`, not a ruleset resource: the unit's `ExecStart`, `ExecReload` and `ExecStop` load and delete the table. `LineInFile` and `Command` are added only if a module cannot do without them.
+A drop-in is a `File` whose whole content we own (preferred); a `File` can carry a one-line `describe` that the plan shows instead of a diff, as the vendor apt keys do with their fingerprint. `Package` installs those of its packages that are missing, with one `apt-get update` and one `apt-get install` for a module (`Partial`: rollback leaves them installed). `Directory` creates a missing directory (`/etc/vps-ready`) and removes it on rollback only if it is empty. `Service` is a systemd unit's enabled and active state; `User` is an account created with `useradd` or groups added to an existing one (`Partial`: a created user's home directory stays); `AuthorizedKeys` appends missing key lines and never removes one. The firewall is two `File`s and a `Service`, not a ruleset resource: the unit's `ExecStart`, `ExecReload` and `ExecStop` load and delete the table. `LineInFile` and `Command` are added only if a module cannot do without them.
 
 ### Modules (`src/modules/<name>/`): policy only
 ```rust
@@ -126,11 +127,11 @@ pub trait Module {
     fn verify(&self, cx: &PlanCx, sys: Sys) -> Result<(), String> { Ok(()) }  // sshd -T -C, nft list table
 }
 pub struct ModuleSteps { pub resources: Vec<Resource>, pub reloads: Vec<Reload>, pub notes: Vec<String> }
-pub enum Reload { SshdReload, FirewallReload, Fail2banRestart, DaemonReload }  // journaled by name
+pub enum Reload { SshdReload, FirewallReload, Fail2banRestart, DaemonReload, DockerRestart, CaddyReload }  // journaled by name
 ```
 **Modules don't have apply/rollback.** The engine does both generically from resource snapshots, so every module is small, readable and reversible in the same way.
 
-`plan` returns resources plus reloads; one module can mix kinds (a `File`, a `Service`, a `User`). Each module parses its own params into a `deny_unknown_fields` struct. A file is validated before it is written (`sshd -t -f`, `nft -c -f`, `visudo -cf` on `files/<n>.after`). A `Reload` is a closed enum with a fixed check and command (`sshd -t`, then `systemctl try-reload-or-restart ssh.service`), so a rollback in a later process replays it from its journaled name, check first. There is no `requires` or topological sort yet: the registry order (`user.admin`, `ssh.server`, `firewall.inbound`, `ssh.bruteforce`, `kernel.sysctl`, `updates.auto`, `deploy.user`) is fixed, and `ssh.server`'s need for an admin is a plan-time check.
+`plan` returns resources plus reloads; one module can mix kinds (a `File`, a `Service`, a `User`). Each module parses its own params into a `deny_unknown_fields` struct. A file is validated before it is written (`sshd -t -f`, `nft -c -f`, `visudo -cf` on `files/<n>.after`). A `Reload` is a closed enum with a fixed check and command (`sshd -t`, then `systemctl try-reload-or-restart ssh.service`), so a rollback in a later process replays it from its journaled name, check first. The one exception: once a rollback removed the Caddyfile, `CaddyReload` runs `systemctl disable --now caddy.service` instead, since Caddy can neither validate, reload nor start without it. Its usual command is `systemctl reload-or-restart caddy.service`, which also starts a stopped Caddy, and `deploy.proxy`'s `verify` then checks that `caddy.service` is active. There is no `requires` or topological sort yet: the registry order (`user.admin`, `ssh.server`, `deploy.docker`, `firewall.inbound`, `ssh.bruteforce`, `kernel.sysctl`, `updates.auto`, `deploy.proxy`, `deploy.user`) is fixed, `ssh.server`'s need for an admin is a plan-time check, a module that sees `deploy.docker`'s `docker-ce` package planned before it plans as if Docker were present, and `deploy.proxy` reads the ruleset `firewall.inbound` plans before it for ports 80 and 443.
 
 ### Controls catalog (declarative, auditable without reading Rust)
 Controls live in `src/audit/controls/<area>.toml`, one file per area (`ssh.toml`, `kernel.toml`, `network.toml`, later `firewall.toml`, ...), using a **closed** check vocabulary. They are separate from modules because some controls have no module that fixes them. The vocabulary must not grow into a DSL:
@@ -241,7 +242,7 @@ reboot:  the boot hook rolls back before sshd starts (reason deadman-reboot)
 - **No confirm code.** At most one transaction can be pending, so a code would pick between one choice, and a code printed in the old terminal proves nothing about the new one. The protection is the new-session check. `confirm --extend [DUR]` moves the deadline (at most 30 minutes ahead, 2 hours after the changes went live) from any session, since extending proves nothing.
 - **New session, from the process tree.** sudo drops `SSH_CONNECTION`, so `confirm` walks `/proc` up to the nearest `sshd`/`sshd-session` process and compares its PID and start time with the session recorded at apply. tmux, screen, mosh, the console and `ControlMaster` connections all count as old. A client on loopback is refused too: the firewall accepts that traffic whatever its rules.
 - **Deadlines** are `CLOCK_BOOTTIME` seconds plus the boot ID, so an NTP step during the window changes nothing.
-- **The boot hook** `/etc/systemd/system/vps-ready-deadman.service` (`DefaultDependencies=no`, `After=vps-ready-firewall.service`, `Before=ssh.service ssh.socket`, `TimeoutStartSec=120`) is written outside any transaction and enabled only while one is armed. It rolls back a transaction armed in an earlier boot, so sshd starts with the restored config; every command it runs has 20 s at most. The timer and the hook run a private copy of the binary that applied, made at arm time, so moving, removing or upgrading the installed binary (`install.sh`, the `.deb`) cannot break them, and the unattended rollback is the version that applied. The copy is one file, overwritten by the next arm and left in place after a confirm or rollback. `confirm --extend` re-arms with the same copy. A transaction armed by v0.4.0, whose hook names the installed binary, is left as it was.
+- **The boot hook** `/etc/systemd/system/vps-ready-deadman.service` (`DefaultDependencies=no`, `After=vps-ready-firewall.service`, `Before=ssh.service ssh.socket docker.service`, `TimeoutStartSec=120`) is written outside any transaction and enabled only while one is armed. It rolls back a transaction armed in an earlier boot, so sshd and Docker start with the restored config; every command it runs has 20 s at most. The timer and the hook run a private copy of the binary that applied, made at arm time, so moving, removing or upgrading the installed binary (`install.sh`, the `.deb`) cannot break them, and the unattended rollback is the version that applied. The copy is one file, overwritten by the next arm and left in place after a confirm or rollback. `confirm --extend` re-arms with the same copy. A transaction armed by v0.4.0, whose hook names the installed binary, is left as it was.
 - **The dead-man rollback is per resource.** Resources of a module with `force_restore` (`ssh.server`, `firewall.inbound`) are restored even if edited during the window; the edit is kept as `files/<n>.during`. Any other resource that changed is skipped and journaled with its by-hand step. Restores go first and the journal is best effort, so a full disk does not stop them. If a forced restore fails, the unforced ones after it (such as the admin `user.admin` set up) wait for a rerun, so the way in stays while the lock-down does. A manual `rollback` keeps the all-or-nothing check.
 - **Waiting.** `apply` counts down until the transaction leaves pending-confirm: exit 0 when confirmed, 1 when rolled back, 4 when Ctrl-C stopped the wait (the timer keeps running).
 
@@ -271,9 +272,9 @@ sequenceDiagram
 ```
 
 Planned:
-- **OpenRC:** a double-forked `setsid` watchdog plus a `local.d` boot hook (M6; today the dead-man modules need systemd).
-- **firewalld:** runtime-only rules as a second safety net (M6).
-- **Non-interactive (cloud-init):** `--deadman=off` with the invariants still enforced, or `--deadman=selftest` (probe the new config via `ssh-keyscan localhost:<port>`) (M5).
+- **OpenRC:** a double-forked `setsid` watchdog plus a `local.d` boot hook (M7; today the dead-man modules need systemd).
+- **firewalld:** runtime-only rules as a second safety net (M7).
+- **Non-interactive (cloud-init):** `--deadman=off` with the invariants still enforced, or `--deadman=selftest` (probe the new config via `ssh-keyscan localhost:<port>`) (v0.6.0, with `export cloud-init`).
 
 ## State layout
 
@@ -293,6 +294,23 @@ Planned:
 ```
 Commands that read this: `history`, `rollback [--txn|--last]`, `confirm`, later `drift`.
 
+## Files vps-ready writes
+
+vps-ready never edits a distro's main config file. It adds its own small file to the program's drop-in directory, so the change stays separate, is easy to see, and rollback only has to remove that file. The program reads the directory in name order, and the number in front of the name sets where the file sits in that order. What the order means depends on the program:
+
+| Program | File | Merge rule | So the name |
+|---|---|---|---|
+| sshd | `/etc/ssh/sshd_config.d/00-vps-ready.conf` | the first value read for a keyword wins ([sshd_config(5)](https://man.openbsd.org/sshd_config)); the `Include` at the top of `sshd_config` reads `*.conf` in name order | starts low, `00-`, to come before cloud-init's `50-cloud-init.conf`. The plan refuses when that `Include` is missing, sits in a `Match` block, or comes after a line that sets the same keyword |
+| sysctl | `/etc/sysctl.d/90-vps-ready.conf` | the last file read wins; files from all directories are sorted by name ([sysctl.d(5)](https://www.freedesktop.org/software/systemd/man/latest/sysctl.d.html)) | `90-`, the top of the 60 to 90 range systemd recommends for `/etc`. `99-*` files still come later; on Debian 12 and Ubuntu, `/etc/sysctl.conf` is read through `99-sysctl.conf` and can override it |
+| sudo | `/etc/sudoers.d/90-vps-ready-admin` | the last matching rule wins; `@includedir` skips names that contain a `.` or end in `~` ([sudoers(5)](https://www.sudo.ws/docs/man/sudoers.man/)) | `90-` to come after the distro's rules, with no dot. Written through `visudo -cf`, mode 0440 |
+| apt | `/etc/apt/apt.conf.d/52vps-ready` | files are read in name order and later values win; names are letters, digits, `_`, `-` and `.` only ([apt.conf(5)](https://manpages.debian.org/apt.conf.5)) | apt's own style, no dash and no extension; `52` comes after `20auto-upgrades` and `50unattended-upgrades` |
+| fail2ban | `/etc/fail2ban/jail.d/90-vps-ready.local` | read order is `jail.conf`, `jail.d/*.conf`, `jail.local`, `jail.d/*.local`, later wins ([jail.conf(5)](https://manpages.debian.org/jail.conf.5)) | `.local` so it is read last; it sets only the `[sshd]` jail, never `[DEFAULT]`, so other jails keep the admin's settings |
+| systemd | `/etc/systemd/system/vps-ready-*.service` | `/etc/systemd/system` is for units the admin adds ([systemd.unit(5)](https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html)) | prefixed `vps-ready-` so they are easy to find and never clash with a package's unit |
+
+Everything vps-ready owns that is not a drop-in lives under its own name: settings in `/etc/vps-ready/` and state in `/var/lib/vps-ready/` (see [State layout](#state-layout)), as the [FHS](https://refspecs.linuxfoundation.org/FHS_3.0/fhs/index.html) puts them. Every config file it writes starts with a `# Written by vps-ready` comment that names the module and says how to undo it.
+
+A new module follows the same rules: use the program's drop-in directory when it has one, pick the number from that program's merge rule (low when the first value wins, high when the last value wins), follow the directory's own naming style, and check that the program actually reads the name (extension, allowed characters).
+
 ## CLI surface (v1)
 
 Commands are `clap` derive structs in `src/cli`. Today `version`, `detect`, `audit`, `plan`, `apply`, `confirm`, `rollback` and `history` exist; the rest arrive with their milestones (see the GitHub milestones).
@@ -307,7 +325,7 @@ vps-ready apply [plan.json | --profile X] [--module M] [--yes] [--deadman 5m|off
 vps-ready confirm [--txn ID] [--extend [DUR]]
 vps-ready rollback [--last | --txn ID]
 vps-ready history | drift
-vps-ready export cloud-init --profile X > user-data.yaml
+vps-ready export cloud-init --profile X > user-data.yaml   # v0.6.0
 vps-ready modules [ID]                  list modules; with an ID, why, params and the controls fixed (no root; not the files touched: that needs a plan against a host)
 vps-ready version
 ```
@@ -318,7 +336,7 @@ vps-ready version
 
 ## Profile format: TOML
 
-TOML avoids YAML's foot-guns in a security config (`no` → `false`, the Norway problem, indentation surprises). Decoding is strict, with a `schema = 1` version field (planned: a JSON Schema for editor completion, deferred from M4 to M6 with the config file, see [the M4 plan](m4-plan.md#not-in-m4)):
+TOML avoids YAML's foot-guns in a security config (`no` → `false`, the Norway problem, indentation surprises). Decoding is strict, with a `schema = 1` version field (planned: a JSON Schema for editor completion, deferred from M4 to M7 with the config file, see [the M4 plan](m4-plan.md#not-in-m4)):
 - Every module's params struct has `#[serde(deny_unknown_fields)]`, and every section is checked when the profile is parsed, so a typo is an error that names the module, not a silently ignored line.
 - Planned: the same structs derive `schemars::JsonSchema`, so the published schema can't drift from the code.
 
@@ -342,7 +360,7 @@ enabled = false
 
 Without `--profile` or `--module`, `plan` and `apply` select only `kernel.sysctl` and `updates.auto`, so an upgrade never makes a plain `apply` start changing SSH or the firewall.
 
-**cloud-init:** `vps-ready export cloud-init` emits `#cloud-config` that writes the profile, downloads a **pinned version, verifying its SHA256** (embedded in the user-data), and runs `apply --yes --deadman=off` from `runcmd`.
+**cloud-init (v0.6.0):** `vps-ready export cloud-init` emits `#cloud-config` that writes the profile, downloads a **pinned version, verifying its SHA256** (embedded in the user-data), and runs `apply --yes --deadman=off` from `runcmd`.
 
 ## Repo layout
 

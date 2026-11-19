@@ -65,8 +65,14 @@ impl Runner for Debian {
             },
             "apt-get" => {
                 if cmd.args.iter().any(|a| a == "install") {
-                    state.installed.insert(last.to_owned());
-                    if last == "fail2ban" {
+                    // The names follow the last option.
+                    let options = cmd
+                        .args
+                        .iter()
+                        .rposition(|a| a.starts_with("Dpkg::Options"));
+                    let names = &cmd.args[options.map_or(cmd.args.len(), |i| i + 1)..];
+                    state.installed.extend(names.iter().cloned());
+                    if names.iter().any(|n| n == "fail2ban") {
                         std::fs::create_dir_all(self.root.join("etc/fail2ban/jail.d")).unwrap();
                         state.enabled = true;
                     }
@@ -199,6 +205,11 @@ fn applies_only_on_debian_with_systemd_and_apt() {
         Applicability::NotApplicable { reason } => reason,
         Applicability::Applicable => panic!("applies"),
     };
+    facts.session = None;
+    facts.ssh.listening.clear();
+    facts.ssh.socket_ports.clear();
+    facts.ssh.effective = None;
+    assert!(reason(&facts).starts_with("the SSH port is unknown"));
     facts.updates = None;
     assert_eq!(reason(&facts), "apt not found, or `apt-config` failed");
     facts.init = Init::OpenRc;
@@ -245,6 +256,21 @@ fn ignores_the_session_address_only_when_there_is_one() {
     );
 }
 
+/// The jail bans on every port sshd can be reached on, not only 22.
+#[test]
+fn bans_on_the_ssh_ports() {
+    let mut facts = facts();
+    facts.session = Some(Session {
+        server: "198.51.100.5:2222".parse().unwrap(),
+        ..session("192.0.2.10:51234")
+    });
+    facts.ssh.listening = vec![2222, 22];
+    let drop_in = drop_in_of(&steps(&facts, &toml::Table::new()).unwrap());
+    assert!(drop_in.contains("\n[sshd]\n"), "{drop_in}");
+    assert!(!drop_in.contains("[DEFAULT]"), "{drop_in}");
+    assert!(drop_in.contains("\nport = 22,2222\n"), "{drop_in}");
+}
+
 #[test]
 fn takes_no_params() {
     let facts = facts();
@@ -269,7 +295,7 @@ fn takes_no_params() {
 fn restarts_fail2ban_after_its_changes() {
     let steps = steps(&facts(), &toml::Table::new()).unwrap();
     assert_eq!(steps.reloads, [Reload::Fail2banRestart]);
-    let Some(Resource::File(file)) = steps.resources.get(3) else {
+    let Some(Resource::File(file)) = steps.resources.get(1) else {
         panic!("the drop-in follows the packages");
     };
     // `fail2ban-client -t` checks the whole configuration, not one file.
@@ -318,7 +344,7 @@ fn apply_is_idempotent_and_rolls_back() {
         let first = plan(&module, &fs, &debian, &facts);
         let mut want: Vec<String> = Vec::new();
         if !start.installed.contains("fail2ban") {
-            want.extend(PACKAGES.map(|p| format!("package:{p}")));
+            want.push(format!("package:{}", PACKAGES.join(",")));
         }
         want.push(format!("file:{DROP_IN}"));
         if !start.active {

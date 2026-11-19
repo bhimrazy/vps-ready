@@ -17,7 +17,7 @@ pub use confirm::{Extended, Refusal, Watch, watch};
 pub use deadman::Deadman;
 pub use journal::{Deadline, Event, Record, RollbackReason, TxnState};
 pub use plan::{ModulePlan, ModuleStatus, Plan, Selected, Step, plan};
-pub use reload::Reload;
+pub use reload::{CADDYFILE, Reload};
 pub use run::{
     ApplyOutcome, ByHand, DeadmanOutcome, Engine, Progress, Rollback, Target, TxnInfo, history,
 };

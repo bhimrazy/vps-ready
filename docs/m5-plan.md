@@ -1,6 +1,6 @@
 # M5 plan: deployment readiness (v0.5.0)
 
-> **Status: accepted.** Nothing below is built yet. The owner decided the open questions on 2026-10-31 (see the end).
+> **Status: done for v0.5.0.** The modules, vendor apt sources, the `.deb` and the SBOM shipped in v0.5.0. The plan is kept as the design record. The v0.6.0 direction at the end moved to the [M6 plan](m6-plan.md), which is not built yet.
 
 M5 takes a server that M3 and M4 hardened and gets it ready to run an app: Docker installed with safe defaults, a reverse proxy with automatic HTTPS, a deploy user for CI, and a way to install vps-ready itself as a package. The milestone as written also had Tailscale with public port 22 closed, and a cloud-init export. Those two change the safety model (a confirm that must arrive over the tailnet, and an apply with no one to confirm at all), so this plan moves them to a second release, v0.6.0, where they get their own design and VM time.
 
@@ -51,7 +51,8 @@ Installs Docker Engine from Docker's repository (`docker-ce`, `docker-ce-cli`, `
 
 - **Not applicable** when the distro's `docker.io`, `podman-docker` or distro `containerd`/`runc` are installed. It says which, and does not remove them: removing a running container stack is not a hardening step.
 - **Docker already installed** (from Docker's repository or otherwise): the module only manages `daemon.json`. An existing `daemon.json` is merged key by key: keys we set are added or changed, other keys are kept, and the plan shows the diff. A file that is not valid JSON makes the module not applicable.
-- **A new reload, `DockerRestart`:** `dockerd --validate --config-file /etc/docker/daemon.json`, then `systemctl try-restart docker.service`. The keys above are not reloadable on SIGHUP, so it is a restart. The restart stops running containers unless `live-restore` was already on. When containers are running and `live-restore` is off, the plan lists them and says they will restart, and that a rollback restarts them again. That note is the warning; `--yes` still means yes.
+- **Docker's repository already configured in another file** (such as `docker.list` from Docker's older install docs): the module does not add `docker.sources`, and uses that source. A second source with another `Signed-By` makes every `apt-get update` fail.
+- **A new reload, `DockerRestart`:** `dockerd --validate` (the default `/etc/docker/daemon.json`; unlike `--config-file`, it passes when a rollback removed the file), then `systemctl try-restart docker.service`. The keys above are not reloadable on SIGHUP, so it is a restart. The restart stops running containers unless `live-restore` was already on. When containers are running and `live-restore` is off, the plan lists them and says they will restart, and that a rollback restarts them again. That note is the warning; `--yes` still means yes.
 - The iptables firewall backend stays the default. Docker's nftables backend is still experimental in Docker 29. In iptables mode Docker sets `ip_forward=1` and a `FORWARD` policy of drop; `kernel.sysctl` does not touch either. The plan says that a host that routes other traffic (a WireGuard peer, a subnet router) needs its own forward rules.
 - Unattended upgrades leave the Docker and Caddy origins out by default, and vps-ready does not change that. So `updates.auto` does not restart Docker on its own, and Caddy gets no automatic security updates either; the user docs say so.
 
@@ -151,7 +152,7 @@ This plan departs from earlier docs; PR 8 updates them:
 
 ### Direction for v0.6.0: private access
 
-Recorded here so v0.5.0 does not paint it into a corner; v0.6.0 gets its own plan. Tailscale is one way to reach a server privately, not the only one (open question 4 in `decisions.md`). So v0.6.0 has two separate pieces:
+Recorded here so v0.5.0 does not paint it into a corner. v0.6.0 now has its own plan, [the M6 plan](m6-plan.md), which also adds a built-in WireGuard module; where the two differ, that plan wins. Tailscale is one way to reach a server privately, not the only one (open question 4 in `decisions.md`). So v0.6.0 has two separate pieces:
 
 1. **Closing public 22 works with any private network.** A `firewall.inbound` parameter names the interface SSH must come through (`ssh_via = "tailscale0"`, `"wg0"`, `"nb0"` for NetBird, and so on). SSH stays open on that interface and closes everywhere else. It runs behind the safety timer, and only a confirm whose server address belongs to that interface counts. Refused at plan time: an interface that is down or has no address. A note when vps-ready cannot tell whether the interface comes back after a reboot (for `tailscale0` it checks that `tailscaled` is enabled; for `wg0`, that `wg-quick@wg0` is). The note also points to the provider's console as the way back in.
 2. **`net.tailscale` is the one install-and-join helper.** It installs Tailscale from its repository (a vendor source as above), joins with an auth key read from a file or the environment, never from the command line, and supports `login_server` for Headscale. Then the close-22 step uses `tailscale0`.

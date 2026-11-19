@@ -58,6 +58,7 @@ Legend: **Risk** = chance of lockout or breakage (L/M/H). **Profile** = M(inimal
 - So `00-` beats cloud-init's `50-cloud-init.conf` (which sets `PasswordAuthentication yes`).
 - `/etc/cloud/cloud.cfg.d/99-vps-ready.cfg` with `ssh_pwauth: false` is not needed: cloud-init only writes `50-cloud-init.conf`, which `00-` already beats (v0.3.0 does not write it).
 - If there's no `Include` line (check Alpine/Arch), add one as the first line.
+- A `Match` block beats the drop-in for the connections it matches, and one other than `Match all` is not in plain `sshd -T`'s output (without `-C`). The audit reads `sshd_config` and its includes for `Match` blocks that set a checked keyword to another value and fails the control, naming the file and line. vps-ready does not edit `Match` blocks, so such a failure names no module to fix it.
 
 ```sshconfig
 PermitRootLogin no
@@ -135,7 +136,7 @@ Also make sure **needrestart ≥ 3.8**, because older versions have local-root C
 ### Kernel / sysctl (`/etc/sysctl.d/90-vps-ready.conf`)
 
 **Safe set (all profiles):**
-- no ICMP redirects or source routing, `tcp_syncookies=1`;
+- no ICMP redirects or source routing, `tcp_syncookies=1`, `net.mptcp.enabled=0`;
 - `rp_filter=2` (loose: `1` breaks Tailscale routing);
 - `kptr_restrict=2`, `dmesg_restrict=1`, `unprivileged_bpf_disabled=1`, `bpf_jit_harden=2`, `yama.ptrace_scope=1`;
 - `fs.protected_*`, `fs.suid_dumpable=0`.
@@ -164,10 +165,10 @@ Also make sure **needrestart ≥ 3.8**, because older versions have local-root C
 
 | ID | Module | Key points |
 |---|---|---|
-| `deploy.docker` | Docker Engine from the **official repo** | `daemon.json`: `log-driver local` with size limits, `live-restore`, `no-new-privileges`, `userland-proxy:false`, `ip:127.0.0.1`. **The docker group is equivalent to root.** Rootless/Podman as an option |
-| `deploy.user` | `deploy` user | No general sudo; `sudoers` allows only `/usr/local/bin/deploy-app`; restricted `authorized_keys` (`restrict,command="…"`) for CI |
-| `deploy.proxy` | Reverse proxy | **Caddy** by default (auto HTTPS); Nginx+certbot as an option; Traefik only behind a docker-socket proxy |
-| `net.tailscale` | Private admin access | `tailscale up`, allow on `tailscale0`, **then close public 22 as the very last step**, behind its own dead-man switch |
+| `deploy.docker` | Docker Engine from the **official repo** | `daemon.json`: `log-driver local` with size limits, `live-restore`, `no-new-privileges`, `userland-proxy:false`, `ip:127.0.0.1`. **The docker group is equivalent to root.** Rootless Docker and Podman are not offered in M5 |
+| `deploy.user` | `deploy` user | No general sudo; with a `command`, `sudoers` allows only that one program (the user's choice, an absolute path to a root-owned file), as root and without arguments; restricted `authorized_keys` (`restrict,command="…"`) for CI |
+| `deploy.proxy` | Reverse proxy | **Caddy** (auto HTTPS). Nginx+certbot is not offered in M5, and Traefik would only go behind a docker-socket proxy |
+| `net.tailscale` | Private admin access | `tailscale up`, allow on `tailscale0`, **then close public 22 as the very last step**, behind its own dead-man switch (v0.6.0, with any private network, not only Tailscale) |
 | `ops.backup` | restic → S3/B2/SFTP | systemd timer, `forget --prune`, weekly `check`, DB dumps, healthchecks.io ping. *Provider snapshots aren't backups* |
 | `ops.monitor` | node_exporter / Beszel | Bind to localhost or the tailnet. **Netdata listens publicly on :19999 by default** |
 

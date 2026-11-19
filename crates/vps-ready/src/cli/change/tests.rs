@@ -90,6 +90,7 @@ pub(in crate::cli) fn host(fs: &FakeFs) -> Host<'_> {
         };
         FakeRunner::new()
             .on("dpkg-query", ["-W"], Output::success("installed"))
+            .on("dpkg", ["--print-architecture"], Output::success("amd64\n"))
             .on("apt-config", ["-c"], Output::success(""))
             .on(
                 "getent",
@@ -390,6 +391,14 @@ fn plan_summary_counts_kinds() {
         ),
         "{out}"
     );
+    // ssh.bruteforce installs three packages in one step.
+    let (_, out, _) = plan_cmd(&apt_host(&fs, &apt), &["ssh.bruteforce", "updates.auto"]);
+    assert!(
+        out.contains(
+            "\n5 changes in 2 modules: 2 files, 2 apt installs of 4 packages, 1 service.\n"
+        ),
+        "{out}"
+    );
 
     let host = Host {
         facts: container,
@@ -409,6 +418,10 @@ fn owner_is_spelled_out() {
     assert_eq!(
         show_owner("/etc/a (0644 0:0 -> 0600 1000:100)"),
         "/etc/a (mode 0644, root:root -> mode 0600, 1000:100)"
+    );
+    assert_eq!(
+        show_owner("/etc/a.asc (0644 0:0): PGP public key, fingerprint 9DC8 (62 lines)"),
+        "/etc/a.asc (mode 0644, root:root): PGP public key, fingerprint 9DC8 (62 lines)"
     );
     assert_eq!(show_owner("/etc/a"), "/etc/a");
 }
@@ -815,6 +828,7 @@ impl Module for Lockout {
                 gid: 0,
             },
             validate: None,
+            describe: None,
         })]
         .into())
     }
@@ -954,7 +968,8 @@ fn a_profile_file_is_read_and_checked() {
     );
     let (code, out, _) = plan_with(&host(&fs), &with_profile("/srv/mine.toml", &[]));
     assert_eq!(code, 0);
-    assert!(out.starts_with("firewall.inbound:"), "{out}");
+    assert!(out.starts_with("deploy.docker:"), "{out}");
+    assert!(out.contains("firewall.inbound:"), "{out}");
     assert!(out.contains("ssh.bruteforce:"), "{out}");
     assert!(out.contains("kernel.sysctl:"), "{out}");
     assert!(!out.contains("updates.auto"), "{out}");

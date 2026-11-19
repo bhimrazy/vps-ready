@@ -5,7 +5,7 @@ exclude = ["fuzz"]
 resolver = "3"
 
 [workspace.package]
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT OR Apache-2.0"
@@ -13,8 +13,8 @@ repository = "https://github.com/bhimrazy/vps-ready"
 
 [workspace.dependencies]
 # The alias crate pins the exact same version.
-vps-ready = { path = "crates/vps-ready", version = "=0.4.0" }
-sshd-config = { path = "crates/sshd-config", version = "=0.4.0" }
+vps-ready = { path = "crates/vps-ready", version = "=0.5.0" }
+sshd-config = { path = "crates/sshd-config", version = "=0.5.0" }
 
 anyhow = "1.0.104"
 askama = { version = "0.16.1", default-features = false, features = ["derive", "std"] }
@@ -23,7 +23,7 @@ dialoguer = { version = "0.12.0", default-features = false }
 owo-colors = "4.4.0"
 rustix = { version = "1.1.5", default-features = false, features = ["std", "fs"] }
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.152"
+serde_json = { version = "1.0.152", features = ["preserve_order"] }
 signal-hook = { version = "0.4.5", default-features = false }
 similar = "3.2.0"
 thiserror = "2.0.21"

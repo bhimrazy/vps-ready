@@ -12,3 +12,5 @@ allow = ["22/tcp", "80/tcp", "443/tcp", "443/udp"]
 [modules."kernel.sysctl"]
 
 [modules."updates.auto"]
+
+[modules."deploy.docker"]

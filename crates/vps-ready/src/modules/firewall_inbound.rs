@@ -2,16 +2,19 @@
 //! own nftables table, `inet vps_ready`, loaded by its own unit.
 
 use std::collections::BTreeSet;
+use std::path::Path;
 use std::time::Duration;
 
 use askama::Template;
 use serde::Deserialize;
 
-use super::{Applicability, Module, ModuleError, ModuleSteps, ParamDoc, PlanCx, parse_params};
+use super::{
+    Applicability, DOCKER_PACKAGE, Module, ModuleError, ModuleSteps, ParamDoc, PlanCx, parse_params,
+};
 use crate::engine::Reload;
 use crate::facts::{Facts, Init, OsFamily, Proto};
 use crate::resource::{Directory, File, Package, Resource, Service, Validate};
-use crate::sys::{Cmd, FileOwner, Sys};
+use crate::sys::{Cmd, FileOwner, Sys, SysError};
 
 /// Holds the ruleset. No package owns a directory it would fit in.
 pub const DIR: &str = "/etc/vps-ready";
@@ -116,6 +119,22 @@ impl Ruleset {
             not_docker: not_docker(facts),
         }
     }
+
+    /// [`Ruleset::new`], also for a Docker that `cx` plans.
+    fn planned(cx: &PlanCx, params: &Params) -> Self {
+        let mut ruleset = Self::new(cx.facts, params);
+        ruleset.docker |= docker_planned(cx);
+        ruleset
+    }
+}
+
+/// Whether a module before this one, `deploy.docker`, installs Docker in
+/// the same plan. Its bridges do not exist yet, and rules for them are
+/// valid all the same, so one apply is enough.
+fn docker_planned(cx: &PlanCx) -> bool {
+    cx.planned
+        .iter()
+        .any(|r| matches!(r, Resource::Package(p) if p.names.iter().any(|n| n == DOCKER_PACKAGE)))
 }
 
 /// The interfaces named `br-*` that Docker did not name. The ruleset keeps
@@ -128,6 +147,10 @@ fn not_docker(facts: &Facts) -> Vec<String> {
         .map(|b| b.name.clone())
         .collect()
 }
+
+/// Why a module that needs [`ssh_ports`] does not apply when it is empty.
+pub(crate) const SSH_PORT_UNKNOWN: &str =
+    "the SSH port is unknown: no SSH session, sshd listener, `sshd -T` or ssh.socket shows it";
 
 /// Every port SSH may be reached on now: [`crate::facts::Ssh::ports`], the
 /// applying session's and every port an sshd process listens on.
@@ -207,8 +230,7 @@ impl Module for FirewallInbound {
         } else if !tools.nft && facts.updates.is_none() {
             "nft is not installed, and apt was not found to install it"
         } else if ssh_ports(facts).is_empty() {
-            "the SSH port is unknown: no SSH session, sshd listener, `sshd -T` or \
-             ssh.socket shows it"
+            SSH_PORT_UNKNOWN
         } else {
             return Applicability::Applicable;
         };
@@ -223,24 +245,18 @@ impl Module for FirewallInbound {
             .map(u16::to_string)
             .collect::<Vec<_>>()
             .join(", ");
-        let mut notes = vec![format!(
-            "always accepts TCP {ports}, the current SSH ports (this session's, root's sshd \
-             listeners and `Port`), whatever `allow` says"
-        )];
+        let mut notes = vec![
+            format!(
+                "always accepts TCP {ports}, the current SSH ports (this session's, root's sshd \
+                 listeners and `Port`), whatever `allow` says"
+            ),
+            "drops incoming IPv4 TCP that carries IP options, also to containers, to blunt \
+             CVE-2026-98432 until the kernel is updated and rebooted; TCP labeled with \
+             CIPSO (NetLabel) stops working"
+                .to_owned(),
+        ];
         if facts.docker {
-            notes.push(
-                "Docker is installed: input from docker0 and br-* is accepted, so \
-                 containers can reach services on the host; a compromised container \
-                 can reach all of them, as with no firewall"
-                    .to_owned(),
-            );
-            let others = not_docker(facts);
-            if !others.is_empty() {
-                notes.push(format!(
-                    "filtered like any other interface, since Docker did not name them: {}",
-                    others.join(", ")
-                ));
-            }
+            notes.extend(docker_notes(facts, "Docker is installed"));
         }
         let firewall = facts.firewall.as_ref();
         notes.extend(forwarded_note(facts));
@@ -283,12 +299,17 @@ impl Module for FirewallInbound {
     /// loads it when it starts.
     fn plan(&self, cx: &PlanCx, _: Sys) -> Result<ModuleSteps, ModuleError> {
         let params: Params = cx.params()?;
-        let model = Ruleset::new(cx.facts, &params);
+        let model = Ruleset::planned(cx, &params);
         let ruleset = model.render()?;
+        let mut notes = Vec::new();
+        if !cx.facts.docker && docker_planned(cx) {
+            notes.extend(docker_notes(cx.facts, "deploy.docker installs Docker"));
+        }
+        notes.extend(proxied_note(cx.facts, &model));
         let mut resources = Vec::new();
         if !cx.facts.firewall_tools.nft {
             resources.push(Resource::Package(Package {
-                name: "nftables".to_owned(),
+                names: vec!["nftables".to_owned()],
             }));
         }
         resources.extend([
@@ -301,12 +322,14 @@ impl Module for FirewallInbound {
                 content: format!("{ruleset}\n").into_bytes(),
                 owner: root(0o644),
                 validate: Some(Validate::new("nft", ["-c", "-f", Validate::PATH])),
+                describe: None,
             }),
             Resource::File(File {
                 path: UNIT_FILE.into(),
                 content: UNIT_TEXT.as_bytes().to_vec(),
                 owner: root(0o644),
                 validate: None,
+                describe: None,
             }),
             Resource::Service(Service {
                 unit: UNIT.to_owned(),
@@ -318,7 +341,7 @@ impl Module for FirewallInbound {
         Ok(ModuleSteps {
             resources,
             reloads: vec![Reload::DaemonReload, Reload::FirewallReload],
-            notes: proxied_note(cx.facts, &model).into_iter().collect(),
+            notes,
         })
     }
 
@@ -326,7 +349,7 @@ impl Module for FirewallInbound {
     /// port the ruleset accepts.
     fn verify(&self, cx: &PlanCx, sys: Sys) -> Result<(), String> {
         let params: Params = cx.params().map_err(|e| e.to_string())?;
-        let want = Ruleset::new(cx.facts, &params);
+        let want = Ruleset::planned(cx, &params);
         let cmd = Cmd::new("nft")
             .args(["-j", "list", "table", "inet", "vps_ready"])
             .timeout(NFT_TIMEOUT);
@@ -347,6 +370,24 @@ impl Module for FirewallInbound {
     fn verify_timeout(&self) -> Duration {
         NFT_TIMEOUT
     }
+}
+
+/// What accepting input from Docker's bridges means, after `why`, e.g.
+/// `Docker is installed`.
+fn docker_notes(facts: &Facts, why: &str) -> Vec<String> {
+    let mut notes = vec![format!(
+        "{why}: input from docker0 and br-* is accepted, so containers can reach \
+         services on the host; a compromised container can reach all of them, as with \
+         no firewall"
+    )];
+    let others = not_docker(facts);
+    if !others.is_empty() {
+        notes.push(format!(
+            "filtered like any other interface, since Docker did not name them: {}",
+            others.join(", ")
+        ));
+    }
+    notes
 }
 
 /// The ports Docker publishes for `family` (`ip` or `ip6`), as `5432/tcp`.
@@ -411,6 +452,44 @@ fn proxied_note(facts: &Facts, ruleset: &Ruleset) -> Option<String> {
             show(&proxied, true)
         )
     })
+}
+
+/// The TCP ports this module accepts from anywhere: by the ruleset that a
+/// module before the caller plans, else by the one on disk from an earlier
+/// apply; `None` when there is neither.
+///
+/// # Errors
+///
+/// Reading the ruleset on disk.
+pub(crate) fn accepted_tcp(cx: &PlanCx, sys: Sys) -> Result<Option<BTreeSet<u16>>, ModuleError> {
+    let planned = cx.planned.iter().find_map(|r| match r {
+        Resource::File(f) if f.path == Path::new(RULESET) => Some(f.content.clone()),
+        _ => None,
+    });
+    let text = match planned {
+        Some(text) => text,
+        None => match sys.fs.read(Path::new(RULESET)) {
+            Ok(text) => text,
+            Err(SysError::NotFound(_)) => return Ok(None),
+            Err(e) => return Err(e.into()),
+        },
+    };
+    Ok(Some(tcp_ports(&String::from_utf8_lossy(&text))))
+}
+
+/// The ports of the `tcp dport { ... } accept` line that
+/// `templates/firewall.nft` renders.
+fn tcp_ports(ruleset: &str) -> BTreeSet<u16> {
+    ruleset
+        .lines()
+        .filter_map(|l| {
+            l.trim()
+                .strip_prefix("tcp dport {")?
+                .strip_suffix("} accept")
+        })
+        .flat_map(|ports| ports.split(','))
+        .filter_map(|p| p.trim().parse().ok())
+        .collect()
 }
 
 /// Whether `json`, the loaded table, has an input chain that drops by

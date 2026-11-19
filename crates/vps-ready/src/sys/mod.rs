@@ -227,6 +227,8 @@ pub struct FileMeta {
     pub gid: u32,
     /// Number of hard links.
     pub nlink: u64,
+    /// Modification time, in seconds since the Unix epoch.
+    pub mtime: i64,
 }
 
 impl FileMeta {
@@ -250,6 +252,20 @@ pub struct FileOwner {
     pub uid: u32,
     /// Owner group id.
     pub gid: u32,
+}
+
+/// A locked file, unlocked before it is closed. A child forked by another
+/// thread holds a copy of the descriptor until it execs, and with it the
+/// `flock`, so closing alone would leave the lock held until then; an
+/// explicit unlock releases it for every copy.
+struct LockFile(File);
+
+impl Drop for LockFile {
+    fn drop(&mut self) {
+        if let Err(e) = self.0.unlock() {
+            tracing::warn!("unlocking: {e}; the lock is released when the file closes");
+        }
+    }
 }
 
 /// A lock taken by [`Fs::try_lock`], released when dropped.
@@ -685,6 +701,7 @@ impl Fs for RealFs {
             uid: meta.uid(),
             gid: meta.gid(),
             nlink: meta.nlink(),
+            mtime: meta.mtime(),
         };
         Ok((bytes, meta))
     }
@@ -726,6 +743,7 @@ impl Fs for RealFs {
             uid: meta.uid(),
             gid: meta.gid(),
             nlink: meta.nlink(),
+            mtime: meta.mtime(),
         })
     }
 
@@ -832,8 +850,8 @@ impl Fs for RealFs {
             .open(self.host_path(path))
             .map_err(|e| SysError::from_io(subject(), e))?;
         match file.try_lock() {
-            // Closing the file releases the lock.
-            Ok(()) => Ok(FsLock::new(file)),
+            // Dropping the guard unlocks the file.
+            Ok(()) => Ok(FsLock::new(LockFile(file))),
             Err(TryLockError::WouldBlock) => Err(SysError::Locked(subject())),
             Err(TryLockError::Error(e)) => Err(SysError::from_io(subject(), e)),
         }
@@ -843,6 +861,38 @@ impl Fs for RealFs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A lock released while another thread spawns a command can be taken
+    /// again at once: the child, between fork and exec, does not keep it.
+    #[test]
+    fn a_released_lock_is_free_while_commands_spawn() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let dir = tempfile::tempdir().unwrap();
+        let fs = RealFs::new(dir.path());
+        let done = AtomicBool::new(false);
+        thread::scope(|s| {
+            for _ in 0..4 {
+                s.spawn(|| {
+                    while !done.load(Ordering::Relaxed) {
+                        RealRunner.run(&Cmd::new("true")).unwrap();
+                    }
+                });
+            }
+            let errors: Vec<String> = (0..2000)
+                .filter_map(|_| fs.try_lock(Path::new("/lock")).err())
+                .map(|e| e.to_string())
+                .collect();
+            let busy = errors.len();
+            done.store(true, Ordering::Relaxed);
+            assert_eq!(
+                busy,
+                0,
+                "the lock was busy {busy} times of 2000: {:?}",
+                errors.first()
+            );
+        });
+    }
 
     #[test]
     fn runs_a_command_and_captures_output() {

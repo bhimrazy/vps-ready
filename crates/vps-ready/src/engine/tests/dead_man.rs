@@ -1432,6 +1432,12 @@ fn every_command_of_the_boot_hook_is_bounded() {
         rec(Event::Reloaded {
             reload: Reload::Fail2banRestart,
         }),
+        rec(Event::Reloaded {
+            reload: Reload::DockerRestart,
+        }),
+        rec(Event::Reloaded {
+            reload: Reload::CaddyReload,
+        }),
     ];
     for r in &records {
         txn.append(&fs, r).unwrap();
@@ -1463,6 +1469,13 @@ fn every_command_of_the_boot_hook_is_bounded() {
     ] {
         assert!(calls.iter().any(|c| c == expected), "{expected}: {calls:?}");
     }
+    // Docker and Caddy start after the hook and read their restored config.
+    assert!(
+        !calls
+            .iter()
+            .any(|c| c.contains("docker") || c.contains("caddy")),
+        "{calls:?}"
+    );
     let unbounded: Vec<String> = run
         .calls()
         .iter()
@@ -1481,7 +1494,11 @@ fn the_first_deadline_covers_package_installs_and_verify_probes() {
         ..module(
             "test.pkg",
             vec![Resource::Package(crate::resource::Package {
-                name: "nftables".into(),
+                names: vec![
+                    "nftables".into(),
+                    "python3-systemd".into(),
+                    "fail2ban".into(),
+                ],
             })],
         )
     };
@@ -1501,10 +1518,11 @@ fn the_first_deadline_covers_package_installs_and_verify_probes() {
         .apply(&plan, &deadman_cfg(), &mut |_| {})
         .unwrap();
     let txn = state.txns(&fs).unwrap().pop().unwrap();
-    // The window; dpkg-query and two apt-get runs (30 + 2 * 600 s), and
-    // dpkg-query again in verify (30 s); the module's verify (30 s); the
+    // The window; dpkg-query for each package in snapshot and in apply, and
+    // one update and one install for all three (6 * 30 + 2 * 600 s), and
+    // dpkg-query again in verify (3 * 30 s); the module's verify (30 s); the
     // re-arm (120 + 30 s).
-    let first = 300 + 1230 + 30 + 30 + 150;
+    let first = 300 + 1380 + 90 + 30 + 150;
     assert!(
         calls(&run).contains(&systemd_run(txn.id(), 1, first)),
         "{:?}",
