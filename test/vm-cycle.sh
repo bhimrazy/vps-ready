@@ -1,13 +1,14 @@
 #!/bin/sh
 # Apply, reboot and roll back with the real binary in a KVM virtual machine.
 #
-# Usage: test/vm-cycle.sh <distro> <binary> <image> [cloud-init]   e.g. ubuntu-24.04
+# Usage: test/vm-cycle.sh <distro> <binary> <image> [cloud-init|private-access]
+#   e.g. ubuntu-24.04
 #   <image> is a cloud image (qcow2). The script boots it with QEMU and KVM
 #   (2 vCPUs, 2 GiB, a copy-on-write overlay, so the image is not changed),
 #   seeds a throwaway SSH key and a passwordless sudo user with cloud-init,
 #   and drives the VM over SSH on 127.0.0.1:$VM_SSH_PORT (default 2222).
 #   The binary must match the VM's CPU; CI uses the x86_64 musl build.
-#   With `cloud-init`, it runs only the first-boot cycle below.
+#   With `cloud-init` or `private-access`, it runs only that cycle below.
 # Needs: qemu-system-x86_64, qemu-img, cloud-localds, ssh, jq, and /dev/kvm;
 #   python3 for the cloud-init cycle.
 #
@@ -83,22 +84,40 @@
 #   exported profile plans nothing. A second fresh boot with a tampered
 #   tarball: `sha256sum -c` fails, nothing is installed or applied, and
 #   `cloud-init status` is error.
+#   private-access (only with the `private-access` argument; needs a Linux
+#   runner with sudo, the wireguard kernel module and wireguard-tools): a
+#   hand-made wg0 in the VM (wireguard-tools installed there, the key loaded
+#   by PostUp) whose peer is the runner, reached through QEMU's UDP forward of
+#   127.0.0.1:$VM_WG_PORT (default 51820). Then, with `--deadman`:
+#     ssh_via from the public session is refused, with the command to run
+#       through wg0;
+#     not confirmed: during the window a new public login fails, and at the
+#       deadline public SSH works again;
+#     confirmed: applied through wg0; a new public login fails, a public
+#       session opened before stays up, a confirm from a login to the VM's
+#       own address is refused as not through wg0, and one through wg0
+#       confirms; SSH-009 and FW-003 pass;
+#     after a reboot public SSH stays closed and SSH through wg0 works, and
+#       `systemd-analyze verify` finds no ordering cycle; rollback through
+#       wg0 reopens public SSH.
 set -eu
 cd "$(dirname "$0")/.."
 
-usage="usage: $0 <distro> <binary> <image|-> [cloud-init]"
+usage="usage: $0 <distro> <binary> <image|-> [cloud-init|private-access]"
 distro=${1:?$usage}
 bin=${2:?$usage}
 image=${3:?$usage}
 cycle=${4:-all}
 port=${VM_SSH_PORT:-2222}
 http_port=${VM_HTTP_PORT:-8321}
+wg_port=${VM_WG_PORT:-51820}
 tmp=$(mktemp -d)
 pid=
 www_pid=
+wg_link=
 
 [ -f "$bin" ] || { echo "binary not found: $bin" >&2; exit 2; }
-case $cycle in all | cloud-init) ;; *) echo "$usage" >&2; exit 2 ;; esac
+case $cycle in all | cloud-init | private-access) ;; *) echo "$usage" >&2; exit 2 ;; esac
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 2; }
 
 cleanup() {
@@ -111,6 +130,7 @@ cleanup() {
     kill "$pid" 2>/dev/null || true
   fi
   [ -z "$www_pid" ] || kill "$www_pid" 2>/dev/null || true
+  [ -z "$wg_link" ] || sudo ip link del "$wg_link" 2>/dev/null || true
   rm -rf "$tmp"
 }
 trap cleanup EXIT
@@ -133,7 +153,7 @@ boot() {
   qemu-system-x86_64 -enable-kvm -cpu host -smp 2 -m 2048 \
     -drive file="$tmp/disk.qcow2",if=virtio,format=qcow2 \
     -drive file="$tmp/seed.img",if=virtio,format=raw \
-    -netdev user,id=net0,hostfwd=tcp:127.0.0.1:"$port"-:22 \
+    -netdev user,id=net0,hostfwd=tcp:127.0.0.1:"$port"-:22,hostfwd=udp:127.0.0.1:"$wg_port"-:51820 \
     -device virtio-net-pci,netdev=net0 \
     -display none -serial file:"$tmp/console.log" \
     -daemonize -pidfile "$tmp/qemu.pid"
@@ -342,6 +362,137 @@ cloud_init_cycle() {
 
 if [ "$cycle" = cloud-init ]; then
   cloud_init_cycle
+  echo "OK [$distro]"
+  exit 0
+fi
+
+# The VM over its public path, whatever `vm` is redefined to.
+pvm() {
+  ssh -F "$sshcfg" -o BatchMode=yes -o ConnectTimeout=5 \
+    -o ServerAliveInterval=5 -o ServerAliveCountMax=3 vm "$@"
+}
+# no_public_login <when>: a new login on the forwarded public port fails.
+# QEMU accepts the TCP connection itself, so `timeout` ends the wait for
+# the banner.
+no_public_login() {
+  ! timeout 20 ssh -F "$sshcfg" -o BatchMode=yes -o ConnectTimeout=5 vm true 2>/dev/null ||
+    die "a new public login works $1"
+}
+
+private_access_cycle() {
+  command -v wg >/dev/null || { echo "wg (wireguard-tools) is required" >&2; exit 2; }
+  echo "== $distro: private access, waiting for SSH and cloud-init"
+  wait_ssh 300
+  pvm sudo cloud-init status --wait >/dev/null 2>&1 || true
+  pvm 'cat >/tmp/vps-ready' <"$bin"
+  pvm sudo install -m 755 /tmp/vps-ready /usr/local/bin/vps-ready
+
+  echo "== $distro: a hand-made wg0, with the runner as its peer"
+  pvm 'sudo apt-get update -q >/dev/null && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends wireguard-tools >/dev/null' ||
+    die "cannot install wireguard-tools in the VM"
+  pvm sudo modprobe wireguard || die "the VM's kernel has no WireGuard module"
+  (umask 077 && wg genkey >"$tmp/wg.key")
+  vm_pub=$(pvm "sudo sh -c 'umask 077; wg genkey >/etc/wireguard/wg0.key; wg pubkey </etc/wireguard/wg0.key'")
+  printf '%s\n' '[Interface]' 'Address = 10.77.0.1/24' 'ListenPort = 51820' \
+    'PostUp = wg set %i private-key /etc/wireguard/%i.key' '' '[Peer]' \
+    "PublicKey = $(wg pubkey <"$tmp/wg.key")" 'AllowedIPs = 10.77.0.2/32' |
+    pvm 'sudo sh -c "umask 077; cat >/etc/wireguard/wg0.conf"'
+  pvm sudo systemctl enable --now wg-quick@wg0 || die "wg-quick@wg0 did not start"
+  wg_link=vrwg
+  sudo ip link add "$wg_link" type wireguard
+  sudo wg set "$wg_link" private-key "$tmp/wg.key" peer "$vm_pub" \
+    endpoint "127.0.0.1:$wg_port" allowed-ips 10.77.0.1/32 persistent-keepalive 5
+  sudo ip addr add 10.77.0.2/24 dev "$wg_link"
+  sudo ip link set "$wg_link" up
+  sed -e 's/^Host vm$/Host vmwg/' -e 's/^  HostName .*/  HostName 10.77.0.1/' \
+    -e 's/^  Port .*/  Port 22/' "$sshcfg" >"$tmp/ssh_config_wg"
+  cat "$tmp/ssh_config_wg" >>"$sshcfg"
+  # From here on `vm`, and so `vr` and the helpers, go through wg0.
+  vm() {
+    ssh -F "$sshcfg" -o BatchMode=yes -o ConnectTimeout=5 \
+      -o ServerAliveInterval=5 -o ServerAliveCountMax=3 vmwg "$@"
+  }
+  wait_ssh 60
+  printf '%s\n' 'schema = 1' '[modules."firewall.inbound"]' 'allow = ["51820/udp"]' \
+    'ssh_via = "wg0"' | pvm 'cat >/tmp/via.toml'
+
+  echo "== $distro: ssh_via from the public session is refused"
+  rc=0; pvm sudo vps-ready apply --yes --profile /tmp/via.toml >"$tmp/public.out" 2>&1 || rc=$?
+  cat "$tmp/public.out"
+  [ "$rc" -eq 2 ] || die "apply from the public session exited $rc, expected 2"
+  grep -q 'not through wg0: connect through wg0 first' "$tmp/public.out" ||
+    die "apply from the public session was not refused as not through wg0"
+  grep -q 'ssh -t ci@10.77.0.1 sudo vps-ready apply' "$tmp/public.out" ||
+    die "the refusal does not give the command through wg0"
+  [ -z "$(vm sudo ls /var/lib/vps-ready/txn 2>/dev/null)" ] || die "the refused apply left a transaction"
+
+  echo "== $distro: ssh_via through wg0, not confirmed"
+  vm sudo vps-ready apply --yes --profile /tmp/via.toml --deadman 1m </dev/null >"$tmp/apply.out" 2>&1 &
+  apply_pid=$!
+  expect_pending
+  no_public_login "during the window"
+  i=0
+  until pvm true 2>/dev/null; do
+    i=$((i + 5)); [ "$i" -le 90 ] || die "public SSH did not come back after the deadline"
+    sleep 5
+  done
+  echo "public SSH back after about $i s"
+  rc=0; wait "$apply_pid" || rc=$?
+  [ "$rc" -eq 1 ] || { cat "$tmp/apply.out"; die "the unconfirmed apply exited $rc, expected 1"; }
+  expect_newest rolled-back
+
+  echo "== $distro: ssh_via through wg0, confirmed"
+  pvm 'test -f ~/.ssh/vr_local || ssh-keygen -q -t ed25519 -N "" -C vr-local -f ~/.ssh/vr_local'
+  # shellcheck disable=SC2016 # expanded in the VM
+  pvm 'grep -qF "$(cat ~/.ssh/vr_local.pub)" ~/.ssh/authorized_keys || cat ~/.ssh/vr_local.pub >>~/.ssh/authorized_keys'
+  self_ip=$(pvm ip -4 -o route get 192.0.2.1 | sed -n 's/.* src \([0-9.]*\).*/\1/p')
+  [ -n "$self_ip" ] || die "no IPv4 address on the VM's default route"
+  # A public session opened before apply: established, so it stays up.
+  pvm 'sleep 45; echo still here' >"$tmp/old-public.out" 2>&1 &
+  old_pid=$!
+  vm sudo vps-ready apply --yes --profile /tmp/via.toml --deadman 2m </dev/null >"$tmp/apply.out" 2>&1 &
+  apply_pid=$!
+  expect_pending
+  no_public_login "after ssh_via"
+  # A new login to the VM's own address arrives on lo, which the firewall
+  # accepts; confirm refuses it all the same.
+  rc=0; vm "ssh -i ~/.ssh/vr_local -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR ci@$self_ip sudo vps-ready confirm" >"$tmp/notvia.out" 2>&1 || rc=$?
+  cat "$tmp/notvia.out"
+  [ "$rc" -eq 2 ] || die "confirm from a login to $self_ip exited $rc, expected 2"
+  grep -q "came in on $self_ip, not through wg0" "$tmp/notvia.out" ||
+    die "the login to $self_ip was not refused as not through wg0"
+  rc=0; vm sudo vps-ready confirm || rc=$?
+  [ "$rc" -eq 0 ] || die "confirm through wg0 exited $rc, expected 0"
+  rc=0; wait "$apply_pid" || rc=$?
+  [ "$rc" -eq 0 ] || { cat "$tmp/apply.out"; die "the confirmed apply exited $rc, expected 0"; }
+  wait "$old_pid" || true
+  grep -q 'still here' "$tmp/old-public.out" || die "the public session opened before apply did not stay up"
+  rc=0; vr audit --json >"$tmp/audit.json" || rc=$?
+  [ "$rc" -le 1 ] || die "audit exited $rc, expected 0 or 1"
+  ids='.id == "SSH-009" or .id == "FW-003"'
+  jq -r ".findings[] | select($ids) | \"\(.id) \(.status) \(.note // \"\")\"" "$tmp/audit.json"
+  jq -e "[.findings[] | select(($ids) and .status == \"pass\")] | length == 2" "$tmp/audit.json" >/dev/null ||
+    die "SSH-009 or FW-003 does not pass under ssh_via"
+
+  echo "== $distro: ssh_via across a reboot"
+  vm sudo systemd-analyze verify /etc/systemd/system/vps-ready-firewall.service \
+    wg-quick@wg0.service >"$tmp/verify.txt" 2>&1 || true
+  cat "$tmp/verify.txt"
+  ! grep -qi 'cycle' "$tmp/verify.txt" || die "systemd-analyze verify reports an ordering cycle"
+  reboot_vm
+  no_public_login "after the reboot"
+  [ "$(vm systemctl is-active wg-quick@wg0)" = active ] || die "wg-quick@wg0 is not active after the reboot"
+  expect_newest confirmed
+
+  echo "== $distro: rollback through wg0 reopens public SSH"
+  rc=0; vr rollback --last || rc=$?
+  [ "$rc" -eq 0 ] || die "rollback exited $rc, expected 0"
+  pvm true || die "no public login after the rollback"
+}
+
+if [ "$cycle" = private-access ]; then
+  private_access_cycle
   echo "OK [$distro]"
   exit 0
 fi
