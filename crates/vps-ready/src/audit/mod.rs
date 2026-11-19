@@ -2258,6 +2258,204 @@ mod tests {
         ));
     }
 
+    /// A default-deny `inet` input chain that opens `open` to all and
+    /// `(ports, interfaces)` on those interfaces only.
+    fn deny_but(open: &[(&str, u16)], scoped: &[(&str, u16, &[&str])]) -> crate::facts::InputChain {
+        let ports = |proto: &str, port| crate::facts::Ports {
+            proto: proto.to_owned(),
+            first: port,
+            last: port,
+        };
+        crate::facts::InputChain {
+            family: "inet".to_owned(),
+            table: "t".to_owned(),
+            name: "input".to_owned(),
+            drops_unmatched: true,
+            open_ports: open
+                .iter()
+                .map(|&(proto, port)| ports(proto, port))
+                .collect(),
+            interface_ports: scoped
+                .iter()
+                .map(|&(proto, port, interfaces)| crate::facts::InterfacePorts {
+                    interfaces: interfaces.iter().map(|i| (*i).to_owned()).collect(),
+                    ports: ports(proto, port),
+                })
+                .collect(),
+            unread_ports: Vec::new(),
+        }
+    }
+
+    fn listening(proto: Proto, addr: &str, port: u16, process: &str) -> crate::facts::Listener {
+        crate::facts::Listener {
+            proto,
+            addr: addr.to_owned(),
+            port,
+            processes: vec![process.to_owned()],
+        }
+    }
+
+    /// FW-003's finding, through [`run`] for the note on a pass.
+    fn exposed(facts: &Facts) -> Finding {
+        let control = catalog()
+            .unwrap()
+            .into_iter()
+            .find(|c| c.check == Check::ExposedListeners)
+            .unwrap();
+        run(vec![control], facts).findings.remove(0)
+    }
+
+    #[test]
+    fn evaluates_exposed_listeners() {
+        let mut facts = host("debian-13", &[]);
+        facts.ipv6 = false;
+        facts.ssh.listening = vec![2222];
+        facts.listeners = vec![
+            listening(Proto::Tcp, "0.0.0.0", 2222, "sshd"),
+            listening(Proto::Tcp, "::", 2222, "sshd"),
+            listening(Proto::Tcp, "*", 80, "caddy"),
+            listening(Proto::Tcp, "*", 443, "caddy"),
+            listening(Proto::Udp, "*", 443, "caddy"),
+            listening(Proto::Udp, "0.0.0.0%eth0", 68, "dhclient"),
+            // Not reachable from beyond the host or its link.
+            listening(Proto::Udp, "127.0.0.53%lo", 53, "systemd-resolve"),
+            listening(Proto::Tcp, "::ffff:127.0.0.1", 8080, "node"),
+            listening(Proto::Tcp, "::1", 8081, "node"),
+            listening(Proto::Udp, "fe80::1%eth0", 546, "dhclient"),
+            listening(Proto::Tcp, "198.51.100.7%tailscale0", 9000, "app"),
+            // FW-002's.
+            listening(Proto::Tcp, "0.0.0.0", 8443, "docker-proxy"),
+        ];
+        let open = "open to the internet: tcp/80 (caddy), tcp/443 (caddy), tcp/2222 (sshd), \
+                    udp/68 (dhclient), udp/443 (caddy)";
+        // Without a default-deny chain, every listener counts.
+        facts.firewall = Some(Firewall::default());
+        let finding = exposed(&facts);
+        assert_eq!(finding.outcome, Outcome::Pass);
+        assert_eq!(finding.note.as_deref(), Some(open));
+
+        // A database on all addresses.
+        facts
+            .listeners
+            .push(listening(Proto::Tcp, "0.0.0.0", 5432, "postgres"));
+        let finding = exposed(&facts);
+        assert_eq!(
+            finding.outcome,
+            Outcome::Fail {
+                found: "ports other than SSH, web and DHCP are open: tcp/5432 (postgres); \
+                        open to the internet: tcp/80 (caddy), tcp/443 (caddy), tcp/2222 (sshd), \
+                        tcp/5432 (postgres), udp/68 (dhclient), udp/443 (caddy)"
+                    .to_owned()
+            }
+        );
+        assert!(
+            finding
+                .manual_fix
+                .unwrap()
+                .contains("firewall.inbound's `allow`")
+        );
+
+        let mut eval = |chains: Vec<crate::facts::InputChain>| {
+            facts.firewall = Some(Firewall {
+                input_chains: chains,
+                ..Firewall::default()
+            });
+            evaluate(&Check::ExposedListeners, &facts)
+        };
+        // The firewall drops it.
+        assert_eq!(eval(vec![deny_but(&[("tcp", 2222)], &[])]), Outcome::Pass);
+        // Open on tailscale0 or lo only: not to the internet.
+        let private: &[&str] = &["tailscale0", "lo"];
+        assert_eq!(
+            eval(vec![deny_but(&[], &[("tcp", 5432, private)])]),
+            Outcome::Pass
+        );
+        // On any other interface, or one that is not named, it counts.
+        for interfaces in [&["tailscale0", "eth0"][..], &[]] {
+            assert!(matches!(
+                eval(vec![deny_but(&[], &[("tcp", 5432, interfaces)])]),
+                Outcome::Fail { .. }
+            ));
+        }
+        // A chain that opens it does not undo one that drops it.
+        assert_eq!(
+            eval(vec![deny_but(&[("tcp", 5432)], &[]), deny_but(&[], &[])]),
+            Outcome::Pass
+        );
+        // A multiport rule may open it.
+        let mut multiport = deny_but(&[], &[]);
+        multiport.unread_ports = vec!["tcp".to_owned()];
+        assert!(matches!(
+            eval(vec![multiport]),
+            Outcome::Unknown { reason } if reason.contains("may open tcp/5432 (postgres); no port")
+        ));
+    }
+
+    #[test]
+    fn exposed_listeners_ipv6_legacy_and_unread() {
+        let mut facts = host("debian-13", &[]);
+        facts.listeners = vec![listening(Proto::Tcp, "::", 5432, "postgres")];
+        facts.firewall = Some(Firewall::default());
+        // IPv6 counts only when the host has a global IPv6 address.
+        facts.ipv6 = false;
+        assert_eq!(evaluate(&Check::ExposedListeners, &facts), Outcome::Pass);
+        facts.ipv6 = true;
+        assert!(matches!(
+            evaluate(&Check::ExposedListeners, &facts),
+            Outcome::Fail { .. }
+        ));
+
+        // iptables-legacy may drop what nft does not, as for FW-001; a nft
+        // chain that drops decides.
+        facts.firewall = Some(Firewall {
+            legacy_filter_v6: true,
+            ..Firewall::default()
+        });
+        assert!(matches!(
+            evaluate(&Check::ExposedListeners, &facts),
+            Outcome::Unknown { reason } if reason.contains("iptables-legacy")
+        ));
+        facts.firewall = Some(Firewall {
+            input_chains: vec![deny_but(&[], &[])],
+            legacy_filter_v6: true,
+            ..Firewall::default()
+        });
+        assert_eq!(evaluate(&Check::ExposedListeners, &facts), Outcome::Pass);
+
+        facts.firewall = None;
+        assert!(matches!(
+            evaluate(&Check::ExposedListeners, &facts),
+            Outcome::Unknown { .. }
+        ));
+        facts.firewall = Some(Firewall::default());
+        facts.listeners.clear();
+        assert!(matches!(
+            evaluate(&Check::ExposedListeners, &facts),
+            Outcome::Unknown { reason } if reason.contains("listening sockets")
+        ));
+    }
+
+    #[test]
+    fn public_families_of_addresses() {
+        for (addr, families) in [
+            ("0.0.0.0", (true, false)),
+            ("203.0.113.5", (true, false)),
+            ("::", (false, true)),
+            ("2001:db8::1", (false, true)),
+            ("*", (true, true)),
+            ("::ffff:192.0.2.1", (true, false)),
+            ("0.0.0.0%eth0", (true, false)),
+            ("127.0.0.53%lo", (false, false)),
+            ("::ffff:127.0.0.1", (false, false)),
+            ("::1", (false, false)),
+            ("169.254.169.254", (false, false)),
+            ("fe80::1%eth0", (false, false)),
+            ("192.0.2.1%tailscale0", (false, false)),
+        ] {
+            assert_eq!(public_families(addr), families, "{addr}");
+        }
+    }
+
     #[test]
     fn evaluates_apparmor() {
         let mut facts = host("debian-13", &[]);

@@ -112,10 +112,10 @@ impl Ports {
 /// Ports an input chain accepts only on some input interfaces.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct InterfacePorts {
-    /// The interface names the rule and the jumps to it match with `==`
-    /// (`iifname`, `iif`), as written, so a wildcard stays `wg*`. A packet
-    /// must arrive on one of them, but not every one may be possible. Empty
-    /// when no such match has only plain names, e.g. `iifname != "eth0"`.
+    /// The names that the rule's and its jumps' `iifname` and `iif` matches
+    /// accept with `==`, as written (a wildcard stays `wg*`). A packet must
+    /// pass each match, so not every name may reach the rule. Empty when no
+    /// match lists plain names, e.g. `iifname != "eth0"`.
     pub interfaces: Vec<String>,
     /// The ports.
     pub ports: Ports,
@@ -1115,8 +1115,13 @@ mod tests {
         assert_eq!(open, ["tcp/22", "tcp/2222", "tcp/53", "udp/53"]);
         // `allow in on eth0`: vps-ready does not know eth0 is the public one.
         assert_eq!(input.blocks("tcp", 3000), None);
+        // From the internet it is open, unless eth0 is private; then the
+        // multiport allows below may still open it.
+        assert_eq!(input.blocks_public("tcp", 3000, |_| false), Some(false));
+        assert_eq!(input.blocks_public("tcp", 3000, |i| i == "eth0"), None);
         // The multiport allows: their ports are not in the JSON.
         assert_eq!(input.unread_ports, ["tcp", "udp"]);
+        assert_eq!(input.blocks_public("sctp", 3000, |_| false), Some(true));
         assert_eq!(input.blocks("tcp", 2222), Some(false));
         assert_eq!(input.blocks("tcp", 5555), None);
 
@@ -1163,6 +1168,7 @@ mod tests {
         // An interface-bound zone: open on that interface only.
         let fw = ruleset_of("drop", "", &[("in", &[on_eth0]), ("zone", &[port_5432])]);
         assert_eq!(fw.input_chains[0].blocks("tcp", 5432), None);
+        assert_eq!(fw.input_chains[0].interface_ports[0].interfaces, ["eth0"]);
         // `ufw limit 2222/tcp`: the port is on the jump, the target accepts.
         let limit = r#"[{"match": {"op": "==", "left": {"payload": {"protocol": "tcp", "field": "dport"}}, "right": 2222}}, {"jump": {"target": "ok"}}]"#;
         assert_eq!(open(&[("in", &[limit]), ("ok", &[accept])]), ["tcp/2222"]);
@@ -1192,6 +1198,31 @@ mod tests {
             r#"[{"match": {"op": "==", "left": {"meta": {"key": "iifname"}}, "right": "wg0"}}, {"match": {"op": "==", "left": {"payload": {"protocol": "tcp", "field": "dport"}}, "right": 5432}}, {"accept": null}]"#,
         );
         assert_eq!(wg0[0].blocks("tcp", 5432), None);
+        let interfaces = |iifname: &str| -> Vec<String> {
+            let rule = format!(
+                r#"[{iifname}, {{"match": {{"op": "==", "left": {{"payload": {{"protocol": "tcp", "field": "dport"}}}}, "right": 5432}}}}, {{"accept": null}}]"#
+            );
+            chain(&rule)[0].interface_ports[0].interfaces.clone()
+        };
+        assert_eq!(
+            interfaces(
+                r#"{"match": {"op": "==", "left": {"meta": {"key": "iif"}}, "right": "tailscale0"}}"#
+            ),
+            ["tailscale0"]
+        );
+        assert_eq!(
+            interfaces(
+                r#"{"match": {"op": "==", "left": {"meta": {"key": "iifname"}}, "right": {"set": ["lo", "wg0"]}}}"#
+            ),
+            ["lo", "wg0"]
+        );
+        // Not a list of names: no interface is known.
+        assert!(
+            interfaces(
+                r#"{"match": {"op": "!=", "left": {"meta": {"key": "iifname"}}, "right": "eth0"}}"#
+            )
+            .is_empty()
+        );
         // `-p tcp --dport 80 -m conntrack --ctstate NEW -j ACCEPT`.
         let new80 = chain(
             r#"[{"match": {"op": "==", "left": {"payload": {"protocol": "tcp", "field": "dport"}}, "right": 80}}, {"xt": {"type": "match", "name": "conntrack"}}, {"accept": null}]"#,
