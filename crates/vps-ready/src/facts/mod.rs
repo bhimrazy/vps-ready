@@ -18,6 +18,7 @@ pub mod docker;
 pub mod firewall;
 pub mod listeners;
 pub mod logins;
+pub mod network;
 pub mod os_release;
 pub mod reboot;
 pub mod session;
@@ -30,6 +31,7 @@ pub use bridges::Bridge;
 pub use docker::{DaemonJson, DockerDaemon, DockerEngine, DockerService};
 pub use firewall::{Firewall, FirewallTools, InputChain, Ports, PublishedPort};
 pub use listeners::{Listener, Proto};
+pub use network::{Address, Interface, Route, Tailscale, Wireguard};
 pub use os_release::{OsFamily, OsRelease};
 pub use reboot::Reboot;
 pub use session::{Env, NoSession, Session, SessionId};
@@ -91,6 +93,14 @@ pub struct Facts {
     /// Whether the kernel has AppArmor enabled. `None` when that could not
     /// be read.
     pub apparmor: Option<bool>,
+    /// Network interfaces with their addresses. Empty when `ip` is missing.
+    pub interfaces: Vec<Interface>,
+    /// Routes of every table, both families. Empty when `ip` is missing.
+    pub routes: Vec<Route>,
+    /// WireGuard's kernel module and listening ports.
+    pub wireguard: Wireguard,
+    /// Tailscale's state. `None` without `tailscale` or its daemon.
+    pub tailscale: Option<Tailscale>,
     /// Human-readable notes about facts that could not be determined.
     pub notices: Vec<String>,
 }
@@ -167,6 +177,10 @@ pub fn collect(fs: &dyn Fs, runner: &dyn Runner, env: &Env) -> Result<Facts, Fac
     };
     let bridges = bridges::detect(fs, &mut notices);
     let apparmor = apparmor(fs, &mut notices);
+    let interfaces = network::interfaces(runner, &mut notices);
+    let routes = network::routes(runner, &mut notices);
+    let wireguard = network::wireguard(fs, runner, &mut notices);
+    let tailscale = network::tailscale(runner, &mut notices);
     Ok(Facts {
         os,
         init,
@@ -184,6 +198,10 @@ pub fn collect(fs: &dyn Fs, runner: &dyn Runner, env: &Env) -> Result<Facts, Fac
         docker_engine,
         bridges,
         apparmor,
+        interfaces,
+        routes,
+        wireguard,
+        tailscale,
         notices,
     })
 }
@@ -367,7 +385,7 @@ mod tests {
     /// so they are pinned in `firewall`'s tests; `systemctl show docker.service`,
     /// `docker info`, `docker ps` and `docker network ls` run only on a host
     /// with Docker, so they are pinned in `docker`'s.
-    const READ_ONLY_COMMANDS: [&[&str]; 13] = [
+    const READ_ONLY_COMMANDS: [&[&str]; 18] = [
         &["systemd-detect-virt", "--container"],
         &["systemd-detect-virt", "--vm"],
         &["ssh", "-V"],
@@ -412,6 +430,11 @@ mod tests {
             "containerd",
             "runc",
         ],
+        &["ip", "-j", "-d", "addr"],
+        &["ip", "-j", "route", "show", "table", "all"],
+        &["modprobe", "--dry-run", "wireguard"],
+        &["wg", "show", "all", "listen-port"],
+        &["tailscale", "status", "--json", "--peers=false"],
     ];
 
     #[test]
@@ -559,14 +582,14 @@ mod tests {
         assert!(facts.listeners.is_empty());
         assert!(!facts.docker);
         // os-release, init, virtualization, ssh version, sshd activation,
-        // sshd config, ss, nft, firewalld, /proc/sys.
-        assert_eq!(facts.notices.len(), 10, "{:?}", facts.notices);
+        // sshd config, ss, nft, firewalld, /proc/sys, ip (one notice for both calls).
+        assert_eq!(facts.notices.len(), 11, "{:?}", facts.notices);
         assert_eq!(facts.session, None);
 
         // No /proc for the session walk either.
         let env = Env { pid: Some(902) };
         let facts = collect(&FakeFs::new(), &FakeRunner::new(), &env).unwrap();
-        assert_eq!(facts.notices.len(), 11, "{:?}", facts.notices);
+        assert_eq!(facts.notices.len(), 12, "{:?}", facts.notices);
         assert!(facts.notices.iter().any(|n| n.starts_with(session::NOTICE)));
     }
 

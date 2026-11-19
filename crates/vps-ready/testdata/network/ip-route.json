@@ -1,0 +1,11 @@
+[{"dst":"default","gateway":"192.0.2.1","dev":"eth0","protocol":"dhcp","prefsrc":"192.0.2.10","metric":100,"flags":[]},
+{"dst":"192.0.2.0/24","dev":"eth0","protocol":"kernel","scope":"link","prefsrc":"192.0.2.10","flags":[]},
+{"dst":"10.77.0.0/24","dev":"wg0","protocol":"kernel","scope":"link","prefsrc":"10.77.0.1","flags":[]},
+{"dst":"100.64.0.0/10","dev":"tailscale0","table":"52","protocol":"static","flags":[]},
+{"type":"local","dst":"192.0.2.10","dev":"eth0","table":"local","protocol":"kernel","scope":"host","prefsrc":"192.0.2.10","flags":[]},
+{"type":"broadcast","dst":"192.0.2.255","dev":"eth0","table":"local","protocol":"kernel","scope":"link","prefsrc":"192.0.2.10","flags":[]},
+{"dst":"2001:db8::/64","dev":"eth0","protocol":"kernel","metric":256,"flags":[],"pref":"medium"},
+{"dst":"fe80::/64","dev":"eth0","protocol":"kernel","metric":256,"flags":[],"pref":"medium"},
+{"dst":"default","gateway":"fe80::1","dev":"eth0","protocol":"ra","metric":1024,"flags":[],"pref":"medium"},
+{"type":"local","dst":"::1","dev":"lo","table":"local","protocol":"kernel","metric":0,"flags":[],"pref":"medium"},
+{"type":"multicast","dst":"ff00::/8","dev":"eth0","table":"local","protocol":"kernel","metric":256,"flags":[],"pref":"medium"}]

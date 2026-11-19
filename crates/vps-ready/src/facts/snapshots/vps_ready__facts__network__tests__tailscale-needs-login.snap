@@ -1,0 +1,7 @@
+---
+source: crates/vps-ready/src/facts/network.rs
+expression: ts
+---
+backend_state: NeedsLogin
+ips: []
+key_expiry: ~

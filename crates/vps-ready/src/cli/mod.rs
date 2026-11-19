@@ -957,6 +957,7 @@ fn print_facts(out: &mut impl Write, facts: &Facts, color: bool) -> io::Result<(
                 .as_ref()
                 .map_or_else(|| "not connected over SSH".to_owned(), session_line),
         ),
+        ("VPN", vpn_line(facts)),
         (
             "Docker",
             if facts.docker {
@@ -975,6 +976,50 @@ fn print_facts(out: &mut impl Write, facts: &Facts, color: bool) -> io::Result<(
         }
     }
     Ok(())
+}
+
+/// VPN-like interfaces and whether the SSH session came in on one, e.g.
+/// `wg0 (WireGuard, 10.77.0.1/24), tailscale0 (Tailscale, Running); SSH session arrived on wg0`.
+fn vpn_line(facts: &Facts) -> String {
+    let vpns: Vec<String> = facts
+        .interfaces
+        .iter()
+        .filter(|i| i.is_vpn())
+        .map(|i| {
+            let detail = if i.is_wireguard() {
+                let addrs: Vec<String> = i
+                    .addresses
+                    .iter()
+                    .map(|a| format!("{}/{}", a.ip, a.prefix))
+                    .collect();
+                if addrs.is_empty() {
+                    "WireGuard".to_owned()
+                } else {
+                    format!("WireGuard, {}", addrs.join(" "))
+                }
+            } else {
+                let state = facts
+                    .tailscale
+                    .as_ref()
+                    .map_or("state unknown", |t| &t.backend_state);
+                format!("Tailscale, {state}")
+            };
+            format!("{} ({detail})", i.name)
+        })
+        .collect();
+    if vpns.is_empty() {
+        return "none".to_owned();
+    }
+    let mut line = vpns.join(", ");
+    let on = facts
+        .session
+        .as_ref()
+        .and_then(|s| facts::network::interface_with(&facts.interfaces, s.server.ip()))
+        .filter(|i| i.is_vpn());
+    if let Some(i) = on {
+        line.push_str(&format!("; SSH session arrived on {}", i.name));
+    }
+    line
 }
 
 /// e.g. `admin, connected from 198.51.100.7 to port 22 (sshd PID 812)`.
@@ -1069,6 +1114,37 @@ fn ports_line(listeners: &[Listener]) -> String {
 mod tests {
     use super::*;
     use crate::facts::fixtures::{HOSTS, host};
+
+    #[test]
+    fn vpn_line_names_interfaces_and_the_session_interface() {
+        let mut facts = host("debian-12", &[]);
+        assert_eq!(vpn_line(&facts), "none");
+        let json = include_bytes!("../../testdata/network/ip-addr.json");
+        let mut notices = Vec::new();
+        let runner = crate::sys::fake::FakeRunner::new().on(
+            "ip",
+            ["-j", "-d", "addr"],
+            crate::sys::Output::success(json.to_vec()),
+        );
+        facts.interfaces = facts::network::interfaces(&runner, &mut notices);
+        assert_eq!(
+            vpn_line(&facts),
+            "wg0 (WireGuard, 10.77.0.1/24), wg1 (WireGuard), tailscale0 (Tailscale, state unknown)"
+        );
+        let session = |server: &str| facts::Session {
+            id: facts::SessionId { pid: 812, start: 1 },
+            client: "198.51.100.7:50022".parse().unwrap(),
+            server: server.parse().unwrap(),
+            uid: 1000,
+            user: None,
+        };
+        facts.session = Some(session("10.77.0.1:22"));
+        assert!(vpn_line(&facts).ends_with("; SSH session arrived on wg0"));
+        facts.session = Some(session("192.0.2.10:22"));
+        assert!(!vpn_line(&facts).contains("arrived"));
+        facts.interfaces.clear();
+        assert_eq!(vpn_line(&facts), "none");
+    }
 
     #[test]
     fn finds_other_vps_ready_binaries_on_path() {
