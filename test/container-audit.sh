@@ -90,8 +90,9 @@ done
 jq -e '.findings | type == "array"' "$tmp/audit-json.out" >/dev/null ||
   { check "audit --json has no findings array"; exit 1; }
 
-# Offenders are listed as "id status", one per line.
-bad=$(jq -r '.findings[] | select(.id | startswith("SSH-"))
+# Offenders are listed as "id status", one per line. SSH-009 is skipped
+# without a VPN interface, which containers do not have.
+bad=$(jq -r '.findings[] | select(.id | startswith("SSH-")) | select(.id != "SSH-009")
   | select(.status != "pass" and .status != "fail") | "\(.id) \(.status)"' "$tmp/audit-json.out")
 [ -z "$bad" ] || check "SSH controls must be pass or fail after a login (did sshd -T fail?):
 $bad"
