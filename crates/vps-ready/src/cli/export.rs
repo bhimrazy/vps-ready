@@ -10,7 +10,7 @@ use anyhow::{Context, bail};
 
 use super::change::Host;
 use crate::VERSION_INFO;
-use crate::config::Profile;
+use crate::config::{Profile, STAGED_VIA};
 
 /// The release tarballs, by `uname -m`.
 const TARGETS: [(&str, &str); 2] = [
@@ -143,7 +143,8 @@ pub(super) fn refusal(profile: &Profile) -> Option<Refusal> {
         .params("firewall.inbound")
         .and_then(|p| p.get("ssh_via"))
         .and_then(toml::Value::as_str);
-    if via.is_some_and(|v| !v.is_empty()) {
+    // The private profile's `"vpn"` stays in step 1 at first boot: SSH public.
+    if via.is_some_and(|v| !v.is_empty() && !v.starts_with(STAGED_VIA)) {
         return Some(Refusal::SshVia);
     }
     if let Some(admin) = profile.params("user.admin") {

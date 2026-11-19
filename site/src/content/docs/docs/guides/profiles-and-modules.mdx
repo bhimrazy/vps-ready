@@ -1,6 +1,6 @@
 ---
 title: Profiles and modules
-description: What the minimal and web profiles change, what each of the ten modules writes, what it checks first, and how to undo it.
+description: What the built-in profiles change, what each of the ten modules writes, what it checks first, and how to undo it.
 sidebar:
   order: 2
 ---
@@ -26,6 +26,7 @@ vps-ready groups its changes into **modules**, and a **profile** picks which mod
 - **minimal** is for any server you log into over SSH.
 - **web** is minimal plus the web ports (UDP 443 is for HTTP/3), fail2ban and Docker with safe defaults.
 - **`net.tailscale` is in no built-in profile.** Add it in your own profile; see [Tailscale](#nettailscale-tailscale) below.
+- **private** is for a server with no public SSH: SSH only through a VPN, and no public port unless you add one. It names no VPN, so you extend it; see [The private profile](#the-private-profile) below.
 - **`deploy.proxy` (Caddy) and `deploy.user` are in no built-in profile.** They need values only you have (domains, deploy keys), so you add them in your own profile, or the guided setup adds Caddy when you give it a domain. See [Deploy an app](/docs/guides/deployment-modules/).
 
 `sudo vps-ready` with no arguments picks between these two for you and builds the profile from your answers: see the [quick start](/docs/quick-start/). To read what a module does before choosing, run `vps-ready modules` (or `vps-ready modules ssh.server` for one).
@@ -97,6 +98,22 @@ allow = ["80/tcp", "443/tcp"]
 ssh_via = "wg0"
 ```
 
+#### The private profile
+
+`private` has the `web` hardening without Docker, an empty `allow`, and `ssh_via = "vpn"`: the interface of the one VPN module in your profile (`tailscale0` for `net.tailscale`). On its own, or with two VPN modules, it is refused, so extend it with one:
+
+```toml title="private.toml"
+schema  = 1
+extends = "private"
+
+[modules."user.admin"]
+authorized_keys = ["ssh-ed25519 AAAAC3Nza... me@laptop"]
+
+[modules."net.tailscale"]
+```
+
+Apply the same file twice. The first apply, from a public SSH login (or at first boot from `export cloud-init`), sets up the VPN and keeps SSH public, with the note "step 1 of 2: SSH stays public until you apply this profile again from a login through tailscale0". Then log in through the VPN and run the same command: from that session, `ssh_via = "vpn"` closes public SSH exactly like an explicit `ssh_via`, with its checks, the safety timer and the confirm through the VPN. After that, applying the file again changes nothing. If SSH is already limited to another interface, the first step is refused rather than reopening SSH publicly. Add `"80/tcp", "443/tcp", "443/udp"` to `allow` for a web app.
+
 ### `ssh.bruteforce`: fail2ban (web profile)
 
 **Changes:** installs `nftables`, `python3-systemd` and `fail2ban`, writes `/etc/fail2ban/jail.d/90-vps-ready.local` to turn on the `sshd` jail (reading the systemd journal, banning in nftables on the ports sshd listens on), and restarts fail2ban. It sets nothing for your other jails.
@@ -158,7 +175,7 @@ The details, with the commands and what to expect, are in [Deploy an app](/docs/
 
 ## Write your own profile
 
-A profile is a TOML file. It can extend `minimal` or `web`, change a module's settings, or leave a module out:
+A profile is a TOML file. It can extend `minimal`, `web` or `private`, change a module's settings, or leave a module out:
 
 ```toml title="my-server.toml"
 schema  = 1
