@@ -436,6 +436,7 @@ impl<'a> Engine<'a> {
                 unit: None,
                 admins: Vec::new(),
                 ssh_port: None,
+                ssh_via: None,
                 without_timer: plan.needs_deadman(),
             })
             .map_err(failed)?;
@@ -510,6 +511,7 @@ impl<'a> Engine<'a> {
             unit: Some(unit),
             admins: plan.admins(),
             ssh_port: plan.facts.session.as_ref().map(|s| s.server.port()),
+            ssh_via: plan.ssh_via.clone(),
             without_timer: false,
         })?;
         Ok(deadline)

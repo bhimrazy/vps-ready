@@ -2,7 +2,7 @@
 //! its changes wait for a confirm.
 
 use std::io::Write;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -70,7 +70,7 @@ pub(in crate::cli) fn confirm(
             again(None)
         ),
     };
-    match engine.confirm(Some(&id), &session, &ports) {
+    match engine.confirm(Some(&id), &session, &ports, &facts.interfaces) {
         Ok(txn) => {
             writeln!(
                 out,
@@ -92,16 +92,35 @@ pub(in crate::cli) fn confirm(
         Err(EngineError::Refused(r @ (Refusal::OtherSshd { .. } | Refusal::NotAdmin { .. }))) => {
             bail!("{r}. {}", again(Some(&session)))
         }
+        Err(EngineError::Refused(Refusal::NotVia { interface, server })) => {
+            let r = Refusal::NotVia {
+                interface: interface.clone(),
+                server,
+            };
+            let Some(ip) = via_address(&facts, &interface) else {
+                bail!("{r}; {interface} has no address now, so it cannot carry a login");
+            };
+            let via = Session {
+                server: SocketAddr::new(ip, session.server.port()),
+                ..session.clone()
+            };
+            bail!(
+                "{r}; log in through {interface}: `{}`",
+                ssh_line(host, &admins, Some(&via), &ports)
+            )
+        }
         Err(e) => Err(e.into()),
     }
 }
 
 /// What `apply` prints once its changes wait for a confirm: the command to
-/// run from a new terminal, with real values, and the deadline.
+/// run from a new terminal, with real values, and the deadline. Under
+/// `ssh_via` the session's address is the VPN's, the only one that works.
 pub(super) fn print_pending(
     host: &Host,
     facts: &Facts,
     admins: &[String],
+    ssh_via: Option<&str>,
     deadline: Deadline,
     left: Duration,
     out: &mut dyn Write,
@@ -116,6 +135,7 @@ pub(super) fn print_pending(
     writeln!(out, "    {}", ssh_line(host, admins, session, &ports))?;
     if let Some(ip) = session.map(|s| s.server.ip())
         && !public(ip)
+        && ssh_via.is_none()
     {
         writeln!(out, "    (or the address you connected to instead of {ip})")?;
     }
@@ -267,6 +287,19 @@ fn ssh_line(host: &Host, admins: &[String], session: Option<&Session>, ports: &[
         "ssh -t -o ControlPath=none -p {port} {}@{address} sudo vps-ready confirm",
         login_user(host, admins, session)
     )
+}
+
+/// An address of `interface` now, IPv4 first, for the `ssh` line.
+fn via_address(facts: &Facts, interface: &str) -> Option<IpAddr> {
+    let mut ips: Vec<IpAddr> = facts
+        .interfaces
+        .iter()
+        .filter(|i| i.name == interface)
+        .flat_map(|i| i.addresses.iter().map(|a| a.ip))
+        .filter(|ip| !matches!(ip, IpAddr::V6(v6) if v6.is_unicast_link_local()))
+        .collect();
+    ips.sort_by_key(IpAddr::is_ipv6);
+    ips.first().copied()
 }
 
 /// Who logs in to confirm: the first user the plan gave SSH keys, else

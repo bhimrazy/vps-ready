@@ -234,6 +234,7 @@ impl Module for DeployDocker {
             resources,
             reloads: vec![Reload::DockerRestart],
             notes,
+            deadman: false,
         })
     }
 }

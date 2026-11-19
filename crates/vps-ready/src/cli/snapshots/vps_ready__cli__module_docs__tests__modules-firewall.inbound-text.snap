@@ -16,7 +16,10 @@ Why
 Params (in the module's profile table)
   allow (default [])
       Ports to accept from anywhere, e.g. ["443/tcp", "443/udp"]; the SSH ports
-      are always accepted.
+      are always accepted, only on `ssh_via` when it is set.
+  ssh_via (default "")
+      Accept SSH only on this interface, e.g. "tailscale0" or "wg0", from a
+      session through it; empty for any.
 
 Fixes these audit controls
   FW-001 [medium] Incoming traffic denied by default

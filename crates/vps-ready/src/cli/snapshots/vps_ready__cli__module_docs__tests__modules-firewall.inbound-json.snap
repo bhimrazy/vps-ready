@@ -12,7 +12,12 @@ expression: out
     {
       "name": "allow",
       "default": "[]",
-      "help": "Ports to accept from anywhere, e.g. [\"443/tcp\", \"443/udp\"]; the SSH ports are always accepted."
+      "help": "Ports to accept from anywhere, e.g. [\"443/tcp\", \"443/udp\"]; the SSH ports are always accepted, only on `ssh_via` when it is set."
+    },
+    {
+      "name": "ssh_via",
+      "default": "\"\"",
+      "help": "Accept SSH only on this interface, e.g. \"tailscale0\" or \"wg0\", from a session through it; empty for any."
     }
   ],
   "controls": [

@@ -508,6 +508,7 @@ fn the_ssh_line_names_the_planned_admin() {
             &host,
             &facts,
             admins,
+            None,
             deadline,
             Duration::from_secs(300),
             &mut out,

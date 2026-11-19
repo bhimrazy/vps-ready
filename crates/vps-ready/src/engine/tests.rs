@@ -61,6 +61,7 @@ impl Module for Demo {
             resources: self.resources.clone(),
             reloads: self.reloads.clone(),
             notes: Vec::new(),
+            deadman: false,
         })
     }
     fn verify(&self, _: &PlanCx, _: Sys) -> Result<(), String> {

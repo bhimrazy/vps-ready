@@ -249,6 +249,7 @@ impl Module for DeployUser {
             resources,
             reloads: Vec::new(),
             notes,
+            deadman: false,
         })
     }
 

@@ -35,8 +35,18 @@ table inet vps_ready {
     iifname "br-*"{% for name in not_docker %} iifname != "{{ name }}"{% endfor %} accept
 {%- endif %}
 {%- endif %}
+{%- if let Some(via) = ssh_via %}
+    # SSH only through {{ via }} (`ssh_via`). iifname matches by name, so
+    # the rule holds before the interface exists and after it is recreated.
+    iifname "{{ via }}" tcp dport { {{ ssh|join(", ") }} } accept
+{%- if !tcp.is_empty() %}
+    # The profile's `allow`.
+    tcp dport { {{ tcp|join(", ") }} } accept
+{%- endif %}
+{%- else %}
     # The profile's `allow`, plus every current SSH port.
     tcp dport { {{ tcp|join(", ") }} } accept
+{%- endif %}
 {%- if !udp.is_empty() %}
     udp dport { {{ udp|join(", ") }} } accept
 {%- endif %}

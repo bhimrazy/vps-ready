@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use super::{EngineError, Reload};
 use crate::facts::Facts;
-use crate::modules::{Applicability, Module, ModuleSteps, PlanCx};
+use crate::modules::{Applicability, Module, ModuleSteps, PlanCx, firewall_inbound};
 use crate::resource::{Change, Resource, keyed_users};
 use crate::sys::Sys;
 
@@ -40,6 +40,10 @@ pub struct Plan<'a> {
     pub modules: Vec<ModulePlan<'a>>,
     #[serde(skip)]
     pub(super) facts: &'a Facts,
+    /// The interface `firewall.inbound` limits SSH to once this plan is
+    /// applied: by the ruleset it plans, else by the one on disk.
+    #[serde(skip)]
+    pub ssh_via: Option<String>,
 }
 
 /// One module's part of a [`Plan`].
@@ -63,6 +67,9 @@ pub struct ModulePlan<'a> {
     /// [`keyed_users`] of all its desired resources, changed or not.
     #[serde(skip)]
     pub(super) keyed: Vec<String>,
+    /// [`ModuleSteps::deadman`].
+    #[serde(skip)]
+    pub(super) deadman: bool,
 }
 
 impl fmt::Debug for ModulePlan<'_> {
@@ -153,7 +160,7 @@ impl Plan<'_> {
     pub fn needs_deadman(&self) -> bool {
         self.modules
             .iter()
-            .any(|m| !m.changes().is_empty() && m.selected.module.needs_deadman())
+            .any(|m| !m.changes().is_empty() && (m.deadman || m.selected.module.needs_deadman()))
     }
 }
 
@@ -176,10 +183,10 @@ impl ModulePlan<'_> {
         }
     }
 
-    /// [`Module::force_restore`].
+    /// [`Module::force_restore`], or [`ModuleSteps::deadman`].
     #[must_use]
     pub fn force_restore(&self) -> bool {
-        self.selected.module.force_restore()
+        self.deadman || self.selected.module.force_restore()
     }
 
     /// [`Module::verify_timeout`].
@@ -217,6 +224,7 @@ pub fn plan<'a>(
         let mut notes = Vec::new();
         let before = planned.clone();
         let mut keyed = Vec::new();
+        let mut deadman = false;
         let status = match module.applicable(facts) {
             Applicability::NotApplicable { reason } => ModuleStatus::NotApplicable { reason },
             Applicability::Applicable => {
@@ -230,11 +238,13 @@ pub fn plan<'a>(
                     resources,
                     mut reloads,
                     notes: found,
+                    deadman: by_host,
                 } = module.plan(&cx, sys).map_err(|error| EngineError::Module {
                     module: module.id(),
                     error,
                 })?;
                 notes.extend(found);
+                deadman = by_host;
                 keyed = keyed_users(&resources);
                 planned.extend(resources.iter().cloned());
                 let mut changes = Vec::new();
@@ -261,10 +271,16 @@ pub fn plan<'a>(
             selected,
             planned: before,
             keyed,
+            deadman,
         });
     }
+    let ssh_via = firewall_inbound::ssh_via(&planned, sys).map_err(|error| EngineError::Module {
+        module: "firewall.inbound",
+        error,
+    })?;
     Ok(Plan {
         modules: plans,
         facts,
+        ssh_via,
     })
 }

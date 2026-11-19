@@ -275,6 +275,15 @@ pub(super) fn apply_profile(
     if n == 0 {
         return Ok(Applied::Nothing);
     }
+    // Only a confirm through it shows that SSH still works.
+    if window.is_none()
+        && let Some(via) = &plan.ssh_via
+    {
+        bail!(
+            "`--deadman=off` is refused with `ssh_via`: only a confirm through {via} shows \
+             that SSH still works; drop `--deadman=off`"
+        );
+    }
     if window.is_none() && plan.needs_deadman() {
         nobody_logged_in(host)?;
     }
@@ -317,7 +326,15 @@ pub(super) fn apply_profile(
                 engine::Watch::Pending { left, .. } => left,
                 _ => Duration::ZERO,
             };
-            confirm::print_pending(host, &facts, &plan.admins(), deadline, left, out)?;
+            confirm::print_pending(
+                host,
+                &facts,
+                &plan.admins(),
+                plan.ssh_via.as_deref(),
+                deadline,
+                left,
+                out,
+            )?;
             out.flush()?;
             return confirm::wait(host, &state, &txn, deadline, &plan, out, err).map(Applied::Ran);
         }
