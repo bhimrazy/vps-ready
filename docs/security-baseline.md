@@ -83,7 +83,7 @@ AllowGroups sshusers        # add admin + deploy to the group FIRST
 - Set `RequiredRSASize 3072`.
 - **On RHEL-likes don't set Ciphers/KEX/MACs in sshd**: it silently overrides crypto-policies. Use `update-crypto-policies --set DEFAULT:NO-SHA1` (or `FUTURE` for paranoid).
 
-**Port change: keep 22 by default.** Changing it only reduces log noise. It touches five places that can each lock you out: the firewall, the provider firewall, the SELinux `semanage port`, `ssh.socket` and fail2ban. A private network (Tailscale) is the real fix.
+**Port change: keep 22 by default.** Changing it only reduces log noise. It touches five places that can each lock you out: the firewall, the provider firewall, the SELinux `semanage port`, `ssh.socket` and fail2ban. A private network, with SSH limited to it (`ssh_via`), is the real fix.
 
 **Validate before reload:** `sshd -t` → `sshd -T | grep -Ei 'passwordauth|permitroot|kbdinter'` → `sshd -T -C user=admin,host=x,addr=192.0.2.1` (for Match/AllowGroups). Then `reload`; existing sessions survive it.
 
@@ -168,7 +168,7 @@ Also make sure **needrestart ≥ 3.8**, because older versions have local-root C
 | `deploy.docker` | Docker Engine from the **official repo** | `daemon.json`: `log-driver local` with size limits, `live-restore`, `no-new-privileges`, `userland-proxy:false`, `ip:127.0.0.1`. **The docker group is equivalent to root.** Rootless Docker and Podman are not offered in M5 |
 | `deploy.user` | `deploy` user | No general sudo; with a `command`, `sudoers` allows only that one program (the user's choice, an absolute path to a root-owned file), as root and without arguments; restricted `authorized_keys` (`restrict,command="…"`) for CI |
 | `deploy.proxy` | Reverse proxy | **Caddy** (auto HTTPS). Nginx+certbot is not offered in M5, and Traefik would only go behind a docker-socket proxy |
-| `net.tailscale` | Private admin access | `tailscale up`, allow on `tailscale0`, **then close public 22 as the very last step**, behind its own dead-man switch (v0.6.0, with any private network, not only Tailscale) |
+| `net.tailscale` | Private admin access | Tailscale from its own repository, `tailscaled` running, `tailscale up --accept-dns=false` with an auth key from a root-only file (or by hand); never Tailscale SSH. Opens no port. Public SSH closes in a second apply with `firewall.inbound`'s `ssh_via`, from a session through the VPN (v0.6.0) |
 | `ops.backup` | restic → S3/B2/SFTP | systemd timer, `forget --prune`, weekly `check`, DB dumps, healthchecks.io ping. *Provider snapshots aren't backups* |
 | `ops.monitor` | node_exporter / Beszel | Bind to localhost or the tailnet. **Netdata listens publicly on :19999 by default** |
 
@@ -185,7 +185,7 @@ Also make sure **needrestart ≥ 3.8**, because older versions have local-root C
    Since v0.3.0, steps 2 to 4 run in **one transaction with one confirm** (`apply --profile minimal`): the dead-man switch is **armed before the first change**, and one new login as the admin proves the user, the sshd config and the firewall together. The confirm window is **5 minutes** by default (`--deadman 1m` to `30m`; `confirm --extend` adds time), counted from when the changes are live. Without a confirm, or after a reboot during the window, everything reverts. `--module user.admin` first, then the rest, shows which step fails.
 5. Brute-force protection, updates, sysctl, journald, auditd.
 6. Deployment modules.
-7. Tailscale → confirm SSH over tailnet → close public 22 (dead-man).
+7. A VPN (Tailscale or WireGuard) → log in through it → from that session, `ssh_via` closes public SSH (dead-man, confirmed from a new login through the VPN).
 8. Reboot → re-audit → report.
 
 > **Why a *new* connection?** sshd reloads and conntrack keep *existing* sessions alive. Your open terminal proves nothing.
@@ -202,7 +202,7 @@ Also make sure **needrestart ≥ 3.8**, because older versions have local-root C
 | sysctl | safe | safe, forwarding on, accept_ra=2 | + paranoid keys |
 | journald / auditd | yes / no | ✓ / basic | ✓ + remote / full + immutable |
 | Docker, proxy, deploy user, backups | no | yes | yes (rootless preferred) |
-| Tailscale + close 22 | offered | recommended | required |
+| Private SSH (`ssh_via`) | offered | recommended | required |
 
 ## Top 10 gotchas (each needs a test)
 
