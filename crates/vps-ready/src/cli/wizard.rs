@@ -9,7 +9,7 @@ use std::path::Path;
 use anyhow::bail;
 
 use super::change::{self, Applied, Host, Selection, plural};
-use super::{EXIT_INTERRUPTED, wrap};
+use super::{EXIT_INTERRUPTED, export, wrap};
 use crate::VERSION_INFO;
 use crate::audit::{self, Outcome, Severity};
 use crate::config::{Profile, ProfileBuilder};
@@ -699,7 +699,7 @@ fn next_time(
     };
     if builder.is_unchanged() {
         repeat(out, builder.base())?;
-        return Ok(());
+        return new_server(host, builder, None, out);
     }
     writeln!(out)?;
     let path = cwd.join(SAVE_AS);
@@ -715,7 +715,7 @@ fn next_time(
             "Not saved. To repeat this, save these lines to a file and run:\n  \
              sudo vps-ready apply --profile <file>\n\n{text}"
         )?;
-        return Ok(());
+        return new_server(host, builder, None, out);
     }
     let owner = FileOwner {
         mode: 0o644,
@@ -726,6 +726,28 @@ fn next_time(
     writeln!(out, "Saved {}.", path.display())?;
     writeln!(out, "Review it before you use it on another server.")?;
     repeat(out, &path.display().to_string())?;
+    new_server(host, builder, Some(&path), out)
+}
+
+/// The closing line: the export that sets up a new server the same way at
+/// its first boot, from the saved profile `file`.
+fn new_server(
+    host: &Host,
+    builder: &ProfileBuilder,
+    file: Option<&Path>,
+    out: &mut dyn Write,
+) -> anyhow::Result<()> {
+    let name = file.map_or("<file>".to_owned(), |f| f.display().to_string());
+    let first = match (export::refusal(&builder.build(host.modules)?), file) {
+        (None, _) => String::new(),
+        (Some(_), Some(_)) => format!(" (add the admin's `authorized_keys` to {name} first)"),
+        (Some(_), None) => " (with the admin's `authorized_keys` in the file)".to_owned(),
+    };
+    writeln!(
+        out,
+        "\nSame setup for a new server, at its first boot{first}:\n  \
+         vps-ready export cloud-init --profile {name} --checksums checksums.txt"
+    )?;
     Ok(())
 }
 
