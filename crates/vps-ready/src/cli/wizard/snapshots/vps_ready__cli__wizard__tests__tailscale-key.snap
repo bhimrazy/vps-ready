@@ -20,6 +20,8 @@ Audit: 14 passed, 12 failed (1 high, 5 medium, 6 low), 5 unknown. vps-ready can 
   An auth key from the Tailscale admin console logs this server in during the
   apply. It is used once and never saved.
 ? Auth key (hidden; Enter to log in yourself after): [hidden]
+  That is not an auth key: it starts with tskey-
+? Auth key (hidden; Enter to log in yourself after): [hidden]
 All other incoming ports are blocked.
 ? More ports to open, e.g. 8080/tcp or 53/udp (Enter for none): 
 ? Pick which modules to run yourself? (y/N) no
@@ -52,7 +54,6 @@ ssh.server: Turn off root and password logins over SSH (fixes SSH-001, SSH-002, 
       +X11Forwarding no
 net.tailscale: Join a tailnet with Tailscale, for a private path to SSH
   note: no port is opened: Tailscale needs none, and firewall.inbound's established,related rule covers its replies; tailscaled's own nftables chains (ts-input) coexist with vps-ready's table
-  note: delete /run/vps-ready/tailscale-auth-key after the login; a one-off key is spent once used, and later applies use the node's own login
   + directory /etc/apt/keyrings (mode 0755, root:root)                    reversible
   + /etc/apt/keyrings/tailscale.asc (mode 0644, root:root): PGP public key, fingerprint 2596 A99E AAB3 3821 893C 0A79 458C A832 957F 5868 (52 lines)  reversible
   + /etc/apt/sources.list.d/tailscale.sources (mode 0644, root:root)      reversible

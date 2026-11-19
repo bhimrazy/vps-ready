@@ -2,11 +2,17 @@
 //! profile, which [`change::apply_profile`] applies as `apply --profile`
 //! would.
 
+use std::ffi::c_int;
 use std::io::{BufRead, Write};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use anyhow::bail;
+use signal_hook::SigId;
+use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
+use zeroize::Zeroizing;
 
 use super::change::{self, Applied, Host, Selection, plural};
 use super::export::{self, Refusal};
@@ -19,6 +25,7 @@ use crate::engine::{self, Engine, EngineError, StateDir};
 use crate::facts::{Facts, OsFamily, Proto, Virt};
 use crate::modules::deploy_proxy::{self, Caddyfile, Domain, Upstream};
 use crate::modules::firewall_inbound::{self, Allow};
+use crate::modules::net_tailscale;
 use crate::modules::user_admin::{self, SessionKeys};
 use crate::modules::{Applicability, Module, ModuleError};
 use crate::resource::ResourceError;
@@ -29,9 +36,16 @@ use crate::tui::{Item, Prompt, PromptError};
 /// Where the answers are saved, in the current directory.
 const SAVE_AS: &str = "vps-ready.toml";
 
-/// A pasted Tailscale auth key, for one apply. `/run` is a tmpfs, so the
-/// key never reaches the disk.
-const AUTH_KEY_FILE: &str = "/run/vps-ready/tailscale-auth-key";
+/// A pasted Tailscale auth key, for one apply.
+const AUTH_KEY_FILE: &str = net_tailscale::WIZARD_KEY_FILE;
+
+/// [`Fs::write_atomic`]'s temp file for [`AUTH_KEY_FILE`], left by a crash
+/// between its create and rename.
+const AUTH_KEY_TEMP: &str = "/run/vps-ready/.tailscale-auth-key.vps-ready-tmp";
+
+/// What every Tailscale auth key starts with. Split, so that no text in
+/// the source looks like a key.
+const AUTH_KEY_PREFIX: &str = concat!("tskey", "-");
 
 /// What the private profile opens when `deploy.proxy` serves a site.
 const WEB_PORTS: [&str; 3] = ["80/tcp", "443/tcp", "443/udp"];
@@ -73,9 +87,9 @@ pub(super) fn run<R: BufRead>(
     };
     // The key goes only into the profile applied now, never the saved one.
     let mut applied = builder.clone();
-    let _key_file = match auth_key {
+    let mut key_file = match auth_key {
         Some(key) => {
-            let file = KeyFile::write(host.sys.fs, &key)?;
+            let file = KeyFile::write(host, &key)?;
             applied.set_params(
                 "net.tailscale",
                 toml::Table::from_iter([("auth_key_file".to_owned(), AUTH_KEY_FILE.into())]),
@@ -86,8 +100,13 @@ pub(super) fn run<R: BufRead>(
     };
     let profile = applied.build(host.modules)?;
     if arms_timer(host, &facts, &profile) {
-        let loaded = firewall_inbound::ssh_via(&[], host.sys).ok().flatten();
-        timer_note(out, loaded.as_deref())?;
+        // The private profile limits SSH in this apply when the login
+        // comes through its VPN already.
+        let via = staged_via(&profile)
+            .filter(|via| firewall_inbound::through(&facts, via))
+            .map(str::to_owned)
+            .or_else(|| firewall_inbound::ssh_via(&[], host.sys).ok().flatten());
+        timer_note(out, via.as_deref())?;
     }
     writeln!(out)?;
     let mut input = stdin();
@@ -98,10 +117,13 @@ pub(super) fn run<R: BufRead>(
         false,
         Some(engine::deadman::DEFAULT_WINDOW),
         Some(&mut input),
+        // Gone before the wait for a confirm.
+        &mut || drop(key_file.take()),
         out,
         err,
-    )?;
-    match applied {
+    );
+    drop(key_file);
+    match applied? {
         // "Nothing was changed." ends it.
         Applied::Declined => return Ok(0),
         Applied::Ran(code) if code != 0 => return Ok(code),
@@ -136,16 +158,46 @@ fn timer_note(out: &mut dyn Write, via: Option<&str>) -> std::io::Result<()> {
     )
 }
 
-/// [`AUTH_KEY_FILE`] while it exists: dropping it removes the file, so it
-/// goes whether the apply succeeded or not.
+/// The signals that would end the wizard while [`KeyFile`] lives.
+const ENDING: [c_int; 3] = [SIGHUP, SIGINT, SIGTERM];
+
+/// [`AUTH_KEY_FILE`] while it exists: dropping it removes the file. Until
+/// then the signals in [`ENDING`] are only noted, and the drop ends the
+/// process with the first one after removing the file. A crash or SIGKILL
+/// leaves it for [`remove_key_file`] at the next start.
 struct KeyFile<'a> {
     fs: &'a dyn Fs,
+    sigint_ends: Option<Arc<AtomicBool>>,
+    caught: Arc<AtomicUsize>,
+    handlers: Vec<SigId>,
 }
 
 impl<'a> KeyFile<'a> {
     /// Writes `key` to [`AUTH_KEY_FILE`], root's with mode 0600, in a
     /// directory only root can write to, as `net.tailscale` requires.
-    fn write(fs: &'a dyn Fs, key: &str) -> anyhow::Result<Self> {
+    fn write(host: &Host<'a>, key: &str) -> anyhow::Result<Self> {
+        let caught = Arc::new(AtomicUsize::new(0));
+        let mut file = Self {
+            fs: host.sys.fs,
+            sigint_ends: host.sigint_ends.clone(),
+            caught: Arc::clone(&caught),
+            handlers: Vec::new(),
+        };
+        // Before the file exists, so no signal can leave it behind.
+        for sig in ENDING {
+            let value = usize::try_from(sig).unwrap_or_default();
+            let id = signal_hook::flag::register_usize(sig, Arc::clone(&caught), value)?;
+            file.handlers.push(id);
+        }
+        if let Some(ends) = &file.sigint_ends {
+            ends.store(false, Ordering::SeqCst);
+        }
+        file.create(key)?;
+        Ok(file)
+    }
+
+    fn create(&self, key: &str) -> anyhow::Result<()> {
+        let fs = self.fs;
         let path = Path::new(AUTH_KEY_FILE);
         let Some(dir) = path.parent() else {
             bail!("{AUTH_KEY_FILE} has no directory");
@@ -168,17 +220,41 @@ impl<'a> KeyFile<'a> {
         }
         // Through a temp file created with O_EXCL and mode 0600.
         fs.write_atomic(path, key.as_bytes(), root(0o600))?;
-        Ok(Self { fs })
+        Ok(())
     }
 }
 
 impl Drop for KeyFile<'_> {
     fn drop(&mut self) {
-        match self.fs.remove(Path::new(AUTH_KEY_FILE)) {
-            Ok(()) | Err(SysError::NotFound(_)) => {}
-            Err(e) => tracing::warn!("removing {AUTH_KEY_FILE}: {e}; delete it yourself"),
+        if let Err(e) = remove_key_file(self.fs) {
+            tracing::warn!("removing {AUTH_KEY_FILE}: {e}; delete it yourself");
+        }
+        for id in self.handlers.drain(..) {
+            signal_hook::low_level::unregister(id);
+        }
+        if let Some(ends) = &self.sigint_ends {
+            ends.store(true, Ordering::SeqCst);
+        }
+        let sig = self.caught.load(Ordering::SeqCst);
+        if let Ok(sig) = c_int::try_from(sig)
+            && sig != 0
+        {
+            // As the signal would have, now that the key is gone.
+            let _ = signal_hook::low_level::emulate_default_handler(sig);
         }
     }
+}
+
+/// Removes [`AUTH_KEY_FILE`] and the temp file `write_atomic` makes for it,
+/// whichever exist.
+fn remove_key_file(fs: &dyn Fs) -> Result<(), SysError> {
+    for path in [AUTH_KEY_FILE, AUTH_KEY_TEMP] {
+        match fs.remove(Path::new(path)) {
+            Ok(()) | Err(SysError::NotFound(_)) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
 }
 
 /// The private profile's `ssh_via` before it takes effect: its interface.
@@ -200,6 +276,12 @@ struct StepTwo {
 
 /// [`SAVE_AS`] in `cwd` when it is root's, holds the private profile in
 /// step 1, and this is a login through its VPN: step 2 can run.
+///
+/// The directory is not checked. The owner and mode come from the same
+/// open as the bytes, with no symlink followed, so swapping the file after
+/// the check changes nothing; another user cannot make a file root's, and
+/// a hard link to one of root's needs `fs.protected_hardlinks` off. The
+/// plan is shown and asked for after this too.
 fn step_two(host: &Host, facts: &Facts, cwd: &Path) -> Option<StepTwo> {
     let path = cwd.join(SAVE_AS);
     let (bytes, meta) = host.sys.fs.read_nofollow(&path).ok()?;
@@ -232,15 +314,21 @@ fn ask_step_two(
             path.display()
         ),
     )?;
-    let mut note = firewall_inbound::console(facts, via);
-    if let Some(first) = note.get_mut(..1) {
-        first.make_ascii_uppercase();
-    }
-    say(out, "  ", &format!("{note}."))?;
+    console_note(facts, via, out)?;
     Ok(prompt.confirm(
         &format!("Apply step 2: accept SSH only through {via}?"),
         false,
     )?)
+}
+
+/// How to get back in from the console once SSH depends on `via`, as a
+/// sentence.
+fn console_note(facts: &Facts, via: &str, out: &mut dyn Write) -> std::io::Result<()> {
+    let mut note = firewall_inbound::console(facts, via);
+    if let Some(first) = note.get_mut(..1) {
+        first.make_ascii_uppercase();
+    }
+    say(out, "  ", &format!("{note}."))
 }
 
 /// Applies step 2 as `apply --profile` would; returns the exit code.
@@ -263,6 +351,7 @@ fn run_step_two(
         false,
         Some(engine::deadman::DEFAULT_WINDOW),
         Some(input),
+        &mut || {},
         out,
         err,
     )?;
@@ -368,6 +457,8 @@ fn start_checks(host: &Host) -> anyhow::Result<()> {
     })?;
     let state = StateDir::create(host.sys.fs, host.state_dir, host.state_uid)?;
     Engine::lock(&state, host.sys)?.ensure_finished()?;
+    // An auth key from a run that ended without its cleanup.
+    remove_key_file(host.sys.fs)?;
     Ok(())
 }
 
@@ -427,7 +518,7 @@ struct Answers {
     /// Whether the module list was changed.
     picked: bool,
     /// A pasted Tailscale auth key, for this apply only.
-    auth_key: Option<String>,
+    auth_key: Option<Zeroizing<String>>,
 }
 
 /// The questions, in order.
@@ -466,7 +557,7 @@ fn ask_private(
     prompt: &mut dyn Prompt,
     out: &mut dyn Write,
     builder: &mut ProfileBuilder,
-) -> anyhow::Result<Option<String>> {
+) -> anyhow::Result<Option<Zeroizing<String>>> {
     let current = builder.build(host.modules)?;
     if !firewall_applies(host, facts) || current.params("firewall.inbound").is_none() {
         return Ok(None);
@@ -499,14 +590,27 @@ fn ask_private(
     if current.params("deploy.docker").is_some() {
         private.set_params("deploy.docker", toml::Table::new());
     }
-    say(
-        out,
-        "  ",
-        &format!(
-            "Two steps: this apply sets it up and keeps SSH public; applying again from a \
-             login through {via} closes SSH to the internet."
-        ),
-    )?;
+    if firewall_inbound::through(facts, via) {
+        // firewall.inbound skips step 1 for a login through the VPN.
+        say(
+            out,
+            "  ",
+            &format!(
+                "This login comes through {via}, so this apply closes SSH to the internet \
+                 and accepts it only through {via}."
+            ),
+        )?;
+        console_note(facts, via, out)?;
+    } else {
+        say(
+            out,
+            "  ",
+            &format!(
+                "Two steps: this apply sets it up and keeps SSH public; applying again from \
+                 a login through {via} closes SSH to the internet."
+            ),
+        )?;
+    }
     let (params, key) = if id == "net.tailscale" {
         (toml::Table::new(), ask_tailscale_key(prompt, out)?)
     } else {
@@ -517,20 +621,34 @@ fn ask_private(
     Ok(key)
 }
 
-/// A Tailscale auth key, hidden as it is typed; `None` to log in by hand.
+/// A Tailscale auth key, hidden as it is typed and asked again unless it
+/// looks like one; `None` to log in by hand.
 fn ask_tailscale_key(
     prompt: &mut dyn Prompt,
     out: &mut dyn Write,
-) -> anyhow::Result<Option<String>> {
+) -> anyhow::Result<Option<Zeroizing<String>>> {
     say(
         out,
         "  ",
         "An auth key from the Tailscale admin console logs this server in during the \
          apply. It is used once and never saved.",
     )?;
-    let key = prompt.password("Auth key (hidden; Enter to log in yourself after)")?;
-    let key = key.trim();
-    Ok((!key.is_empty()).then(|| key.to_owned()))
+    loop {
+        let typed =
+            Zeroizing::new(prompt.password("Auth key (hidden; Enter to log in yourself after)")?);
+        let key = typed.trim();
+        if key.is_empty() {
+            return Ok(None);
+        }
+        if key.starts_with(AUTH_KEY_PREFIX) {
+            return Ok(Some(Zeroizing::new(key.to_owned())));
+        }
+        say(
+            out,
+            "  ",
+            &format!("That is not an auth key: it starts with {AUTH_KEY_PREFIX}"),
+        )?;
+    }
 }
 
 /// The device that connects to WireGuard on this server, as module `id`'s

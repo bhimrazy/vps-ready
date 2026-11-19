@@ -207,7 +207,7 @@ pub(super) fn apply(
     let profile = sel.load(host)?;
     let whole = profile.is_some() && sel.modules.is_empty();
     Ok(
-        match apply_profile(host, profile, sel, yes, window, input, out, err)? {
+        match apply_profile(host, profile, sel, yes, window, input, &mut || {}, out, err)? {
             Applied::Nothing => {
                 writeln!(out, "\n{}", nothing_to_do(whole))?;
                 0
@@ -241,7 +241,8 @@ pub(super) enum Applied {
 }
 
 /// [`apply`] with `profile` loaded; `sel` picks its modules. Checks root
-/// itself too, for callers that did not load a profile first.
+/// itself too, for callers that did not load a profile first. `applied`
+/// runs once the engine is done, before any wait for a confirm.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn apply_profile(
     host: &Host,
@@ -250,6 +251,7 @@ pub(super) fn apply_profile(
     yes: bool,
     window: Option<Duration>,
     input: Option<&mut dyn BufRead>,
+    applied: &mut dyn FnMut(),
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> anyhow::Result<Applied> {
@@ -313,7 +315,9 @@ pub(super) fn apply_profile(
         binary: host.binary.clone(),
         off: window.is_none(),
     };
-    match engine.apply(&plan, &deadman, &mut |p| print_progress(err, &p))? {
+    let outcome = engine.apply(&plan, &deadman, &mut |p| print_progress(err, &p));
+    applied();
+    match outcome? {
         ApplyOutcome::NothingToDo => writeln!(out, "Nothing to do.")?,
         ApplyOutcome::Pending { txn, deadline } => {
             // A confirm and the timer's rollback need the lock.

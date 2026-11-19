@@ -1079,6 +1079,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "yaml-rust2",
+ "zeroize",
 ]
 
 [[package]]

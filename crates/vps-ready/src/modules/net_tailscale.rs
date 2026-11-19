@@ -23,6 +23,10 @@ pub const PACKAGE: &str = "tailscale";
 /// Tailscale's daemon.
 pub(crate) const UNIT: &str = "tailscaled.service";
 
+/// Where the wizard puts a pasted auth key for one apply, and removes it.
+/// `/run` is a tmpfs on systemd hosts, so the key normally stays off disk.
+pub(crate) const WIZARD_KEY_FILE: &str = "/run/vps-ready/tailscale-auth-key";
+
 /// Adds Tailscale's repository to unattended-upgrades' origins. The list
 /// adds to the one in `52vps-ready` and `50unattended-upgrades`.
 const ORIGINS: &str = "/etc/apt/apt.conf.d/52vps-ready-tailscale";
@@ -239,11 +243,14 @@ impl Module for NetTailscale {
                 login_server,
                 hostname,
             }));
-            notes.push(format!(
-                "delete {} after the login; a one-off key is spent once used, and later \
-                 applies use the node's own login",
-                path.display()
-            ));
+            // The wizard removes its own file, and every run removes a leftover.
+            if path != Path::new(WIZARD_KEY_FILE) {
+                notes.push(format!(
+                    "delete {} after the login; a one-off key is spent once used, and later \
+                     applies use the node's own login",
+                    path.display()
+                ));
+            }
         }
         if !installed {
             notes.push(

@@ -53,6 +53,8 @@ fn a_pasted_auth_key_is_used_once_and_removed() {
         Enter,
         Enter,
         Pick(1),
+        // Not an auth key: asked again.
+        Type("my-password".into()),
         Type(format!(" {key} ")),
         Enter,
         Enter,
@@ -63,11 +65,14 @@ fn a_pasted_auth_key_is_used_once_and_removed() {
         let host = on(&fs, &runner);
         let (code, text) = wizard(&host, questions.clone(), typed);
         assert!(!text.contains(&key), "{text}");
+        assert!(text.contains("  That is not an auth key: it starts with tskey-\n"));
         assert!(text.contains("? Auth key (hidden; Enter to log in yourself after): [hidden]\n"));
         assert!(
             text.contains("+ log in to the tailnet with the auth key in /run/vps-ready/"),
             "{text}"
         );
+        // The wizard removes it, so the module does not ask the user to.
+        assert!(!text.contains("delete /run/vps-ready"), "{text}");
         assert!(!fs.exists(Path::new(AUTH_KEY_FILE)), "{typed:?}");
         if typed == "y\n" {
             // The dead-man switch cannot be armed: /proc/uptime is missing.
@@ -85,18 +90,28 @@ fn a_pasted_auth_key_is_used_once_and_removed() {
     assert!(!saved.contains(&key), "{saved}");
 }
 
+/// While the file exists Ctrl-C is the wizard's to handle, so that it
+/// can remove the file first.
 #[test]
 fn the_key_file_is_root_only_and_removed_when_dropped() {
     let fs = fs_with_run();
+    let runner = runner(|r| r);
+    let ends = Arc::new(AtomicBool::new(true));
+    let host = Host {
+        sigint_ends: Some(Arc::clone(&ends)),
+        ..on(&fs, &runner)
+    };
     let key = auth_key();
-    let file = KeyFile::write(&fs, &key).unwrap();
+    let file = KeyFile::write(&host, &key).unwrap();
     let (bytes, meta) = fs.read_nofollow(Path::new(AUTH_KEY_FILE)).unwrap();
     assert_eq!(bytes, key.as_bytes());
     assert_eq!((meta.mode, meta.uid, meta.gid), (0o600, 0, 0));
     let dir = fs.metadata(Path::new("/run/vps-ready")).unwrap();
     assert_eq!((dir.kind, dir.mode, dir.uid), (FileKind::Dir, 0o700, 0));
+    assert!(!ends.load(Ordering::SeqCst));
     drop(file);
     assert!(!fs.exists(Path::new(AUTH_KEY_FILE)));
+    assert!(ends.load(Ordering::SeqCst));
 
     // A directory others can write to is not used.
     let open = FileOwner {
@@ -105,9 +120,30 @@ fn the_key_file_is_root_only_and_removed_when_dropped() {
         gid: 0,
     };
     let fs = fs_with_run().with_dir("/run/vps-ready", open);
-    let err = KeyFile::write(&fs, &key).err().unwrap();
+    let host = on(&fs, &runner);
+    let err = KeyFile::write(&host, &key).err().unwrap();
     assert!(err.to_string().contains("only root can write to"), "{err}");
     assert!(!fs.exists(Path::new(AUTH_KEY_FILE)));
+}
+
+/// A key left by a run that ended without its cleanup goes at the start.
+#[test]
+fn a_leftover_key_file_is_removed_at_the_start() {
+    let root = FileOwner {
+        mode: 0o700,
+        uid: 0,
+        gid: 0,
+    };
+    let fs = fs_with_run().with_dir("/run/vps-ready", root);
+    for path in [AUTH_KEY_FILE, AUTH_KEY_TEMP] {
+        fs.write_atomic(Path::new(path), auth_key().as_bytes(), root)
+            .unwrap();
+    }
+    let runner = runner(|r| r);
+    let (code, _) = wizard(&on(&fs, &runner), vec![CtrlC], "");
+    assert_eq!(code, EXIT_INTERRUPTED);
+    assert!(!fs.exists(Path::new(AUTH_KEY_FILE)));
+    assert!(!fs.exists(Path::new(AUTH_KEY_TEMP)));
 }
 
 /// On the private profile the ports start unchecked, and a domain opens
@@ -359,9 +395,8 @@ fn admin_through_tailscale() -> Session {
 
 const PRIVATE: &str = "schema = 1\nextends = \"private\"\n\n[modules.\"net.tailscale\"]\n";
 
-/// The step 1 profile in the current directory with `mode` and `uid`, and
-/// admin's key, as step 1 left them.
-fn fs_with_profile(mode: u32, uid: u32) -> FakeFs {
+/// admin with a key.
+fn fs_with_admin() -> FakeFs {
     let admin = |mode| FileOwner {
         mode,
         uid: 1001,
@@ -373,6 +408,13 @@ fn fs_with_profile(mode: u32, uid: u32) -> FakeFs {
     let keys = Path::new("/home/admin/.ssh/authorized_keys");
     fs.write_atomic(keys, format!("{KEY}\n").as_bytes(), admin(0o600))
         .unwrap();
+    fs
+}
+
+/// The step 1 profile in the current directory with `mode` and `uid`, and
+/// admin's key, as step 1 left them.
+fn fs_with_profile(mode: u32, uid: u32) -> FakeFs {
+    let fs = fs_with_admin();
     let owner = FileOwner { mode, uid, gid: 0 };
     fs.write_atomic(&Path::new(CWD).join(SAVE_AS), PRIVATE.as_bytes(), owner)
         .unwrap();
@@ -420,6 +462,31 @@ fn step_two_host<'a>(fs: &'a FakeFs, runner: &'a FakeRunner) -> Host<'a> {
         facts: vpn_login,
         ..on(fs, runner)
     }
+}
+
+/// Tailscale up and this login through it: firewall.inbound limits SSH in
+/// this one apply, and the wizard says so.
+#[test]
+fn a_login_through_tailscale_closes_ssh_in_one_apply() {
+    let fs = fs_with_admin();
+    let runner = runner(after_step_one);
+    let host = step_two_host(&fs, &runner);
+    let questions = vec![Enter, Enter, Pick(1), Enter, Enter, Enter];
+    let (text, _) = scenario("tailscale-through", &host, questions);
+    assert!(
+        text.contains("this apply closes SSH to the internet"),
+        "{text}"
+    );
+    assert!(!text.contains("Two steps"), "{text}");
+    assert!(
+        text.contains("  If tailscale0 stops working, SSH is closed."),
+        "{text}"
+    );
+    assert!(
+        text.contains("minutes to log in through tailscale0 from a new"),
+        "{text}"
+    );
+    assert!(text.contains("iifname \"tailscale0\" tcp dport"), "{text}");
 }
 
 #[test]
