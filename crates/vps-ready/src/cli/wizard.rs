@@ -19,6 +19,7 @@ use crate::engine::{self, Engine, EngineError, StateDir};
 use crate::facts::{Facts, OsFamily, Proto, Virt};
 use crate::modules::deploy_proxy::{self, Caddyfile, Domain, Upstream};
 use crate::modules::firewall_inbound::{self, Allow};
+use crate::modules::net_wireguard;
 use crate::modules::user_admin::{self, SessionKeys};
 use crate::modules::{Applicability, Module, ModuleError};
 use crate::resource::ResourceError;
@@ -92,15 +93,18 @@ pub(super) fn run<R: BufRead>(
 }
 
 /// Whether `profile` runs a module that arms the safety timer here. Under
-/// a loaded `ssh_via` on Tailscale, `net.tailscale` arms it too, if it
-/// changes anything.
+/// a loaded `ssh_via` on its interface, `net.tailscale` or `net.wireguard`
+/// arms it too, if it changes anything.
 fn arms_timer(host: &Host, facts: &Facts, profile: &Profile) -> bool {
-    let via_tailscale = firewall_inbound::ssh_via(&[], host.sys)
-        .ok()
-        .flatten()
-        .is_some_and(|via| firewall_inbound::is_tailscale(facts, &via));
+    let via = firewall_inbound::ssh_via(&[], host.sys).ok().flatten();
+    let via_tailscale = via
+        .as_deref()
+        .is_some_and(|via| firewall_inbound::is_tailscale(facts, via));
+    let via_wireguard = via.as_deref() == Some(net_wireguard::INTERFACE);
     host.modules.iter().any(|m| {
-        (m.needs_deadman() || (via_tailscale && m.id() == "net.tailscale"))
+        (m.needs_deadman()
+            || (via_tailscale && m.id() == "net.tailscale")
+            || (via_wireguard && m.id() == "net.wireguard"))
             && profile.params(m.id()).is_some()
             && m.applicable(facts) == Applicability::Applicable
     })

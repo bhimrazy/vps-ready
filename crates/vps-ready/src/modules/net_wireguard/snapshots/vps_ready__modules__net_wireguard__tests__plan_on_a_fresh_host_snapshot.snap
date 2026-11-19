@@ -1,0 +1,44 @@
+---
+source: crates/vps-ready/src/modules/net_wireguard/tests.rs
+expression: plan
+---
+modules:
+  - id: net.wireguard
+    title: "Run a WireGuard interface, for a private path to SSH"
+    status: applicable
+    changes:
+      - id: "package:wireguard-tools"
+        summary: install wireguard-tools
+        diff: ~
+        reversibility: partial
+      - id: "directory:/etc/wireguard"
+        summary: "create directory /etc/wireguard (0700 0:0)"
+        diff: ~
+        reversibility: reversible
+      - id: "wireguard-key:/etc/wireguard/wg0.key"
+        summary: "generate a private key in /etc/wireguard/wg0.key (mode 0600, root:root) with `wg genkey`; it never leaves this server"
+        diff: ~
+        reversibility: partial
+      - id: "file:/etc/wireguard/wg0.conf"
+        summary: "create /etc/wireguard/wg0.conf (0600 0:0)"
+        diff: "@@ -0,0 +1,12 @@\n+# Written by vps-ready (net.wireguard). `vps-ready rollback --last` restores\n+# the previous state; edits here are replaced by the next apply.\n+# The private key is in /etc/wireguard/wg0.key and is loaded by PostUp.\n+[Interface]\n+Address = 10.86.12.1/24\n+ListenPort = 51820\n+PostUp = wg set %i private-key /etc/wireguard/%i.key\n+\n+[Peer]\n+# laptop\n+PublicKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\n+AllowedIPs = 10.86.12.2/32\n"
+        reversibility: reversible
+      - id: "directory:/etc/systemd/system/wg-quick@wg0.service.d"
+        summary: "create directory /etc/systemd/system/wg-quick@wg0.service.d (0755 0:0)"
+        diff: ~
+        reversibility: reversible
+      - id: "file:/etc/systemd/system/wg-quick@wg0.service.d/10-vps-ready.conf"
+        summary: "create /etc/systemd/system/wg-quick@wg0.service.d/10-vps-ready.conf (0644 0:0)"
+        diff: "@@ -0,0 +1,6 @@\n+# Written by vps-ready (net.wireguard). `vps-ready rollback --last` removes it.\n+# The unit's reload runs `wg syncconf`, which clears the private key that\n+# PostUp loaded, since wg0.conf holds none. vps-ready changes a running wg0\n+# with `wg set`; with ExecReload= empty, `systemctl reload` fails instead.\n+[Service]\n+ExecReload=\n"
+        reversibility: reversible
+      - id: "service:wg-quick@wg0.service"
+        summary: enable and start wg-quick@wg0.service
+        diff: ~
+        reversibility: reversible
+    reloads:
+      - daemon-reload
+    notes:
+      - "for admin access to this host only: peers reach its tunnel address and nothing else, with no forwarding, routes or NAT"
+      - "rollback keeps the generated key /etc/wireguard/wg0.key, so client configs made meanwhile keep working; `sudo rm /etc/wireguard/wg0.key` and apply again to make a new one"
+      - firewall.inbound accepts UDP 51820 once it is applied; another firewall needs the port opened
+      - "after apply, `sudo vps-ready wireguard-config [PEER]` prints each peer's client config"

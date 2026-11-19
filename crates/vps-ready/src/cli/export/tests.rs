@@ -40,13 +40,48 @@ fn fs(profile: &str, sums: &str) -> FakeFs {
 
 /// Exit code and stdout, or the error as `main` prints it.
 fn export(fs: &FakeFs, spec: &str, base_url: Option<&str>) -> Result<String, String> {
-    let mut out = Vec::new();
-    cloud_init(&host(fs), spec, Path::new(CHECKSUMS), base_url, &mut out)
-        .map(|code| {
-            assert_eq!(code, 0);
-            String::from_utf8(out).unwrap()
-        })
-        .map_err(|e| format!("{e:#}"))
+    export_err(fs, spec, base_url).map(|(out, _)| out)
+}
+
+/// [`export`], with stderr.
+fn export_err(fs: &FakeFs, spec: &str, base_url: Option<&str>) -> Result<(String, String), String> {
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    cloud_init(
+        &host(fs),
+        spec,
+        Path::new(CHECKSUMS),
+        base_url,
+        &mut out,
+        &mut err,
+    )
+    .map(|code| {
+        assert_eq!(code, 0);
+        (
+            String::from_utf8(out).unwrap(),
+            String::from_utf8(err).unwrap(),
+        )
+    })
+    .map_err(|e| format!("{e:#}"))
+}
+
+/// An explicit WireGuard `address` is exported, with a warning; the
+/// derived one is not warned about.
+#[test]
+fn warns_about_an_explicit_wireguard_address() {
+    let with = |extra: &str| {
+        fs(
+            &format!("{KEYED}\n[modules.\"net.wireguard\"]\n{extra}\n"),
+            &checksums(),
+        )
+    };
+    let (out, err) = export_err(&with("address = \"10.86.12.1/24\""), PROFILE, None).unwrap();
+    assert!(out.contains("address = \"10.86.12.1/24\""), "{out}");
+    assert!(
+        err.starts_with("warning: net.wireguard has an explicit `address`"),
+        "{err}"
+    );
+    let (_, err) = export_err(&with("port = 51820"), PROFILE, None).unwrap();
+    assert!(err.is_empty(), "{err}");
 }
 
 /// The version in the output, which changes with every release.

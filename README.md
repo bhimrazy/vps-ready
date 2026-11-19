@@ -26,7 +26,7 @@
 </div>
 
 > [!NOTE]
-> vps-ready is at **v0.5**. `detect` and `audit` (33 controls), and `plan`, `apply`, `confirm` and `rollback` for ten modules work today on Debian 12/13 and Ubuntu 22.04/24.04 with systemd: an admin user, SSH hardening and an inbound firewall behind a dead-man switch, Tailscale for a private path to SSH, plus fail2ban, kernel settings and automatic updates, and Docker, a Caddy reverse proxy and a deploy user for CI. There may be breaking changes before 1.0.
+> vps-ready is at **v0.5**. `detect` and `audit` (34 controls), and `plan`, `apply`, `confirm` and `rollback` for eleven modules work today on Debian 12/13 and Ubuntu 22.04/24.04 with systemd: an admin user, SSH hardening and an inbound firewall behind a dead-man switch, Tailscale or WireGuard for a private path to SSH, plus fail2ban, kernel settings and automatic updates, and Docker, a Caddy reverse proxy and a deploy user for CI. There may be breaking changes before 1.0.
 
 ## Why
 
@@ -105,11 +105,13 @@ Hardening is grouped into modules:
 | `kernel.sysctl` | Safer kernel and network settings | `KRN-*`, `NET-*` | no |
 | `updates.auto` | Automatic security updates with `unattended-upgrades` | `UPD-001` | no |
 | `net.tailscale` | Tailscale from its own apt repository, `tailscaled` running, and a tailnet login from a root-only auth key file (never Tailscale SSH, never the tailnet's DNS) | none | no |
+| `net.wireguard` | A WireGuard interface, `wg0`, for admin access to this host only: a private key generated on the host that never leaves it, peers by public key, the client config printed for each device | `NET-008` | under `ssh_via = "wg0"` |
 | `deploy.docker` | Docker Engine from Docker's own apt repository, with safer defaults: published ports bind to 127.0.0.1, `live-restore`, local log rotation | `FW-002` | no |
 | `deploy.proxy` | Caddy from its official apt repository as a reverse proxy with automatic HTTPS for the sites you list | none | no |
 | `deploy.user` | A login for CI that can run one command, with your keys | none | no |
 
-Profiles pick the modules: **minimal** is `user.admin`, `ssh.server`, `firewall.inbound` (SSH only), `kernel.sysctl` and `updates.auto`; **web** adds ports 80 and 443 (TCP, and UDP for HTTP/3) and `ssh.bruteforce` and `deploy.docker`. A profile file can extend either and set your own admin name and keys. A plain `apply`, without `--profile` or `--module`, leaves the modules that can lock you out (and `ssh.bruteforce`, which installs packages) out, so it changes only kernel settings and automatic updates. `net.tailscale`, `deploy.proxy` and `deploy.user` are in no profile: you add them in a profile file. Logging, a **paranoid** profile, WireGuard, SSH only through the VPN, and backups come later.
+Profiles pick the modules: **minimal** is `user.admin`, `ssh.server`, `firewall.inbound` (SSH only), `kernel.sysctl` and `updates.auto`; **web** adds ports 80 and 443 (TCP, and UDP for HTTP/3) and `ssh.bruteforce` and `deploy.docker`. A profile file can extend either and set your own admin name and keys. A plain `apply`, without `--profile` or `--module`, leaves the modules that can lock you out (and `ssh.bruteforce`, which installs packages) out, so it changes only kernel settings and automatic updates. `net.tailscale`, `net.wireguard`, `deploy.proxy` and `deploy.user` are in no profile: you add them in a profile file. Logging, a **paranoid** profile and backups come later.
+
 
 ## How a run works
 

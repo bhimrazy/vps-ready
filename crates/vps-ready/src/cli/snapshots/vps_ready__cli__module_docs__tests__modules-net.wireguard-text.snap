@@ -1,0 +1,34 @@
+---
+source: crates/vps-ready/src/cli/module_docs.rs
+expression: out
+---
+net.wireguard
+  Run a WireGuard interface, for a private path to SSH
+  Does not apply to this host: whether the kernel has WireGuard is unknown:
+  /sys/module/wireguard is missing and modprobe could not tell.
+
+Why
+  A server reachable only through a private network has no SSH port for the
+  internet to scan or brute force. WireGuard gives this host a tunnel address
+  that only your devices' keys can reach, with no outside service;
+  firewall.inbound can then close public SSH. WireGuard does not answer packets
+  without a valid handshake, so its port reveals nothing.
+
+Params (in the module's profile table)
+  port (default 51820)
+      The UDP port WireGuard listens on; firewall.inbound accepts it.
+  address (default "")
+      This server's tunnel address and subnet, e.g. "10.86.12.1/24" (IPv4, a
+      prefix of 8 to 24). Empty: a /24 in 10.0.0.0/8 derived from
+      /etc/machine-id, so each server gets its own. Changing it on a running wg0
+      is refused.
+  endpoint (default "")
+      The address or host name clients connect to, only for the printed client
+      config. Empty: guessed from this host's public address.
+  peers (default [])
+      Your devices: { name = "laptop", public_key = "<from wg pubkey>", host = 2
+      }. `host` (2 to 254) is the last part of the peer's tunnel address. Public
+      keys only: a device's private key stays on it.
+
+Fixes these audit controls
+  NET-008 [medium] WireGuard private keys readable only by root

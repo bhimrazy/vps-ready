@@ -1,8 +1,9 @@
 //! Command-line interface: argument definitions and command dispatch.
 //!
 //! Today: the wizard (no command, on a terminal), `version`, `detect`,
-//! `audit`, `plan`, `apply`, `rollback`, `confirm`, `history`, `modules`
-//! and `export cloud-init`. Further commands are added as their milestones land; see the
+//! `audit`, `plan`, `apply`, `rollback`, `confirm`, `history`, `modules`,
+//! `export cloud-init` and `wireguard-config`. Further commands are added as their milestones land; see the
+
 //! GitHub milestones.
 
 use std::cmp::Reverse;
@@ -211,6 +212,14 @@ pub enum Command {
     /// makes no network call.
     #[command(subcommand)]
     Export(Export),
+    /// Print the WireGuard client config of each peer of net.wireguard, or
+    /// of PEER, to paste into the device's WireGuard app with its own
+    /// private key. Needs root.
+    WireguardConfig {
+        /// The peer's name in the profile. Default: every peer.
+        #[arg(value_name = "PEER")]
+        peer: Option<String>,
+    },
 }
 
 /// What `export` prints.
@@ -554,6 +563,16 @@ pub fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
             let n = change::history(&real_host(cli), cli.json, &mut out)?;
             code = ExitCode::from(n);
         }
+        Command::WireguardConfig { peer } => {
+            no_json(cli, "wireguard-config")?;
+            let n = change::wireguard_config(
+                &real_host(cli),
+                peer.as_deref(),
+                &mut out,
+                &mut io::stderr(),
+            )?;
+            code = ExitCode::from(n);
+        }
         Command::Export(Export::CloudInit {
             profile,
             checksums,
@@ -566,6 +585,7 @@ pub fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
                 checksums,
                 base_url.as_deref(),
                 &mut out,
+                &mut io::stderr(),
             )?;
             code = ExitCode::from(n);
         }
@@ -666,7 +686,8 @@ fn log_notices(facts: &Facts, quiet: &[&str]) {
 
 /// Whether running as root would let an unknown control be checked: when
 /// `sshd -T`, `fail2ban-client` or `nft list ruleset` could not run (all
-/// need root), or a `/proc/sys` file is root-only on this kernel.
+/// need root), a `/proc/sys` file is root-only on this kernel, or
+/// `/etc/wireguard` could not be read.
 fn root_would_help(report: &Report, facts: &Facts) -> bool {
     report.findings.iter().any(|f| {
         matches!(f.outcome, Outcome::Unknown { .. })
@@ -692,6 +713,8 @@ fn root_would_help(report: &Report, facts: &Facts) -> bool {
                             .any(|n| n.ends_with(crate::facts::firewall::NEEDS_ROOT))
                 }
                 Check::Apparmor => false,
+                // /etc/wireguard is root's, mode 0700.
+                Check::WireguardKeyFiles => true,
                 // `/proc/sys/net/ipv4/conf` is readable by anyone.
                 Check::ReversePathFilter
                 | Check::IcmpRedirectsIgnored

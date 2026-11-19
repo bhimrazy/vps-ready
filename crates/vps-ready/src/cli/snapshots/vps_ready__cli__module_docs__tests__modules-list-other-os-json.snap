@@ -25,6 +25,13 @@ expression: out
     "arms_safety_timer": false
   },
   {
+    "id": "net.wireguard",
+    "title": "Run a WireGuard interface, for a private path to SSH",
+    "applies": false,
+    "reason": "WireGuard is set up only on Debian and Ubuntu so far",
+    "arms_safety_timer": false
+  },
+  {
     "id": "deploy.docker",
     "title": "Install Docker with logs capped and ports on loopback by default",
     "applies": false,

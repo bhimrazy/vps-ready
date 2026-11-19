@@ -15,11 +15,11 @@ use super::reload::{self, Reload, SYSTEMCTL_TIMEOUT};
 use super::{EngineError, StateDir, Txn, id};
 use crate::facts::Interface;
 use crate::facts::network::interface_with;
-use crate::modules::{firewall_inbound, net_tailscale};
+use crate::modules::{firewall_inbound, net_tailscale, net_wireguard};
 use crate::resource::sysctl::boot_id;
 use crate::resource::{
     Backup, Resource, ResourceError, Sysctl, after_path, authorized_keys, before_path, directory,
-    during_path, restore, service, tailscale_up, user,
+    during_path, restore, service, tailscale_up, user, wireguard,
 };
 use crate::sys::{Cmd, FileKind, FileOwner, Fs, FsLock, Sys, SysError};
 
@@ -664,12 +664,15 @@ impl<'a> Engine<'a> {
     /// current one does not, unless the session comes through it: no timer
     /// covers a manual rollback. And it refuses to stop `tailscaled` or
     /// take the node down when SSH is limited to Tailscale afterwards, or
-    /// from a session through Tailscale's interface.
+    /// from a session through Tailscale's interface; the same for stopping
+    /// `wg-quick@wg0` under `ssh_via = "wg0"`, or, from a session through
+    /// `wg0`, stopping it or removing that session's peer.
     ///
     /// # Errors
     ///
     /// [`EngineError::OwnAccount`], [`EngineError::ViaRollback`],
-    /// [`EngineError::CutsTailscale`], or those of [`Engine::rollback`].
+    /// [`EngineError::CutsTailscale`], [`EngineError::CutsWireguard`], or
+    /// those of [`Engine::rollback`].
     pub fn rollback_by(
         &self,
         target: Target,
@@ -740,6 +743,30 @@ impl<'a> Engine<'a> {
                     via: None,
                     pending,
                 });
+            }
+        }
+        let wg = net_wireguard::INTERFACE;
+        let stops_wg = cuts_wireguard(&records);
+        let over_wg = who
+            .server
+            .and_then(|ip| interface_with(who.interfaces, ip.to_canonical()))
+            .is_some_and(|i| i.name == wg);
+        let drops_peer = over_wg
+            && who
+                .client
+                .is_some_and(|c| drops_peer(&records, c.to_canonical()));
+        if stops_wg || drops_peer {
+            let pending = matches!(journal::replay(&records)?, TxnState::PendingConfirm { .. });
+            let refuse = |via| EngineError::CutsWireguard {
+                txn: txn.id().to_owned(),
+                via,
+                pending,
+            };
+            if stops_wg && let Some(via) = self.via_after(&txn, &records)?.filter(|v| v == wg) {
+                return Err(refuse(Some(via)));
+            }
+            if over_wg {
+                return Err(refuse(None));
             }
         }
         // A pending, expired or unfinished transaction only returns to what
@@ -1484,6 +1511,53 @@ pub(super) fn cuts_tailscale(records: &[Record]) -> bool {
     })
 }
 
+/// Whether rolling back `records` stops the `wg-quick@wg0` apply started,
+/// not restored yet.
+pub(super) fn cuts_wireguard(records: &[Record]) -> bool {
+    records.iter().any(|r| match &r.event {
+        Event::Backup {
+            resource,
+            backup:
+                Backup::Service {
+                    unit,
+                    was_active: false,
+                    active: true,
+                    ..
+                },
+            ..
+        } if unit == net_wireguard::UNIT => not_restored(records, resource),
+        _ => false,
+    })
+}
+
+/// Whether rolling back `records` cuts the session from `client` (a tunnel
+/// address) through a running WireGuard interface that apply changed, not
+/// restored yet: it removes that client's peer, moves its address to another
+/// key, or moves the listen port its client connects to.
+pub(crate) fn drops_peer(records: &[Record], client: IpAddr) -> bool {
+    let holds = |ips: &Vec<String>| ips.iter().any(|ip| net_wireguard::contains(ip, client));
+    records.iter().any(|r| match &r.event {
+        Event::Backup {
+            resource,
+            backup:
+                Backup::WireguardSync {
+                    before: Some(before),
+                    after,
+                    ..
+                },
+            ..
+        } => {
+            not_restored(records, resource)
+                && (before.port != after.port
+                    || after
+                        .peers
+                        .iter()
+                        .any(|(key, ips)| holds(ips) && !before.peers.get(key).is_some_and(&holds)))
+        }
+        _ => false,
+    })
+}
+
 fn not_restored(records: &[Record], resource: &str) -> bool {
     !records
         .iter()
@@ -1735,6 +1809,13 @@ fn unchanged(
         }
         // The node's state is Tailscale's: restoring only runs `tailscale down`.
         Backup::TailscaleUp { .. } => Ok(true),
+        // Restoring keeps the key.
+        Backup::WireguardKey { .. } => Ok(true),
+        Backup::WireguardSync {
+            interface,
+            before,
+            after,
+        } => wireguard::unchanged(sys, interface, before.as_ref(), after).map_err(at(resource)),
     }
 }
 
@@ -1771,7 +1852,15 @@ fn by_hand(dir: &Path, resource: &str, backup: &Backup) -> Option<ByHand> {
         Backup::User { .. } => user::by_hand(backup)?,
         Backup::AuthorizedKeys { .. } => authorized_keys::by_hand(dir, backup)?,
         Backup::TailscaleUp { was_running } => tailscale_up::by_hand(*was_running)?,
+        // Rollback keeps the key.
+        Backup::WireguardKey { .. } => return None,
+        Backup::WireguardSync {
+            interface,
+            before,
+            after,
+        } => wireguard::by_hand(interface, before.as_ref(), after)?,
     };
+
     Some(ByHand {
         resource: resource.to_owned(),
         step,
