@@ -147,6 +147,12 @@ impl WireguardKey {
             })
             .and_then(|()| public_key(sys, &self.path).map(drop));
         if let Err(e) = generated {
+            // Created since the check: someone else's file, left as it is.
+            if let ResourceError::Sys(SysError::Io { source, .. }) = &e
+                && source.kind() == std::io::ErrorKind::AlreadyExists
+            {
+                return Err(e);
+            }
             match sys.fs.remove(&self.path) {
                 Ok(()) | Err(SysError::NotFound(_)) => {}
                 Err(rm) => tracing::error!("removing {}: {rm}", self.path.display()),

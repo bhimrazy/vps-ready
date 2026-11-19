@@ -120,9 +120,9 @@ pub enum WireguardDir {
     Read {
         /// Owner and mode of each regular file in it, not its subdirectories.
         files: Vec<WireguardFile>,
-        /// Whether `wg0.conf` starts with [`WG0_HEADER`]; `None` without
-        /// one. Nothing else of it is used: a hand-made one holds a
-        /// private key.
+        /// Whether `wg0.conf` starts with [`WG0_HEADER`] and has no
+        /// `PrivateKey` line; `None` without one. Nothing else of it is
+        /// kept: a hand-made one holds a private key.
         wg0_managed: Option<bool>,
     },
 }
@@ -266,7 +266,7 @@ fn ip_json<T: for<'de> Deserialize<'de>>(
     }
 }
 
-pub(super) fn wireguard(fs: &dyn Fs, runner: &dyn Runner, notices: &mut Vec<String>) -> Wireguard {
+pub(crate) fn wireguard(fs: &dyn Fs, runner: &dyn Runner, notices: &mut Vec<String>) -> Wireguard {
     let module = if fs.exists(Path::new("/sys/module/wireguard")) {
         Some(true)
     } else {
@@ -318,7 +318,8 @@ fn wireguard_dir(fs: &dyn Fs, notices: &mut Vec<String>) -> WireguardDir {
                 uid: meta.uid,
                 mode: meta.mode,
             }),
-            Ok(_) => {}
+            // Removed since the listing.
+            Ok(_) | Err(SysError::NotFound(_)) => {}
             Err(e) => {
                 notices.push(format!("reading {}: {e}", path.display()));
                 return WireguardDir::Unreadable;
@@ -326,7 +327,11 @@ fn wireguard_dir(fs: &dyn Fs, notices: &mut Vec<String>) -> WireguardDir {
         }
     }
     let wg0_managed = match fs.read_nofollow(Path::new(WG0_CONF)) {
-        Ok((bytes, _)) => Some(bytes.starts_with(WG0_HEADER.as_bytes())),
+        // A PrivateKey added by hand makes it not ours: vps-ready would diff
+        // and copy it.
+        Ok((bytes, _)) => {
+            Some(bytes.starts_with(WG0_HEADER.as_bytes()) && !private_key_line(&bytes))
+        }
         Err(SysError::NotFound(_)) => None,
         // A symlink or a special file is not ours.
         Err(SysError::Symlink(_) | SysError::NotRegular { .. }) => Some(false),
@@ -336,6 +341,18 @@ fn wireguard_dir(fs: &dyn Fs, notices: &mut Vec<String>) -> WireguardDir {
         }
     };
     WireguardDir::Read { files, wg0_managed }
+}
+
+/// Whether a WireGuard config has a `PrivateKey` line, as `wg` reads keys:
+/// case-insensitive, spaces allowed.
+#[must_use]
+pub fn private_key_line(config: &[u8]) -> bool {
+    String::from_utf8_lossy(config).lines().any(|line| {
+        let line = line.trim_start();
+        line.len() >= 10
+            && line.as_bytes()[..10].eq_ignore_ascii_case(b"privatekey")
+            && line[10..].trim_start().starts_with('=')
+    })
 }
 
 /// `<interface>\t<port>` lines.

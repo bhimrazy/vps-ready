@@ -39,7 +39,7 @@ export const heroScenes: Record<'audit' | 'plan' | 'apply' | 'confirm', Step[]> 
     { o: `${I}fix: sudo vps-ready apply --module kernel.sysctl`, d: 200 },
     { o: '' },
     { o: '28 passed, 3 failed (2 medium, 1 low), 0 unknown, 3 skipped' },
-    { o: 'Skipped: there is no VPN interface (WireGuard or tailscale0).' },
+    { o: 'Skipped: there is no VPN interface (WireGuard or tailscale0) and no `ssh_via` rule.' },
     { o: 'Skipped: /etc/wireguard does not exist.' },
     { o: 'Skipped: Docker is not installed.' },
     { o: 'vps-ready can fix 2 of the 3 (KRN-004, KRN-001): run `sudo vps-ready plan`.' },

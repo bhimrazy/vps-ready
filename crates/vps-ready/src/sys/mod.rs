@@ -482,11 +482,24 @@ impl RealRunner {
 impl Runner for RealRunner {
     fn run(&self, cmd: &Cmd) -> Result<Output, SysError> {
         tracing::debug!(program = %cmd.program, args = ?cmd.args, "run");
+        let mut written: Option<File> = None;
         let stdin = match &cmd.stdin {
             Some(path) => {
-                let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NOCTTY | OFlags::CLOEXEC;
-                let fd = rfs::open(path, flags, Mode::empty())
-                    .map_err(|e| errno(path.display().to_string(), e))?;
+                // O_NONBLOCK: opening a FIFO does not wait for a writer.
+                let flags = OFlags::RDONLY
+                    | OFlags::NOFOLLOW
+                    | OFlags::NOCTTY
+                    | OFlags::NONBLOCK
+                    | OFlags::CLOEXEC;
+                let subject = || path.display().to_string();
+                let fd = rfs::open(path, flags, Mode::empty()).map_err(|e| errno(subject(), e))?;
+                let stat = rfs::fstat(&fd).map_err(|e| errno(subject(), e))?;
+                if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile {
+                    return Err(SysError::NotRegular {
+                        path: subject(),
+                        kind: FileKind::Other,
+                    });
+                }
                 Stdio::from(File::from(fd))
             }
             None => Stdio::null(),
@@ -502,7 +515,13 @@ impl Runner for RealRunner {
                 let fd = rfs::open(path, flags, perm(*mode)).map_err(|e| errno(subject(), e))?;
                 // The umask may have narrowed the mode, never widened it.
                 rfs::fchmod(&fd, perm(*mode)).map_err(|e| errno(subject(), e))?;
-                Stdio::from(File::from(fd))
+                let file = File::from(fd);
+                // Kept to sync the file once the child has written it.
+                written = Some(
+                    file.try_clone()
+                        .map_err(|e| SysError::from_io(subject(), e))?,
+                );
+                Stdio::from(file)
             }
             None => Stdio::piped(),
         };
@@ -537,6 +556,10 @@ impl Runner for RealRunner {
             }
         };
 
+        if let (Some(file), Some((path, _))) = (written, &cmd.stdout) {
+            file.sync_all()
+                .map_err(|e| SysError::from_io(path.display().to_string(), e))?;
+        }
         Ok(Output {
             status: status.code().unwrap_or(-1),
             stdout: join(stdout, &cmd.program)?,
@@ -977,6 +1000,19 @@ mod tests {
             .run(&Cmd::new("cat").stdin_from(&link))
             .unwrap_err();
         assert!(matches!(err, SysError::Symlink(_)), "{err:?}");
+        // Nor a FIFO, which would block until a writer comes.
+        let fifo = dir.path().join("fifo");
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let err = RealRunner
+            .run(&Cmd::new("cat").stdin_from(&fifo))
+            .unwrap_err();
+        assert!(matches!(err, SysError::NotRegular { .. }), "{err:?}");
     }
 
     #[test]

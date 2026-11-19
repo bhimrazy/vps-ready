@@ -104,9 +104,10 @@
 #       opened before stays up, a confirm from a login from the VM to its
 #       own address or to wg0's is refused as local, and one through wg0
 #       confirms; SSH-009, FW-003 and NET-008 pass;
-#     under ssh_via a second peer arms the timer, the wg0 session survives
-#       with the key intact, and a confirm through wg0 keeps it; moving this
-#       session's own peer is refused;
+#     under ssh_via a second peer plans only net.wireguard and arms the
+#       timer; not confirmed, the dead-man takes the peer off wg0 again;
+#       confirmed through wg0, a wg0 session opened before stays up with the
+#       key intact; moving this session's own peer is refused;
 #     after a reboot public SSH stays closed and SSH through wg0 works with
 #       the same key, and `systemd-analyze verify` finds no ordering cycle;
 #     rollback --last until the start: public SSH reopens, stopping wg0 is
@@ -574,20 +575,37 @@ private_access_cycle() {
   echo "== $distro: under ssh_via, a second peer through wg0"
   { echo 'schema = 1'; wg_module "$laptop, $phone"; printf '%s\n' '[modules."firewall.inbound"]' 'ssh_via = "wg0"'; } |
     vm 'cat >/tmp/wg2.toml'
-  vm 'sleep 40; echo still here' >"$tmp/old-wg.out" 2>&1 &
+  rc=0; vr plan --json --profile /tmp/wg2.toml >"$tmp/plan.json" || rc=$?
+  [ "$rc" -eq 0 ] || die "plan of the second peer exited $rc, expected 0"
+  jq -e '[.modules[] | select((.changes // []) | length > 0) | .id] == ["net.wireguard"]' \
+    "$tmp/plan.json" >/dev/null || { jq . "$tmp/plan.json"; die "the peer change plans more than net.wireguard"; }
+
+  # Not confirmed: the dead-man takes the peer off the running wg0 again.
+  vm sudo vps-ready apply --yes --profile /tmp/wg2.toml --deadman 1m </dev/null >"$tmp/apply.out" 2>&1 &
+  apply_pid=$!
+  expect_pending
+  vm sudo wg show wg0 peers | grep -qx "$phone_pub" || die "the second peer is not on wg0"
+  rc=0; wait "$apply_pid" || rc=$?
+  [ "$rc" -eq 1 ] || { cat "$tmp/apply.out"; die "the unconfirmed peer apply exited $rc, expected 1"; }
+  expect_newest rolled-back
+  ! vm sudo wg show wg0 peers | grep -qx "$phone_pub" || die "the dead-man left the second peer on wg0"
+  [ "$(vm sudo wg show wg0 public-key)" = "$vm_pub" ] || die "the dead-man rollback changed wg0's key"
+
+  # Confirmed: a session through wg0 opened before the apply stays up.
+  vm 'sleep 600' >/dev/null 2>&1 &
   old_pid=$!
   vm sudo vps-ready apply --yes --profile /tmp/wg2.toml --deadman 2m </dev/null >"$tmp/apply.out" 2>&1 &
   apply_pid=$!
   expect_pending
-  sleep 2
-  [ "$(vm sudo wg show wg0 public-key)" = "$vm_pub" ] || die "adding a peer changed wg0's key"
   vm sudo wg show wg0 peers | grep -qx "$phone_pub" || die "the second peer is not on wg0"
+  [ "$(vm sudo wg show wg0 public-key)" = "$vm_pub" ] || die "adding a peer changed wg0's key"
+  sleep 2
   rc=0; vm sudo vps-ready confirm || rc=$?
   [ "$rc" -eq 0 ] || die "confirm through wg0 exited $rc, expected 0"
   rc=0; wait "$apply_pid" || rc=$?
   [ "$rc" -eq 0 ] || { cat "$tmp/apply.out"; die "the peer apply exited $rc, expected 0"; }
-  wait "$old_pid" || true
-  grep -q 'still here' "$tmp/old-wg.out" || die "the wg0 session did not survive the peer change"
+  kill -0 "$old_pid" 2>/dev/null || die "the wg0 session did not survive the peer change"
+  kill "$old_pid" 2>/dev/null || true
   # Moving this session's own peer is refused.
   laptop4="{ name = \"laptop\", public_key = \"$runner_pub\", host = 4 }"
   { echo 'schema = 1'; wg_module "$laptop4, $phone"; printf '%s\n' '[modules."firewall.inbound"]' 'ssh_via = "wg0"'; } |

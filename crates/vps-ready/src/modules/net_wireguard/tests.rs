@@ -661,9 +661,39 @@ fn key_generation() {
         fs: &fs,
         runner: &rejecting,
     };
-    let err = Resource::WireguardKey(key).apply(sys).unwrap_err();
-    assert!(matches!(err, ResourceError::Command { .. }), "{err:?}");
+    let err = Resource::WireguardKey(key.clone()).apply(sys).unwrap_err();
+    assert!(matches!(err, ResourceError::Command { .. }));
+    let secret = rejecting.0.private_keys().pop().unwrap();
+    assert!(!format!("{err} {err:?}").contains(&secret));
     assert!(!fs.exists(Path::new(KEY)));
+
+    // A file that appeared since the check (O_EXCL refused it) is not
+    // removed: it is not vps-ready's.
+    struct Raced<'a>(&'a FakeFs);
+    impl Runner for Raced<'_> {
+        fn run(&self, cmd: &Cmd) -> Result<Output, SysError> {
+            assert_eq!(cmd.args, ["genkey"]);
+            self.0
+                .write_atomic(Path::new(KEY), b"theirs\n", root(0o600))
+                .unwrap();
+            Err(SysError::from_io(
+                KEY,
+                std::io::ErrorKind::AlreadyExists.into(),
+            ))
+        }
+    }
+    let fs = self::fs().with_dir(WIREGUARD_DIR, root(0o700));
+    let raced = Raced(&fs);
+    let sys = Sys {
+        fs: &fs,
+        runner: &raced,
+    };
+    let err = Resource::WireguardKey(key).apply(sys).unwrap_err();
+    assert!(
+        matches!(err, ResourceError::Sys(SysError::Io { .. })),
+        "{err:?}"
+    );
+    assert_eq!(fs.read(Path::new(KEY)).unwrap(), b"theirs\n");
 }
 
 /// [`Host`] whose `wg pubkey` rejects every key.
@@ -714,19 +744,97 @@ fn an_unsafe_key_file_is_refused() {
     assert!(err.to_string().contains("it is a symlink"), "{err}");
 }
 
-/// Every byte the engine wrote (the journal, `files/<n>`, the plan) and
-/// every command it ran, with no trace of the generated private key.
+/// [`FakeFs`] that fails the test on any read of the key file: only the
+/// `wg pubkey` stand-in, which reads the inner `FakeFs`, may read it.
+struct Guarded<'a>(&'a FakeFs);
+
+impl Guarded<'_> {
+    fn check(path: &Path) {
+        assert_ne!(path, Path::new(KEY), "vps-ready read the private key");
+    }
+}
+
+impl Fs for Guarded<'_> {
+    fn read(&self, path: &Path) -> Result<Vec<u8>, SysError> {
+        Self::check(path);
+        self.0.read(path)
+    }
+    fn read_nofollow(&self, path: &Path) -> Result<(Vec<u8>, crate::sys::FileMeta), SysError> {
+        Self::check(path);
+        self.0.read_nofollow(path)
+    }
+    fn exists(&self, path: &Path) -> bool {
+        self.0.exists(path)
+    }
+    fn read_dir(&self, path: &Path) -> Result<Vec<PathBuf>, SysError> {
+        self.0.read_dir(path)
+    }
+    fn metadata(&self, path: &Path) -> Result<crate::sys::FileMeta, SysError> {
+        self.0.metadata(path)
+    }
+    fn read_link(&self, path: &Path) -> Result<PathBuf, SysError> {
+        self.0.read_link(path)
+    }
+    fn write_atomic(&self, path: &Path, bytes: &[u8], owner: FileOwner) -> Result<(), SysError> {
+        self.0.write_atomic(path, bytes, owner)
+    }
+    fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), SysError> {
+        self.0.write(path, bytes)
+    }
+    fn append_sync(&self, path: &Path, bytes: &[u8]) -> Result<(), SysError> {
+        self.0.append_sync(path, bytes)
+    }
+    fn remove(&self, path: &Path) -> Result<(), SysError> {
+        self.0.remove(path)
+    }
+    fn create_dir_all(&self, path: &Path, mode: u32) -> Result<(), SysError> {
+        self.0.create_dir_all(path, mode)
+    }
+    fn create_dir(&self, path: &Path, owner: FileOwner) -> Result<(), SysError> {
+        self.0.create_dir(path, owner)
+    }
+    fn remove_dir(&self, path: &Path) -> Result<(), SysError> {
+        self.0.remove_dir(path)
+    }
+    fn sync_dir(&self, path: &Path) -> Result<(), SysError> {
+        self.0.sync_dir(path)
+    }
+    fn try_lock(&self, path: &Path) -> Result<crate::sys::FsLock, SysError> {
+        self.0.try_lock(path)
+    }
+}
+
+/// Every byte the engine wrote (the journal, `files/<n>`), the plans, the
+/// progress lines, the client configs, freshly collected facts and every
+/// command run carry no trace of the generated private key, and nothing
+/// but the `wg pubkey` stand-in reads its file.
 #[test]
 fn the_private_key_is_nowhere_but_its_file() {
-    let fs = armable();
-    let runner = Host::new(&fs);
+    let inner = armable();
+    let fs = Guarded(&inner);
+    let runner = Host::new(&inner);
+    let sys = Sys {
+        fs: &fs,
+        runner: &runner,
+    };
+    let state = StateDir::create(&fs, STATE, 0).unwrap();
+    let engine = Engine::lock(&state, sys).unwrap();
+    let mut progress = Vec::new();
     let facts = facts();
     let params = table(&format!("{ADDRESS}\n{}", peers(&[("laptop", 1, 2)])));
-    let first = plan(&fs, &runner, &facts, &params);
-    let (state, sys) = engine_on(&fs, &runner);
-    let engine = Engine::lock(&state, sys).unwrap();
+    let first = engine::plan(
+        &[Selected {
+            module: &NetWireguard,
+            params: &params,
+        }],
+        &facts,
+        sys,
+    )
+    .unwrap();
     engine
-        .apply(&first, &Deadman::default(), &mut |_| {})
+        .apply(&first, &Deadman::default(), &mut |p| {
+            progress.push(format!("{p:?}"));
+        })
         .unwrap();
     // A peer change on the running wg0, then a rollback of it.
     let up = with_wg0(self::facts(), "10.86.12.1");
@@ -734,23 +842,44 @@ fn the_private_key_is_nowhere_but_its_file() {
         "{ADDRESS}\n{}",
         peers(&[("laptop", 1, 2), ("phone", 2, 3)])
     ));
-    let second = plan(&fs, &runner, &up, &more);
-    let plan_json = serde_json::to_string(&second).unwrap();
+    let second = engine::plan(
+        &[Selected {
+            module: &NetWireguard,
+            params: &more,
+        }],
+        &up,
+        sys,
+    )
+    .unwrap();
     engine
-        .apply(&second, &Deadman::default(), &mut |_| {})
+        .apply(&second, &Deadman::default(), &mut |p| {
+            progress.push(format!("{p:?}"));
+        })
         .unwrap();
-    engine.rollback(Target::Last, &mut |_| {}).unwrap();
+    engine
+        .rollback(Target::Last, &mut |p| progress.push(format!("{p:?}")))
+        .unwrap();
+    let (configs, _) = clients(sys, &up, None).unwrap();
+    let collected = crate::facts::collect(&fs, &runner, &crate::facts::Env::default()).unwrap();
 
     let secrets = runner.private_keys();
     assert_eq!(secrets.len(), 1);
     let secret = &secrets[0];
-    assert!(!serde_json::to_string(&first).unwrap().contains(secret));
-    assert!(!plan_json.contains(secret));
+    let texts = [
+        serde_json::to_string(&first).unwrap(),
+        serde_json::to_string(&second).unwrap(),
+        progress.join("\n"),
+        configs,
+        serde_json::to_string(&collected).unwrap(),
+    ];
+    for text in &texts {
+        assert!(!text.contains(secret.as_str()));
+    }
     for cmd in runner.calls.lock().unwrap().iter() {
         assert!(!format!("{cmd:?}").contains(secret), "{cmd:?}");
     }
     let mut seen = 0;
-    walk(&fs, Path::new("/"), &mut |path, bytes| {
+    walk(&inner, Path::new("/"), &mut |path, bytes| {
         if path == Path::new(KEY) {
             return;
         }
@@ -1480,4 +1609,202 @@ fn the_private_profile_with_wireguard_in_two_steps() {
     assert_eq!(step2.ssh_via.as_deref(), Some(INTERFACE));
     // net.wireguard itself has nothing to change by then.
     assert!(step2.modules[0].changes().is_empty());
+}
+
+/// A `wg0.conf` of ours that someone gave a `PrivateKey` line is no
+/// longer ours: not applicable through the facts, refused if planned
+/// anyway, and never parsed for the firewall or the client config.
+#[test]
+fn a_private_key_added_to_wg0_conf_is_never_diffed_or_copied() {
+    let fs = fs().with_dir(WIREGUARD_DIR, root(0o700));
+    let runner = Host::new(&fs);
+    let params: Params = parse_params(&table(ADDRESS)).unwrap();
+    let ours = render(&params, Subnet::parse("10.86.12.1/24").unwrap());
+    // Made up at run time, as a hand edit would add it.
+    let leaked = format!("{ours}privatekey= {}\n", b64([0x5c; 32]));
+    fs.write_atomic(Path::new(WG0_CONF), leaked.as_bytes(), root(0o600))
+        .unwrap();
+    let mut notices = Vec::new();
+    let facts_now = crate::facts::network::wireguard(&fs, &FakeRunner::new(), &mut notices);
+    assert!(matches!(
+        facts_now.dir,
+        WireguardDir::Read {
+            wg0_managed: Some(false),
+            ..
+        }
+    ));
+    let mut facts = facts();
+    facts.wireguard.dir = facts_now.dir;
+    assert!(matches!(
+        NetWireguard.applicable(&facts),
+        Applicability::NotApplicable { .. }
+    ));
+    let err = refused(try_steps(&self::facts(), &fs, &runner, ADDRESS));
+    assert!(err.contains("has a PrivateKey line"), "{err}");
+    assert!(!err.contains(&b64([0x5c; 32])));
+    let sys = Sys {
+        fs: &fs,
+        runner: &runner,
+    };
+    assert_eq!(managed_port(&[], sys).unwrap(), None);
+    assert_eq!(parse_conf(&leaked), None);
+    for line in ["PrivateKey = x", "  privateKEY=x", "PrivateKey\t= x"] {
+        assert!(private_key_line(line.as_bytes()), "{line}");
+    }
+    assert!(!private_key_line(
+        b"PostUp = wg set %i private-key /etc/wireguard/%i.key\n"
+    ));
+}
+
+/// A peer cannot take the server's own tunnel address.
+#[test]
+fn a_peer_cannot_have_the_servers_address() {
+    let check = |text: &str| NetWireguard.check_params(&table(text));
+    let err = check(&format!(
+        "address = \"10.86.12.5/24\"\n{}",
+        peers(&[("laptop", 1, 5)])
+    ))
+    .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("host 5 is this server's own tunnel address, 10.86.12.5"),
+        "{err}"
+    );
+    // With a /16, host 5 is 10.86.0.5.
+    assert!(
+        check(&format!(
+            "address = \"10.86.0.5/16\"\n{}",
+            peers(&[("laptop", 1, 5)])
+        ))
+        .is_err()
+    );
+    assert!(
+        check(&format!(
+            "address = \"10.86.12.5/16\"\n{}",
+            peers(&[("laptop", 1, 5)])
+        ))
+        .is_ok()
+    );
+}
+
+/// `uninitialized`, which an image has before its first boot, would give
+/// every server the same subnet.
+#[test]
+fn the_machine_id_must_be_32_hex_digits() {
+    for id in [
+        "uninitialized\n",
+        "4F1C0D6E2B8A4C3D9E7F6A5B4C3D2E1F\n",
+        "abc\n",
+    ] {
+        let fs = FakeFs::new().with_file(MACHINE_ID, id);
+        let runner = Host::new(&fs);
+        let err = refused(try_steps(&facts(), &fs, &runner, ""));
+        assert!(err.contains("not 32 hex digits"), "{id}: {err}");
+    }
+}
+
+/// From a session through wg0, a port change would cut it until the
+/// client's Endpoint changes; a peer whose allowed IPs were widened by
+/// hand is still the session's.
+#[test]
+fn a_port_change_or_a_widened_peer_from_a_wg0_session() {
+    let fs = fs();
+    let runner = Host::new(&fs);
+    let base = table(&format!(
+        "{ADDRESS}\n{}",
+        peers(&[("laptop", 1, 2), ("phone", 2, 3)])
+    ));
+    set_up(&fs, &runner, "wg0", &base);
+    let mut up = with_wg0(facts(), "10.86.12.1");
+    up.session = Some(session("10.86.12.1:22", "10.86.12.2:40000"));
+    let p = |extra: &str, list: &[(&str, u8, u8)]| format!("{ADDRESS}\n{extra}\n{}", peers(list));
+    let err = refused(try_steps(
+        &up,
+        &fs,
+        &runner,
+        &p("port = 51821", &[("laptop", 1, 2), ("phone", 2, 3)]),
+    ));
+    assert!(err.contains("changing `port` from 51820 to 51821"), "{err}");
+    // Widened by hand: the laptop peer holds 10.86.12.0/28.
+    runner
+        .run(&wg([
+            "set",
+            INTERFACE,
+            "peer",
+            &peer_key(1),
+            "allowed-ips",
+            "10.86.12.0/28",
+        ]))
+        .unwrap();
+    let err = refused(try_steps(&up, &fs, &runner, &p("", &[("phone", 2, 3)])));
+    assert!(err.starts_with("this session comes through wg0"), "{err}");
+    assert!(try_steps(&up, &fs, &runner, &p("", &[("laptop", 1, 2)])).is_ok());
+}
+
+/// The rollback guard: a port change that a rollback would undo cuts a
+/// session through wg0 as well.
+#[test]
+fn a_rollback_that_moves_the_port_is_refused_from_wg0() {
+    use crate::engine::{Event, Record};
+    use crate::resource::Backup;
+    let state = |port| WgState {
+        port,
+        peers: [(peer_key(1), vec!["10.86.12.2/32".to_owned()])].into(),
+    };
+    let backup = |before: WgState, after: WgState| Record {
+        at: 0,
+        event: Event::Backup {
+            resource: "wireguard:wg0".into(),
+            backup: Backup::WireguardSync {
+                interface: INTERFACE.into(),
+                before: Some(before),
+                after,
+            },
+            force_restore: false,
+        },
+    };
+    let client = "10.86.12.2".parse().unwrap();
+    let cuts = crate::engine::drops_peer_for_tests;
+    assert!(cuts(&[backup(state(51820), state(51821))], client));
+    assert!(!cuts(&[backup(state(51820), state(51820))], client));
+    // A peer change under a widened allowed IP of the same key keeps it.
+    let mut wide = state(51820);
+    wide.peers
+        .insert(peer_key(1), vec!["10.86.12.0/28".to_owned()]);
+    assert!(!cuts(&[backup(wide, state(51820))], client));
+}
+
+/// What the plan says about a running wg0 it cannot fix: gone while the
+/// unit is active, or running without its key.
+#[test]
+fn notes_for_a_wg0_gone_or_without_its_key() {
+    let fs = fs();
+    let runner = Host::new(&fs);
+    let base = table(ADDRESS);
+    set_up(&fs, &runner, "eth0", &base);
+    let up = with_wg0(facts(), "10.86.12.1");
+    runner.wg0.lock().unwrap().as_mut().unwrap().public_key = None;
+    let steps = try_steps(&up, &fs, &runner, ADDRESS).unwrap();
+    assert!(
+        steps
+            .notes
+            .iter()
+            .any(|n| n.starts_with("wg0 runs without a private key")),
+        "{:?}",
+        steps.notes
+    );
+    // Deleted by hand: the oneshot unit stays active.
+    *runner.wg0.lock().unwrap() = None;
+    let gone = with_wg0(facts(), "10.86.12.1");
+    let mut gone = gone;
+    gone.interfaces.retain(|i| i.name != INTERFACE);
+    let steps = try_steps(&gone, &fs, &runner, ADDRESS).unwrap();
+    assert!(
+        steps
+            .notes
+            .iter()
+            .any(|n| n.starts_with("wg-quick@wg0 is active but wg0 is gone")),
+        "{:?}",
+        steps.notes
+    );
 }

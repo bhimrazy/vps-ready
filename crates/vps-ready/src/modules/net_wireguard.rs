@@ -15,13 +15,15 @@ use super::{
     Applicability, Module, ModuleError, ModuleSteps, ParamDoc, PlanCx, parse_params, refuse,
 };
 use crate::engine::Reload;
-use crate::facts::network::{WG0_CONF, WG0_HEADER, WIREGUARD_DIR, interface_with};
+use crate::facts::network::{
+    WG0_CONF, WG0_HEADER, WIREGUARD_DIR, interface_with, private_key_line,
+};
 use crate::facts::{Facts, Init, OsFamily, WireguardDir};
 use crate::resource::wireguard::{WG_TIMEOUT, runtime, wg};
 use crate::resource::{
     Directory, File, Package, Resource, Service, SyncPeer, WireguardKey, WireguardSync, is_key,
 };
-use crate::sys::{Cmd, FileOwner, Sys, SysError};
+use crate::sys::{Cmd, FileKind, FileOwner, Sys, SysError};
 
 /// The interface; a second one is not supported.
 pub const INTERFACE: &str = "wg0";
@@ -84,15 +86,25 @@ struct Peer {
     host: i64,
 }
 
+impl Peer {
+    /// Its tunnel address in `subnet`; `host` is checked to be 2 to 254.
+    fn host_in(&self, subnet: Subnet) -> Ipv4Addr {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        subnet.peer(self.host as u8)
+    }
+}
+
 impl Params {
     /// The checks that need no host.
     fn check(&self) -> Result<(), ModuleError> {
         if self.port == 0 {
             return refuse("port 0 is not a port; the default is 51820");
         }
-        if !self.address.is_empty() {
-            Subnet::parse(&self.address)?;
-        }
+        let subnet = if self.address.is_empty() {
+            None
+        } else {
+            Some(Subnet::parse(&self.address)?)
+        };
         if !self.endpoint.is_empty() && !is_endpoint(&self.endpoint) {
             return refuse(&format!(
                 "endpoint {:?} is not an IP address or a host name, e.g. 203.0.113.10",
@@ -127,6 +139,14 @@ impl Params {
             }
             if !hosts.insert(peer.host) {
                 return refuse(&format!("peer {name} has the host of another peer"));
+            }
+            if let Some(subnet) = subnet
+                && peer.host_in(subnet) == subnet.server
+            {
+                return refuse(&format!(
+                    "peer {name}: host {} is this server's own tunnel address, {}",
+                    peer.host, subnet.server
+                ));
             }
         }
         Ok(())
@@ -333,6 +353,23 @@ impl Module for NetWireguard {
         }
         collisions(facts, subnet)?;
         notes.extend(gateway_note(facts, subnet));
+        if let Some(p) = params
+            .peers
+            .iter()
+            .find(|p| p.host_in(subnet) == subnet.server)
+        {
+            return refuse(&format!(
+                "peer {}: host {} is this server's own tunnel address, {}",
+                p.name, p.host, subnet.server
+            ));
+        }
+        // A file someone gave a PrivateKey since is not diffed or copied.
+        if has_private_key(sys)? {
+            return refuse(&format!(
+                "{WG0_CONF} has a PrivateKey line, which vps-ready never writes: remove it (the \
+                 key belongs in {KEY}, which PostUp loads) and apply again"
+            ));
+        }
         if let Some(wg0) = facts.interfaces.iter().find(|i| i.name == INTERFACE) {
             let want = IpAddr::V4(subnet.server);
             let same = wg0
@@ -356,7 +393,8 @@ impl Module for NetWireguard {
             }
         }
         let peers = sync_peers(&params, subnet);
-        own_peer(facts, &peers, sys)?;
+        own_peer(facts, &peers, params.port, sys)?;
+        notes.extend(runtime_note(facts, sys)?);
         let key = WireguardKey { path: KEY.into() };
         if let Some(own) = server_public_key(sys)?
             && let Some(p) = params.peers.iter().find(|p| p.public_key == own)
@@ -413,7 +451,7 @@ impl Module for NetWireguard {
                  working; `sudo rm {KEY}` and apply again to make a new one"
             ));
         }
-        notes.extend(firewall_note(facts, params.port));
+        notes.push(firewall_note(facts, params.port, sys)?);
         notes.push(
             "after apply, `sudo vps-ready wireguard-config [PEER]` prints each peer's client \
              config"
@@ -498,13 +536,19 @@ fn subnet(params: &Params, sys: Sys) -> Result<Subnet, ModuleError> {
         Err(SysError::NotFound(_)) => String::new(),
         Err(e) => return Err(e.into()),
     };
-    if id.trim().is_empty() {
+    // `uninitialized` before first boot, which every image would share.
+    let id = id.trim();
+    if id.len() != 32
+        || !id
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
         return refuse(&format!(
-            "{MACHINE_ID} is missing or empty, so no subnet can be derived: set `address`, \
-             e.g. \"10.86.12.1/24\""
+            "{MACHINE_ID} is missing or not 32 hex digits, so no subnet can be derived for this \
+             server: set `address`, e.g. \"10.86.12.1/24\""
         ));
     }
-    Ok(Subnet::derived(&id))
+    Ok(Subnet::derived(id))
 }
 
 fn sync_peers(params: &Params, subnet: Subnet) -> Vec<SyncPeer> {
@@ -514,8 +558,7 @@ fn sync_peers(params: &Params, subnet: Subnet) -> Vec<SyncPeer> {
         .map(|p| SyncPeer {
             name: p.name.clone(),
             public_key: p.public_key.clone(),
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            allowed_ip: format!("{}/32", subnet.peer(p.host as u8)),
+            allowed_ip: format!("{}/32", p.host_in(subnet)),
         })
         .collect()
 }
@@ -573,9 +616,10 @@ fn gateway_note(facts: &Facts, subnet: Subnet) -> Option<String> {
     })
 }
 
-/// Refuses removing the peer this session comes through, or changing its
-/// key or address: that would cut the session.
-fn own_peer(facts: &Facts, peers: &[SyncPeer], sys: Sys) -> Result<(), ModuleError> {
+/// Refuses removing the peer this session comes through, changing its key
+/// or address, or changing the listen port its client connects to: that
+/// would cut the session.
+fn own_peer(facts: &Facts, peers: &[SyncPeer], port: u16, sys: Sys) -> Result<(), ModuleError> {
     let Some(session) = &facts.session else {
         return Ok(());
     };
@@ -588,8 +632,21 @@ fn own_peer(facts: &Facts, peers: &[SyncPeer], sys: Sys) -> Result<(), ModuleErr
     let Some(now) = runtime(sys, INTERFACE)? else {
         return Ok(());
     };
+    let other_path = "Change it from another path (public SSH while it is open, another peer, or \
+                      the console)";
+    if now.port != port {
+        return refuse(&format!(
+            "this session comes through wg0, and changing `port` from {} to {port} would cut \
+             it until its client's Endpoint changes too. {other_path}",
+            now.port
+        ));
+    }
     let ip = format!("{client}/32");
-    let Some((key, _)) = now.peers.iter().find(|(_, ips)| ips.contains(&ip)) else {
+    let Some((key, _)) = now
+        .peers
+        .iter()
+        .find(|(_, ips)| ips.iter().any(|net| contains(net, client)))
+    else {
         return Ok(());
     };
     if peers
@@ -605,11 +662,73 @@ fn own_peer(facts: &Facts, peers: &[SyncPeer], sys: Sys) -> Result<(), ModuleErr
     ))
 }
 
+/// Whether `net`, an allowed IP such as `10.86.12.0/24` or a bare
+/// address, holds `ip`.
+pub(crate) fn contains(net: &str, ip: IpAddr) -> bool {
+    let (addr, prefix) = net.split_once('/').unwrap_or((net, "32"));
+    let (Ok(IpAddr::V4(addr)), Ok(prefix), IpAddr::V4(ip)) =
+        (addr.parse::<IpAddr>(), prefix.parse::<u8>(), ip)
+    else {
+        return net.parse::<IpAddr>().ok() == Some(ip);
+    };
+    let mask = if prefix == 0 {
+        0
+    } else {
+        u32::MAX << (32 - prefix.min(32))
+    };
+    u32::from(addr) & mask == u32::from(ip) & mask
+}
+
+/// Whether the `wg0.conf` on disk has a `PrivateKey` line. Only that is
+/// looked for; the file is not kept.
+fn has_private_key(sys: Sys) -> Result<bool, ModuleError> {
+    match sys.fs.read_nofollow(Path::new(WG0_CONF)) {
+        Ok((bytes, _)) => Ok(private_key_line(&bytes)),
+        Err(SysError::NotFound(_) | SysError::Symlink(_) | SysError::NotRegular { .. }) => {
+            Ok(false)
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// What the plan cannot fix but should say: `wg-quick@wg0` active with no
+/// `wg0` (the oneshot unit stays active after the interface goes), or a
+/// running `wg0` without its key (as `wg syncconf` leaves it).
+fn runtime_note(facts: &Facts, sys: Sys) -> Result<Option<String>, ModuleError> {
+    let restart = "`sudo systemctl restart wg-quick@wg0` brings it back with the key";
+    if facts.interfaces.iter().any(|i| i.name == INTERFACE) {
+        let out = match sys.runner.run(&wg(["show", INTERFACE, "public-key"])) {
+            Ok(out) => out,
+            Err(SysError::NotFound(_)) => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        let key = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+        return Ok((out.ok() && !is_key(&key)).then(|| {
+            format!(
+                "wg0 runs without a private key (cleared by `wg syncconf` or `wg set` by hand?), \
+                 so no peer can connect; {restart}"
+            )
+        }));
+    }
+    let cmd = Cmd::new("systemctl")
+        .args(["show", "--property=ActiveState"])
+        .arg(UNIT);
+    let active = sys
+        .runner
+        .run(&cmd)
+        .ok()
+        .filter(crate::sys::Output::ok)
+        .is_some_and(|o| String::from_utf8_lossy(&o.stdout).contains("ActiveState=active"));
+    Ok(active
+        .then(|| format!("wg-quick@wg0 is active but wg0 is gone (deleted by hand?); {restart}")))
+}
+
 /// The server's public key; `None` without a key or without `wg`.
 fn server_public_key(sys: Sys) -> Result<Option<String>, ModuleError> {
     match sys.fs.metadata(Path::new(KEY)) {
         Err(SysError::NotFound(_)) => return Ok(None),
         Err(e) => return Err(e.into()),
+        Ok(meta) if meta.kind != FileKind::File => return Ok(None),
         Ok(_) => {}
     }
     let out = match sys.runner.run(&wg(["pubkey"]).stdin_from(KEY)) {
@@ -621,22 +740,24 @@ fn server_public_key(sys: Sys) -> Result<Option<String>, ModuleError> {
     Ok((out.ok() && is_key(&key)).then_some(key))
 }
 
-/// What the firewall needs, besides `firewall.inbound`.
-fn firewall_note(facts: &Facts, port: u16) -> Option<String> {
-    if facts.firewall_tools.ufw == Some(true) {
-        Some(format!(
-            "ufw is active: open UDP {port} there (`sudo ufw allow {port}/udp`)"
-        ))
+/// Who opens the port. `firewall.inbound` comes after this module, so its
+/// ruleset is known here only once it is on disk.
+fn firewall_note(facts: &Facts, port: u16, sys: Sys) -> Result<String, ModuleError> {
+    Ok(if facts.firewall_tools.ufw == Some(true) {
+        format!("ufw is active: open UDP {port} there (`sudo ufw allow {port}/udp`)")
     } else if facts.firewall_tools.firewalld == Some(true) {
-        Some(format!(
+        format!(
             "firewalld is running: open UDP {port} there (`sudo firewall-cmd --permanent \
              --add-port={port}/udp`)"
-        ))
+        )
+    } else if sys.fs.exists(Path::new(firewall_inbound::RULESET)) {
+        format!("firewall.inbound accepts UDP {port} for it")
     } else {
-        Some(format!(
-            "firewall.inbound accepts UDP {port} for it; another firewall needs it opened"
-        ))
-    }
+        format!(
+            "firewall.inbound accepts UDP {port} for it when it is applied; another firewall \
+             needs the port opened"
+        )
+    })
 }
 
 /// `wg0.conf`: no `PrivateKey`, which `PostUp` loads from its own file; no
@@ -707,7 +828,7 @@ pub(crate) struct Conf {
 
 /// Parses a `wg0.conf` that [`render`] wrote; `None` for any other.
 pub(crate) fn parse_conf(text: &str) -> Option<Conf> {
-    if !text.starts_with(WG0_HEADER) {
+    if !text.starts_with(WG0_HEADER) || private_key_line(text.as_bytes()) {
         return None;
     }
     let (mut server, mut port, mut endpoint) = (None, None, None);

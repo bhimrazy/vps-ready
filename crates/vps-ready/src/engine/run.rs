@@ -754,7 +754,7 @@ impl<'a> Engine<'a> {
         let drops_peer = over_wg
             && who
                 .client
-                .is_some_and(|c| drops_peer(&records, &c.to_canonical().to_string()));
+                .is_some_and(|c| drops_peer(&records, c.to_canonical()));
         if stops_wg || drops_peer {
             let pending = matches!(journal::replay(&records)?, TxnState::PendingConfirm { .. });
             let refuse = |via| EngineError::CutsWireguard {
@@ -1530,14 +1530,12 @@ pub(super) fn cuts_wireguard(records: &[Record]) -> bool {
     })
 }
 
-/// Whether rolling back `records` removes the WireGuard peer that `client`
-/// (a tunnel address) comes from, or moves that address to another key:
-/// a running interface's peers that apply set, not restored yet.
-pub(super) fn drops_peer(records: &[Record], client: &str) -> bool {
-    let holds = |ips: &Vec<String>| {
-        ips.iter()
-            .any(|ip| ip.split_once('/').map_or(ip.as_str(), |(a, _)| a) == client)
-    };
+/// Whether rolling back `records` cuts the session from `client` (a tunnel
+/// address) through a running WireGuard interface that apply changed, not
+/// restored yet: it removes that client's peer, moves its address to another
+/// key, or moves the listen port its client connects to.
+pub(crate) fn drops_peer(records: &[Record], client: IpAddr) -> bool {
+    let holds = |ips: &Vec<String>| ips.iter().any(|ip| net_wireguard::contains(ip, client));
     records.iter().any(|r| match &r.event {
         Event::Backup {
             resource,
@@ -1550,10 +1548,11 @@ pub(super) fn drops_peer(records: &[Record], client: &str) -> bool {
             ..
         } => {
             not_restored(records, resource)
-                && after
-                    .peers
-                    .iter()
-                    .any(|(key, ips)| holds(ips) && !before.peers.get(key).is_some_and(&holds))
+                && (before.port != after.port
+                    || after
+                        .peers
+                        .iter()
+                        .any(|(key, ips)| holds(ips) && !before.peers.get(key).is_some_and(&holds)))
         }
         _ => false,
     })

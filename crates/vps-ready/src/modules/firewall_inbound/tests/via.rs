@@ -16,6 +16,7 @@ fn via_facts(server: &str) -> Facts {
     );
     let mut facts = facts();
     facts.interfaces = crate::facts::network::interfaces(&runner, &mut Vec::new());
+    facts.wireguard.listen_ports = [("wg0".to_owned(), 51820)].into();
     facts.routes = vec![Route {
         dst: "default".into(),
         dev: Some("eth0".into()),
@@ -755,4 +756,103 @@ fn a_staged_ssh_via_does_not_reopen_ssh_limited_elsewhere() {
     let from_wg = via_facts("10.77.0.1:22");
     let steps = via_steps(&from_wg, "vpn:wg0", &loaded, &on).unwrap();
     assert_eq!(via_of(&ruleset_of(&steps)).as_deref(), Some("wg0"));
+}
+
+/// `ssh_via` on a WireGuard interface whose listen port is unknown (`wg
+/// show` failed) is refused unless `allow` has a UDP port, and only a note
+/// when the loaded ruleset already has the rule; staged (step 1), the
+/// interface's known port is still accepted.
+#[test]
+fn an_unknown_wireguard_port_under_ssh_via() {
+    let mut facts = via_facts("10.77.0.1:22");
+    facts.wireguard.listen_ports.clear();
+    let fs = wg_fs(None);
+    let on = units("enabled");
+    let plan = |text: &str, fs: &FakeFs| {
+        let params = params(text);
+        FirewallInbound.plan(
+            &PlanCx {
+                facts: &facts,
+                params: &params,
+                planned: &[],
+            },
+            Sys { fs, runner: &on },
+        )
+    };
+    let err = refused(plan("ssh_via = \"wg0\"", &fs));
+    assert!(
+        err.starts_with("wg0 is a WireGuard interface whose listen port vps-ready cannot read"),
+        "{err}"
+    );
+    let steps = plan("ssh_via = \"wg0\"\nallow = [\"51820/udp\"]", &fs).unwrap();
+    assert!(
+        steps
+            .notes
+            .iter()
+            .any(|n| n.contains("make sure its port is in `allow`")),
+        "{:?}",
+        steps.notes
+    );
+    // The same rule on disk: a note.
+    let loaded = wg_fs(Some("    iifname \"wg0\" tcp dport { 22 } accept\n"));
+    assert!(plan("ssh_via = \"wg0\"", &loaded).is_ok());
+
+    // Step 1 of a staged ssh_via keeps a known port of the interface.
+    let mut public = via_facts("192.0.2.10:22");
+    public.wireguard.listen_ports = [("wg0".to_owned(), 51820)].into();
+    let staged = params("ssh_via = \"vpn:wg0\"");
+    let steps = FirewallInbound
+        .plan(
+            &PlanCx {
+                facts: &public,
+                params: &staged,
+                planned: &[],
+            },
+            Sys {
+                fs: &fs,
+                runner: &on,
+            },
+        )
+        .unwrap();
+    let text = ruleset_of(&steps);
+    assert!(!text.contains("iifname \"wg0\""), "{text}");
+    assert!(text.contains("udp dport { 51820 } accept"), "{text}");
+}
+
+/// When the via interface is the managed wg0 that this plan changes, the
+/// file's port counts, not the old running one, so the next apply plans
+/// nothing.
+#[test]
+fn the_managed_wg0_port_replaces_the_running_one() {
+    use crate::facts::network::{WG0_CONF, WG0_HEADER};
+    let mut facts = via_facts("10.77.0.1:22");
+    facts.wireguard.listen_ports = [("wg0".to_owned(), 51820)].into();
+    let planned = [Resource::File(File {
+        path: WG0_CONF.into(),
+        content: format!(
+            "{WG0_HEADER} x\n[Interface]\nAddress = 10.77.0.1/24\nListenPort = 51821\n"
+        )
+        .into_bytes(),
+        owner: root(0o600),
+        validate: None,
+        describe: None,
+    })];
+    let params = params("ssh_via = \"wg0\"");
+    let fs = wg_fs(None);
+    let steps = FirewallInbound
+        .plan(
+            &PlanCx {
+                facts: &facts,
+                params: &params,
+                planned: &planned,
+            },
+            Sys {
+                fs: &fs,
+                runner: &units("enabled"),
+            },
+        )
+        .unwrap();
+    let text = ruleset_of(&steps);
+    assert!(text.contains("udp dport { 51821 } accept"), "{text}");
+    assert!(!text.contains("51820"), "{text}");
 }

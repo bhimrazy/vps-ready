@@ -882,7 +882,7 @@ fn accepts_the_wireguard_port_ssh_may_depend_on() {
     );
     let via = params("ssh_via = \"wg1\"");
     let cx = PlanCx { params: &via, ..cx };
-    let model = Ruleset::planned(&cx, &parse_params(&via).unwrap(), sys).unwrap();
+    let model = Ruleset::planned(&cx, &parse_params(&via).unwrap(), Some("wg1"), sys).unwrap();
     assert_eq!(model.wireguard, [51821]);
     insta::assert_snapshot!("ruleset-wireguard", model.render().unwrap());
 }

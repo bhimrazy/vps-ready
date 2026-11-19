@@ -186,18 +186,22 @@ impl Ruleset {
     }
 
     /// [`Ruleset::new`], also for a Docker that `cx` plans, with the
-    /// WireGuard ports SSH may depend on.
-    fn planned(cx: &PlanCx, params: &Params, sys: Sys) -> Result<Self, ModuleError> {
+    /// WireGuard ports SSH may depend on: the managed `wg0`'s, and that of
+    /// `wg_via`, the `ssh_via` interface before step 1 cleared it, when it
+    /// is WireGuard.
+    fn planned(
+        cx: &PlanCx,
+        params: &Params,
+        wg_via: Option<&str>,
+        sys: Sys,
+    ) -> Result<Self, ModuleError> {
         let mut ruleset = Self::new(cx.facts, params);
         ruleset.docker |= docker_planned(cx);
         let mut ports = BTreeSet::new();
-        ports.extend(net_wireguard::managed_port(cx.planned, sys)?);
-        if let Some(via) = &ruleset.ssh_via
-            && cx
-                .facts
-                .interfaces
-                .iter()
-                .any(|i| &i.name == via && i.is_wireguard())
+        let managed = net_wireguard::managed_port(cx.planned, sys)?;
+        ports.extend(managed);
+        if let Some(via) = wg_via
+            && runtime_port_counts(cx.facts, via, managed)
         {
             ports.extend(cx.facts.wireguard.listen_ports.get(via));
         }
@@ -207,6 +211,48 @@ impl Ruleset {
             .collect();
         Ok(ruleset)
     }
+}
+
+/// Whether the running listen port of `via` is the one to accept: it is a
+/// WireGuard interface other than the managed `wg0`, whose port is the
+/// file's, which this apply sets.
+fn runtime_port_counts(facts: &Facts, via: &str, managed: Option<u16>) -> bool {
+    let wireguard = facts
+        .interfaces
+        .iter()
+        .any(|i| i.name == via && i.is_wireguard());
+    wireguard && !(via == net_wireguard::INTERFACE && managed.is_some())
+}
+
+/// Refuses `ssh_via` on a WireGuard interface whose listen port is unknown
+/// (`wg show` needs root and wireguard-tools) and that `allow` opens no UDP
+/// port for: the firewall would drop its packets and with them SSH. A note
+/// instead when the rule does not change, or `allow` has UDP ports.
+fn unknown_port(
+    cx: &PlanCx,
+    model: &Ruleset,
+    via: &str,
+    same: bool,
+    sys: Sys,
+) -> Result<Option<String>, ModuleError> {
+    let managed = net_wireguard::managed_port(cx.planned, sys)?;
+    if !runtime_port_counts(cx.facts, via, managed)
+        || cx.facts.wireguard.listen_ports.contains_key(via)
+    {
+        return Ok(None);
+    }
+    let why = format!(
+        "{via} is a WireGuard interface whose listen port vps-ready cannot read (`wg show all \
+         listen-port` failed), so this firewall accepts it only if `allow` lists it"
+    );
+    if model.udp.is_empty() && model.ssh_via.is_some() && !same {
+        return refuse(&format!(
+            "{why}: add it, e.g. allow = [\"51820/udp\"], or SSH through {via} stops"
+        ));
+    }
+    Ok(Some(format!(
+        "{why}: make sure its port is in `allow` (\"<port>/udp\")"
+    )))
 }
 
 /// The WireGuard interfaces whose ports this ruleset does not accept, which
@@ -407,8 +453,9 @@ impl Module for FirewallInbound {
     /// loads it when it starts.
     fn plan(&self, cx: &PlanCx, sys: Sys) -> Result<ModuleSteps, ModuleError> {
         let mut params: Params = cx.params()?;
+        let wg_via = params.ssh_via.name.clone();
         let mut notes: Vec<String> = stage(cx, &mut params, sys)?.into_iter().collect();
-        let model = Ruleset::planned(cx, &params, sys)?;
+        let model = Ruleset::planned(cx, &params, wg_via.as_deref(), sys)?;
         let ruleset = model.render()?;
         notes.extend(wireguard_note(cx.facts, &model));
         if !cx.facts.docker && docker_planned(cx) {
@@ -420,7 +467,11 @@ impl Module for FirewallInbound {
             // The same interface and ports: the SSH rule does not change.
             let on_disk = ruleset_text(cx.planned, sys)?.and_then(|t| ssh_rule_of(&t));
             let same = on_disk.is_some() && on_disk == ssh_rule_of(&ruleset);
-            notes.extend(via::check(cx.facts, via, same, sys)?);
+            let checked = via::check(cx.facts, via, same, sys)?;
+            notes.extend(unknown_port(cx, &model, via, same, sys)?);
+            notes.extend(checked);
+        } else if let Some(via) = &wg_via {
+            notes.extend(unknown_port(cx, &model, via, true, sys)?);
         }
         let mut resources = Vec::new();
         if !cx.facts.firewall_tools.nft {
@@ -466,8 +517,10 @@ impl Module for FirewallInbound {
     /// port the ruleset accepts.
     fn verify(&self, cx: &PlanCx, sys: Sys) -> Result<(), String> {
         let mut params: Params = cx.params().map_err(|e| e.to_string())?;
+        let wg_via = params.ssh_via.name.clone();
         stage(cx, &mut params, sys).map_err(|e| e.to_string())?;
-        let want = Ruleset::planned(cx, &params, sys).map_err(|e| e.to_string())?;
+        let want =
+            Ruleset::planned(cx, &params, wg_via.as_deref(), sys).map_err(|e| e.to_string())?;
         let cmd = Cmd::new("nft")
             .args(["-j", "list", "table", "inet", "vps_ready"])
             .timeout(NFT_TIMEOUT);

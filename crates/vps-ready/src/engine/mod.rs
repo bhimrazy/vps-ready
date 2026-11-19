@@ -13,6 +13,9 @@ mod state;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+pub(crate) use run::drops_peer as drops_peer_for_tests;
+
 pub use confirm::{Extended, Pending, Refusal, Watch, watch};
 pub use deadman::Deadman;
 pub use journal::{Deadline, Event, Record, RollbackReason, TxnState};
@@ -264,7 +267,7 @@ fn cuts_tailscale(txn: &str, via: Option<&str>, pending: bool) -> String {
 fn cuts_wireguard(txn: &str, via: Option<&str>, pending: bool) -> String {
     cuts(
         txn,
-        "it stops wg-quick@wg0 or removes the WireGuard peer this session comes from",
+        "it stops wg-quick@wg0, or changes the WireGuard peer or port this session comes through",
         "wg0",
         via,
         pending,
