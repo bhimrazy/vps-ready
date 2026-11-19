@@ -57,6 +57,11 @@ Caddyfile (its own is `Caddyfile.dpkg-dist`), HTTPS through Caddy reaches an
 upstream on 127.0.0.1, and `rollback --last` removes the source, the key and
 the Caddyfile, keeps the package and stops and disables Caddy. A second apply
 starts Caddy again, and a second rollback undoes it. It needs network access.
+`test/container-tailscale.sh <distro> [binary]` installs Tailscale with
+`net.tailscale` and `updates.auto`, without an auth key: the next plan is
+empty, `tailscaled` runs and is `NeedsLogin`, `unattended-upgrade --dry-run`
+lists the Tailscale origin, and `rollback --last` removes the source, the key
+and the origin file and keeps the package. It needs network access.
 
 ```sh
 cargo build --release --target aarch64-unknown-linux-musl   # x86_64-... on Intel
