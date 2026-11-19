@@ -87,7 +87,7 @@ First, breathe: if you just ran `apply` with a profile and have not confirmed ye
 
 3. **Reboot from your provider's control panel.** If the change has not been confirmed, a reboot rolls it back before the SSH server starts. After a confirm, a reboot changes nothing: the changes are kept.
 
-4. **Use your provider's web console** (or serial console). It logs in locally, without SSH or the firewall. Run `sudo vps-ready rollback --last` there. The console cannot confirm a change, but it can always roll one back.
+4. **Use your provider's web console** (or serial console). It logs in locally, without SSH or the firewall. Run `sudo vps-ready rollback --last` there. The console cannot confirm a change, but it can always roll one back. If SSH is limited to a VPN (`ssh_via`) and the VPN is down, `sudo systemctl stop vps-ready-firewall` opens everything until the next boot; `sudo vps-ready rollback --txn <id>` (see `sudo vps-ready history`) undoes the `ssh_via` change for good. The console needs a password: set one for a sudo user (`sudo passwd admin`) before you close public SSH.
 
 5. **Last resort: the provider's rescue system.** Each transaction keeps what it wrote and the original files in `/var/lib/vps-ready/txn/<id>/`: `journal.jsonl` lists every change, and `files/<n>.before` holds the original bytes, so you can put files back by hand from a mounted disk.
 

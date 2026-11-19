@@ -5,7 +5,7 @@
 // (crates/vps-ready/src/cli): the audit FAIL rows from the audit_shows_fix
 // snapshot, the plan and apply lines from a Debian 13 VM run (assets/demo.png)
 // in today's format, the confirm block from cli/change/confirm.rs and its
-// pending tests. The counts are made consistent for one example host (29
+// pending tests. The counts are made consistent for one example host (33
 // controls). Long runs are cut, never reworded.
 import { sp, type Step } from './motion';
 
@@ -17,7 +17,7 @@ export const heroScenes: Record<'audit' | 'plan' | 'apply' | 'confirm', Step[]> 
   audit: [
     ...root,
     { c: 'sudo vps-ready audit' },
-    { o: sp('b', 'Audit of Debian GNU/Linux 13 (trixie): 32 controls'), d: 200 },
+    { o: sp('b', 'Audit of Debian GNU/Linux 13 (trixie): 33 controls'), d: 200 },
     { o: '' },
     { o: sp('dim', 'STATUS   ID       SEVERITY  CONTROL') },
     { o: `${sp('badb', 'FAIL')}     KRN-004  medium    ptrace scope restricted` },
@@ -38,11 +38,12 @@ export const heroScenes: Record<'audit' | 'plan' | 'apply' | 'confirm', Step[]> 
     { o: sp('dim', `${I}them from normal users makes that harder.`) },
     { o: `${I}fix: sudo vps-ready apply --module kernel.sysctl`, d: 200 },
     { o: '' },
-    { o: '25 passed, 3 failed (2 medium, 1 low), 0 unknown, 1 skipped' },
+    { o: '28 passed, 3 failed (2 medium, 1 low), 0 unknown, 2 skipped' },
+    { o: 'Skipped: there is no VPN interface (WireGuard or tailscale0).' },
     { o: 'Skipped: Docker is not installed.' },
     { o: 'vps-ready can fix 2 of the 3 (KRN-004, KRN-001): run `sudo vps-ready plan`.' },
     { o: 'The other one needs a manual fix for now; it says so above.' },
-    { o: 'Run `vps-ready audit --all` to list the 25 passing controls too.' },
+    { o: 'Run `vps-ready audit --all` to list the 28 passing controls too.' },
     { w: 4000 },
   ],
   plan: [

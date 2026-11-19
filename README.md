@@ -26,7 +26,7 @@
 </div>
 
 > [!NOTE]
-> vps-ready is at **v0.5**. `detect` and `audit` (32 controls), and `plan`, `apply`, `confirm` and `rollback` for nine modules work today on Debian 12/13 and Ubuntu 22.04/24.04 with systemd: an admin user, SSH hardening and an inbound firewall behind a dead-man switch, plus fail2ban, kernel settings and automatic updates, and Docker, a Caddy reverse proxy and a deploy user for CI. There may be breaking changes before 1.0.
+> vps-ready is at **v0.5**. `detect` and `audit` (33 controls), and `plan`, `apply`, `confirm` and `rollback` for nine modules work today on Debian 12/13 and Ubuntu 22.04/24.04 with systemd: an admin user, SSH hardening and an inbound firewall behind a dead-man switch, plus fail2ban, kernel settings and automatic updates, and Docker, a Caddy reverse proxy and a deploy user for CI. There may be breaking changes before 1.0.
 
 ## Why
 

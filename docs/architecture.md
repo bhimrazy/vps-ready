@@ -213,11 +213,11 @@ stateDiagram-v2
   RolledBack --> [*]
 ```
 
-The journal events, one JSON object per line: `begin`, `armed` (unit, boot ID, first deadline), `backup` (with `force_restore`), `applied` (with the uid of a created account), `reloaded`, `extended` (a new unit and deadline), `confirmed` (session, user, client), `rollback`, `restored`, `skipped` (a resource the dead-man left, with the by-hand step), `reload-skipped` (a rollback reload whose check failed), `retry` (a timer that finishes an incomplete dead-man rollback) and `state`. `state pending-confirm` carries the unit, the deadline, `live_since`, the applying session, the `admins` who may confirm and the session's `ssh_port`.
+The journal events, one JSON object per line: `begin`, `armed` (unit, boot ID, first deadline), `backup` (with `force_restore`), `applied` (with the uid of a created account), `reloaded`, `extended` (a new unit and deadline), `confirmed` (session, user, client), `rollback`, `restored`, `skipped` (a resource the dead-man left, with the by-hand step), `reload-skipped` (a rollback reload whose check failed), `retry` (a timer that finishes an incomplete dead-man rollback) and `state`. `state pending-confirm` carries the unit, the deadline, `live_since`, the applying session, the `admins` who may confirm, the session's `ssh_port` and, when the firewall limits SSH to one interface, `ssh_via` (absent otherwise, so older journals read as before).
 
 ## Dead-man switch (the headline feature)
 
-For modules with `needs_deadman` (`user.admin`, `ssh.server`, `firewall.inbound`). Several of them in one apply share one transaction and one confirm. The full design and its reasons are in [the M3 plan](m3-plan.md#dead-man-switch).
+For modules with `needs_deadman` (`user.admin`, `ssh.server`, `firewall.inbound`), and for a module whose plan sets `ModuleSteps.deadman` on this host (a VPN that SSH depends on through `ssh_via`; its resources are then restored as with `force_restore`). Several of them in one apply share one transaction and one confirm. The full design and its reasons are in [the M3 plan](m3-plan.md#dead-man-switch).
 
 ```
 arm:     (before the first change; a failure ends the transaction before any backup)
@@ -232,7 +232,8 @@ pending: re-arm to the window (5 minutes by default) under unit -2; journal "sta
 prompt:  "Open a NEW terminal and run:
             ssh -t -o ControlPath=none -p 22 admin@203.0.113.10 sudo vps-ready confirm"
 confirm: the nearest sshd ancestor of `confirm` is a different session from apply's, started after
-         the changes went live, on a port sshd listens on, logged in as the plan's admin
+         the changes went live, on a port sshd listens on, logged in as the plan's admin,
+         and, under ssh_via, to an address of that interface (else Refusal::NotVia)
          → journal "confirmed" → stop the timer → disable the boot hook
 timeout: the timer runs the rollback even if apply, its terminal and its SSH session are gone
 reboot:  the boot hook rolls back before sshd starts (reason deadman-reboot)
