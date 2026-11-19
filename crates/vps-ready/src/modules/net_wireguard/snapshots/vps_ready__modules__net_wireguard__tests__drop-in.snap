@@ -1,0 +1,10 @@
+---
+source: crates/vps-ready/src/modules/net_wireguard/tests.rs
+expression: "file_text(&steps, DROP_IN)"
+---
+# Written by vps-ready (net.wireguard). `vps-ready rollback --last` removes it.
+# The unit's reload runs `wg syncconf`, which clears the private key that
+# PostUp loaded, since wg0.conf holds none. vps-ready changes a running wg0
+# with `wg set`; with ExecReload= empty, `systemctl reload` fails instead.
+[Service]
+ExecReload=

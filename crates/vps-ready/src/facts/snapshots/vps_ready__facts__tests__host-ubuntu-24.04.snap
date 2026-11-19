@@ -314,5 +314,7 @@ routes:
 wireguard:
   module: ~
   listen_ports: {}
+  dir:
+    state: missing
 tailscale: ~
 notices: []

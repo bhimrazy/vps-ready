@@ -232,6 +232,8 @@ jobs:
         run: test/container-proxy.sh "$DISTRO" bin/vps-ready
       - name: Apply and roll back net.tailscale in the container
         run: test/container-tailscale.sh "$DISTRO" bin/vps-ready
+      - name: Install wireguard-tools; net.wireguard needs the kernel module
+        run: test/container-wireguard.sh "$DISTRO" bin/vps-ready
 
   # Single required check for branch protection. build-musl and containers
   # may be skipped (a docs-only PR); every other result must be success.

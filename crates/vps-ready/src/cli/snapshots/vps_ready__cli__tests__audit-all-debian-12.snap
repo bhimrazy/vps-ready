@@ -2,7 +2,7 @@
 source: crates/vps-ready/src/cli/mod.rs
 expression: "String::from_utf8(text).unwrap()"
 ---
-Audit of Debian GNU/Linux 12 (bookworm): 33 controls
+Audit of Debian GNU/Linux 12 (bookworm): 34 controls
 
 STATUS   ID       SEVERITY  CONTROL
 FAIL     SSH-001  medium    Root login disabled
@@ -49,6 +49,7 @@ SKIP     NET-004  low       IPv4 reverse path filtering enabled
 SKIP     NET-005  medium    IPv4 ICMP redirects not accepted
 SKIP     NET-006  low       IPv4 ICMP redirects not sent
 SKIP     NET-007  low       Multipath TCP disabled
+SKIP     NET-008  medium    WireGuard private keys readable only by root
 FAIL     UPD-001  medium    Security updates installed automatically
          unattended-upgrades is not installed;
          APT::Periodic::Update-Package-Lists is not set;
@@ -69,9 +70,10 @@ PASS     FW-003   low       Only expected ports are open to the internet
          open to the internet: tcp/22 (sshd)
 SKIP     MAC-001  medium    AppArmor enabled
 
-5 passed, 6 failed (1 high, 3 medium, 2 low), 0 unknown, 22 skipped
+5 passed, 6 failed (1 high, 3 medium, 2 low), 0 unknown, 23 skipped
 Skipped: there is no VPN interface (WireGuard or tailscale0).
 Skipped: kernel settings are not checked inside a container.
+Skipped: /etc/wireguard does not exist.
 Skipped: Docker is not installed.
 vps-ready can fix all 6 (SSH-001, SSH-002, SSH-005, SSH-008, UPD-001, FW-001):
 run `sudo vps-ready plan --module ssh.server --module ssh.bruteforce --module

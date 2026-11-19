@@ -19,6 +19,7 @@ All other incoming ports are blocked.
   [ ] user.admin: Set up an admin account that logs in with an SSH key and uses sudo (can lock you out; undone unless you confirm)
   [ ] ssh.server: Turn off root and password logins over SSH (can lock you out; undone unless you confirm)
   [ ] net.tailscale: Join a tailnet with Tailscale, for a private path to SSH
+  [ ] net.wireguard: Run a WireGuard interface, for a private path to SSH (does not apply: whether the kernel has WireGuard is unknown: /sys/module/wireguard is missing and modprobe could not tell)
   [ ] deploy.docker: Install Docker with logs capped and ports on loopback by default
   [ ] firewall.inbound: Drop incoming traffic that no rule allows (can lock you out; undone unless you confirm)
   [ ] ssh.bruteforce: Ban addresses that keep failing to log in over SSH

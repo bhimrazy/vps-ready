@@ -235,22 +235,53 @@ pub enum EngineError {
         /// Whether the transaction is pending a confirm.
         pending: bool,
     },
+    /// A rollback would stop `wg-quick@wg0` while SSH is limited to `wg0`,
+    /// or stop it or remove this session's peer from a session through it.
+    #[error("{}", cuts_wireguard(.txn, .via.as_deref(), *.pending))]
+    CutsWireguard {
+        /// Transaction ID.
+        txn: String,
+        /// `wg0`, when SSH is limited to it after the rollback.
+        via: Option<String>,
+        /// Whether the transaction is pending a confirm.
+        pending: bool,
+    },
     /// Two steps of a plan change the same resource.
     #[error("the plan changes {0} twice")]
     DuplicateResource(String),
 }
 
 fn cuts_tailscale(txn: &str, via: Option<&str>, pending: bool) -> String {
-    let start = format!(
-        "refusing to roll back transaction {txn}: it stops tailscaled or takes this node \
-         out of the tailnet"
-    );
+    cuts(
+        txn,
+        "it stops tailscaled or takes this node out of the tailnet",
+        "Tailscale",
+        via,
+        pending,
+    )
+}
+
+fn cuts_wireguard(txn: &str, via: Option<&str>, pending: bool) -> String {
+    cuts(
+        txn,
+        "it stops wg-quick@wg0 or removes the WireGuard peer this session comes from",
+        "wg0",
+        via,
+        pending,
+    )
+}
+
+/// Why a rollback that `does` something to a VPN is refused: SSH depends
+/// on it through `via`, else this session comes `through` it.
+fn cuts(txn: &str, does: &str, through: &str, via: Option<&str>, pending: bool) -> String {
+    let start = format!("refusing to roll back transaction {txn}: {does}");
     let Some(via) = via else {
         return format!(
-            "{start}, and this session comes through Tailscale, so the rollback would cut it; \
+            "{start}, and this session comes through {through}, so the rollback would cut it; \
              run the rollback from another path (the provider's console or a public SSH login)"
         );
     };
+
     let timer = if pending {
         format!(
             ". It is pending: unless confirmed through {via}, its safety timer rolls it back \

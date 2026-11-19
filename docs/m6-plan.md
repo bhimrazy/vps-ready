@@ -228,8 +228,9 @@ AllowedIPs = 10.86.12.2/32
 
 **Changes to a running `wg0`: `wg set`, never `syncconf`.** The unit's `ExecReload` runs `wg syncconf %i <(wg-quick strip %i)`. A config without `PrivateKey` is likely to clear the key that `PostUp` loaded: wireguard-tools' `config_read_init` marks the private key as set for a full (non-append) parse, and `sync_conf` only adjusts peer replacement. That would cut every tunnel, including an SSH session through it, and a rollback would run the same reload. So:
 - A drop-in, `/etc/systemd/system/wg-quick@wg0.service.d/10-vps-ready.conf`, sets an empty `ExecReload=`, so `systemctl reload wg-quick@wg0` (by hand or by any tool) fails instead of clearing the key. It is a `File`, removed on rollback.
+- **As built (net.wireguard PR):** `WireguardSync` is a resource, not a reload. The engine drops the reloads of a module with no resource change, so a reload could not put back a running `wg0` that drifted while the files stayed the same; as a resource it diffs the runtime, shows each peer change in the plan, journals the peers before and after (public keys only), and rollback restores them. It runs the same `wg set` commands as below; the file's parse check is in `verify` (`wg-quick strip wg0`).
 - A new `Reload::WireguardSync`, run when the unit is active: check `wg-quick strip wg0` (the file parses), then compare the file's peers with `wg show wg0 peers` and `allowed-ips` and apply only the differences: `wg set wg0 peer <key> allowed-ips <ip>/32` for a new or changed peer, `wg set wg0 peer <key> remove` for a removed one, and `wg set wg0 listen-port <port>` for a new port. The key is never touched. On rollback the same reload runs against the restored file, so the runtime follows the file both ways.
-- **Precondition of the WireGuard PR:** a VM check of what `syncconf` does with a key-less file. If it keeps the key after all, the drop-in can go; the `wg set` path stays either way, since it is narrower.
+- **Precondition of the WireGuard PR:** a VM check of what `syncconf` does with a key-less file. If it keeps the key after all, the drop-in can go; the `wg set` path stays either way, since it is narrower. **Result:** `syncconf` clears the key (`wg show wg0 public-key` prints `(none)`; checked on Debian 13's wireguard-tools 1.0.20210914, and printed by the `private-access` VM cycle on all four images), so the drop-in stays.
 - `Address` is a `wg-quick` setting that only an interface restart applies. Changing it on a live `wg0` that vps-ready manages is refused ("bring wg0 down with `systemctl stop wg-quick@wg0` and apply again, from public SSH or the console"), so there is no restart reload.
 
 **Addresses.** IPv4 inside the tunnel only; the endpoint itself may be IPv4 or IPv6. The default subnet is a `/24` inside `10.0.0.0/8` derived from `/etc/machine-id` (two bytes of a SHA-256 over it and a fixed label), with the server at `.1`. Why this range and this rule:
@@ -353,9 +354,11 @@ A use-after-free in the kernel's handling of IPv4 TCP options when building a SY
 |---|---|---|---|
 | `WireguardKey` | `{ path, created, public_key }` | the file exists with the recorded public key | none: rollback keeps it; `rm` it to rotate |
 | `TailscaleUp` | `{ was_running }` | always (the node's state is Tailscale's) | `tailscale down` if it was not running before; `tailscale logout` to remove the node from the tailnet |
+| `WireguardSync` (as built) | `{ interface, before, after }`: port and peers' allowed IPs | the running interface is as before or after, or down | the `wg set` commands back to `before` |
 
 - Both are `partial`. Neither backup holds a secret.
-- `Reload::WireguardSync`, above. No restart reload.
+- `WireguardSync` is a resource as built, above. No restart reload.
+
 - `Cmd` gains stdout to a file opened with `O_EXCL` and a mode, and stdin from a file, if it does not have them.
 - `ModuleSteps` gains `deadman: bool`, for the VPN modules under `ssh_via`.
 - A v0.5 binary cannot read a journal with the new kinds; the release notes say so, as v0.3.0's did.

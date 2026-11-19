@@ -6,16 +6,23 @@
 
 use std::collections::BTreeMap;
 use std::net::IpAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
 use super::{Probe, probe};
-use crate::sys::{Cmd, Fs, Runner};
+use crate::sys::{Cmd, FileKind, Fs, Runner, SysError};
 
 const WIREGUARD: &str = "wireguard";
 const TAILSCALE_IF: &str = "tailscale0";
+
+/// WireGuard's configuration directory.
+pub const WIREGUARD_DIR: &str = "/etc/wireguard";
+/// The config `wg-quick@wg0` reads.
+pub const WG0_CONF: &str = "/etc/wireguard/wg0.conf";
+/// The first line of a `wg0.conf` that `net.wireguard` wrote.
+pub const WG0_HEADER: &str = "# Written by vps-ready (net.wireguard).";
 
 /// A network interface and its addresses.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -97,6 +104,38 @@ pub struct Wireguard {
     /// Listen port per interface, from `wg show all listen-port`. Empty
     /// without `wg`, without root, or without interfaces.
     pub listen_ports: BTreeMap<String, u16>,
+    /// `/etc/wireguard`, from metadata, and whose `wg0.conf` it holds.
+    pub dir: WireguardDir,
+}
+
+/// `/etc/wireguard`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "state", rename_all = "lowercase")]
+pub enum WireguardDir {
+    /// It does not exist.
+    Missing,
+    /// It could not be read (it is root's, mode 0700).
+    Unreadable,
+    /// Its regular files.
+    Read {
+        /// Owner and mode of each regular file in it, not its subdirectories.
+        files: Vec<WireguardFile>,
+        /// Whether `wg0.conf` starts with [`WG0_HEADER`]; `None` without
+        /// one. Nothing else of it is used: a hand-made one holds a
+        /// private key.
+        wg0_managed: Option<bool>,
+    },
+}
+
+/// A regular file in `/etc/wireguard`, from its metadata only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WireguardFile {
+    /// Its path.
+    pub path: PathBuf,
+    /// Owner.
+    pub uid: u32,
+    /// Permission bits.
+    pub mode: u32,
 }
 
 /// Tailscale's state from `tailscale status --json`.
@@ -256,7 +295,47 @@ pub(super) fn wireguard(fs: &dyn Fs, runner: &dyn Runner, notices: &mut Vec<Stri
     Wireguard {
         module,
         listen_ports,
+        dir: wireguard_dir(fs, notices),
     }
+}
+
+fn wireguard_dir(fs: &dyn Fs, notices: &mut Vec<String>) -> WireguardDir {
+    let entries = match fs.read_dir(Path::new(WIREGUARD_DIR)) {
+        Ok(entries) => entries,
+        Err(SysError::NotFound(_)) => return WireguardDir::Missing,
+        Err(e) => {
+            notices.push(format!(
+                "reading {WIREGUARD_DIR}: {e}; WireGuard's files are unknown (it needs root)"
+            ));
+            return WireguardDir::Unreadable;
+        }
+    };
+    let mut files = Vec::new();
+    for path in entries {
+        match fs.metadata(&path) {
+            Ok(meta) if meta.kind == FileKind::File => files.push(WireguardFile {
+                path,
+                uid: meta.uid,
+                mode: meta.mode,
+            }),
+            Ok(_) => {}
+            Err(e) => {
+                notices.push(format!("reading {}: {e}", path.display()));
+                return WireguardDir::Unreadable;
+            }
+        }
+    }
+    let wg0_managed = match fs.read_nofollow(Path::new(WG0_CONF)) {
+        Ok((bytes, _)) => Some(bytes.starts_with(WG0_HEADER.as_bytes())),
+        Err(SysError::NotFound(_)) => None,
+        // A symlink or a special file is not ours.
+        Err(SysError::Symlink(_) | SysError::NotRegular { .. }) => Some(false),
+        Err(e) => {
+            notices.push(format!("reading {WG0_CONF}: {e}"));
+            return WireguardDir::Unreadable;
+        }
+    };
+    WireguardDir::Read { files, wg0_managed }
 }
 
 /// `<interface>\t<port>` lines.
@@ -416,6 +495,66 @@ mod tests {
         let runner = FakeRunner::new().on("wg", ["show"], failed("Operation not permitted"));
         wireguard(&FakeFs::new(), &runner, &mut notices);
         assert_eq!(notices.len(), 1, "{notices:?}");
+    }
+
+    /// Owner and mode of each regular file, and whose `wg0.conf` it is,
+    /// from its first bytes only.
+    #[test]
+    fn wireguard_dir_files_and_owner() {
+        use crate::sys::FileOwner;
+        let owner = |mode| FileOwner {
+            mode,
+            uid: 0,
+            gid: 0,
+        };
+        let mut notices = Vec::new();
+        assert_eq!(
+            wireguard_dir(&FakeFs::new(), &mut notices),
+            WireguardDir::Missing
+        );
+        let fs = FakeFs::new()
+            .with_dir(WIREGUARD_DIR, owner(0o700))
+            .with_dir("/etc/wireguard/sub", owner(0o755));
+        fs.write_atomic(Path::new("/etc/wireguard/wg0.key"), b"k\n", owner(0o600))
+            .unwrap();
+        let conf = format!("{WG0_HEADER} `vps-ready rollback --last` restores\n");
+        fs.write_atomic(Path::new(WG0_CONF), conf.as_bytes(), owner(0o600))
+            .unwrap();
+        let WireguardDir::Read { files, wg0_managed } = wireguard_dir(&fs, &mut notices) else {
+            panic!("{notices:?}");
+        };
+        assert_eq!(wg0_managed, Some(true));
+        let seen: Vec<(String, u32)> = files
+            .iter()
+            .map(|f| (f.path.display().to_string(), f.mode))
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                ("/etc/wireguard/wg0.conf".to_owned(), 0o600),
+                ("/etc/wireguard/wg0.key".to_owned(), 0o600)
+            ]
+        );
+        fs.write_atomic(Path::new(WG0_CONF), b"[Interface]\n", owner(0o600))
+            .unwrap();
+        assert!(matches!(
+            wireguard_dir(&fs, &mut notices),
+            WireguardDir::Read {
+                wg0_managed: Some(false),
+                ..
+            }
+        ));
+        let linked = FakeFs::new()
+            .with_dir(WIREGUARD_DIR, owner(0o700))
+            .with_symlink(WG0_CONF, "/root/wg0.conf");
+        assert!(matches!(
+            wireguard_dir(&linked, &mut notices),
+            WireguardDir::Read {
+                wg0_managed: Some(false),
+                ..
+            }
+        ));
+        assert!(notices.is_empty(), "{notices:?}");
     }
 
     #[test]

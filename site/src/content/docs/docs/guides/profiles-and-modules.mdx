@@ -1,6 +1,6 @@
 ---
 title: Profiles and modules
-description: What the minimal and web profiles change, what each of the ten modules writes, what it checks first, and how to undo it.
+description: What the minimal and web profiles change, what each of the eleven modules writes, what it checks first, and how to undo it.
 sidebar:
   order: 2
 ---
@@ -25,7 +25,7 @@ vps-ready groups its changes into **modules**, and a **profile** picks which mod
 - **Plain `apply`**, with no `--profile` or `--module`, only changes kernel settings and automatic updates. Nothing in it can lock you out, so a future version can never make a plain `apply` start changing SSH or the firewall.
 - **minimal** is for any server you log into over SSH.
 - **web** is minimal plus the web ports (UDP 443 is for HTTP/3), fail2ban and Docker with safe defaults.
-- **`net.tailscale` is in no built-in profile.** Add it in your own profile; see [Tailscale](#nettailscale-tailscale) below.
+- **`net.tailscale` and `net.wireguard` are in no built-in profile.** Add one in your own profile; see [Tailscale](#nettailscale-tailscale) and [WireGuard](#netwireguard-wireguard) below.
 - **`deploy.proxy` (Caddy) and `deploy.user` are in no built-in profile.** They need values only you have (domains, deploy keys), so you add them in your own profile, or the guided setup adds Caddy when you give it a domain. See [Deploy an app](/docs/guides/deployment-modules/).
 
 `sudo vps-ready` with no arguments picks between these two for you and builds the profile from your answers: see the [quick start](/docs/quick-start/). To read what a module does before choosing, run `vps-ready modules` (or `vps-ready modules ssh.server` for one).
@@ -43,13 +43,14 @@ sudo vps-ready plan --profile web
 | 1 | `user.admin` | yes | Creates the way in that is not root |
 | 2 | `ssh.server` | yes | Turns off root and password logins, and refuses unless that way in exists |
 | 3 | `net.tailscale` | under `ssh_via` on Tailscale | Before the firewall: a private path to SSH that needs no open port |
-| 4 | `deploy.docker` | no | Before the firewall, so the firewall knows Docker's bridges |
-| 5 | `firewall.inbound` | yes | Drops unsolicited traffic, always allowing the SSH ports in use |
-| 6 | `ssh.bruteforce` | no | Can only ban an address, and never yours |
-| 7 | `kernel.sysctl` | no | Cannot lock you out |
-| 8 | `updates.auto` | no | Cannot lock you out |
-| 9 | `deploy.proxy` | no | After the firewall, so it can read whether ports 80 and 443 are open |
-| 10 | `deploy.user` | no | Last: a login for CI, separate from the admin |
+| 4 | `net.wireguard` | under `ssh_via = "wg0"` | Before the firewall, which opens its UDP port |
+| 5 | `deploy.docker` | no | Before the firewall, so the firewall knows Docker's bridges |
+| 6 | `firewall.inbound` | yes | Drops unsolicited traffic, always allowing the SSH ports in use |
+| 7 | `ssh.bruteforce` | no | Can only ban an address, and never yours |
+| 8 | `kernel.sysctl` | no | Cannot lock you out |
+| 9 | `updates.auto` | no | Cannot lock you out |
+| 10 | `deploy.proxy` | no | After the firewall, so it can read whether ports 80 and 443 are open |
+| 11 | `deploy.user` | no | Last: a login for CI, separate from the admin |
 
 The order is fixed. The admin user comes first because turning off root and password logins is only safe once there is another way in, and the firewall comes after the admin user and SSH so it can allow the SSH port your login really uses. On their own, the three deployment modules do not touch the SSH server, the firewall's SSH rule or the admin's login, so they do not arm the safety timer. In a run with a guarded module, as in the `web` profile, they share its transaction: confirm it, or the timer undoes them too. The three guarded modules share one transaction, so a single new login confirms all of them together. To see which part fails on a tricky server, apply `--module user.admin` on its own first, then the rest.
 
@@ -145,6 +146,33 @@ With `auth_key_file`, it logs in with `tailscale up --auth-key=file:<path> --acc
 **Undo:** the repository, its key and the origin file are removed; `tailscale down` runs if the node was not up before, and `tailscaled` is stopped if it was off before. On a fresh install, `tailscaled` keeps running after the rollback, as the package started it: `sudo systemctl disable --now tailscaled` stops it. The package, `/var/lib/tailscale` and the node's login stay: `sudo tailscale logout` removes the node from the tailnet. A rollback that would stop `tailscaled` or run `tailscale down` is refused before it changes anything: while `ssh_via` limits SSH to Tailscale, whatever the session (remove `ssh_via` or roll back the transaction that set it first), and otherwise from an SSH session that comes through Tailscale (roll back from the provider's console or a public SSH login).
 
 `export cloud-init` refuses a profile with `auth_key_file`: user-data can be read through the metadata service, so it must not lead to a key.
+
+### `net.wireguard`: WireGuard
+
+**Changes:** installs `wireguard-tools`, generates the server's private key in `/etc/wireguard/wg0.key` (mode 0600) with `wg genkey` writing straight to the file, writes `/etc/wireguard/wg0.conf` and a drop-in for `wg-quick@wg0`, and enables and starts `wg-quick@wg0`. It is for admin access to this host only: peers reach its tunnel address and nothing else, with no forwarding, routes or NAT.
+
+```toml
+[modules."net.wireguard"]
+port = 51820                     # default
+address = "10.86.12.1/24"        # optional; derived per server by default
+endpoint = "203.0.113.10"        # optional; only for the printed client config
+peers = [
+  { name = "laptop", public_key = "<from wg pubkey on the laptop>", host = 2 },
+]
+```
+
+Each device makes its own key (`wg genkey | tee laptop.key | wg pubkey`, or "Add tunnel" in the WireGuard app) and you list its public key; `host` is the last part of its tunnel address, from 2 to 254. Without `address`, the subnet is a `/24` in `10.0.0.0/8` derived from `/etc/machine-id`, with the server at `.1`, so each server gets its own and one laptop can reach several. A subnet that overlaps an address or route on the server is refused. After apply, and any time with `sudo vps-ready wireguard-config [PEER]`, vps-ready prints each device's client config, with a placeholder where the device's own private key goes.
+
+The private key never passes through vps-ready: `wg0.conf` holds no `PrivateKey`, its `PostUp` loads the key file, and the plan, the journal and the transaction's file copies never contain it. A running `wg0` changes with `wg set` only. The unit's own reload runs `wg syncconf`, which clears a key loaded by `PostUp`, so the drop-in empties `ExecReload=`: `systemctl reload wg-quick@wg0` fails instead. Someone who ran `wg set` by hand shows up as a change in the next plan, which puts `wg0` back to the file. Changing `address` on a running `wg0` is refused: stop it with `sudo systemctl stop wg-quick@wg0` and apply again, from public SSH or the console. `firewall.inbound` accepts its UDP port.
+
+**Under `ssh_via = "wg0"`:** any change this module makes arms the safety timer and needs a confirm through `wg0`, and the dead-man rollback restores it even if edited since. From a session through `wg0`, removing that session's own peer, or changing its key or `host`, is refused.
+
+**Checks first:** Debian and Ubuntu with systemd, and a kernel with WireGuard (not in LXC or OpenVZ containers). A `wg0.conf` or a `wg0` interface that vps-ready did not make is left alone; `ssh_via = "wg0"` works with it.
+
+**Undo:** the config, the drop-in and the unit's state are restored, and peers it changed on a running `wg0` are put back with `wg set`. The generated key stays, so client configs made meanwhile keep working: `sudo rm /etc/wireguard/wg0.key` and apply again for a new one. A rollback that would stop `wg-quick@wg0` is refused while `ssh_via` limits SSH to `wg0`, and one that would stop it or remove your session's peer is refused from a session through `wg0`: roll back from public SSH or the provider's console.
+
+`export cloud-init` warns about an explicit `address`, which every server made from it would share.
+
 
 ### `deploy.docker`, `deploy.proxy` and `deploy.user`: deployment
 

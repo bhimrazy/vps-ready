@@ -9,8 +9,10 @@ use askama::Template;
 use serde::Deserialize;
 
 use super::{
-    Applicability, DOCKER_PACKAGE, Module, ModuleError, ModuleSteps, ParamDoc, PlanCx, parse_params,
+    Applicability, DOCKER_PACKAGE, Module, ModuleError, ModuleSteps, ParamDoc, PlanCx,
+    net_wireguard, parse_params,
 };
+
 use crate::engine::Reload;
 use crate::facts::{Facts, Init, OsFamily, Proto};
 use crate::resource::{Directory, File, Package, Resource, Service, Validate};
@@ -133,6 +135,9 @@ struct Ruleset {
     /// [`Self::ssh_via`] limits them.
     tcp: Vec<u16>,
     udp: Vec<u16>,
+    /// WireGuard listen ports not in [`Self::udp`]: the managed `wg0`'s, and
+    /// the `ssh_via` interface's when that is WireGuard.
+    wireguard: Vec<u16>,
     /// Accept everything from Docker's bridges.
     docker: bool,
     /// Interfaces named `br-*` that are not Docker's, which that leaves out.
@@ -161,17 +166,53 @@ impl Ruleset {
             ssh_via,
             tcp: tcp.into_iter().collect(),
             udp: udp.into_iter().collect(),
+            wireguard: Vec::new(),
             docker: facts.docker,
             not_docker: not_docker(facts),
         }
     }
 
-    /// [`Ruleset::new`], also for a Docker that `cx` plans.
-    fn planned(cx: &PlanCx, params: &Params) -> Self {
+    /// [`Ruleset::new`], also for a Docker that `cx` plans, with the
+    /// WireGuard ports SSH may depend on.
+    fn planned(cx: &PlanCx, params: &Params, sys: Sys) -> Result<Self, ModuleError> {
         let mut ruleset = Self::new(cx.facts, params);
         ruleset.docker |= docker_planned(cx);
-        ruleset
+        let mut ports = BTreeSet::new();
+        ports.extend(net_wireguard::managed_port(cx.planned, sys)?);
+        if let Some(via) = &ruleset.ssh_via
+            && cx
+                .facts
+                .interfaces
+                .iter()
+                .any(|i| &i.name == via && i.is_wireguard())
+        {
+            ports.extend(cx.facts.wireguard.listen_ports.get(via));
+        }
+        ruleset.wireguard = ports
+            .into_iter()
+            .filter(|p| !ruleset.udp.contains(p))
+            .collect();
+        Ok(ruleset)
     }
+}
+
+/// The WireGuard interfaces whose ports this ruleset does not accept, which
+/// the admin opens through `allow` if they are needed.
+fn wireguard_note(facts: &Facts, ruleset: &Ruleset) -> Option<String> {
+    let closed: Vec<String> = facts
+        .wireguard
+        .listen_ports
+        .iter()
+        .filter(|(_, port)| !ruleset.udp.contains(port) && !ruleset.wireguard.contains(port))
+        .map(|(name, port)| format!("{name} on UDP {port}"))
+        .collect();
+    (!closed.is_empty()).then(|| {
+        format!(
+            "WireGuard listens on ports this firewall drops: {}; to keep one reachable, add it to \
+             `allow`, e.g. \"<port>/udp\"",
+            closed.join(", ")
+        )
+    })
 }
 
 /// Whether a module before this one, `deploy.docker`, installs Docker in
@@ -353,9 +394,10 @@ impl Module for FirewallInbound {
     /// loads it when it starts.
     fn plan(&self, cx: &PlanCx, sys: Sys) -> Result<ModuleSteps, ModuleError> {
         let params: Params = cx.params()?;
-        let model = Ruleset::planned(cx, &params);
+        let model = Ruleset::planned(cx, &params, sys)?;
         let ruleset = model.render()?;
         let mut notes = Vec::new();
+        notes.extend(wireguard_note(cx.facts, &model));
         if !cx.facts.docker && docker_planned(cx) {
             notes.extend(docker_notes(cx.facts, "deploy.docker installs Docker"));
         }
@@ -411,7 +453,7 @@ impl Module for FirewallInbound {
     /// port the ruleset accepts.
     fn verify(&self, cx: &PlanCx, sys: Sys) -> Result<(), String> {
         let params: Params = cx.params().map_err(|e| e.to_string())?;
-        let want = Ruleset::planned(cx, &params);
+        let want = Ruleset::planned(cx, &params, sys).map_err(|e| e.to_string())?;
         let cmd = Cmd::new("nft")
             .args(["-j", "list", "table", "inet", "vps_ready"])
             .timeout(NFT_TIMEOUT);
@@ -619,12 +661,16 @@ fn check_loaded(json: &[u8], want: &Ruleset) -> Result<(), String> {
     if !chain.drops_unmatched {
         return Err("its input chain does not drop by default".to_owned());
     }
-    let closed: Vec<String> = [(Proto::Tcp, &want.tcp), (Proto::Udp, &want.udp)]
-        .into_iter()
-        .flat_map(|(proto, ports)| ports.iter().map(move |p| (proto, *p)))
-        .filter(|(proto, port)| chain.blocks(&proto.to_string(), *port) != Some(false))
-        .map(|(proto, port)| format!("{proto}/{port}"))
-        .collect();
+    let closed: Vec<String> = [
+        (Proto::Tcp, &want.tcp),
+        (Proto::Udp, &want.udp),
+        (Proto::Udp, &want.wireguard),
+    ]
+    .into_iter()
+    .flat_map(|(proto, ports)| ports.iter().map(move |p| (proto, *p)))
+    .filter(|(proto, port)| chain.blocks(&proto.to_string(), *port) != Some(false))
+    .map(|(proto, port)| format!("{proto}/{port}"))
+    .collect();
     if !closed.is_empty() {
         return Err(format!("it does not accept {}", closed.join(", ")));
     }

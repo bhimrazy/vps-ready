@@ -23,18 +23,33 @@ pub(super) const PROFILE_PATH: &str = "/etc/vps-ready/profile.toml";
 
 /// Prints the user-data for profile `spec` (a built-in name or a file),
 /// with the hashes from the file `checksums` and the tarballs downloaded
-/// from `base_url`, by default this version's GitHub release.
+/// from `base_url`, by default this version's GitHub release. Warnings go
+/// to `err`.
 pub(super) fn cloud_init(
     host: &Host,
     spec: &str,
     checksums: &Path,
     base_url: Option<&str>,
     out: &mut dyn Write,
+    err: &mut dyn Write,
 ) -> anyhow::Result<u8> {
     let (text, profile) = load(host, spec)?;
     if let Some(why) = refusal(&profile) {
         bail!("profile {spec}: {}", why.reason());
     }
+    let address = profile
+        .params("net.wireguard")
+        .and_then(|w| w.get("address"))
+        .and_then(toml::Value::as_str);
+    if address.is_some_and(|a| !a.is_empty()) {
+        writeln!(
+            err,
+            "warning: net.wireguard has an explicit `address`, so every server made from this \
+             export gets the same WireGuard subnet, and one laptop cannot reach two of them; \
+             drop `address` to derive one per server"
+        )?;
+    }
+
     // YAML 1.1 parsers break lines at these; TOML allows them in strings.
     if let Some(c) = text
         .chars()

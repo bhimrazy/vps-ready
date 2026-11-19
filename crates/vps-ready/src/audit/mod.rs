@@ -11,7 +11,7 @@ use std::net::IpAddr;
 
 use serde::{Deserialize, Serialize};
 
-use crate::facts::network::{Interface, interface_with};
+use crate::facts::network::{Interface, WireguardDir, interface_with};
 use crate::facts::ssh::MatchOverride;
 use crate::facts::sysctl::Ipv4Conf;
 use crate::facts::{
@@ -144,6 +144,11 @@ pub enum Check {
     /// The kernel has AppArmor enabled. Debian and Ubuntu only so far;
     /// skipped elsewhere and inside a container.
     Apparmor,
+    /// Every regular file in `/etc/wireguard` is owned by root and has no
+    /// group or other permission bits: its configs and keys hold private
+    /// keys. From metadata only, never the contents; skipped without
+    /// `/etc/wireguard`.
+    WireguardKeyFiles,
     /// Every interface filters packets by reverse path: the larger of
     /// `net.ipv4.conf.all.rp_filter` and the interface's own is 1 (strict)
     /// or 2 (loose). Like the next two, it also checks `default`, the values
@@ -226,6 +231,7 @@ impl Finding {
                 | Check::ExposedListeners
                 | Check::SshPrivateOnly
                 | Check::Apparmor
+                | Check::WireguardKeyFiles
                 | Check::ReversePathFilter
                 | Check::IcmpRedirectsIgnored
                 | Check::IcmpRedirectsNotSent,
@@ -467,6 +473,7 @@ pub(crate) fn evaluate(check: &Check, facts: &Facts) -> Outcome {
                 }
             }
         }
+        Check::WireguardKeyFiles => wireguard_key_files(facts),
         Check::PublishedPorts => match &facts.firewall {
             Some(firewall) => match published_ports(firewall, facts.ipv6, facts.docker) {
                 // Docker with iptables-legacy publishes ports in rules that
@@ -987,6 +994,45 @@ fn exposed_listeners(facts: &Facts) -> (Outcome, Option<String>) {
     (outcome, Some(note))
 }
 
+/// NET-008: no file in `/etc/wireguard` is readable by anyone but root.
+fn wireguard_key_files(facts: &Facts) -> Outcome {
+    let files = match &facts.wireguard.dir {
+        WireguardDir::Missing => {
+            return Outcome::Skip {
+                reason: "/etc/wireguard does not exist".to_owned(),
+            };
+        }
+        WireguardDir::Unreadable => {
+            return Outcome::Unknown {
+                reason: "/etc/wireguard could not be read (it needs root)".to_owned(),
+            };
+        }
+        WireguardDir::Read { files, .. } => files,
+    };
+    let open: Vec<String> = files
+        .iter()
+        .filter(|f| f.uid != 0 || f.mode & 0o077 != 0)
+        .map(|f| {
+            format!(
+                "{} (mode {:04o}, uid {})",
+                f.path.display(),
+                f.mode & 0o7777,
+                f.uid
+            )
+        })
+        .collect();
+    if open.is_empty() {
+        Outcome::Pass
+    } else {
+        Outcome::Fail {
+            found: format!(
+                "readable by others than root: {}; `chown root:root` and `chmod 600` them",
+                open.join(", ")
+            ),
+        }
+    }
+}
+
 /// SSH-009: no SSH port is accepted on an interface other than a VPN's.
 fn ssh_private_only(facts: &Facts) -> Outcome {
     if let Some(found) = ssh_limited_to_missing(facts) {
@@ -1362,6 +1408,9 @@ mod tests {
                 // The captured hosts have no VPN; `evaluates_ssh_private_only` covers it.
                 Check::SshPrivateOnly => {}
                 Check::Apparmor => assert!(facts.apparmor.is_some(), "{}", c.id),
+                // The captured hosts have no WireGuard; `evaluates_wireguard_key_files` covers it.
+                Check::WireguardKeyFiles => {}
+
                 // The captured hosts are containers, which have no `reboot` fact.
                 Check::RebootRequired => {}
                 // The captured hosts are containers, which do not read
@@ -2127,9 +2176,9 @@ mod tests {
             .filter(|f| reads_proc_sys(&f.control.check))
             .count();
         assert!(sysctl_controls > 0);
-        // Plus MAC-001 and UPD-002 (in a container), FW-002 (no Docker) and
-        // SSH-009 (no VPN).
-        assert_eq!(report.summary.skipped, sysctl_controls + 4);
+        // Plus MAC-001 and UPD-002 (in a container), FW-002 (no Docker),
+        // SSH-009 (no VPN) and NET-008 (no /etc/wireguard).
+        assert_eq!(report.summary.skipped, sysctl_controls + 5);
         assert!(report.all_passed(), "{:?}", report.summary);
     }
 
@@ -2863,6 +2912,48 @@ udp UNCONN 0 0 [::1]:323 [::]:* users:((\"chronyd\",pid=400,fd=6))
     }
 
     #[test]
+    fn evaluates_wireguard_key_files() {
+        use crate::facts::{WireguardDir, WireguardFile};
+        let mut facts = host("debian-13", &[]);
+        let check = |facts: &Facts| evaluate(&Check::WireguardKeyFiles, facts);
+        assert_eq!(
+            check(&facts),
+            Outcome::Skip {
+                reason: "/etc/wireguard does not exist".into()
+            }
+        );
+        facts.wireguard.dir = WireguardDir::Unreadable;
+        assert!(matches!(check(&facts), Outcome::Unknown { .. }));
+        let file = |name: &str, uid, mode| WireguardFile {
+            path: format!("/etc/wireguard/{name}").into(),
+            uid,
+            mode,
+        };
+        facts.wireguard.dir = WireguardDir::Read {
+            files: vec![file("wg0.key", 0, 0o600), file("wg0.conf", 0, 0o400)],
+            wg0_managed: Some(true),
+        };
+        assert_eq!(check(&facts), Outcome::Pass);
+        facts.wireguard.dir = WireguardDir::Read {
+            files: vec![
+                file("wg0.key", 0, 0o600),
+                file("wg1.conf", 0, 0o644),
+                file("old.key", 1000, 0o600),
+            ],
+            wg0_managed: None,
+        };
+        assert_eq!(
+            check(&facts),
+            Outcome::Fail {
+                found: "readable by others than root: /etc/wireguard/wg1.conf (mode 0644, uid \
+                        0), /etc/wireguard/old.key (mode 0600, uid 1000); `chown root:root` and \
+                        `chmod 600` them"
+                    .into()
+            }
+        );
+    }
+
+    #[test]
     fn report_json_flattens_control_and_outcome() {
         let report = run(catalog().unwrap(), &host("debian-12", &[]));
         let json = serde_json::to_value(&report.findings[1]).unwrap();
@@ -2886,6 +2977,6 @@ udp UNCONN 0 0 [::1]:323 [::]:* users:((\"chronyd\",pid=400,fd=6))
             .filter(|f| reads_proc_sys(&f.control.check))
             .count();
         let summary = serde_json::to_value(report.summary).unwrap();
-        assert_eq!(summary["skipped"], sysctl_controls + 4);
+        assert_eq!(summary["skipped"], sysctl_controls + 5);
     }
 }
