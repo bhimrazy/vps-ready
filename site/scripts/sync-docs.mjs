@@ -45,7 +45,7 @@ const PAGES = {
     slug: 'project/m6-plan',
     label: 'Design notes: M6',
     order: 10,
-    note: 'This is the plan for the next release, v0.6.0. Nothing in it is built yet.',
+    note: 'This is the plan for the next release, v0.6.0. Waves 1 and 2 and the private profile are built; WireGuard and the wizard are in progress.',
   },
 };
 const DOCS_OUT = join(site, 'src/content/docs/docs');

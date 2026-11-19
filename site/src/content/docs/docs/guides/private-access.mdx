@@ -1,0 +1,276 @@
+---
+title: Private access
+description: Harden a server at first boot, reach SSH through Tailscale or another VPN, close public SSH safely, and get back in if the VPN stops working.
+sidebar:
+  label: Private access
+  order: 6
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+<Aside type="note" title="New in v0.6.0">
+`export cloud-init`, `apply --deadman=off`, the `net.tailscale` module, `ssh_via` in `firewall.inbound`, and the audit controls `FW-003` and `SSH-009`.
+</Aside>
+
+This guide takes a server from "never exposed" to "SSH only through a private network":
+
+1. **Harden it at first boot**, before anyone logs in, with `export cloud-init`.
+2. **Join a private network**, such as Tailscale, so you can reach the same SSH server over it.
+3. **Close public SSH** with `ssh_via`, applied from a login that already comes through the VPN.
+
+Each step works on its own. You can skip the first one on a server that is already running.
+
+## Harden at first boot
+
+`vps-ready export cloud-init` turns a profile into user-data that you paste into your provider's form when you create a server. At first boot it installs this version of vps-ready, checks the tarball's SHA-256, and applies the profile. It makes no network call where you run it.
+
+<Steps>
+
+1. **Download and verify `checksums.txt`** from the release that matches your `vps-ready version`, as in [Verify a release by hand](/docs/install/#verify-a-release-by-hand). The hashes in the user-data come from this file, so verify it first.
+
+2. **Write a profile that lists your SSH keys.** At first boot there is no SSH session to copy keys from.
+
+   ```toml
+   # vps-ready.toml
+   schema = 1
+   extends = "web"
+
+   [modules."user.admin"]
+   name = "admin"
+   authorized_keys = ["ssh-ed25519 AAAAC3Nza... me@laptop"]
+   ```
+
+3. **Export it.**
+
+   ```sh
+   vps-ready export cloud-init --profile vps-ready.toml --checksums checksums.txt > user-data.yaml
+   ```
+
+   Paste `user-data.yaml` into the provider's user-data (or cloud-init) field. It is plain `#cloud-config` and far below the usual 16 KB limit.
+
+4. **Keep the provider's firewall closed, and do not log in, until first boot finishes.** The image's own SSH settings apply for the first minute or so, until cloud-init's last stage runs. Any login during that time, including a provisioning tool that waits for SSH, makes the apply refuse `--deadman=off`.
+
+5. **Wait for first boot to finish without logging in.** Watch the server's console log in the provider's panel (often called the serial or boot log) for cloud-init's final message, `Cloud-init v. ... finished at ...`. The output of the apply comes just before it.
+
+6. **Open the provider's firewall for SSH, then check that it worked.**
+
+   ```sh
+   ssh admin@203.0.113.10
+   cloud-init status
+   sudo vps-ready history
+   ```
+
+   `cloud-init status` should say `done`, and `history` should show one transaction `applied (without the timer)`. Open any other ports only after this check.
+
+</Steps>
+
+The exported script runs `vps-ready apply --profile /etc/vps-ready/profile.toml --yes --deadman=off`. Nobody is logged in to confirm at first boot, so it applies without the [safety timer](/docs/guides/safety-net/). The checks that run before any change still apply: a sudo admin with a key exists before root and password logins are turned off, and the SSH port stays open.
+
+**If something fails** (a download, the hash, a login during first boot, the apply), the server keeps the image's defaults and is not hardened. `cloud-init status` then shows `error`, and `/var/log/cloud-init-output.log` says why. Fix the cause and create the server again.
+
+`export` refuses three kinds of profile:
+
+- **`user.admin` without `authorized_keys`.** Add your public keys to the profile.
+- **`net.tailscale` with `auth_key_file`.** Any process on the server can read user-data through the provider's metadata service, so it must not lead to a key. Leave the key out, and log in with `sudo tailscale up --accept-dns=false` after the first boot.
+- **`firewall.inbound` with an explicit `ssh_via`**, such as `"tailscale0"`. No SSH session can come through the VPN at first boot. Apply it later, from a session through the VPN.
+
+The [`private` profile](#the-private-profile) does export: its `ssh_via = "vpn"` stays in step 1 at first boot, with public SSH open.
+
+Flags and exit codes: [`export cloud-init`](/docs/reference/commands/#export-cloud-init).
+
+## Join a private network
+
+`ssh_via` works with any network interface the server has, so you can use the module below or set up a VPN yourself.
+
+### Tailscale
+
+Add `net.tailscale` to your profile. It installs Tailscale from Tailscale's own repository, keeps `tailscaled` running, and adds Tailscale to automatic updates. It opens no port: Tailscale needs none.
+
+```toml
+[modules."net.tailscale"]
+auth_key_file = "/root/tailscale-auth-key"   # optional
+```
+
+You can join the tailnet in one of two ways:
+
+- **With an auth key file.** Put the key in a file that only root can read, then apply:
+
+  ```sh
+  sudo sh -c 'umask 077; cat > /root/tailscale-auth-key'   # paste <auth key>, then Ctrl-D
+  sudo vps-ready apply --profile vps-ready.toml
+  ```
+
+  The file must be a regular file owned by root with mode `0600`, not a symlink, in directories only root can write to; otherwise the plan refuses it. `tailscale up` reads the file itself, so the key never shows up in the plan, the journal or the process list. Delete the file after the login: later applies use the node's own login.
+
+- **By hand.** Leave `auth_key_file` out. The apply installs and starts Tailscale, and the plan says to log in with:
+
+  ```sh
+  sudo tailscale up --accept-dns=false
+  ```
+
+Use a **tagged** key that is **not ephemeral**. A tagged node has key expiry off, and an ephemeral node is removed from the tailnet when it goes idle, for example during an outage. If your node's key does expire, `ssh_via` refuses to close public SSH until you turn off key expiry for this machine in the Tailscale admin console.
+
+vps-ready never turns on Tailscale SSH and never accepts the tailnet's DNS settings. A node you already logged in by hand is left as it is. More detail: [`net.tailscale`](/docs/guides/profiles-and-modules/#nettailscale-tailscale).
+
+{/* WireGuard (net.wireguard): its own section goes here, before "Another VPN". */}
+
+### Another VPN
+
+Any interface works: a `wg0` you set up with `wg-quick`, or the interface of another mesh VPN. Make sure it comes back after a reboot (for `wg0`, `sudo systemctl enable wg-quick@wg0`). For `tailscaled` and `wg-quick@<interface>`, vps-ready checks that; for other interfaces it cannot tell, and the plan says so.
+
+## Close public SSH
+
+`ssh_via` limits the firewall's SSH rule to one interface. Everything else in `firewall.inbound` stays the same, and the SSH server itself is not changed.
+
+<Steps>
+
+1. **First apply: the VPN and the firewall, without `ssh_via`.** Use your profile with the VPN module and `firewall.inbound`, then confirm as usual. Public SSH stays open. The firewall must be loaded before the next step, so that your public session is tracked as an established connection.
+
+2. **Log in through the VPN.** From your own computer, use the server's VPN address:
+
+   ```sh
+   ssh admin@100.64.0.7
+   ```
+
+3. **Add `ssh_via` and apply from that session.**
+
+   ```toml
+   [modules."firewall.inbound"]
+   allow = ["80/tcp", "443/tcp", "443/udp"]
+   ssh_via = "tailscale0"
+   ```
+
+   ```sh
+   sudo vps-ready apply --profile vps-ready.toml
+   ```
+
+   Read the notes in the plan. The last one says how to get back in from the provider's console. SSH ports listed in `allow` (the built-in profiles list `22/tcp`) are left out, with a note.
+
+4. **Confirm from a new login through the VPN.** `apply` prints the exact command, with the VPN address:
+
+   ```sh
+   ssh -t -o ControlPath=none -p 22 admin@100.64.0.7 sudo vps-ready confirm
+   ```
+
+   If nobody confirms in time, the safety timer rolls back and public SSH opens again.
+
+5. **Check the result.**
+
+   ```sh
+   sudo vps-ready audit --all
+   ```
+
+   `SSH-009` should pass, and `FW-003` lists what the internet can still reach. See [Check it with audit](#check-it-with-audit).
+
+</Steps>
+
+### The private profile
+
+The built-in [`private` profile](/docs/guides/profiles-and-modules/#the-private-profile) does both applies with one file. Extend it with one VPN module and your keys, then run the same command twice: first from a public SSH login (or at first boot from `export cloud-init`), then from a login through the VPN.
+
+```toml
+schema = 1
+extends = "private"
+
+[modules."user.admin"]
+authorized_keys = ["ssh-ed25519 AAAAC3Nza... me@laptop"]
+
+[modules."net.tailscale"]
+```
+
+```sh
+sudo vps-ready apply --profile private.toml
+```
+
+The first apply sets up the VPN and keeps SSH public, with the note "step 1 of 2: SSH stays public until you apply this profile again from a login through tailscale0". The second, from a session through the VPN, closes public SSH with the same checks, timer and confirm as the steps above. It has an empty `allow`: add `"80/tcp", "443/tcp", "443/udp"` for a web app.
+
+### Why the second apply must come through the VPN
+
+After `ssh_via`, a broken VPN means no SSH at all. So vps-ready closes public SSH only when the private path has already carried a real login: yours. The confirm then proves that a **new** login through the VPN works under the new rules. It does not prove that public SSH is closed; the check after apply does that, by reading the firewall back.
+
+### What it refuses
+
+The plan refuses `ssh_via` when:
+
+- the interface does not exist, is down, or has no address;
+- you are not in an SSH session (the console, cloud-init);
+- your session did not come in through the interface. The message gives the command to use, for example `ssh -t admin@100.64.0.7 sudo vps-ready apply ...`. With the `private` profile's `ssh_via = "vpn"`, this is the step 1 note instead, and SSH stays public;
+- your session comes from the server itself (a login to its own VPN address goes over loopback);
+- the unit that brings the interface up at boot (`tailscaled` or `wg-quick@<interface>`) is not enabled;
+- the Tailscale node's key expires, Tailscale is not running, or its state is unknown;
+- the interface is loopback, a bridge for local containers or guests (`docker0`, `br-*`, `virbr*`, `lxcbr*`, `podman*`, `cni*`, `veth*`), or holds the server's default route;
+- you pass `--deadman=off`.
+
+When the loaded firewall already limits SSH to the same interface and SSH ports, all but the last two become notes. That way an apply from the console still works while the VPN is down.
+
+### The confirm through the VPN
+
+`confirm` adds one rule to the [usual ones](/docs/guides/safety-net/#what-counts-as-a-new-login): the new login must connect to an address of the `ssh_via` interface. A login to the public address is refused:
+
+```text
+error: this SSH login connected to 203.0.113.10, which is not an address of tailscale0; log in through tailscale0: `ssh -t -o ControlPath=none -p 22 admin@100.64.0.7 sudo vps-ready confirm`
+```
+
+### Later changes
+
+While SSH depends on the VPN, any change to it is as risky as closing public SSH:
+
+- A change that `net.tailscale` plans arms the safety timer and needs a confirm through Tailscale.
+- Every change that arms the timer needs a confirm through the VPN, unless the change removes `ssh_via`. One applied from the console while the VPN is down rolls back at its deadline.
+- `--deadman=off` is refused when the plan arms the timer.
+- An apply without `ssh_via` opens public SSH again, behind the timer like any firewall change.
+
+## Check it with audit
+
+Two controls show the result. Both are low severity and have no automatic fix.
+
+- **`FW-003` Only expected ports are open to the internet.** It lists every port the server's firewall lets in from outside, with its process. It fails only on ports other than SSH, 80 and 443, the DHCP clients and WireGuard. Ports open only on a VPN or a Docker bridge do not count. It cannot see a firewall at your provider.
+- **`SSH-009` SSH reachable only through a private network.** It passes when the firewall drops by default and accepts SSH only on a VPN interface. It is skipped on servers without a VPN interface. It fails when SSH is limited to an interface that is missing or down, and whenever a VPN interface exists but SSH is still accepted elsewhere: after step 1 (VPN joined, SSH public), that failure is expected and clears after the close step. When SSH is limited to Tailscale, it carries a warning when the node's key expires (with the date), when Tailscale is not running, or when its state is unknown. `detect` shows the same warning.
+
+Full list: [Security controls](/docs/reference/security-controls/).
+
+## If the VPN stops working
+
+With `ssh_via`, a broken VPN closes SSH. Plan your way back in before you need it.
+
+<Steps>
+
+1. **Set a password for a sudo user** before you close public SSH:
+
+   ```sh
+   sudo passwd admin
+   ```
+
+   The provider's web console logs in with a password. The SSH server still refuses passwords. Without one, recovery needs the provider's rescue mode.
+
+2. **Log in from the provider's web console and roll back the `ssh_via` change**, by its ID. This reopens public SSH, and the firewall stays loaded:
+
+   ```sh
+   sudo vps-ready history
+   sudo vps-ready rollback --txn <id>
+   ```
+
+3. **If the rollback refuses**, remove `ssh_via` from your profile (or switch to one without it) and apply from the console. The plan reopens public SSH behind the safety timer, and you confirm from a new public login, not through the VPN:
+
+   ```sh
+   sudo vps-ready apply --profile vps-ready.toml
+   ssh -t -o ControlPath=none -p 22 admin@203.0.113.10 sudo vps-ready confirm   # from your computer
+   ```
+
+4. **Last resort: stop the firewall.** This drops every rule until the next boot. Load it again as soon as SSH works:
+
+   ```sh
+   sudo systemctl stop vps-ready-firewall
+   # roll back or apply as above, then:
+   sudo systemctl start vps-ready-firewall
+   ```
+
+</Steps>
+
+A manual rollback can refuse while SSH depends on the VPN:
+
+- **It would limit SSH to the VPN again**, with no timer to undo it. Run it from an SSH login through the VPN, from another machine.
+- **It would stop `tailscaled` or take the node off the tailnet** while SSH depends on Tailscale. Remove `ssh_via` first, or roll back the transaction that set it.
+- **It would cut your own session**, which comes through Tailscale. Run it from the console or a public SSH login.
+
+More ways back in: [Undo changes and recover](/docs/guides/undo-and-recover/#locked-out).

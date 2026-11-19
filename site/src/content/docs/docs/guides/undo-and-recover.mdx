@@ -58,6 +58,7 @@ A manual rollback is all or nothing, so it refuses (exit code 2) rather than und
 - **A file changed since `apply`.** vps-ready will not overwrite an edit you made after it. Put the file back, or undo your edit, and run it again.
 - **It would remove your own account.** You cannot roll back the admin user while you are logged in as that user. Log in as another user with sudo.
 - **A later apply depends on it.** An admin user cannot be removed while a later transaction is applied, confirmed or waiting, since that one may have turned off root and password logins. Roll back the later one first.
+- **SSH depends on a VPN (`ssh_via`).** A rollback that would limit SSH to the VPN again runs only from an SSH login through the VPN, from another machine, since no timer covers it. One that would stop `tailscaled` or take the node off the tailnet is refused while SSH or your own session depends on Tailscale. The message says which path to use. See [Private access](/docs/guides/private-access/#if-the-vpn-stops-working).
 
 If a rollback starts but cannot finish, it exits 3 and says what is left to do by hand, for example when `userdel` fails because the admin user still has processes running.
 
@@ -87,7 +88,16 @@ First, breathe: if you just ran `apply` with a profile and have not confirmed ye
 
 3. **Reboot from your provider's control panel.** If the change has not been confirmed, a reboot rolls it back before the SSH server starts. After a confirm, a reboot changes nothing: the changes are kept.
 
-4. **Use your provider's web console** (or serial console). It logs in locally, without SSH or the firewall. Run `sudo vps-ready rollback --last` there. The console cannot confirm a change, but it can always roll one back. If SSH is limited to a VPN (`ssh_via`) and the VPN is down, `sudo systemctl stop vps-ready-firewall` opens everything until the next boot; `sudo vps-ready rollback --txn <id>` (see `sudo vps-ready history`) undoes the `ssh_via` change for good. The console needs a password: set one for a sudo user (`sudo passwd admin`) before you close public SSH.
+4. **Use your provider's web console** (or serial console). It logs in locally, without SSH or the firewall. Run `sudo vps-ready rollback --last` there. The console cannot confirm a change, but it can roll one back. The console needs a password: set one for a sudo user (`sudo passwd admin`) before you close public SSH.
+
+   **If SSH goes only through a VPN** (`ssh_via`) and the VPN is down, roll back the `ssh_via` change by its ID. This reopens public SSH and keeps the firewall loaded:
+
+   ```sh
+   sudo vps-ready history
+   sudo vps-ready rollback --txn <id>
+   ```
+
+   If the rollback refuses, remove `ssh_via` from your profile, apply from the console, and confirm from a new public login. Stopping the firewall (`sudo systemctl stop vps-ready-firewall`) is the last resort: it drops every rule until the next boot, so run `sudo systemctl start vps-ready-firewall` once you are back in. From the console while the VPN is down, a change that arms the safety timer cannot be confirmed and rolls back at its deadline, unless the change removes `ssh_via`. Details: [Private access](/docs/guides/private-access/#if-the-vpn-stops-working).
 
 5. **Last resort: the provider's rescue system.** Each transaction keeps what it wrote and the original files in `/var/lib/vps-ready/txn/<id>/`: `journal.jsonl` lists every change, and `files/<n>.before` holds the original bytes, so you can put files back by hand from a mounted disk.
 
