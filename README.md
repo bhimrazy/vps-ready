@@ -100,7 +100,7 @@ Hardening is grouped into modules:
 |---|---|---|---|
 | `user.admin` | A login user other than root, with your SSH keys (copied from the account you logged in with, or given in a profile) and sudo | needed before root login is turned off | yes |
 | `ssh.server` | One drop-in, `/etc/ssh/sshd_config.d/00-vps-ready.conf`, that turns off root and password logins and the other failing settings; reloads sshd. The port stays 22 | `SSH-001` to `SSH-007` | yes |
-| `firewall.inbound` | Drops unsolicited inbound traffic in vps-ready's own nftables table, always allowing every current SSH port; Docker's and fail2ban's rules stay untouched | `FW-001` | yes |
+| `firewall.inbound` | Drops unsolicited inbound traffic in vps-ready's own nftables table, always allowing every current SSH port; Docker's and fail2ban's rules stay untouched. A port you add to `allow` that a service listens on fails `FW-003` (low) by design, so every open port stays visible | `FW-001` | yes |
 | `ssh.bruteforce` | fail2ban's `sshd` jail, reading the journal and banning in nftables | `SSH-008` | no |
 | `kernel.sysctl` | Safer kernel and network settings | `KRN-*`, `NET-*` | no |
 | `updates.auto` | Automatic security updates with `unattended-upgrades` | `UPD-001` | no |
