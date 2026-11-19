@@ -344,14 +344,15 @@ fn wireguard_dir(fs: &dyn Fs, notices: &mut Vec<String>) -> WireguardDir {
 }
 
 /// Whether a WireGuard config has a `PrivateKey` line, as `wg` reads keys:
-/// case-insensitive, spaces allowed.
+/// whitespace dropped, case-insensitive (`Private Key =` counts).
 #[must_use]
 pub fn private_key_line(config: &[u8]) -> bool {
     String::from_utf8_lossy(config).lines().any(|line| {
-        let line = line.trim_start();
-        line.len() >= 10
-            && line.as_bytes()[..10].eq_ignore_ascii_case(b"privatekey")
-            && line[10..].trim_start().starts_with('=')
+        let Some((name, _)) = line.split_once('=') else {
+            return false;
+        };
+        let name: String = name.chars().filter(|c| !c.is_whitespace()).collect();
+        name.eq_ignore_ascii_case("privatekey")
     })
 }
 

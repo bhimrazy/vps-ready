@@ -591,8 +591,9 @@ private_access_cycle() {
   ! vm sudo wg show wg0 peers | grep -qx "$phone_pub" || die "the dead-man left the second peer on wg0"
   [ "$(vm sudo wg show wg0 public-key)" = "$vm_pub" ] || die "the dead-man rollback changed wg0's key"
 
-  # Confirmed: a session through wg0 opened before the apply stays up.
-  vm 'sleep 600' >/dev/null 2>&1 &
+  # Confirmed: a session through wg0 opened before the apply stays up and
+  # keeps carrying data (a line a second).
+  vm 'while sleep 1; do echo tick; done' >"$tmp/ticks" 2>&1 &
   old_pid=$!
   vm sudo vps-ready apply --yes --profile /tmp/wg2.toml --deadman 2m </dev/null >"$tmp/apply.out" 2>&1 &
   apply_pid=$!
@@ -605,6 +606,10 @@ private_access_cycle() {
   rc=0; wait "$apply_pid" || rc=$?
   [ "$rc" -eq 0 ] || { cat "$tmp/apply.out"; die "the peer apply exited $rc, expected 0"; }
   kill -0 "$old_pid" 2>/dev/null || die "the wg0 session did not survive the peer change"
+  before=$(wc -l <"$tmp/ticks")
+  sleep 25
+  after=$(wc -l <"$tmp/ticks")
+  [ "$after" -gt "$before" ] || die "the wg0 session stopped carrying data after the peer change"
   kill "$old_pid" 2>/dev/null || true
   # Moving this session's own peer is refused.
   laptop4="{ name = \"laptop\", public_key = \"$runner_pub\", host = 4 }"

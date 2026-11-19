@@ -203,7 +203,14 @@ impl Ruleset {
         if let Some(via) = wg_via
             && runtime_port_counts(cx.facts, via, managed)
         {
-            ports.extend(cx.facts.wireguard.listen_ports.get(via));
+            match cx.facts.wireguard.listen_ports.get(via) {
+                Some(port) => {
+                    ports.insert(*port);
+                }
+                // Unknown now (`wg show` failed): keep what the loaded
+                // ruleset accepts, so a re-apply does not drop it.
+                None => ports.extend(loaded_wireguard_ports(cx.planned, sys)?),
+            }
         }
         ruleset.wireguard = ports
             .into_iter()
@@ -241,18 +248,79 @@ fn unknown_port(
     {
         return Ok(None);
     }
-    let why = format!(
+    let unread = format!(
         "{via} is a WireGuard interface whose listen port vps-ready cannot read (`wg show all \
-         listen-port` failed), so this firewall accepts it only if `allow` lists it"
+         listen-port` failed)"
     );
+    if !model.wireguard.is_empty() {
+        let kept: Vec<String> = model.wireguard.iter().map(u16::to_string).collect();
+        return Ok(Some(format!(
+            "{unread}; the WireGuard UDP ports the loaded ruleset accepts stay accepted: {}",
+            kept.join(", ")
+        )));
+    }
+    let why = format!("{unread}, so this firewall accepts it only if `allow` lists it");
     if model.udp.is_empty() && model.ssh_via.is_some() && !same {
         return refuse(&format!(
             "{why}: add it, e.g. allow = [\"51820/udp\"], or SSH through {via} stops"
         ));
     }
-    Ok(Some(format!(
-        "{why}: make sure its port is in `allow` (\"<port>/udp\")"
-    )))
+    let listed: Vec<String> = model.udp.iter().map(|p| format!("{p}/udp")).collect();
+    Ok(Some(if listed.is_empty() {
+        format!("{why}: add its port, e.g. allow = [\"51820/udp\"]")
+    } else {
+        format!(
+            "{why}: make sure its port is among those `allow` lists ({})",
+            listed.join(", ")
+        )
+    }))
+}
+
+/// The ports of the WireGuard line of the ruleset in `planned`, else the
+/// one on disk, as `templates/firewall.nft` renders it.
+fn loaded_wireguard_ports(planned: &[Resource], sys: Sys) -> Result<Vec<u16>, ModuleError> {
+    let Some(text) = ruleset_text(planned, sys)? else {
+        return Ok(Vec::new());
+    };
+    Ok(wireguard_ports_of(&text))
+}
+
+/// The ports of the `udp dport { ... } accept` line after the WireGuard
+/// comment of `templates/firewall.nft`.
+fn wireguard_ports_of(ruleset: &str) -> Vec<u16> {
+    let mut lines = ruleset.lines().map(str::trim);
+    while let Some(line) = lines.next() {
+        if !line.starts_with(WIREGUARD_COMMENT) {
+            continue;
+        }
+        return lines
+            .find_map(|l| l.strip_prefix("udp dport {")?.strip_suffix("} accept"))
+            .into_iter()
+            .flat_map(|ports| ports.split(','))
+            .filter_map(|p| p.trim().parse().ok())
+            .collect();
+    }
+    Vec::new()
+}
+
+/// The comment above the WireGuard line in `templates/firewall.nft`.
+const WIREGUARD_COMMENT: &str = "# WireGuard, which SSH may depend on.";
+
+/// Whether the ruleset on disk accepts UDP `port` from anywhere.
+///
+/// # Errors
+///
+/// Reading the ruleset on disk.
+pub(crate) fn accepts_udp(sys: Sys, port: u16) -> Result<bool, ModuleError> {
+    let Some(text) = ruleset_text(&[], sys)? else {
+        return Ok(false);
+    };
+    Ok(text.lines().any(|l| {
+        l.trim()
+            .strip_prefix("udp dport {")
+            .and_then(|r| r.strip_suffix("} accept"))
+            .is_some_and(|ports| ports.split(',').any(|p| p.trim().parse() == Ok(port)))
+    }))
 }
 
 /// The WireGuard interfaces whose ports this ruleset does not accept, which

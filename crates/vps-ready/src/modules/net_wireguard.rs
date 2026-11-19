@@ -740,8 +740,8 @@ fn server_public_key(sys: Sys) -> Result<Option<String>, ModuleError> {
     Ok((out.ok() && is_key(&key)).then_some(key))
 }
 
-/// Who opens the port. `firewall.inbound` comes after this module, so its
-/// ruleset is known here only once it is on disk.
+/// Who opens the port. `firewall.inbound` comes after this module, so only
+/// the ruleset on disk is known here.
 fn firewall_note(facts: &Facts, port: u16, sys: Sys) -> Result<String, ModuleError> {
     Ok(if facts.firewall_tools.ufw == Some(true) {
         format!("ufw is active: open UDP {port} there (`sudo ufw allow {port}/udp`)")
@@ -750,12 +750,12 @@ fn firewall_note(facts: &Facts, port: u16, sys: Sys) -> Result<String, ModuleErr
             "firewalld is running: open UDP {port} there (`sudo firewall-cmd --permanent \
              --add-port={port}/udp`)"
         )
-    } else if sys.fs.exists(Path::new(firewall_inbound::RULESET)) {
+    } else if firewall_inbound::accepts_udp(sys, port)? {
         format!("firewall.inbound accepts UDP {port} for it")
     } else {
         format!(
-            "firewall.inbound accepts UDP {port} for it when it is applied; another firewall \
-             needs the port opened"
+            "firewall.inbound accepts UDP {port} once it is applied; another firewall needs the \
+             port opened"
         )
     })
 }

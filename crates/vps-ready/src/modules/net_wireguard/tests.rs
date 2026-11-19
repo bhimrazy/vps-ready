@@ -1648,7 +1648,12 @@ fn a_private_key_added_to_wg0_conf_is_never_diffed_or_copied() {
     };
     assert_eq!(managed_port(&[], sys).unwrap(), None);
     assert_eq!(parse_conf(&leaked), None);
-    for line in ["PrivateKey = x", "  privateKEY=x", "PrivateKey\t= x"] {
+    for line in [
+        "PrivateKey = x",
+        "  privateKEY=x",
+        "PrivateKey\t= x",
+        "Private Key = x",
+    ] {
         assert!(private_key_line(line.as_bytes()), "{line}");
     }
     assert!(!private_key_line(

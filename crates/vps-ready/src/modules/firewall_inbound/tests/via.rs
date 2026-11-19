@@ -789,7 +789,7 @@ fn an_unknown_wireguard_port_under_ssh_via() {
         steps
             .notes
             .iter()
-            .any(|n| n.contains("make sure its port is in `allow`")),
+            .any(|n| n.contains("make sure its port is among those `allow` lists (51820/udp)")),
         "{:?}",
         steps.notes
     );
@@ -855,4 +855,53 @@ fn the_managed_wg0_port_replaces_the_running_one() {
     let text = ruleset_of(&steps);
     assert!(text.contains("udp dport { 51821 } accept"), "{text}");
     assert!(!text.contains("51820"), "{text}");
+}
+
+/// The same `ssh_via` rule loaded with the interface's UDP port, and the
+/// port unknown now (`wg show` failed): the port the loaded ruleset accepts
+/// stays, so the ruleset does not change.
+#[test]
+fn a_loaded_wireguard_port_is_kept_when_the_port_is_unknown() {
+    let mut facts = via_facts("10.77.0.1:22");
+    let params = params("ssh_via = \"wg0\"");
+    let on = units("enabled");
+    let plan = |facts: &Facts, fs: &FakeFs| {
+        FirewallInbound
+            .plan(
+                &PlanCx {
+                    facts,
+                    params: &params,
+                    planned: &[],
+                },
+                Sys { fs, runner: &on },
+            )
+            .unwrap()
+    };
+    let known = plan(&facts, &wg_fs(None));
+    let loaded = ruleset_of(&known);
+    assert!(loaded.contains("udp dport { 51820 } accept"), "{loaded}");
+    let fs = wg_fs(Some(&loaded));
+    facts.wireguard.listen_ports.clear();
+    let unknown = plan(&facts, &fs);
+    assert_eq!(ruleset_of(&unknown), loaded);
+    let file = unknown
+        .resources
+        .iter()
+        .find(|r| r.id() == format!("file:{RULESET}"))
+        .unwrap();
+    let runner = FakeRunner::new();
+    assert_eq!(
+        file.diff(Sys {
+            fs: &fs,
+            runner: &runner
+        })
+        .unwrap(),
+        None
+    );
+    assert!(
+        unknown.notes.iter().any(|n| n
+            .ends_with("the WireGuard UDP ports the loaded ruleset accepts stay accepted: 51820")),
+        "{:?}",
+        unknown.notes
+    );
 }

@@ -40,5 +40,5 @@ modules:
     notes:
       - "for admin access to this host only: peers reach its tunnel address and nothing else, with no forwarding, routes or NAT"
       - "rollback keeps the generated key /etc/wireguard/wg0.key, so client configs made meanwhile keep working; `sudo rm /etc/wireguard/wg0.key` and apply again to make a new one"
-      - firewall.inbound accepts UDP 51820 for it when it is applied; another firewall needs the port opened
+      - firewall.inbound accepts UDP 51820 once it is applied; another firewall needs the port opened
       - "after apply, `sudo vps-ready wireguard-config [PEER]` prints each peer's client config"
