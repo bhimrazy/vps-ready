@@ -4,7 +4,7 @@
 
 use std::io::{BufRead, Write};
 use std::net::IpAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::bail;
 
@@ -13,7 +13,7 @@ use super::export::{self, Refusal};
 use super::{EXIT_INTERRUPTED, wrap};
 use crate::VERSION_INFO;
 use crate::audit::{self, Outcome, Severity};
-use crate::config::{Profile, ProfileBuilder};
+use crate::config::{Profile, ProfileBuilder, ProfileError, STAGED_VIA, VPNS};
 use crate::engine::CADDYFILE;
 use crate::engine::{self, Engine, EngineError, StateDir};
 use crate::facts::{Facts, OsFamily, Proto, Virt};
@@ -23,11 +23,18 @@ use crate::modules::user_admin::{self, SessionKeys};
 use crate::modules::{Applicability, Module, ModuleError};
 use crate::resource::ResourceError;
 use crate::resource::authorized_keys::is_plain_key;
-use crate::sys::FileOwner;
+use crate::sys::{FileKind, FileOwner, Fs, SysError};
 use crate::tui::{Item, Prompt, PromptError};
 
 /// Where the answers are saved, in the current directory.
 const SAVE_AS: &str = "vps-ready.toml";
+
+/// A pasted Tailscale auth key, for one apply. `/run` is a tmpfs, so the
+/// key never reaches the disk.
+const AUTH_KEY_FILE: &str = "/run/vps-ready/tailscale-auth-key";
+
+/// What the private profile opens when `deploy.proxy` serves a site.
+const WEB_PORTS: [&str; 3] = ["80/tcp", "443/tcp", "443/udp"];
 
 /// Runs the wizard. `cwd` is where the answers are saved; `stdin` gives the
 /// terminal for apply's own question, called after the last of `prompt`'s.
@@ -42,25 +49,45 @@ pub(super) fn run<R: BufRead>(
     start_checks(host)?;
     let facts = (host.facts)(host.sys)?;
     header(&facts, out)?;
-    let (builder, picked) = match ask(host, &facts, prompt, out) {
+    if let Some(step) = step_two(host, &facts, cwd) {
+        match ask_step_two(&facts, &step, prompt, out) {
+            Err(e) if interrupted(&e) => {
+                writeln!(out, "Nothing was changed.")?;
+                return Ok(EXIT_INTERRUPTED);
+            }
+            Ok(true) => return run_step_two(host, &facts, &step, &mut stdin(), out, err),
+            Ok(false) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    let Answers {
+        builder,
+        picked,
+        auth_key,
+    } = match ask(host, &facts, prompt, out) {
         Err(e) if interrupted(&e) => {
             writeln!(out, "Nothing was changed.")?;
             return Ok(EXIT_INTERRUPTED);
         }
         answers => answers?,
     };
-    let profile = builder.build(host.modules)?;
+    // The key goes only into the profile applied now, never the saved one.
+    let mut applied = builder.clone();
+    let _key_file = match auth_key {
+        Some(key) => {
+            let file = KeyFile::write(host.sys.fs, &key)?;
+            applied.set_params(
+                "net.tailscale",
+                toml::Table::from_iter([("auth_key_file".to_owned(), AUTH_KEY_FILE.into())]),
+            );
+            Some(file)
+        }
+        None => None,
+    };
+    let profile = applied.build(host.modules)?;
     if arms_timer(host, &facts, &profile) {
-        let minutes = engine::deadman::DEFAULT_WINDOW.as_secs() / 60;
-        writeln!(out)?;
-        say(
-            out,
-            "",
-            &format!(
-                "After you apply, you have {minutes} minutes to log in from a new terminal \
-                 and confirm. If you don't, every change is undone."
-            ),
-        )?;
+        let loaded = firewall_inbound::ssh_via(&[], host.sys).ok().flatten();
+        timer_note(out, loaded.as_deref())?;
     }
     writeln!(out)?;
     let mut input = stdin();
@@ -82,13 +109,223 @@ pub(super) fn run<R: BufRead>(
         Applied::Nothing if picked => writeln!(out, "\nNothing to do with the modules you chose.")?,
         Applied::Nothing => writeln!(out, "\nNothing to do: this server already matches.")?,
     }
-    match next_time(host, &builder, prompt, cwd, out) {
+    let name = match next_time(host, &builder, prompt, cwd, out) {
         Err(e) if interrupted(&e) => {
             writeln!(out, "Not saved.")?;
-            Ok(EXIT_INTERRUPTED)
+            return Ok(EXIT_INTERRUPTED);
         }
-        done => done.map(|()| 0),
+        name => name?,
+    };
+    step_one_done(host, &builder, &name, out)?;
+    Ok(0)
+}
+
+/// What the wizard says before an apply that arms the safety timer; `via`
+/// when the confirm must come through that interface.
+fn timer_note(out: &mut dyn Write, via: Option<&str>) -> std::io::Result<()> {
+    let minutes = engine::deadman::DEFAULT_WINDOW.as_secs() / 60;
+    let through = via.map(|v| format!(" through {v}")).unwrap_or_default();
+    writeln!(out)?;
+    say(
+        out,
+        "",
+        &format!(
+            "After you apply, you have {minutes} minutes to log in{through} from a new \
+             terminal and confirm. If you don't, every change is undone."
+        ),
+    )
+}
+
+/// [`AUTH_KEY_FILE`] while it exists: dropping it removes the file, so it
+/// goes whether the apply succeeded or not.
+struct KeyFile<'a> {
+    fs: &'a dyn Fs,
+}
+
+impl<'a> KeyFile<'a> {
+    /// Writes `key` to [`AUTH_KEY_FILE`], root's with mode 0600, in a
+    /// directory only root can write to, as `net.tailscale` requires.
+    fn write(fs: &'a dyn Fs, key: &str) -> anyhow::Result<Self> {
+        let path = Path::new(AUTH_KEY_FILE);
+        let Some(dir) = path.parent() else {
+            bail!("{AUTH_KEY_FILE} has no directory");
+        };
+        let root = |mode| FileOwner {
+            mode,
+            uid: 0,
+            gid: 0,
+        };
+        if !fs.exists(dir) {
+            fs.create_dir(dir, root(0o700))?;
+        }
+        let meta = fs.metadata(dir)?;
+        if meta.kind != FileKind::Dir || meta.uid != 0 || meta.mode & 0o022 != 0 {
+            bail!(
+                "{} is not a directory only root can write to, so the auth key is not \
+                 written there",
+                dir.display()
+            );
+        }
+        // Through a temp file created with O_EXCL and mode 0600.
+        fs.write_atomic(path, key.as_bytes(), root(0o600))?;
+        Ok(Self { fs })
     }
+}
+
+impl Drop for KeyFile<'_> {
+    fn drop(&mut self) {
+        match self.fs.remove(Path::new(AUTH_KEY_FILE)) {
+            Ok(()) | Err(SysError::NotFound(_)) => {}
+            Err(e) => tracing::warn!("removing {AUTH_KEY_FILE}: {e}; delete it yourself"),
+        }
+    }
+}
+
+/// The private profile's `ssh_via` before it takes effect: its interface.
+fn staged_via(profile: &Profile) -> Option<&str> {
+    profile
+        .params("firewall.inbound")?
+        .get("ssh_via")?
+        .as_str()?
+        .strip_prefix(STAGED_VIA)
+}
+
+/// The private profile saved here, in step 1 of 2.
+struct StepTwo {
+    path: PathBuf,
+    profile: Profile,
+    /// The interface SSH is to be limited to.
+    via: String,
+}
+
+/// [`SAVE_AS`] in `cwd` when it is root's, holds the private profile in
+/// step 1, and this is a login through its VPN: step 2 can run.
+fn step_two(host: &Host, facts: &Facts, cwd: &Path) -> Option<StepTwo> {
+    let path = cwd.join(SAVE_AS);
+    let (bytes, meta) = host.sys.fs.read_nofollow(&path).ok()?;
+    // A file someone else can write is not offered as root's next step.
+    if meta.uid != 0 || meta.mode & 0o022 != 0 {
+        return None;
+    }
+    let profile = Profile::parse(std::str::from_utf8(&bytes).ok()?, host.modules).ok()?;
+    let via = staged_via(&profile)?.to_owned();
+    let loaded = firewall_inbound::ssh_via(&[], host.sys).ok().flatten();
+    if !firewall_inbound::through(facts, &via) || loaded.as_deref() == Some(via.as_str()) {
+        return None;
+    }
+    Some(StepTwo { path, profile, via })
+}
+
+/// Whether to run step 2, with the console note first.
+fn ask_step_two(
+    facts: &Facts,
+    step: &StepTwo,
+    prompt: &mut dyn Prompt,
+    out: &mut dyn Write,
+) -> anyhow::Result<bool> {
+    let StepTwo { path, via, .. } = step;
+    say(
+        out,
+        "",
+        &format!(
+            "{} is in step 1 of 2, and this login comes through {via}.",
+            path.display()
+        ),
+    )?;
+    let mut note = firewall_inbound::console(facts, via);
+    if let Some(first) = note.get_mut(..1) {
+        first.make_ascii_uppercase();
+    }
+    say(out, "  ", &format!("{note}."))?;
+    Ok(prompt.confirm(
+        &format!("Apply step 2: accept SSH only through {via}?"),
+        false,
+    )?)
+}
+
+/// Applies step 2 as `apply --profile` would; returns the exit code.
+fn run_step_two(
+    host: &Host,
+    facts: &Facts,
+    step: &StepTwo,
+    input: &mut dyn BufRead,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> anyhow::Result<u8> {
+    if arms_timer(host, facts, &step.profile) {
+        timer_note(out, Some(&step.via))?;
+    }
+    writeln!(out)?;
+    let applied = change::apply_profile(
+        host,
+        Some(step.profile.clone()),
+        &Selection::default(),
+        false,
+        Some(engine::deadman::DEFAULT_WINDOW),
+        Some(input),
+        out,
+        err,
+    )?;
+    match applied {
+        Applied::Declined => return Ok(0),
+        Applied::Ran(code) if code != 0 => return Ok(code),
+        Applied::Ran(_) => {}
+        Applied::Nothing => writeln!(out, "\nNothing to do: this server already matches.")?,
+    }
+    writeln!(
+        out,
+        "\nNext time, without questions:\n  sudo vps-ready apply --profile {}",
+        step.path.display()
+    )?;
+    Ok(0)
+}
+
+/// After step 1 of the private profile, the login through the VPN that
+/// runs step 2. `name` is the profile as `--profile` takes it.
+fn step_one_done(
+    host: &Host,
+    builder: &ProfileBuilder,
+    name: &str,
+    out: &mut dyn Write,
+) -> anyhow::Result<()> {
+    let profile = builder.build(host.modules)?;
+    let Some(via) = staged_via(&profile) else {
+        return Ok(());
+    };
+    // The VPN came up only in this apply.
+    let facts = (host.facts)(host.sys)?;
+    if firewall_inbound::through(&facts, via) {
+        return Ok(());
+    }
+    let user = profile
+        .params("user.admin")
+        .and_then(|p| p.get("name"))
+        .and_then(toml::Value::as_str)
+        .unwrap_or(user_admin::DEFAULT_NAME);
+    let to = firewall_inbound::address(&facts, via)
+        .map_or_else(|| format!("<address of {via}>"), |ip| ip.to_string());
+    writeln!(out)?;
+    say(
+        out,
+        "",
+        &format!(
+            "Step 2 of 2: SSH is still open to the internet. To close it, log in through \
+             {via} and apply the same profile again:"
+        ),
+    )?;
+    if profile.params("net.wireguard").is_some() {
+        say(
+            out,
+            "  ",
+            "First add this server to your device: `sudo vps-ready wireguard-config` \
+             prints its client config.",
+        )?;
+    }
+    writeln!(
+        out,
+        "  ssh -t {user}@{to} sudo vps-ready apply --profile {name}"
+    )?;
+    Ok(())
 }
 
 /// Whether `profile` runs a module that arms the safety timer here. Under
@@ -183,21 +420,154 @@ fn header(facts: &Facts, out: &mut dyn Write) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The questions, in order; the answers as a profile, and whether the
-/// module list was changed.
+/// What [`ask`] gathers.
+struct Answers {
+    /// The answers as a profile, saved as they are.
+    builder: ProfileBuilder,
+    /// Whether the module list was changed.
+    picked: bool,
+    /// A pasted Tailscale auth key, for this apply only.
+    auth_key: Option<String>,
+}
+
+/// The questions, in order.
 fn ask(
     host: &Host,
     facts: &Facts,
     prompt: &mut dyn Prompt,
     out: &mut dyn Write,
-) -> anyhow::Result<(ProfileBuilder, bool)> {
+) -> anyhow::Result<Answers> {
     let mut builder = ask_profile(facts, prompt)?;
     ask_admin(host, facts, prompt, out, &mut builder)?;
+    // Before the ports: a VPN starts them from the private profile's none.
+    let auth_key = ask_private(host, facts, prompt, out, &mut builder)?;
     ask_ports(host, facts, prompt, out, &mut builder)?;
     let picked = prompt.confirm("Pick which modules to run yourself?", false)?
         && ask_modules(host, facts, prompt, out, &mut builder)?;
     ask_sites(host, facts, prompt, out, &mut builder)?;
-    Ok((builder, picked))
+    Ok(Answers {
+        builder,
+        picked,
+        auth_key,
+    })
+}
+
+/// Whether `firewall.inbound` runs here, so its ports are asked.
+fn firewall_applies(host: &Host, facts: &Facts) -> bool {
+    find(host, "firewall.inbound").is_some_and(|m| m.applicable(facts) == Applicability::Applicable)
+}
+
+/// Private access for SSH: none, or a VPN module that the private profile
+/// limits SSH to. A VPN moves the answers onto that profile. Returns a
+/// pasted Tailscale auth key.
+fn ask_private(
+    host: &Host,
+    facts: &Facts,
+    prompt: &mut dyn Prompt,
+    out: &mut dyn Write,
+    builder: &mut ProfileBuilder,
+) -> anyhow::Result<Option<String>> {
+    let current = builder.build(host.modules)?;
+    if !firewall_applies(host, facts) || current.params("firewall.inbound").is_none() {
+        return Ok(None);
+    }
+    // Only a registered VPN module: the profile would not load without it.
+    let vpns: Vec<(&str, &str)> = VPNS
+        .iter()
+        .copied()
+        .filter(|(id, _)| {
+            find(host, id).is_some_and(|m| m.applicable(facts) == Applicability::Applicable)
+        })
+        .collect();
+    if vpns.is_empty() {
+        return Ok(None);
+    }
+    let mut items = vec!["None: SSH stays reachable from the internet, with keys only".to_owned()];
+    items.extend(vpns.iter().map(|(id, _)| match *id {
+        "net.tailscale" => "Tailscale (the private profile)".to_owned(),
+        _ => "WireGuard on this server (the private profile)".to_owned(),
+    }));
+    let i = prompt.select("Private access for SSH", &items, 0)?;
+    let Some(&(id, via)) = i.checked_sub(1).and_then(|i| vpns.get(i)) else {
+        return Ok(None);
+    };
+    let mut private = ProfileBuilder::new("private")?;
+    if let Some(admin) = current.params("user.admin") {
+        private.set_params("user.admin", admin.clone());
+    }
+    // The answer "Web apps or Docker" keeps Docker.
+    if current.params("deploy.docker").is_some() {
+        private.set_params("deploy.docker", toml::Table::new());
+    }
+    say(
+        out,
+        "  ",
+        &format!(
+            "Two steps: this apply sets it up and keeps SSH public; applying again from a \
+             login through {via} closes SSH to the internet."
+        ),
+    )?;
+    let (params, key) = if id == "net.tailscale" {
+        (toml::Table::new(), ask_tailscale_key(prompt, out)?)
+    } else {
+        (ask_wireguard_peer(host, id, prompt, out)?, None)
+    };
+    private.set_params(id, params);
+    *builder = private;
+    Ok(key)
+}
+
+/// A Tailscale auth key, hidden as it is typed; `None` to log in by hand.
+fn ask_tailscale_key(
+    prompt: &mut dyn Prompt,
+    out: &mut dyn Write,
+) -> anyhow::Result<Option<String>> {
+    say(
+        out,
+        "  ",
+        "An auth key from the Tailscale admin console logs this server in during the \
+         apply. It is used once and never saved.",
+    )?;
+    let key = prompt.password("Auth key (hidden; Enter to log in yourself after)")?;
+    let key = key.trim();
+    Ok((!key.is_empty()).then(|| key.to_owned()))
+}
+
+/// The device that connects to WireGuard on this server, as module `id`'s
+/// params, checked by the module itself and asked again on a bad value.
+fn ask_wireguard_peer(
+    host: &Host,
+    id: &str,
+    prompt: &mut dyn Prompt,
+    out: &mut dyn Write,
+) -> anyhow::Result<toml::Table> {
+    let Some(module) = find(host, id) else {
+        bail!("{id} is not a module");
+    };
+    say(
+        out,
+        "  ",
+        "Make a key pair on the device you will connect from: `wg genkey | tee laptop.key | \
+         wg pubkey`, or \"Add tunnel\" in the WireGuard app.",
+    )?;
+    loop {
+        let name = prompt.input("Name of the device", "laptop")?;
+        let key = prompt.input("Its public key", "")?;
+        let peer = toml::Table::from_iter([
+            ("name".to_owned(), name.trim().into()),
+            ("public_key".to_owned(), key.trim().into()),
+            ("host".to_owned(), 2.into()),
+        ]);
+        let params = toml::Table::from_iter([(
+            "peers".to_owned(),
+            toml::Value::Array(vec![toml::Value::Table(peer)]),
+        )]);
+        match module.check_params(&params) {
+            Ok(()) => return Ok(params),
+            Err(ModuleError::Refused(why)) => say(out, "  ", &why)?,
+            Err(e) => return Err(e.into()),
+        }
+    }
 }
 
 /// `web` or `minimal`, the recommended one first.
@@ -467,13 +837,17 @@ fn ask_ports(
                 dim: false,
             })
             .collect();
-        let question = if ssh_list.is_empty() {
-            "Open ports besides SSH".to_owned()
-        } else {
-            format!(
+        let via = params
+            .get("ssh_via")
+            .and_then(toml::Value::as_str)
+            .and_then(|v| v.strip_prefix(STAGED_VIA));
+        let question = match via {
+            Some(via) => format!("Open ports besides SSH (only through {via} after step 2)"),
+            None if ssh_list.is_empty() => "Open ports besides SSH".to_owned(),
+            None => format!(
                 "Open ports besides SSH ({}, always open)",
                 ssh_list.join(", ")
-            )
+            ),
         };
         for i in prompt.multi_select(&question, &items)? {
             picked.extend(offered.get(i).map(|(t, ..)| t.clone()));
@@ -614,6 +988,42 @@ fn ask_sites(
         "deploy.proxy",
         toml::Table::from_iter([("sites".to_owned(), toml::Value::Array(sites))]),
     );
+    if builder.base() == "private" {
+        open_web_ports(host, out, builder)?;
+    }
+    Ok(())
+}
+
+/// Adds [`WEB_PORTS`] to `firewall.inbound`'s `allow`, which the private
+/// profile leaves empty.
+fn open_web_ports(
+    host: &Host,
+    out: &mut dyn Write,
+    builder: &mut ProfileBuilder,
+) -> anyhow::Result<()> {
+    let profile = builder.build(host.modules)?;
+    let Some(params) = profile.params("firewall.inbound") else {
+        return Ok(());
+    };
+    let mut allow: Vec<toml::Value> = params
+        .get("allow")
+        .and_then(toml::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for port in WEB_PORTS {
+        if !allow.iter().any(|v| v.as_str() == Some(port)) {
+            allow.push(port.into());
+        }
+    }
+    builder.set_params(
+        "firewall.inbound",
+        toml::Table::from_iter([("allow".to_owned(), toml::Value::Array(allow))]),
+    );
+    say(
+        out,
+        "  ",
+        "Ports 80/tcp, 443/tcp and 443/udp are opened for Caddy.",
+    )?;
     Ok(())
 }
 
@@ -662,9 +1072,18 @@ fn ask_modules(
             };
             any = true;
         }
+        let built = match changed.build(host.modules) {
+            Ok(profile) => profile,
+            // The private profile without its one VPN module.
+            Err(ProfileError::Vpn(why)) => {
+                say(out, "  ", &why)?;
+                continue;
+            }
+            Err(e) => return Err(e.into()),
+        };
         // `deploy.proxy` picked here gets its sites from the next question.
         let mut checked_builder = changed.clone();
-        if proxy_without_sites(&changed.build(host.modules)?) {
+        if proxy_without_sites(&built) {
             checked_builder.remove("deploy.proxy");
         }
         let profile = checked_builder.build(host.modules)?;
@@ -690,14 +1109,15 @@ fn ask_modules(
 }
 
 /// The command that repeats this without questions: the built-in profile,
-/// or the answers saved to [`SAVE_AS`] if they differ from it.
+/// or the answers saved to [`SAVE_AS`] if they differ from it. Returns the
+/// profile as `--profile` takes it.
 fn next_time(
     host: &Host,
     builder: &ProfileBuilder,
     prompt: &mut dyn Prompt,
     cwd: &Path,
     out: &mut dyn Write,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<String> {
     let repeat = |out: &mut dyn Write, profile: &str| {
         writeln!(
             out,
@@ -706,7 +1126,8 @@ fn next_time(
     };
     if builder.is_unchanged() {
         repeat(out, builder.base())?;
-        return new_server(host, builder, Saved::Base, out);
+        new_server(host, builder, Saved::Base, out)?;
+        return Ok(builder.base().to_owned());
     }
     writeln!(out)?;
     let path = cwd.join(SAVE_AS);
@@ -722,7 +1143,8 @@ fn next_time(
             "Not saved. To repeat this, save these lines to a file and run:\n  \
              sudo vps-ready apply --profile <file>\n\n{text}"
         )?;
-        return new_server(host, builder, Saved::No, out);
+        new_server(host, builder, Saved::No, out)?;
+        return Ok("<file>".to_owned());
     }
     let owner = FileOwner {
         mode: 0o644,
@@ -732,8 +1154,10 @@ fn next_time(
     host.sys.fs.write_atomic(&path, text.as_bytes(), owner)?;
     writeln!(out, "Saved {}.", path.display())?;
     writeln!(out, "Review it before you use it on another server.")?;
-    repeat(out, &path.display().to_string())?;
-    new_server(host, builder, Saved::To(&path), out)
+    let name = path.display().to_string();
+    repeat(out, &name)?;
+    new_server(host, builder, Saved::To(&path), out)?;
+    Ok(name)
 }
 
 /// Where [`next_time`] left the answers.

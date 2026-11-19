@@ -105,7 +105,9 @@ fn round_trip(host: &Host, questions: Vec<Answer>) -> ProfileBuilder {
     let facts = (host.facts)(host.sys).unwrap();
     let log = Transcript::default();
     let mut script = Script::new(questions, &log);
-    let (builder, _) = ask(host, &facts, &mut script, &mut log.clone()).unwrap();
+    let builder = ask(host, &facts, &mut script, &mut log.clone())
+        .unwrap()
+        .builder;
     assert!(script.done());
     let built = builder.build(host.modules).unwrap();
     let parsed = Profile::parse(&builder.to_toml(), host.modules).unwrap();
@@ -131,6 +133,12 @@ fn scenario(name: &str, host: &Host, questions: Vec<Answer>) -> (String, String)
     );
     insta::assert_snapshot!(name, text);
     (text, round_trip(host, questions).to_toml())
+}
+
+/// Snapshots `text` as `name` from this module, so that the snapshots of
+/// its submodules are in the same directory.
+fn snapshot(name: &str, text: &str) {
+    insta::assert_snapshot!(name, text);
 }
 
 fn saved(fs: &FakeFs) -> String {
@@ -167,7 +175,7 @@ fn a_docker_host_gets_web_without_its_published_ports() {
         },
         ..on(&fs, &runner)
     };
-    let (text, profile) = scenario("docker", &host, vec![Enter; 6]);
+    let (text, profile) = scenario("docker", &host, vec![Enter; 7]);
     assert!(
         text.contains("(recommended: Docker is installed)"),
         "{text}"
@@ -201,6 +209,7 @@ fn a_docker_host_adds_a_domain_for_caddy() {
         ..on(&fs, &runner)
     };
     let questions = vec![
+        Enter,
         Enter,
         Enter,
         Enter,
@@ -256,7 +265,14 @@ fn deploy_proxy_picked_in_the_module_list_asks_for_domains() {
     ];
     let pick = |more: Vec<Answer>| {
         [
-            vec![Enter, Enter, Enter, Say(true), modules(&host, &minimal)],
+            vec![
+                Enter,
+                Enter,
+                Enter,
+                Enter,
+                Say(true),
+                modules(&host, &minimal),
+            ],
             more,
         ]
         .concat()
@@ -276,7 +292,9 @@ fn deploy_proxy_picked_in_the_module_list_asks_for_domains() {
     let facts = (host.facts)(host.sys).unwrap();
     let log = Transcript::default();
     let mut script = Script::new(pick(vec![Enter]), &log);
-    let (builder, _) = ask(&host, &facts, &mut script, &mut log.clone()).unwrap();
+    let builder = ask(&host, &facts, &mut script, &mut log.clone())
+        .unwrap()
+        .builder;
     assert!(script.done());
     assert!(
         log.text()
@@ -308,7 +326,7 @@ fn a_hand_written_caddyfile_is_named_before_the_domains() {
     };
     let facts = (host.facts)(host.sys).unwrap();
     let log = Transcript::default();
-    let mut script = Script::new(vec![Enter; 6], &log);
+    let mut script = Script::new(vec![Enter; 7], &log);
     ask(&host, &facts, &mut script, &mut log.clone()).unwrap();
     assert!(script.done());
     assert!(
@@ -326,7 +344,7 @@ fn a_host_with_nothing_listening_gets_minimal() {
     let fs = fs();
     let runner = runner(|r| r);
     let host = on(&fs, &runner);
-    let (text, profile) = scenario("nothing-listening", &host, vec![Enter, Enter, Enter, Enter]);
+    let (text, profile) = scenario("nothing-listening", &host, vec![Enter; 5]);
     assert!(text.contains("only SSH is open (recommended: "), "{text}");
     assert!(
         text.contains("All other incoming ports are blocked.\n? More ports"),
@@ -387,7 +405,7 @@ fn the_session_user_is_the_default_admin() {
         },
         ..on(&fs, &runner)
     };
-    let (text, profile) = scenario("session-user", &host, vec![Enter, Enter, Enter, Enter]);
+    let (text, profile) = scenario("session-user", &host, vec![Enter; 5]);
     assert!(
         text.contains(
             "  existing account (the one you logged in as): gets sudo without a password and\n  \
@@ -431,7 +449,7 @@ fn an_existing_admin_account_is_named() {
     let fs = fs().with_dir("/home/admin", home);
     let runner = existing_admin("User admin is not allowed to run sudo on vm.\n");
     let host = on(&fs, &runner);
-    let (text, _) = scenario("existing-admin", &host, vec![Enter, Enter, Enter, Enter]);
+    let (text, _) = scenario("existing-admin", &host, vec![Enter; 5]);
     assert!(
         text.contains(
             "  existing account: gets sudo without a password and 1 key from\n  \
@@ -444,7 +462,7 @@ fn an_existing_admin_account_is_named() {
     let runner =
         existing_admin("User admin may run the following commands on vm:\n    (ALL) ALL\n");
     let host = on(&fs, &runner);
-    let (_, text) = wizard(&host, vec![Enter, Enter, Enter, Enter], "n\n");
+    let (_, text) = wizard(&host, vec![Enter; 5], "n\n");
     assert!(
         text.contains("  existing account: keeps its sudo rules and logs in with 1 key from\n"),
         "{text}"
@@ -471,7 +489,7 @@ fn root_with_an_admin_group_is_offered_sysadmin() {
     let fs = fs();
     let runner = groups(&["admin"]);
     let host = on(&fs, &runner);
-    let (text, profile) = scenario("admin-group", &host, vec![Enter, Enter, Enter, Enter]);
+    let (text, profile) = scenario("admin-group", &host, vec![Enter; 5]);
     assert!(
         text.contains("? Admin user for logging in: sysadmin\n  new account:"),
         "{text}"
@@ -481,7 +499,7 @@ fn root_with_an_admin_group_is_offered_sysadmin() {
     // Neither is accepted: no default, so a name must be typed.
     let runner = groups(&["admin", "sysadmin"]);
     let host = on(&fs, &runner);
-    let answers = vec![Enter, Enter, Type("deploy".into()), Enter, Enter];
+    let answers = vec![Enter, Enter, Type("deploy".into()), Enter, Enter, Enter];
     let (code, text) = wizard(&host, answers, "n\n");
     assert_eq!(code, 0, "{text}");
     assert!(
@@ -502,6 +520,7 @@ fn a_group_without_a_user_is_refused_and_asked_again() {
             Enter,
             Type("admin".into()),
             Type("deploy".into()),
+            Enter,
             Enter,
             Enter,
         ],
@@ -530,6 +549,7 @@ fn without_a_key_to_copy_one_is_pasted() {
             Enter,
             Type("my key".into()),
             Type(format!("  {KEY}  ")),
+            Enter,
             Enter,
             Enter,
         ],
@@ -567,6 +587,7 @@ fn public_listeners_are_offered_unchecked_and_ports_can_be_typed() {
         "listeners",
         &host,
         vec![
+            Enter,
             Enter,
             Enter,
             Enter,
@@ -608,6 +629,7 @@ fn a_customized_module_list() {
         "kernel.sysctl",
     ];
     let questions = vec![
+        Enter,
         Enter,
         Enter,
         Enter,
@@ -728,6 +750,7 @@ fn an_empty_plan_of_chosen_modules() {
         Enter,
         Enter,
         Enter,
+        Enter,
         Say(true),
         modules(&host, &["kernel.sysctl"]),
     ];
@@ -800,7 +823,7 @@ fn the_other_profile_can_be_picked() {
     let fs = fs();
     let runner = runner(|r| r);
     let host = on(&fs, &runner);
-    let questions = vec![Pick(1), Enter, Enter, Enter, Enter, Enter];
+    let questions = vec![Pick(1), Enter, Enter, Enter, Enter, Enter, Enter];
     let (code, _) = wizard(&host, questions.clone(), "n\n");
     assert_eq!(code, 0);
     assert_eq!(round_trip(&host, questions).base(), "web");
@@ -838,7 +861,7 @@ fn yes_applies_the_answers() {
     let runner = runner(|r| r);
     let host = on(&fs, &runner);
     let safe = modules(&host, &["kernel.sysctl", "updates.auto"]);
-    let answers = vec![Enter, Enter, Enter, Say(true), safe.clone(), Enter];
+    let answers = vec![Enter, Enter, Enter, Enter, Say(true), safe.clone(), Enter];
     let (code, text) = wizard(&host, answers, "y\n");
     assert_eq!(code, 0, "{text}");
     assert!(text.contains("Apply 8 changes? [y/N] y\n"), "{text}");
@@ -851,7 +874,7 @@ fn yes_applies_the_answers() {
 
     let fs = self::fs();
     let host = on(&fs, &runner);
-    let answers = vec![Enter, Enter, Enter, Say(true), safe, CtrlC];
+    let answers = vec![Enter, Enter, Enter, Enter, Say(true), safe, CtrlC];
     let (code, text) = wizard(&host, answers, "y\n");
     assert_eq!(code, EXIT_INTERRUPTED, "{text}");
     assert!(text.ends_with("later? ^C\nNot saved.\n"), "{text}");
@@ -860,7 +883,7 @@ fn yes_applies_the_answers() {
     // The dead-man switch cannot be armed: /proc/uptime is missing.
     let fs = self::fs();
     let host = on(&fs, &runner);
-    let (code, text) = wizard(&host, vec![Enter, Enter, Enter, Enter], "y\n");
+    let (code, text) = wizard(&host, vec![Enter; 5], "y\n");
     assert_eq!(code, 2, "{text}");
     assert!(
         text.contains("error: dead-man switch: reading /proc/uptime"),
@@ -938,3 +961,5 @@ fn public_addresses() {
         assert!(!public(addr), "{addr}");
     }
 }
+
+mod private;
