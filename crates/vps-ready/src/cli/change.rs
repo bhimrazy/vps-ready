@@ -275,8 +275,9 @@ pub(super) fn apply_profile(
     if n == 0 {
         return Ok(Applied::Nothing);
     }
-    // Only a confirm through it shows that SSH still works.
+    // Under `ssh_via` only a confirm through it shows that SSH still works.
     if window.is_none()
+        && plan.needs_deadman()
         && let Some(via) = &plan.ssh_via
     {
         bail!(
