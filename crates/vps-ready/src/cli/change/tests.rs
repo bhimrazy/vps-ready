@@ -127,7 +127,7 @@ pub(in crate::cli) fn host(fs: &FakeFs) -> Host<'_> {
 }
 
 pub(in crate::cli) const BINARY: &str = "/usr/local/bin/vps-ready";
-const WINDOW: std::time::Duration = crate::engine::deadman::DEFAULT_WINDOW;
+const WINDOW: Option<std::time::Duration> = Some(crate::engine::deadman::DEFAULT_WINDOW);
 
 /// Exit code, stdout and stderr, with an error printed as `main` does.
 fn run(

@@ -109,7 +109,10 @@ mod tests {
     /// no sshd ancestor.
     const TMUX: [(u32, &str); 4] = [
         (1, "/sbin/init\0"),
-        (640, "sshd: /usr/sbin/sshd -D [listener] 0 of 10-100 startups\0"),
+        (
+            640,
+            "sshd: /usr/sbin/sshd -D [listener] 0 of 10-100 startups\0",
+        ),
         (900, "tmux\0new\0"),
         (901, "-bash\0"),
     ];

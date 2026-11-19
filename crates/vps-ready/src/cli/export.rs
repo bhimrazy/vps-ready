@@ -46,9 +46,7 @@ pub(super) fn cloud_init(
                 checksums.display()
             )
         })?;
-        cases.push_str(&format!(
-            "        {arch}) t={target}; sum={sum} ;;\n"
-        ));
+        cases.push_str(&format!("        {arch}) t={target}; sum={sum} ;;\n"));
     }
     let base = match base_url {
         Some(url) => checked_url(url)?,

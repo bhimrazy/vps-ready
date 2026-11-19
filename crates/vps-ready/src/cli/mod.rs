@@ -1137,6 +1137,21 @@ mod tests {
         ] {
             assert!(window(text).is_err(), "{text}");
         }
+        let apply = |args: &[&str]| match Cli::try_parse_from(args).map(|c| c.command) {
+            Ok(Some(Command::Apply { deadman, .. })) => Ok(deadman),
+            other => Err(format!("{other:?}")),
+        };
+        assert_eq!(
+            apply(&["vps-ready", "apply"]),
+            Ok(Deadman(Some(Duration::from_secs(300))))
+        );
+        assert_eq!(
+            apply(&["vps-ready", "apply", "--deadman=off"]),
+            Ok(Deadman(None))
+        );
+        assert!(apply(&["vps-ready", "apply", "--deadman=selftest"]).is_err());
+        // `confirm --extend` takes a window only.
+        assert!(Cli::try_parse_from(["vps-ready", "confirm", "--extend", "off"]).is_err());
     }
 
     #[test]
