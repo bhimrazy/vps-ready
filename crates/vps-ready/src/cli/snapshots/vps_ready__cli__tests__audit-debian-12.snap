@@ -2,7 +2,7 @@
 source: crates/vps-ready/src/cli/mod.rs
 expression: "String::from_utf8(text).unwrap()"
 ---
-Audit of Debian GNU/Linux 12 (bookworm): 32 controls
+Audit of Debian GNU/Linux 12 (bookworm): 33 controls
 
 STATUS   ID       SEVERITY  CONTROL
 FAIL     SSH-002  high      Password authentication disabled
@@ -41,7 +41,8 @@ FAIL     SSH-008  low       Repeated failed logins are slowed down
          failing cuts the log noise and slows down a guess at a weak password.
          fix: sudo vps-ready apply --module ssh.bruteforce
 
-5 passed, 6 failed (1 high, 3 medium, 2 low), 0 unknown, 21 skipped
+5 passed, 6 failed (1 high, 3 medium, 2 low), 0 unknown, 22 skipped
+Skipped: there is no VPN interface (WireGuard or tailscale0).
 Skipped: kernel settings are not checked inside a container.
 Skipped: Docker is not installed.
 vps-ready can fix all 6 (SSH-002, FW-001, SSH-001, UPD-001, SSH-005, SSH-008):

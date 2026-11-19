@@ -61,6 +61,38 @@ struct Params {
     /// are accepted whatever this says.
     #[serde(default)]
     allow: Vec<Allow>,
+    /// Accept SSH only on this interface, e.g. `tailscale0`.
+    #[serde(default)]
+    ssh_via: Via,
+}
+
+/// `ssh_via`: an interface name, or `""` for none. A name is what the
+/// kernel allows (at most 15 bytes), narrowed to letters, digits, `_`, `-`
+/// and `.` so that it is safe in a quoted nft string.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "String")]
+struct Via(Option<String>);
+
+impl TryFrom<String> for Via {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, String> {
+        if s.is_empty() {
+            return Ok(Self(None));
+        }
+        let ok = s.len() <= 15
+            && s != "."
+            && s != ".."
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || "_-.".contains(c));
+        if ok {
+            Ok(Self(Some(s)))
+        } else {
+            Err(format!(
+                "{s:?} is not an interface name (up to 15 letters, digits, `_`, `-` or `.`)"
+            ))
+        }
+    }
 }
 
 /// A port in `allow`: `<port>/tcp` or `<port>/udp`.
@@ -93,7 +125,12 @@ impl TryFrom<String> for Allow {
 #[derive(Debug, Clone, PartialEq, Eq, Template)]
 #[template(path = "firewall.nft", escape = "none")]
 struct Ruleset {
-    /// Never empty: it holds the SSH ports.
+    /// The SSH ports; never empty.
+    ssh: Vec<u16>,
+    /// The only interface that SSH is accepted on, if limited.
+    ssh_via: Option<String>,
+    /// Accepted on any interface: `allow`, and [`Self::ssh`] unless
+    /// [`Self::ssh_via`] limits them.
     tcp: Vec<u16>,
     udp: Vec<u16>,
     /// Accept everything from Docker's bridges.
@@ -104,15 +141,24 @@ struct Ruleset {
 
 impl Ruleset {
     fn new(facts: &Facts, params: &Params) -> Self {
-        let mut tcp = ssh_ports(facts);
+        let ssh = ssh_ports(facts);
+        let ssh_via = params.ssh_via.0.clone();
+        let mut tcp = match ssh_via {
+            Some(_) => BTreeSet::new(),
+            None => ssh.clone(),
+        };
         let mut udp = BTreeSet::new();
         for allow in &params.allow {
             match allow.proto {
+                // Left out with a note (`left_out`).
+                Proto::Tcp if ssh_via.is_some() && ssh.contains(&allow.port) => false,
                 Proto::Tcp => tcp.insert(allow.port),
                 Proto::Udp => udp.insert(allow.port),
             };
         }
         Self {
+            ssh: ssh.into_iter().collect(),
+            ssh_via,
             tcp: tcp.into_iter().collect(),
             udp: udp.into_iter().collect(),
             docker: facts.docker,
@@ -194,11 +240,18 @@ impl Module for FirewallInbound {
     }
 
     fn params_doc(&self) -> &'static [ParamDoc] {
-        &[ParamDoc {
-            name: "allow",
-            default: "[]",
-            help: "Ports to accept from anywhere, e.g. [\"443/tcp\", \"443/udp\"]; the SSH ports are always accepted.",
-        }]
+        &[
+            ParamDoc {
+                name: "allow",
+                default: "[]",
+                help: "Ports to accept from anywhere, e.g. [\"443/tcp\", \"443/udp\"]; the SSH ports are always accepted, only on `ssh_via` when it is set.",
+            },
+            ParamDoc {
+                name: "ssh_via",
+                default: "\"\"",
+                help: "Accept SSH only on this interface, e.g. \"tailscale0\" or \"wg0\", from a session through it; empty for any.",
+            },
+        ]
     }
 
     fn needs_deadman(&self) -> bool {
@@ -288,6 +341,7 @@ impl Module for FirewallInbound {
         if !facts.firewall_tools.nft {
             notes.push("if this installs nftables, rollback leaves it installed".to_owned());
         }
+        notes.extend(crate::audit::tailscale_expiry(facts));
         notes
     }
 
@@ -297,7 +351,7 @@ impl Module for FirewallInbound {
 
     /// The ruleset is checked with `nft -c` before it is written; the unit
     /// loads it when it starts.
-    fn plan(&self, cx: &PlanCx, _: Sys) -> Result<ModuleSteps, ModuleError> {
+    fn plan(&self, cx: &PlanCx, sys: Sys) -> Result<ModuleSteps, ModuleError> {
         let params: Params = cx.params()?;
         let model = Ruleset::planned(cx, &params);
         let ruleset = model.render()?;
@@ -306,6 +360,13 @@ impl Module for FirewallInbound {
             notes.extend(docker_notes(cx.facts, "deploy.docker installs Docker"));
         }
         notes.extend(proxied_note(cx.facts, &model));
+        if let Some(via) = &model.ssh_via {
+            notes.extend(left_out(&params, &model, via));
+            // The same interface and ports: the SSH rule does not change.
+            let on_disk = ruleset_text(cx.planned, sys)?.and_then(|t| ssh_rule_of(&t));
+            let same = on_disk.is_some() && on_disk == ssh_rule_of(&ruleset);
+            notes.extend(via::check(cx.facts, via, same, sys)?);
+        }
         let mut resources = Vec::new();
         if !cx.facts.firewall_tools.nft {
             resources.push(Resource::Package(Package {
@@ -342,6 +403,7 @@ impl Module for FirewallInbound {
             resources,
             reloads: vec![Reload::DaemonReload, Reload::FirewallReload],
             notes,
+            deadman: false,
         })
     }
 
@@ -462,7 +524,23 @@ fn proxied_note(facts: &Facts, ruleset: &Ruleset) -> Option<String> {
 ///
 /// Reading the ruleset on disk.
 pub(crate) fn accepted_tcp(cx: &PlanCx, sys: Sys) -> Result<Option<BTreeSet<u16>>, ModuleError> {
-    let planned = cx.planned.iter().find_map(|r| match r {
+    Ok(ruleset_text(cx.planned, sys)?.map(|text| tcp_ports(&text)))
+}
+
+/// The interface SSH is limited to (`ssh_via`) by the ruleset in `planned`,
+/// else by the one on disk, which the unit loads; `None` when neither
+/// limits it.
+///
+/// # Errors
+///
+/// Reading the ruleset on disk.
+pub(crate) fn ssh_via(planned: &[Resource], sys: Sys) -> Result<Option<String>, ModuleError> {
+    Ok(ruleset_text(planned, sys)?.and_then(|text| via_of(&text)))
+}
+
+/// The ruleset in `planned`, else the one on disk; `None` without either.
+fn ruleset_text(planned: &[Resource], sys: Sys) -> Result<Option<String>, ModuleError> {
+    let planned = planned.iter().find_map(|r| match r {
         Resource::File(f) if f.path == Path::new(RULESET) => Some(f.content.clone()),
         _ => None,
     });
@@ -474,7 +552,43 @@ pub(crate) fn accepted_tcp(cx: &PlanCx, sys: Sys) -> Result<Option<BTreeSet<u16>
             Err(e) => return Err(e.into()),
         },
     };
-    Ok(Some(tcp_ports(&String::from_utf8_lossy(&text))))
+    Ok(Some(String::from_utf8_lossy(&text).into_owned()))
+}
+
+/// The interface of the `iifname "<if>" tcp dport { ... } accept` line
+/// that `templates/firewall.nft` renders for `ssh_via`.
+pub(crate) fn via_of(ruleset: &str) -> Option<String> {
+    let rule = ssh_rule_of(ruleset)?;
+    let (name, _) = rule.strip_prefix("iifname \"")?.split_once('"')?;
+    Some(name.to_owned())
+}
+
+/// That line, trimmed.
+fn ssh_rule_of(ruleset: &str) -> Option<String> {
+    ruleset.lines().map(str::trim).find_map(|l| {
+        let (_, rest) = l.strip_prefix("iifname \"")?.split_once('"')?;
+        let rest = rest.trim_start();
+        (rest.starts_with("tcp dport {") && rest.ends_with("} accept")).then(|| l.to_owned())
+    })
+}
+
+/// The note for SSH ports in `allow`, which `ssh_via` leaves out of the
+/// ports open to any interface. Not a refusal, so that a profile extending
+/// `minimal` or `web` (both allow `22/tcp`) need not restate `allow`.
+fn left_out(params: &Params, model: &Ruleset, via: &str) -> Option<String> {
+    let ports: Vec<String> = params
+        .allow
+        .iter()
+        .filter(|a| a.proto == Proto::Tcp && model.ssh.contains(&a.port))
+        .map(|a| format!("{}/tcp", a.port))
+        .collect();
+    let is = if ports.len() == 1 { "is" } else { "are" };
+    (!ports.is_empty()).then(|| {
+        format!(
+            "{} in `allow` {is} left out: `ssh_via` limits SSH to {via}",
+            ports.join(", ")
+        )
+    })
 }
 
 /// The ports of the `tcp dport { ... } accept` line that
@@ -511,12 +625,41 @@ fn check_loaded(json: &[u8], want: &Ruleset) -> Result<(), String> {
         .filter(|(proto, port)| chain.blocks(&proto.to_string(), *port) != Some(false))
         .map(|(proto, port)| format!("{proto}/{port}"))
         .collect();
-    if closed.is_empty() {
+    if !closed.is_empty() {
+        return Err(format!("it does not accept {}", closed.join(", ")));
+    }
+    let Some(via) = &want.ssh_via else {
+        return Ok(());
+    };
+    // Public SSH is closed only if nothing but the `ssh_via` rule accepts
+    // the SSH ports. A rule that accepts all ports on one interface
+    // (`iifname "x" accept`) is not seen: the parser takes it as narrow.
+    let only_via = |p: &crate::facts::InterfacePorts| p.interfaces == [via.as_str()];
+    let mut wrong = Vec::new();
+    for &port in &want.ssh {
+        let via_rules: Vec<_> = chain
+            .interface_ports
+            .iter()
+            .filter(|p| p.ports.contains("tcp", port))
+            .collect();
+        if chain.open_ports.iter().any(|p| p.contains("tcp", port))
+            || chain.unread_ports.iter().any(|p| p == "tcp")
+            || via_rules.iter().any(|p| !only_via(p))
+        {
+            wrong.push(format!(
+                "it accepts tcp/{port} on interfaces other than {via}"
+            ));
+        } else if via_rules.is_empty() {
+            wrong.push(format!("it does not accept tcp/{port} on {via}"));
+        }
+    }
+    if wrong.is_empty() {
         Ok(())
     } else {
-        Err(format!("it does not accept {}", closed.join(", ")))
+        Err(wrong.join("; "))
     }
 }
 
 #[cfg(test)]
 mod tests;
+mod via;

@@ -135,6 +135,12 @@ pub enum Check {
     /// does not show may open one. WireGuard's listen ports need
     /// wireguard-tools (`wg`).
     ExposedListeners,
+    /// SSH is accepted only through a VPN: the input chains drop every SSH
+    /// port unless it arrives on `lo`, `tailscale0` or a WireGuard
+    /// interface. Skipped when the host has none of the last two. The
+    /// finding's note warns when SSH depends on `tailscale0` and the node's
+    /// key expires.
+    SshPrivateOnly,
     /// The kernel has AppArmor enabled. Debian and Ubuntu only so far;
     /// skipped elsewhere and inside a container.
     Apparmor,
@@ -218,6 +224,7 @@ impl Finding {
                 | Check::InboundDefaultDeny
                 | Check::PublishedPorts
                 | Check::ExposedListeners
+                | Check::SshPrivateOnly
                 | Check::Apparmor
                 | Check::ReversePathFilter
                 | Check::IcmpRedirectsIgnored
@@ -304,6 +311,7 @@ pub fn run(controls: Vec<Control>, facts: &Facts) -> Report {
         .map(|mut control| {
             let (outcome, note) = match control.check {
                 Check::ExposedListeners => exposed_listeners(facts),
+                Check::SshPrivateOnly => (ssh_private_only(facts), tailscale_expiry(facts)),
                 _ => (evaluate(&control.check, facts), None),
             };
             let mut manual_fix = None;
@@ -437,6 +445,7 @@ pub(crate) fn evaluate(check: &Check, facts: &Facts) -> Outcome {
             },
         },
         Check::ExposedListeners => exposed_listeners(facts).0,
+        Check::SshPrivateOnly => ssh_private_only(facts),
         Check::Apparmor => {
             if facts.virtualization.in_container() {
                 Outcome::Skip {
@@ -978,6 +987,140 @@ fn exposed_listeners(facts: &Facts) -> (Outcome, Option<String>) {
     (outcome, Some(note))
 }
 
+/// SSH-009: no SSH port is accepted on an interface other than a VPN's.
+fn ssh_private_only(facts: &Facts) -> Outcome {
+    if let Some(found) = ssh_limited_to_missing(facts) {
+        return Outcome::Fail { found };
+    }
+    if !facts.interfaces.iter().any(crate::facts::Interface::is_vpn) {
+        return Outcome::Skip {
+            reason: "there is no VPN interface (WireGuard or tailscale0)".to_owned(),
+        };
+    }
+    let Some(firewall) = &facts.firewall else {
+        let reason = "the firewall ruleset could not be read".to_owned();
+        return Outcome::Unknown { reason };
+    };
+    let vpn = |name: &str| {
+        matches!(name, "lo" | "tailscale0")
+            || facts
+                .interfaces
+                .iter()
+                .any(|i| i.name == name && i.is_wireguard())
+    };
+    let (mut open, mut maybe) = (Vec::new(), Vec::new());
+    for port in crate::modules::firewall_inbound::ssh_ports(facts) {
+        for v6 in [false, true].into_iter().filter(|&v6| !v6 || facts.ipv6) {
+            match admitted(firewall, Proto::Tcp, port, v6, vpn) {
+                Reach::Blocked => {}
+                Reach::Maybe => maybe.push(format!("tcp/{port}")),
+                Reach::Open(names) if names.is_empty() => {
+                    open.push(format!("tcp/{port} from any interface"));
+                }
+                Reach::Open(names) => {
+                    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+                    open.push(format!("tcp/{port} on {}", and_list(&names)));
+                }
+            }
+        }
+    }
+    open.dedup();
+    maybe.dedup();
+    if !open.is_empty() {
+        Outcome::Fail {
+            found: format!("SSH is accepted beyond a VPN: {}", open.join(", ")),
+        }
+    } else if !maybe.is_empty() {
+        Outcome::Unknown {
+            reason: format!(
+                "a firewall rule whose ports nft does not show, or the filter table of \
+                 iptables-legacy, may accept SSH ({})",
+                maybe.join(", ")
+            ),
+        }
+    } else {
+        Outcome::Pass
+    }
+}
+
+/// The interfaces that the loaded rules accept SSH ports on, by name; a
+/// wildcard and `lo` left out.
+fn ssh_interfaces(facts: &Facts) -> BTreeSet<String> {
+    let ssh = crate::modules::firewall_inbound::ssh_ports(facts);
+    facts
+        .firewall
+        .iter()
+        .flat_map(|f| &f.input_chains)
+        .flat_map(|c| &c.interface_ports)
+        .filter(|p| ssh.iter().any(|&port| p.ports.contains("tcp", port)))
+        .flat_map(|p| &p.interfaces)
+        .filter(|n| *n != "lo" && !n.contains('*'))
+        .cloned()
+        .collect()
+}
+
+/// When no rule accepts SSH on every interface and a rule limits it to
+/// interfaces that are absent or down: SSH is closed, VPN or not.
+fn ssh_limited_to_missing(facts: &Facts) -> Option<String> {
+    let firewall = facts.firewall.as_ref()?;
+    // Without `ip`, nothing is known about the interfaces.
+    if facts.interfaces.is_empty() {
+        return None;
+    }
+    let ssh = crate::modules::firewall_inbound::ssh_ports(facts);
+    let anywhere = firewall.input_chains.iter().any(|c| {
+        c.open_ports
+            .iter()
+            .any(|p| ssh.iter().any(|&port| p.contains("tcp", port)))
+    });
+    let broken: Vec<String> = ssh_interfaces(facts)
+        .into_iter()
+        .filter_map(|n| match facts.interfaces.iter().find(|i| i.name == n) {
+            None => Some(format!("{n}, which does not exist")),
+            Some(i) if !i.up => Some(format!("{n}, which is down")),
+            Some(_) => None,
+        })
+        .collect();
+    (!anywhere && !broken.is_empty()).then(|| format!("SSH is limited to {}", broken.join("; ")))
+}
+
+/// A warning when the loaded rules accept SSH on Tailscale's interface and
+/// SSH through it may stop: this node's key expires, or Tailscale is not
+/// running.
+pub(crate) fn tailscale_expiry(facts: &Facts) -> Option<String> {
+    let names = ssh_interfaces(facts);
+    let ips = facts
+        .tailscale
+        .as_ref()
+        .map(|t| t.ips.as_slice())
+        .unwrap_or_default();
+    let on = names.iter().find(|n| {
+        *n == "tailscale0"
+            || facts
+                .interfaces
+                .iter()
+                .any(|i| &i.name == *n && i.addresses.iter().any(|a| ips.contains(&a.ip)))
+    })?;
+    match &facts.tailscale {
+        Some(t) if t.backend_state == "Running" => t.key_expiry.as_ref().map(|at| {
+            format!(
+                "warning: this node's Tailscale key expires at {at}, and SSH through {on} \
+                 stops then; disable key expiry for this machine in the Tailscale admin \
+                 console"
+            )
+        }),
+        Some(t) => Some(format!(
+            "warning: SSH is limited to {on}, and Tailscale is {}, so SSH through it may not \
+             work",
+            t.backend_state
+        )),
+        None => Some(format!(
+            "warning: SSH is limited to {on}, and Tailscale's state is unknown (`tailscale \
+             status` failed)"
+        )),
+    }
+}
+
 /// Which incoming traffic no chain drops by default, e.g. `IPv6`.
 fn inbound_default_deny(firewall: &Firewall, ipv6: bool) -> Outcome {
     let drops = |v6: bool| {
@@ -1216,6 +1359,8 @@ mod tests {
                         c.id
                     );
                 }
+                // The captured hosts have no VPN; `evaluates_ssh_private_only` covers it.
+                Check::SshPrivateOnly => {}
                 Check::Apparmor => assert!(facts.apparmor.is_some(), "{}", c.id),
                 // The captured hosts are containers, which have no `reboot` fact.
                 Check::RebootRequired => {}
@@ -1982,8 +2127,9 @@ mod tests {
             .filter(|f| reads_proc_sys(&f.control.check))
             .count();
         assert!(sysctl_controls > 0);
-        // Plus MAC-001 and UPD-002 (in a container) and FW-002 (no Docker).
-        assert_eq!(report.summary.skipped, sysctl_controls + 3);
+        // Plus MAC-001 and UPD-002 (in a container), FW-002 (no Docker) and
+        // SSH-009 (no VPN).
+        assert_eq!(report.summary.skipped, sysctl_controls + 4);
         assert!(report.all_passed(), "{:?}", report.summary);
     }
 
@@ -2740,6 +2886,6 @@ udp UNCONN 0 0 [::1]:323 [::]:* users:((\"chronyd\",pid=400,fd=6))
             .filter(|f| reads_proc_sys(&f.control.check))
             .count();
         let summary = serde_json::to_value(report.summary).unwrap();
-        assert_eq!(summary["skipped"], sysctl_controls + 3);
+        assert_eq!(summary["skipped"], sysctl_controls + 4);
     }
 }

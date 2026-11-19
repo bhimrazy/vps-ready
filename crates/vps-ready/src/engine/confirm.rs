@@ -9,7 +9,7 @@ use super::deadman::{self, MAX_EXTEND, MAX_PENDING, unit_name};
 use super::journal::{self, Deadline, Event, Record, RollbackReason, TxnState};
 use super::run::{Engine, Open};
 use super::{EngineError, StateDir, Txn, id};
-use crate::facts::{Session, SessionId};
+use crate::facts::{Interface, Session, SessionId};
 use crate::sys::Fs;
 
 /// Why `confirm` or `confirm --extend` refused.
@@ -62,7 +62,8 @@ pub enum Refusal {
     /// went live, so it proves nothing about them.
     #[error("this SSH session started before the changes went live")]
     OldSession,
-    /// The SSH login comes from loopback, which the firewall accepts
+    /// The SSH login comes from loopback (or, under `ssh_via`, from any
+    /// address of this host: it travels over lo), which the firewall accepts
     /// whatever its rules, so it proves nothing about logins from outside.
     #[error(
         "this SSH login comes from {0}, on this server itself, so it does not show that \
@@ -95,6 +96,15 @@ pub enum Refusal {
         /// Who may confirm.
         admins: Vec<String>,
     },
+    /// The changes limit SSH to `interface` (`ssh_via`), and the login did
+    /// not come in through it, so it proves nothing about that path.
+    #[error("this SSH login connected to {server}, which is not an address of {interface}")]
+    NotVia {
+        /// The interface SSH is limited to.
+        interface: String,
+        /// The server address of the login.
+        server: IpAddr,
+    },
 }
 
 fn expired(txn: &str, reason: RollbackReason) -> String {
@@ -118,6 +128,18 @@ struct Waiting {
     /// From its `state pending-confirm` record.
     admins: Vec<String>,
     ssh_port: Option<u16>,
+    ssh_via: Option<String>,
+}
+
+/// The transaction a confirm would act on, from [`Engine::waiting`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pending {
+    /// Transaction ID.
+    pub txn: String,
+    /// Who may confirm it; empty means any user.
+    pub admins: Vec<String>,
+    /// The interface a confirm must come in through, if any.
+    pub ssh_via: Option<String>,
 }
 
 /// How [`Engine::extend`] moved a deadline.
@@ -143,9 +165,12 @@ impl Engine<'_> {
     ///
     /// [`EngineError::Refused`] says why not; others if a journal cannot be
     /// read.
-    pub fn waiting(&self, id: Option<&str>) -> Result<(String, Vec<String>), EngineError> {
-        self.waiting_txn(id)
-            .map(|w| (w.txn.id().to_owned(), w.admins))
+    pub fn waiting(&self, id: Option<&str>) -> Result<Pending, EngineError> {
+        self.waiting_txn(id).map(|w| Pending {
+            txn: w.txn.id().to_owned(),
+            admins: w.admins,
+            ssh_via: w.ssh_via,
+        })
     }
 
     fn waiting_txn(&self, id: Option<&str>) -> Result<Waiting, EngineError> {
@@ -196,7 +221,7 @@ impl Engine<'_> {
         if let Some(reason) = deadman::switch(&records).and_then(|s| s.expired(fs)) {
             return Err(Refusal::Expired { txn: id, reason }.into());
         }
-        let (admins, ssh_port) = records
+        let (admins, ssh_port, ssh_via) = records
             .iter()
             .rev()
             .find_map(|r| match &r.event {
@@ -204,8 +229,9 @@ impl Engine<'_> {
                     state: TxnState::PendingConfirm { .. },
                     admins,
                     ssh_port,
+                    ssh_via,
                     ..
-                } => Some((admins.clone(), *ssh_port)),
+                } => Some((admins.clone(), *ssh_port, ssh_via.clone())),
                 _ => None,
             })
             .unwrap_or_default();
@@ -216,6 +242,7 @@ impl Engine<'_> {
             session,
             admins,
             ssh_port,
+            ssh_via,
         })
     }
 
@@ -225,7 +252,9 @@ impl Engine<'_> {
     /// `ports` (those the host's sshd listens on) or the port apply's
     /// session came in on, and as one of the users the plan named as
     /// admins, if any. With no port known at all, it refuses. A client on
-    /// loopback is refused too.
+    /// loopback is refused too. When the transaction limits SSH to an
+    /// interface, the login's server address must be one of that
+    /// interface's in `interfaces`, the host's now.
     /// Journals `confirmed` and
     /// the state, and only then stops its timers and disables the boot hook,
     /// best effort: a timer or a hook that runs anyway finds it confirmed.
@@ -240,6 +269,7 @@ impl Engine<'_> {
         id: Option<&str>,
         session: &Session,
         ports: &[u16],
+        interfaces: &[Interface],
     ) -> Result<String, EngineError> {
         let w = self.waiting_txn(id)?;
         if w.session == Some(session.id) {
@@ -263,6 +293,29 @@ impl Engine<'_> {
         let port = session.server.port();
         if !ports.contains(&port) {
             return Err(Refusal::OtherSshd { port, ports }.into());
+        }
+        if let Some(via) = w.ssh_via {
+            // A login from this host to its own VPN address travels over lo,
+            // which the firewall accepts: the VPN carried nothing. One from
+            // a container hops through a Docker bridge, also accepted, and is
+            // not caught here: its client is the container's address.
+            if interfaces
+                .iter()
+                .any(|i| i.addresses.iter().any(|a| a.ip == client))
+            {
+                return Err(Refusal::Local(client).into());
+            }
+            let server = session.server.ip().to_canonical();
+            let through = interfaces
+                .iter()
+                .any(|i| i.name == via && i.addresses.iter().any(|a| a.ip == server));
+            if !through {
+                return Err(Refusal::NotVia {
+                    interface: via,
+                    server,
+                }
+                .into());
+            }
         }
         if !w.admins.is_empty() && !session.user.as_ref().is_some_and(|u| w.admins.contains(u)) {
             return Err(Refusal::NotAdmin {

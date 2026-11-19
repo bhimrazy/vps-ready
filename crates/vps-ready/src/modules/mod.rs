@@ -152,6 +152,11 @@ pub struct ModuleSteps {
     pub reloads: Vec<Reload>,
     /// Shown after [`Module::notes`], for what only planning finds out.
     pub notes: Vec<String>,
+    /// Whether its changes need the dead-man switch on this host, though
+    /// [`Module::needs_deadman`] says no: e.g. a VPN that SSH depends on
+    /// through `ssh_via`. Its resources are then restored as if
+    /// [`Module::force_restore`] said yes.
+    pub deadman: bool,
 }
 
 impl From<Vec<Resource>> for ModuleSteps {
@@ -172,7 +177,8 @@ pub trait Module {
     /// Why the change matters.
     fn why(&self) -> &'static str;
     /// Whether its changes can lock the admin out, so apply arms the
-    /// dead-man switch and waits for a confirm.
+    /// dead-man switch and waits for a confirm. The static answer, for
+    /// `modules` and the wizard; [`ModuleSteps::deadman`] adds it per host.
     fn needs_deadman(&self) -> bool {
         false
     }

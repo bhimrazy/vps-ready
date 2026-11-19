@@ -121,7 +121,7 @@ ssh_via = "tailscale0"     # or "wg0", "nb0", ...; "vpn" in the private profile
 6. `lo`, `docker0`, `br-*`, or an interface that is the host's default route: not a private path.
 7. `--deadman=off`.
 
-**When the loaded ruleset already has the same `ssh_via`,** the SSH rule does not change, and refusals 1 to 5 become notes. So an apply from the console that changes something else (another port, a sysctl) still works when the VPN is down, which is when it is needed most. Refusals 6 and 7 stay.
+**When the loaded ruleset already has the same SSH rule** (interface and ports), the rule does not change, and refusals 1 to 5 become notes. So an apply from the console is planned when the VPN is down; a change that needs no timer (a sysctl) then works, but one that arms the timer (another port) needs a confirm through the VPN and rolls back at its deadline, which the console note says. Refusals 6 and 7 stay.
 
 **Notes, not refusals:**
 - **Console recovery.** The plan's last note before the prompt: "If tailscale0 stops working, SSH is closed. Your provider's web console logs in with a password, so set one for a sudo user (`sudo passwd admin`) if you have not; without it, recovery needs the provider's rescue mode. From the console: `sudo systemctl stop vps-ready-firewall` opens everything until the next boot; `sudo vps-ready rollback --txn <id>` undoes this change." It checks `/etc/shadow` and says which case applies. A refusal here would push every user to set a password; sshd still refuses passwords (`SSH-002`), so a console-only password is reasonable, but it is the admin's choice.

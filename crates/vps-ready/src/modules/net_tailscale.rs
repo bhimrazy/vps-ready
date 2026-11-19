@@ -256,6 +256,7 @@ impl Module for NetTailscale {
             resources,
             reloads: Vec::new(),
             notes,
+            deadman: false,
         })
     }
 

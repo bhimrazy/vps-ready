@@ -177,6 +177,7 @@ impl Module for SshServer {
             })],
             reloads: vec![Reload::SshdReload],
             notes: Vec::new(),
+            deadman: false,
         })
     }
 

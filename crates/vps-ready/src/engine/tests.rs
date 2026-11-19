@@ -25,6 +25,8 @@ struct Demo {
     unverified: Option<&'static str>,
     deadman: bool,
     force: bool,
+    /// [`ModuleSteps::deadman`].
+    by_host: bool,
 }
 
 impl Module for Demo {
@@ -61,6 +63,7 @@ impl Module for Demo {
             resources: self.resources.clone(),
             reloads: self.reloads.clone(),
             notes: Vec::new(),
+            deadman: self.by_host,
         })
     }
     fn verify(&self, _: &PlanCx, _: Sys) -> Result<(), String> {
@@ -102,6 +105,7 @@ fn module(id: &'static str, resources: Vec<Resource>) -> Demo {
         unverified: None,
         deadman: false,
         force: false,
+        by_host: false,
     }
 }
 

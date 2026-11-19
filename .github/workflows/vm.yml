@@ -57,8 +57,8 @@ jobs:
     name: vm (${{ matrix.distro }})
     needs: build
     runs-on: ubuntu-24.04
-    # The cycles, then two first boots of the cloud-init cycle.
-    timeout-minutes: 30
+    # The cycles, two first boots of the cloud-init cycle, then private access.
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -109,7 +109,7 @@ jobs:
           mkdir -p debs/partial
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends -o Dir::Cache::Archives="$PWD/debs" \
-            qemu-system-x86 qemu-utils cloud-image-utils
+            qemu-system-x86 qemu-utils cloud-image-utils wireguard-tools
           sudo chown -R "$USER" debs
       - if: steps.debs.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -141,3 +141,6 @@ jobs:
         run: test/vm-cycle.sh "$DISTRO" bin/vps-ready image.qcow2
       - name: First boot from export cloud-init
         run: test/vm-cycle.sh "$DISTRO" bin/vps-ready image.qcow2 cloud-init
+      # The runner is the VM's WireGuard peer.
+      - name: SSH only through a hand-made wg0
+        run: test/vm-cycle.sh "$DISTRO" bin/vps-ready image.qcow2 private-access

@@ -54,7 +54,11 @@ pub(in crate::cli) fn confirm(
         )?;
         return Ok(0);
     }
-    let (id, admins) = engine.waiting(txn)?;
+    let engine::Pending {
+        txn: id,
+        admins,
+        ssh_via,
+    } = engine.waiting(txn)?;
     let facts = (host.facts)(host.sys)?;
     let ports = facts.ssh.ports();
     let again = |session| again(host, &admins, session, &ports);
@@ -70,7 +74,7 @@ pub(in crate::cli) fn confirm(
             again(None)
         ),
     };
-    match engine.confirm(Some(&id), &session, &ports) {
+    match engine.confirm(Some(&id), &session, &ports, &facts.interfaces) {
         Ok(txn) => {
             writeln!(
                 out,
@@ -87,21 +91,43 @@ pub(in crate::cli) fn confirm(
             again(Some(&session))
         ),
         Err(EngineError::Refused(r @ Refusal::Local(_))) => {
-            bail!("{r}. Confirm from your own computer. {}", again(None))
+            // Under `ssh_via`, the way in is the VPN's address.
+            match ssh_via.as_deref().and_then(|v| via_address(&facts, v)) {
+                Some(ip) => bail!(
+                    "{r}. Confirm from your own computer: `{}`",
+                    ssh_line_to(host, &admins, Some(&session), &ports, Some(ip))
+                ),
+                None => bail!("{r}. Confirm from your own computer. {}", again(None)),
+            }
         }
         Err(EngineError::Refused(r @ (Refusal::OtherSshd { .. } | Refusal::NotAdmin { .. }))) => {
             bail!("{r}. {}", again(Some(&session)))
+        }
+        Err(EngineError::Refused(Refusal::NotVia { interface, server })) => {
+            let r = Refusal::NotVia {
+                interface: interface.clone(),
+                server,
+            };
+            let Some(ip) = via_address(&facts, &interface) else {
+                bail!("{r}; {interface} has no address now, so it cannot carry a login");
+            };
+            bail!(
+                "{r}; log in through {interface}: `{}`",
+                ssh_line_to(host, &admins, Some(&session), &ports, Some(ip))
+            )
         }
         Err(e) => Err(e.into()),
     }
 }
 
 /// What `apply` prints once its changes wait for a confirm: the command to
-/// run from a new terminal, with real values, and the deadline.
+/// run from a new terminal, with real values, and the deadline. Under
+/// `ssh_via` the session's address is the VPN's, the only one that works.
 pub(super) fn print_pending(
     host: &Host,
     facts: &Facts,
     admins: &[String],
+    ssh_via: Option<&str>,
     deadline: Deadline,
     left: Duration,
     out: &mut dyn Write,
@@ -113,9 +139,15 @@ pub(super) fn print_pending(
         "Changes are live. To keep them, open a NEW terminal on your computer and run\n\
          this to show you can still log in:\n"
     )?;
-    writeln!(out, "    {}", ssh_line(host, admins, session, &ports))?;
+    let via = ssh_via.and_then(|v| via_address(facts, v));
+    writeln!(
+        out,
+        "    {}",
+        ssh_line_to(host, admins, session, &ports, via)
+    )?;
     if let Some(ip) = session.map(|s| s.server.ip())
         && !public(ip)
+        && ssh_via.is_none()
     {
         writeln!(out, "    (or the address you connected to instead of {ip})")?;
     }
@@ -255,18 +287,42 @@ fn again(host: &Host, admins: &[String], session: Option<&Session>, ports: &[u16
 /// ControlPath=none` keeps a `ControlMaster` from reusing an old connection;
 /// `-t` gives sudo a terminal to ask for a password on.
 fn ssh_line(host: &Host, admins: &[String], session: Option<&Session>, ports: &[u16]) -> String {
+    ssh_line_to(host, admins, session, ports, None)
+}
+
+/// [`ssh_line`] to `to` instead of the session's server address.
+fn ssh_line_to(
+    host: &Host,
+    admins: &[String],
+    session: Option<&Session>,
+    ports: &[u16],
+    to: Option<IpAddr>,
+) -> String {
     let port = session
         .map(|s| s.server.port())
         .or_else(|| ports.first().copied())
         .unwrap_or(22);
-    let address = session.map_or_else(
-        || "<server address>".to_owned(),
-        |s| s.server.ip().to_string(),
-    );
+    let address = to
+        .or_else(|| session.map(|s| s.server.ip()))
+        .map_or_else(|| "<server address>".to_owned(), |ip| ip.to_string());
     format!(
         "ssh -t -o ControlPath=none -p {port} {}@{address} sudo vps-ready confirm",
         login_user(host, admins, session)
     )
+}
+
+/// An address of `interface` now, IPv4 first, for the `ssh` line.
+fn via_address(facts: &Facts, interface: &str) -> Option<IpAddr> {
+    let mut ips: Vec<IpAddr> = facts
+        .interfaces
+        .iter()
+        .filter(|i| i.name == interface)
+        .flat_map(|i| i.addresses.iter().map(|a| a.ip))
+        // A link-local address needs a zone (`%wg0`) to be used.
+        .filter(|ip| !matches!(ip, IpAddr::V6(v6) if v6.is_unicast_link_local()))
+        .collect();
+    ips.sort_by_key(IpAddr::is_ipv6);
+    ips.first().copied()
 }
 
 /// Who logs in to confirm: the first user the plan gave SSH keys, else

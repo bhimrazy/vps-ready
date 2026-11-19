@@ -765,9 +765,18 @@ fn new_server(
             "<file>".to_owned(),
             " (with the admin's `authorized_keys` in the file)".to_owned(),
         ),
+        (Saved::To(path), Some(Refusal::SshVia)) => {
+            let path = path.display().to_string();
+            let first = format!(" (remove firewall.inbound's `ssh_via` from {path} first)");
+            (path, first)
+        }
         (Saved::No, Some(Refusal::TailscaleAuthKey)) => (
             "<file>".to_owned(),
             " (without net.tailscale's `auth_key_file`)".to_owned(),
+        ),
+        (Saved::No, Some(Refusal::SshVia)) => (
+            "<file>".to_owned(),
+            " (without firewall.inbound's `ssh_via`)".to_owned(),
         ),
         // A built-in profile has no keys.
         (Saved::Base, _) => (

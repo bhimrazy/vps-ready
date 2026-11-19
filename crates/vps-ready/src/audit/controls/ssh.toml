@@ -68,3 +68,10 @@ title = "Repeated failed logins are slowed down"
 why = "Bots try common passwords all day. Holding back an address that keeps failing cuts the log noise and slows down a guess at a weak password."
 check = { kind = "ssh_rate_limited" }
 fix = "ssh.bruteforce"
+
+[[control]]
+id = "SSH-009"
+severity = "low"
+title = "SSH reachable only through a private network"
+why = "With SSH accepted only through a VPN (WireGuard or Tailscale), the internet cannot reach sshd at all: no login attempts, and no exposure to the next sshd flaw. firewall.inbound does this with `ssh_via`, applied from a session that already comes through the VPN; `apply --module firewall.inbound` alone does not set it. Skipped on hosts without a VPN interface."
+check = { kind = "ssh_private_only" }

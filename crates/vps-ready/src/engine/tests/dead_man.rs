@@ -223,6 +223,7 @@ fn arms_before_the_first_change_and_waits_for_a_confirm() {
             unit: Some(unit(2)),
             admins: vec!["admin".into()],
             ssh_port: Some(22),
+            ssh_via: None,
             without_timer: false,
         }
     );
@@ -252,6 +253,61 @@ fn a_plan_without_a_dead_man_module_arms_nothing() {
     ));
     assert!(calls(&run).is_empty());
     assert!(!fs.exists(Path::new(deadman::HOOK)));
+}
+
+/// A module that asks for the dead-man switch on this host only (a VPN
+/// that SSH depends on) arms it, and its resources are restored even if
+/// edited.
+#[test]
+fn a_module_that_needs_the_dead_man_on_this_host_arms_it() {
+    let fs = armable();
+    let facts = facts();
+    let vpn = Demo {
+        by_host: true,
+        ..module("test.vpn", vec![sysctl("kernel.kptr_restrict", "1")])
+    };
+    assert!(!vpn.needs_deadman());
+    let plan = plan_of(&fs, &facts, &[&vpn]);
+    assert!(plan.needs_deadman() && plan.modules[0].force_restore());
+    let (txn, _) = pending(&fs, &plan);
+    assert!(events(&fs, &txn).iter().any(|e| matches!(
+        e,
+        Event::Backup {
+            force_restore: true,
+            ..
+        }
+    )));
+    // With nothing to change, it arms nothing.
+    let none = Demo {
+        by_host: true,
+        ..module("test.vpn", Vec::new())
+    };
+    assert!(!plan_of(&fs, &facts, &[&none]).needs_deadman());
+}
+
+/// A pending transaction that reopened public SSH goes back to `ssh_via` on
+/// rollback, as its timer would: `rollback --last` stays open from anywhere.
+#[test]
+fn rolling_back_a_pending_change_back_to_ssh_via_is_not_refused() {
+    use crate::modules::firewall_inbound::RULESET;
+    let via = "    iifname \"wg0\" tcp dport { 22 } accept\n";
+    let fs = armable()
+        .with_dir("/etc/vps-ready", owner(0o755))
+        .with_file(RULESET, via);
+    let facts = facts();
+    let reopen = Demo {
+        deadman: true,
+        force: true,
+        ..module(
+            "test.reopen",
+            vec![file(RULESET, "    tcp dport { 22 } accept\n", 0o644)],
+        )
+    };
+    let plan = plan_of(&fs, &facts, &[&reopen]);
+    pending(&fs, &plan);
+    let done = manual(&fs, &dm_runner()).unwrap();
+    assert!(done.skipped.is_empty(), "{done:?}");
+    assert_eq!(fs.read(Path::new(RULESET)).unwrap(), via.as_bytes());
 }
 
 /// `apply --deadman=off`: no timer, no hook, no copy of the binary (here

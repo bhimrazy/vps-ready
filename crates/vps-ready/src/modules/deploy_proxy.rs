@@ -260,6 +260,7 @@ impl Module for DeployProxy {
                 resources,
                 reloads: Vec::new(),
                 notes,
+                deadman: false,
             });
         }
         if current == Caddyfile::Missing {
@@ -280,6 +281,7 @@ impl Module for DeployProxy {
             resources,
             reloads: vec![Reload::CaddyReload],
             notes,
+            deadman: false,
         })
     }
 

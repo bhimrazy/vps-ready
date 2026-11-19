@@ -113,6 +113,8 @@ pub(super) enum Refusal {
     /// User-data is readable by any process on the host through the
     /// metadata service, so it must not lead to an auth key.
     TailscaleAuthKey,
+    /// At first boot no SSH session can come through the VPN.
+    SshVia,
 }
 
 impl Refusal {
@@ -127,12 +129,23 @@ impl Refusal {
                  safely: user-data is readable through the metadata service. Leave it out, and \
                  log in with `sudo tailscale up --accept-dns=false` after the first boot"
             }
+            Self::SshVia => {
+                "firewall.inbound has `ssh_via`: at first boot no SSH session can come through \
+                 the VPN, so apply it later from one that does"
+            }
         }
     }
 }
 
 /// Why `export` refuses `profile`, if it does.
 pub(super) fn refusal(profile: &Profile) -> Option<Refusal> {
+    let via = profile
+        .params("firewall.inbound")
+        .and_then(|p| p.get("ssh_via"))
+        .and_then(toml::Value::as_str);
+    if via.is_some_and(|v| !v.is_empty()) {
+        return Some(Refusal::SshVia);
+    }
     if let Some(admin) = profile.params("user.admin") {
         let keys = admin.get("authorized_keys").and_then(toml::Value::as_array);
         if keys.is_none_or(Vec::is_empty) {

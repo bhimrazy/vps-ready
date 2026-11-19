@@ -16,7 +16,7 @@ use crate::audit::{self, Outcome};
 use crate::config::Profile;
 use crate::engine::{
     self, ApplyOutcome, Deadman, DeadmanOutcome, Engine, EngineError, ModuleStatus, Plan, Progress,
-    Rollback, Selected, StateDir, Target, TxnInfo, TxnState,
+    Rollback, Selected, StateDir, Target, TxnInfo, TxnState, Who,
 };
 use crate::facts::{Facts, NoSession, Session};
 use crate::modules::Module;
@@ -275,6 +275,17 @@ pub(super) fn apply_profile(
     if n == 0 {
         return Ok(Applied::Nothing);
     }
+    // Under `ssh_via` only a confirm through it shows that SSH still works.
+    if window.is_none()
+        && plan.needs_deadman()
+        && let Some(via) = &plan.ssh_via
+    {
+        bail!(
+            "`--deadman=off` is refused with `ssh_via`: only a confirm through {via} shows \
+             that SSH still works, so drop `--deadman=off` and confirm through {via}. From \
+             the console while {via} is down, such a change rolls back at its deadline"
+        );
+    }
     if window.is_none() && plan.needs_deadman() {
         nobody_logged_in(host)?;
     }
@@ -317,7 +328,15 @@ pub(super) fn apply_profile(
                 engine::Watch::Pending { left, .. } => left,
                 _ => Duration::ZERO,
             };
-            confirm::print_pending(host, &facts, &plan.admins(), deadline, left, out)?;
+            confirm::print_pending(
+                host,
+                &facts,
+                &plan.admins(),
+                plan.ssh_via.as_deref(),
+                deadline,
+                left,
+                out,
+            )?;
             out.flush()?;
             return confirm::wait(host, &state, &txn, deadline, &plan, out, err).map(Applied::Ran);
         }
@@ -377,10 +396,19 @@ pub(super) fn rollback(
 ) -> anyhow::Result<u8> {
     require_root(host, "rollback")?;
     let state = StateDir::create(host.sys.fs, host.state_dir, host.state_uid)?;
-    // Who runs it: a rollback must not remove their account.
+    // Who runs it: a rollback must not remove their account, nor limit SSH
+    // to a VPN this session does not come through.
+    let session = (host.session)(host.sys).ok();
     let mut own: Vec<String> = host.sudo_user.iter().cloned().collect();
-    own.extend((host.session)(host.sys).ok().and_then(|s| s.user));
-    let done = Engine::lock(&state, host.sys)?.rollback_by(target, &own, &mut |p| {
+    own.extend(session.as_ref().and_then(|s| s.user.clone()));
+    let interfaces = crate::facts::network::interfaces(host.sys.runner, &mut Vec::new());
+    let who = Who {
+        own: &own,
+        server: session.as_ref().map(|s| s.server.ip()),
+        client: session.map(|s| s.client.ip()),
+        interfaces: &interfaces,
+    };
+    let done = Engine::lock(&state, host.sys)?.rollback_by(target, &who, &mut |p| {
         print_progress(err, &p);
     })?;
     print_rollback(out, &done)?;

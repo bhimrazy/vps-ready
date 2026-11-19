@@ -236,6 +236,7 @@ impl Module for UserAdmin {
             resources,
             reloads: Vec::new(),
             notes,
+            deadman: false,
         })
     }
 

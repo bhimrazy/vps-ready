@@ -134,6 +134,7 @@ impl Module for SshBruteforce {
             resources,
             reloads: vec![Reload::Fail2banRestart],
             notes: Vec::new(),
+            deadman: false,
         })
     }
 }
