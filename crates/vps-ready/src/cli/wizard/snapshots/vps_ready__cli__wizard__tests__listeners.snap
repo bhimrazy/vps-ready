@@ -3,7 +3,7 @@ source: crates/vps-ready/src/cli/wizard/tests.rs
 expression: text
 ---
 vps-ready <version> on Debian GNU/Linux 13 (trixie) (vm-other)
-Audit: 13 passed, 12 failed (1 high, 5 medium, 6 low), 5 unknown. vps-ready can fix 11 of them.
+Audit: 13 passed, 13 failed (1 high, 5 medium, 7 low), 5 unknown. vps-ready can fix 11 of them.
 
 ? What will this server run?
   > Web apps or Docker: opens ports 80 and 443 (recommended: something listens on port 80)

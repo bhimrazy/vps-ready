@@ -660,6 +660,9 @@ fixed='.fix == "ssh.server" or .fix == "firewall.inbound"'
 jq -r ".findings[] | select($fixed) | \"\(.id) \(.status)\"" "$tmp/audit.json"
 jq -e "[.findings[] | select(($fixed) and .status != \"pass\")] | length == 0" \
   "$tmp/audit.json" >/dev/null || die "an ssh.server or firewall.inbound control does not pass after the confirm"
+jq -r '.findings[] | select(.id == "FW-003") | "FW-003 \(.status): \(.note)"' "$tmp/audit.json"
+jq -e '.findings[] | select(.id == "FW-003" and .status == "pass")' "$tmp/audit.json" >/dev/null ||
+  die "FW-003 does not pass after the confirm"
 expect_empty_plan ssh.server
 vm sudo nft list chain inet vps_ready prerouting | grep -q 'ip hdrlength > 5 .*drop' ||
   die "the prerouting chain does not drop IPv4 TCP with IP options"
