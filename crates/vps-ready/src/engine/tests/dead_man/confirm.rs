@@ -453,12 +453,21 @@ fn under_ssh_via_only_a_login_through_the_interface_confirms() {
     );
     assert_eq!(
         err.to_string(),
-        "this SSH login came in on 203.0.113.10, not through wg0"
+        "this SSH login connected to 203.0.113.10, which is not an address of wg0"
     );
     let private = Session {
         server: "10.77.0.1:22".parse().unwrap(),
         ..login(952, 1050)
     };
+    // From the host itself to wg0's address: over lo, not through wg0.
+    let own = Session {
+        client: "10.77.0.1:50022".parse().unwrap(),
+        ..private.clone()
+    };
+    assert_eq!(
+        refusal(engine.confirm(None, &own, &[22], &[wg0("10.77.0.1")])),
+        Refusal::Local("10.77.0.1".parse().unwrap())
+    );
     // The address must be wg0's now.
     assert!(matches!(
         refusal(engine.confirm(None, &private, &[22], &[wg0("10.77.0.2")])),

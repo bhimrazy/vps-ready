@@ -2,6 +2,7 @@
 
 use std::collections::BTreeSet;
 use std::fmt;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -12,6 +13,8 @@ use super::journal::{self, Deadline, Event, Record, RollbackReason, TxnState};
 use super::plan::{Plan, Step};
 use super::reload::{self, Reload, SYSTEMCTL_TIMEOUT};
 use super::{EngineError, StateDir, Txn, id};
+use crate::facts::Interface;
+use crate::modules::firewall_inbound;
 use crate::resource::sysctl::boot_id;
 use crate::resource::{
     Backup, Resource, ResourceError, Sysctl, after_path, authorized_keys, before_path, directory,
@@ -64,6 +67,17 @@ pub enum Target<'a> {
     Last,
     /// The one with this ID.
     Txn(&'a str),
+}
+
+/// Who runs a manual rollback, for [`Engine::rollback_by`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Who<'a> {
+    /// The login and the user who ran sudo.
+    pub own: &'a [String],
+    /// The server address of the SSH session it runs in, if any.
+    pub server: Option<IpAddr>,
+    /// The host's interfaces now.
+    pub interfaces: &'a [Interface],
 }
 
 /// What [`Engine::apply`] or a rollback is about to do or has done, for the
@@ -634,23 +648,27 @@ impl<'a> Engine<'a> {
         target: Target,
         progress: &mut dyn FnMut(Progress),
     ) -> Result<Rollback, EngineError> {
-        self.rollback_by(target, &[], progress)
+        self.rollback_by(target, &Who::default(), progress)
     }
 
-    /// [`Engine::rollback`], run by the users in `own` (the login and the
-    /// one who ran sudo): it refuses to remove an account that is one of
-    /// them, since `userdel` fails while that user has processes, and its
-    /// by-hand step ends their session.
+    /// [`Engine::rollback`], run by `who`: it refuses to remove an account
+    /// that is one of [`Who::own`], since `userdel` fails while that user
+    /// has processes, and its by-hand step ends their session. It also
+    /// refuses to restore a ruleset that limits SSH to an interface the
+    /// current one does not, unless the session comes through it: no timer
+    /// covers a manual rollback.
     ///
     /// # Errors
     ///
-    /// [`EngineError::OwnAccount`], or those of [`Engine::rollback`].
+    /// [`EngineError::OwnAccount`], [`EngineError::ViaRollback`], or those
+    /// of [`Engine::rollback`].
     pub fn rollback_by(
         &self,
         target: Target,
-        own: &[String],
+        who: &Who,
         progress: &mut dyn FnMut(Progress),
     ) -> Result<Rollback, EngineError> {
+        let own = who.own;
         let fs = self.sys.fs;
         let txn = match target {
             Target::Last => match self.state.unfinished(fs)?.pop() {
@@ -686,6 +704,19 @@ impl<'a> Engine<'a> {
                 user: user.to_owned(),
                 later,
             });
+        }
+        if let Some(via) = self.restores_via(&txn, &records)? {
+            let server = who.server.map(|s| s.to_canonical());
+            let through = who
+                .interfaces
+                .iter()
+                .any(|i| i.name == via && i.addresses.iter().any(|a| Some(a.ip) == server));
+            if !through {
+                return Err(EngineError::ViaRollback {
+                    txn: txn.id().to_owned(),
+                    via,
+                });
+            }
         }
         let switch = deadman::switch(&records);
         let unit = deadman::last_unit(&records).map(|(u, _)| u.to_owned());
@@ -921,6 +952,33 @@ impl<'a> Engine<'a> {
 
     /// The newest transaction after `id` that is applied, confirmed or
     /// pending a confirm, if any.
+    /// The interface SSH is limited to by the ruleset that rolling back
+    /// `txn` restores, when the ruleset now does not limit it to the same.
+    fn restores_via(&self, txn: &Txn, records: &[Record]) -> Result<Option<String>, EngineError> {
+        let fs = self.sys.fs;
+        let ruleset = Path::new(firewall_inbound::RULESET);
+        let restored = records.iter().find_map(|r| match &r.event {
+            Event::Backup {
+                backup: Backup::File { path, n, original },
+                ..
+            } if path == ruleset => Some(original.map(|_| *n)),
+            _ => None,
+        });
+        let Some(Some(n)) = restored else {
+            return Ok(None);
+        };
+        let via = |bytes: Vec<u8>| firewall_inbound::via_of(&String::from_utf8_lossy(&bytes));
+        let Some(before) = via(fs.read(&before_path(txn.dir(), n))?) else {
+            return Ok(None);
+        };
+        let now = match fs.read(ruleset) {
+            Ok(bytes) => via(bytes),
+            Err(SysError::NotFound(_)) => None,
+            Err(e) => return Err(e.into()),
+        };
+        Ok((now.as_deref() != Some(before.as_str())).then_some(before))
+    }
+
     fn later_in_place(&self, id: &str) -> Result<Option<String>, EngineError> {
         for txn in self.state.txns(self.sys.fs)?.into_iter().rev() {
             // `txns` is in ID order, oldest first.

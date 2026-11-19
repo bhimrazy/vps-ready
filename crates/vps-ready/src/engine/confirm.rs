@@ -62,7 +62,8 @@ pub enum Refusal {
     /// went live, so it proves nothing about them.
     #[error("this SSH session started before the changes went live")]
     OldSession,
-    /// The SSH login comes from loopback, which the firewall accepts
+    /// The SSH login comes from loopback (or, under `ssh_via`, from any
+    /// address of this host: it travels over lo), which the firewall accepts
     /// whatever its rules, so it proves nothing about logins from outside.
     #[error(
         "this SSH login comes from {0}, on this server itself, so it does not show that \
@@ -97,7 +98,7 @@ pub enum Refusal {
     },
     /// The changes limit SSH to `interface` (`ssh_via`), and the login did
     /// not come in through it, so it proves nothing about that path.
-    #[error("this SSH login came in on {server}, not through {interface}")]
+    #[error("this SSH login connected to {server}, which is not an address of {interface}")]
     NotVia {
         /// The interface SSH is limited to.
         interface: String,
@@ -280,6 +281,14 @@ impl Engine<'_> {
             return Err(Refusal::OtherSshd { port, ports }.into());
         }
         if let Some(via) = w.ssh_via {
+            // A login from this host to its own VPN address travels over lo,
+            // which the firewall accepts: the VPN carried nothing.
+            if interfaces
+                .iter()
+                .any(|i| i.addresses.iter().any(|a| a.ip == client))
+            {
+                return Err(Refusal::Local(client).into());
+            }
             let server = session.server.ip().to_canonical();
             let through = interfaces
                 .iter()

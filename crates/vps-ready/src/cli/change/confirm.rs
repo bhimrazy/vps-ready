@@ -2,7 +2,7 @@
 //! its changes wait for a confirm.
 
 use std::io::Write;
-use std::net::{IpAddr, SocketAddr};
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -100,13 +100,9 @@ pub(in crate::cli) fn confirm(
             let Some(ip) = via_address(&facts, &interface) else {
                 bail!("{r}; {interface} has no address now, so it cannot carry a login");
             };
-            let via = Session {
-                server: SocketAddr::new(ip, session.server.port()),
-                ..session.clone()
-            };
             bail!(
                 "{r}; log in through {interface}: `{}`",
-                ssh_line(host, &admins, Some(&via), &ports)
+                ssh_line_to(host, &admins, Some(&session), &ports, Some(ip))
             )
         }
         Err(e) => Err(e.into()),
@@ -132,7 +128,12 @@ pub(super) fn print_pending(
         "Changes are live. To keep them, open a NEW terminal on your computer and run\n\
          this to show you can still log in:\n"
     )?;
-    writeln!(out, "    {}", ssh_line(host, admins, session, &ports))?;
+    let via = ssh_via.and_then(|v| via_address(facts, v));
+    writeln!(
+        out,
+        "    {}",
+        ssh_line_to(host, admins, session, &ports, via)
+    )?;
     if let Some(ip) = session.map(|s| s.server.ip())
         && !public(ip)
         && ssh_via.is_none()
@@ -275,14 +276,24 @@ fn again(host: &Host, admins: &[String], session: Option<&Session>, ports: &[u16
 /// ControlPath=none` keeps a `ControlMaster` from reusing an old connection;
 /// `-t` gives sudo a terminal to ask for a password on.
 fn ssh_line(host: &Host, admins: &[String], session: Option<&Session>, ports: &[u16]) -> String {
+    ssh_line_to(host, admins, session, ports, None)
+}
+
+/// [`ssh_line`] to `to` instead of the session's server address.
+fn ssh_line_to(
+    host: &Host,
+    admins: &[String],
+    session: Option<&Session>,
+    ports: &[u16],
+    to: Option<IpAddr>,
+) -> String {
     let port = session
         .map(|s| s.server.port())
         .or_else(|| ports.first().copied())
         .unwrap_or(22);
-    let address = session.map_or_else(
-        || "<server address>".to_owned(),
-        |s| s.server.ip().to_string(),
-    );
+    let address = to
+        .or_else(|| session.map(|s| s.server.ip()))
+        .map_or_else(|| "<server address>".to_owned(), |ip| ip.to_string());
     format!(
         "ssh -t -o ControlPath=none -p {port} {}@{address} sudo vps-ready confirm",
         login_user(host, admins, session)

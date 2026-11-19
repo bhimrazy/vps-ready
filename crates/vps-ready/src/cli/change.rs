@@ -16,7 +16,7 @@ use crate::audit::{self, Outcome};
 use crate::config::Profile;
 use crate::engine::{
     self, ApplyOutcome, Deadman, DeadmanOutcome, Engine, EngineError, ModuleStatus, Plan, Progress,
-    Rollback, Selected, StateDir, Target, TxnInfo, TxnState,
+    Rollback, Selected, StateDir, Target, TxnInfo, TxnState, Who,
 };
 use crate::facts::{Facts, NoSession, Session};
 use crate::modules::Module;
@@ -282,7 +282,8 @@ pub(super) fn apply_profile(
     {
         bail!(
             "`--deadman=off` is refused with `ssh_via`: only a confirm through {via} shows \
-             that SSH still works; drop `--deadman=off`"
+             that SSH still works, so drop `--deadman=off` and confirm through {via}. From \
+             the console while {via} is down, such a change rolls back at its deadline"
         );
     }
     if window.is_none() && plan.needs_deadman() {
@@ -395,10 +396,18 @@ pub(super) fn rollback(
 ) -> anyhow::Result<u8> {
     require_root(host, "rollback")?;
     let state = StateDir::create(host.sys.fs, host.state_dir, host.state_uid)?;
-    // Who runs it: a rollback must not remove their account.
+    // Who runs it: a rollback must not remove their account, nor limit SSH
+    // to a VPN this session does not come through.
+    let session = (host.session)(host.sys).ok();
     let mut own: Vec<String> = host.sudo_user.iter().cloned().collect();
-    own.extend((host.session)(host.sys).ok().and_then(|s| s.user));
-    let done = Engine::lock(&state, host.sys)?.rollback_by(target, &own, &mut |p| {
+    own.extend(session.as_ref().and_then(|s| s.user.clone()));
+    let interfaces = crate::facts::network::interfaces(host.sys.runner, &mut Vec::new());
+    let who = Who {
+        own: &own,
+        server: session.map(|s| s.server.ip()),
+        interfaces: &interfaces,
+    };
+    let done = Engine::lock(&state, host.sys)?.rollback_by(target, &who, &mut |p| {
         print_progress(err, &p);
     })?;
     print_rollback(out, &done)?;

@@ -126,7 +126,14 @@ fn a_rollback_does_not_remove_the_account_running_it() {
     .unwrap();
     let own = ["admin".to_owned()];
     let err = engine
-        .rollback_by(Target::Last, &own, &mut |_| {})
+        .rollback_by(
+            Target::Last,
+            &Who {
+                own: &own,
+                ..Who::default()
+            },
+            &mut |_| {},
+        )
         .unwrap_err();
     assert!(
         matches!(&err, EngineError::OwnAccount { user, .. } if user == "admin"),
@@ -142,7 +149,14 @@ fn a_rollback_does_not_remove_the_account_running_it() {
     assert_eq!(fs.read(Path::new(KPTR)).unwrap(), b"1");
     // Another account may.
     engine
-        .rollback_by(Target::Last, &["ubuntu".to_owned()], &mut |_| {})
+        .rollback_by(
+            Target::Last,
+            &Who {
+                own: &["ubuntu".to_owned()],
+                ..Who::default()
+            },
+            &mut |_| {},
+        )
         .unwrap();
 }
 
@@ -245,6 +259,62 @@ fn a_created_account_outlives_a_later_transaction() {
             reason: RollbackReason::Manual
         }
     );
+}
+
+/// A manual rollback has no timer, so one that would limit SSH to `wg0`
+/// again runs only from a session through `wg0`.
+#[test]
+fn a_rollback_that_restores_ssh_via_needs_a_session_through_it() {
+    use crate::facts::{Address, Interface};
+    use crate::modules::firewall_inbound::RULESET;
+    let via = "    iifname \"wg0\" tcp dport { 22 } accept\n";
+    let fs = fixture()
+        .with_dir("/etc/vps-ready", owner(0o755))
+        .with_file(RULESET, via);
+    let facts = facts();
+    // A change that reopens public SSH: its rollback closes it again.
+    let reopen = module(
+        "test.reopen",
+        vec![file(RULESET, "    tcp dport { 22 } accept\n", 0o644)],
+    );
+    let plan = plan_of(&fs, &facts, &[&reopen]);
+    assert!(matches!(
+        apply(&fs, &plan).unwrap(),
+        ApplyOutcome::Applied { .. }
+    ));
+    let wg0 = [Interface {
+        name: "wg0".into(),
+        kind: Some("wireguard".into()),
+        addresses: vec![Address {
+            ip: "10.77.0.1".parse().unwrap(),
+            prefix: 24,
+        }],
+        up: true,
+    }];
+    let state = state(&fs);
+    let engine = Engine::lock(&state, sys(&fs)).unwrap();
+    for server in [None, Some("192.0.2.10".parse().unwrap())] {
+        let who = Who {
+            server,
+            interfaces: &wg0,
+            ..Who::default()
+        };
+        let err = engine
+            .rollback_by(Target::Last, &who, &mut |_| {})
+            .unwrap_err();
+        assert!(
+            matches!(&err, EngineError::ViaRollback { via, .. } if via == "wg0"),
+            "{err:?}"
+        );
+    }
+    assert_ne!(fs.read(Path::new(RULESET)).unwrap(), via.as_bytes());
+    let who = Who {
+        server: Some("10.77.0.1".parse().unwrap()),
+        interfaces: &wg0,
+        ..Who::default()
+    };
+    engine.rollback_by(Target::Last, &who, &mut |_| {}).unwrap();
+    assert_eq!(fs.read(Path::new(RULESET)).unwrap(), via.as_bytes());
 }
 
 fn state_of(fs: &dyn Fs, txn: &str) -> TxnState {

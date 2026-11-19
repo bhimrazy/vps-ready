@@ -497,18 +497,18 @@ fn the_ssh_line_names_the_planned_admin() {
         sudo_user: Some("root".into()),
         ..lockout_host(&fs, &runner)
     };
-    let facts = vm_in_session(host.sys).unwrap();
+    let mut facts = vm_in_session(host.sys).unwrap();
     let deadline = engine::Deadline {
         boottime: 1300,
         wall: 0,
     };
-    let line = |admins: &[String]| {
+    let line = |facts: &Facts, admins: &[String], via: Option<&str>| {
         let mut out = Vec::new();
         super::super::confirm::print_pending(
             &host,
-            &facts,
+            facts,
             admins,
-            None,
+            via,
             deadline,
             Duration::from_secs(300),
             &mut out,
@@ -522,12 +522,27 @@ fn the_ssh_line_names_the_planned_admin() {
             .to_owned()
     };
     assert_eq!(
-        line(&["admin".into(), "deploy".into()]),
+        line(&facts, &["admin".into(), "deploy".into()], None),
         "    ssh -t -o ControlPath=none -p 22 admin@10.0.2.15 sudo vps-ready confirm"
     );
     assert_eq!(
-        line(&[]),
+        line(&facts, &[], None),
         "    ssh -t -o ControlPath=none -p 22 root@10.0.2.15 sudo vps-ready confirm"
+    );
+    // Under `ssh_via`, wg0's address, also without a session (the console).
+    facts.session = None;
+    facts.interfaces.push(crate::facts::Interface {
+        name: "wg0".into(),
+        kind: Some("wireguard".into()),
+        addresses: vec![crate::facts::Address {
+            ip: "10.77.0.1".parse().unwrap(),
+            prefix: 24,
+        }],
+        up: true,
+    });
+    assert_eq!(
+        line(&facts, &["admin".into()], Some("wg0")),
+        "    ssh -t -o ControlPath=none -p 22 admin@10.77.0.1 sudo vps-ready confirm"
     );
 }
 
@@ -600,7 +615,7 @@ fn confirm_under_ssh_via_needs_a_login_through_the_interface() {
     assert_eq!(code, 2);
     assert_eq!(
         err,
-        "error: this SSH login came in on 10.0.2.15, not through wg0; log in through wg0: \
+        "error: this SSH login connected to 10.0.2.15, which is not an address of wg0; log in through wg0: \
          `ssh -t -o ControlPath=none -p 22 admin@10.77.0.1 sudo vps-ready confirm`\n"
     );
     assert!(history_text(&host).contains("pending-confirm"));
@@ -723,7 +738,8 @@ fn deadman_off_is_refused_under_ssh_via() {
     assert_eq!(
         err,
         "error: `--deadman=off` is refused with `ssh_via`: only a confirm through wg0 shows \
-         that SSH still works; drop `--deadman=off`\n"
+         that SSH still works, so drop `--deadman=off` and confirm through wg0. From the \
+         console while wg0 is down, such a change rolls back at its deadline\n"
     );
     assert!(txn_ids(&fs).is_empty());
 }

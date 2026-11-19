@@ -19,7 +19,7 @@ pub use journal::{Deadline, Event, Record, RollbackReason, TxnState};
 pub use plan::{ModulePlan, ModuleStatus, Plan, Selected, Step, plan};
 pub use reload::{CADDYFILE, Reload};
 pub use run::{
-    ApplyOutcome, ByHand, DeadmanOutcome, Engine, Progress, Rollback, Target, TxnInfo, history,
+    ApplyOutcome, ByHand, DeadmanOutcome, Engine, Progress, Rollback, Target, TxnInfo, Who, history,
 };
 pub use state::{StateDir, Txn};
 
@@ -209,6 +209,19 @@ pub enum EngineError {
         user: String,
         /// The later transaction that is applied, confirmed or pending.
         later: String,
+    },
+    /// A rollback would limit SSH to `via` again (`ssh_via`), with no timer
+    /// and no confirm, from a session that does not come through it.
+    #[error(
+        "refusing to roll back transaction {txn}: it limits SSH to {via} again, and this \
+         session does not come through {via}, so nothing shows that SSH still works \
+         afterwards; roll back from a session through {via}"
+    )]
+    ViaRollback {
+        /// Transaction ID.
+        txn: String,
+        /// The interface the restored ruleset limits SSH to.
+        via: String,
     },
     /// Two steps of a plan change the same resource.
     #[error("the plan changes {0} twice")]
