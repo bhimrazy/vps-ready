@@ -571,6 +571,17 @@ mod tests {
             r#"{"at":7,"event":"state","state":"pending-confirm","deadline":{"boottime":1575,"wall":1792932341},"live_since":1275,"session":{"pid":812,"start":10433},"unit":"vps-ready-deadman-20261025T120000Z-2","admins":["admin"],"ssh_port":22}"#
         );
         assert_eq!(
+            line(Event::State {
+                state: pending(),
+                unit: None,
+                admins: Vec::new(),
+                ssh_port: Some(22),
+                ssh_via: Some("wg0".into()),
+                without_timer: false,
+            }),
+            r#"{"at":7,"event":"state","state":"pending-confirm","deadline":{"boottime":1575,"wall":1792932341},"live_since":1275,"session":{"pid":812,"start":10433},"ssh_port":22,"ssh_via":"wg0"}"#
+        );
+        assert_eq!(
             line(extended(1934)),
             r#"{"at":7,"event":"extended","unit":"vps-ready-deadman-20261025T120000Z-3","deadline":{"boottime":1934,"wall":1792932700}}"#
         );

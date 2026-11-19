@@ -1050,12 +1050,16 @@ pub(crate) fn tailscale_expiry(facts: &Facts) -> Option<String> {
         .key_expiry
         .as_ref()?;
     let ssh = crate::modules::firewall_inbound::ssh_ports(facts);
-    let via_tailscale = facts.firewall.iter().flat_map(|f| &f.input_chains).any(|c| {
-        c.interface_ports.iter().any(|p| {
-            p.interfaces.iter().any(|i| i == "tailscale0")
-                && ssh.iter().any(|&port| p.ports.contains("tcp", port))
-        })
-    });
+    let via_tailscale = facts
+        .firewall
+        .iter()
+        .flat_map(|f| &f.input_chains)
+        .any(|c| {
+            c.interface_ports.iter().any(|p| {
+                p.interfaces.iter().any(|i| i == "tailscale0")
+                    && ssh.iter().any(|&port| p.ports.contains("tcp", port))
+            })
+        });
     via_tailscale.then(|| {
         format!(
             "warning: this node's Tailscale key expires at {at}, and SSH through tailscale0 \

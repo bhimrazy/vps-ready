@@ -255,6 +255,36 @@ fn a_plan_without_a_dead_man_module_arms_nothing() {
     assert!(!fs.exists(Path::new(deadman::HOOK)));
 }
 
+/// A module that asks for the dead-man switch on this host only (a VPN
+/// that SSH depends on) arms it, and its resources are restored even if
+/// edited.
+#[test]
+fn a_module_that_needs_the_dead_man_on_this_host_arms_it() {
+    let fs = armable();
+    let facts = facts();
+    let vpn = Demo {
+        by_host: true,
+        ..module("test.vpn", vec![sysctl("kernel.kptr_restrict", "1")])
+    };
+    assert!(!vpn.needs_deadman());
+    let plan = plan_of(&fs, &facts, &[&vpn]);
+    assert!(plan.needs_deadman() && plan.modules[0].force_restore());
+    let (txn, _) = pending(&fs, &plan);
+    assert!(events(&fs, &txn).iter().any(|e| matches!(
+        e,
+        Event::Backup {
+            force_restore: true,
+            ..
+        }
+    )));
+    // With nothing to change, it arms nothing.
+    let none = Demo {
+        by_host: true,
+        ..module("test.vpn", Vec::new())
+    };
+    assert!(!plan_of(&fs, &facts, &[&none]).needs_deadman());
+}
+
 /// `apply --deadman=off`: no timer, no hook, no copy of the binary (here
 /// there is none to check), and `state applied` says so.
 #[test]

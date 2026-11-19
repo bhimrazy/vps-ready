@@ -274,10 +274,11 @@ pub fn plan<'a>(
             deadman,
         });
     }
-    let ssh_via = firewall_inbound::ssh_via(&planned, sys).map_err(|error| EngineError::Module {
-        module: "firewall.inbound",
-        error,
-    })?;
+    let ssh_via =
+        firewall_inbound::ssh_via(&planned, sys).map_err(|error| EngineError::Module {
+            module: "firewall.inbound",
+            error,
+        })?;
     Ok(Plan {
         modules: plans,
         facts,

@@ -563,6 +563,49 @@ fn confirm_refuses_a_login_other_than_the_admin() {
     assert!(history_text(&host).contains("pending-confirm"));
 }
 
+/// Under `ssh_via`, a new login to the public address is told the command
+/// through the interface.
+#[test]
+fn confirm_under_ssh_via_needs_a_login_through_the_interface() {
+    fn with_wg0(sys: Sys) -> anyhow::Result<Facts> {
+        let mut facts = vm_in_session(sys)?;
+        facts.interfaces.push(crate::facts::Interface {
+            name: "wg0".into(),
+            kind: Some("wireguard".into()),
+            addresses: vec![crate::facts::Address {
+                ip: "10.77.0.1".parse().unwrap(),
+                prefix: 24,
+            }],
+            up: true,
+        });
+        Ok(facts)
+    }
+    let fs = armable();
+    let runner = dm_runner();
+    let host = lockout_host(&fs, &runner);
+    apply_lockout(&host);
+    let txn = txn_ids(&fs).pop().unwrap();
+    let path = PathBuf::from(format!("{STATE}/txn/{txn}/journal.jsonl"));
+    let text = String::from_utf8(fs.read(&path).unwrap())
+        .unwrap()
+        .replace(r#""ssh_port":22"#, r#""ssh_port":22,"ssh_via":"wg0""#);
+    fs.write(&path, text.as_bytes()).unwrap();
+    set_uptime(&fs, 1100);
+    let new = Host {
+        session: new_login,
+        facts: with_wg0,
+        ..lockout_host(&fs, &runner)
+    };
+    let (code, _, err) = confirm_cmd(&new, None);
+    assert_eq!(code, 2);
+    assert_eq!(
+        err,
+        "error: this SSH login came in on 10.0.2.15, not through wg0; log in through wg0: \
+         `ssh -t -o ControlPath=none -p 22 admin@10.77.0.1 sudo vps-ready confirm`\n"
+    );
+    assert!(history_text(&host).contains("pending-confirm"));
+}
+
 /// `/proc` of a first boot: init and the sshd listener, nobody logged in.
 fn first_boot() -> FakeFs {
     fixture()
@@ -660,6 +703,29 @@ fn deadman_off_is_refused_while_someone_is_logged_in() {
         &logind(&[("3", "admin", "user")]),
         "logind session 3 of admin",
     );
+}
+
+/// Refusal 7: with SSH limited to an interface, only a confirm through it
+/// shows that SSH still works, even when nobody is logged in.
+#[test]
+fn deadman_off_is_refused_under_ssh_via() {
+    let fs = first_boot().with_file(
+        crate::modules::firewall_inbound::RULESET,
+        "    iifname \"wg0\" tcp dport { 22 } accept\n",
+    );
+    let runner = logind(&[]);
+    let host = Host {
+        facts: vm,
+        ..lockout_host(&fs, &runner)
+    };
+    let (code, _, err) = apply_off(&host);
+    assert_eq!(code, EXIT_ERROR, "{err}");
+    assert_eq!(
+        err,
+        "error: `--deadman=off` is refused with `ssh_via`: only a confirm through wg0 shows \
+         that SSH still works; drop `--deadman=off`\n"
+    );
+    assert!(txn_ids(&fs).is_empty());
 }
 
 #[test]

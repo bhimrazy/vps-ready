@@ -239,7 +239,7 @@ impl Module for FirewallInbound {
          connections, and drops the rest."
     }
 
-        fn params_doc(&self) -> &'static [ParamDoc] {
+    fn params_doc(&self) -> &'static [ParamDoc] {
         &[
             ParamDoc {
                 name: "allow",
@@ -363,7 +363,12 @@ impl Module for FirewallInbound {
         if let Some(via) = &model.ssh_via {
             notes.extend(left_out(&params, &model, via));
             let loaded = ssh_via(cx.planned, sys)?;
-            notes.extend(via::check(cx.facts, via, loaded.as_ref() == Some(via), sys)?);
+            notes.extend(via::check(
+                cx.facts,
+                via,
+                loaded.as_ref() == Some(via),
+                sys,
+            )?);
         }
         let mut resources = Vec::new();
         if !cx.facts.firewall_tools.nft {
@@ -636,7 +641,9 @@ fn check_loaded(json: &[u8], want: &Ruleset) -> Result<(), String> {
             || chain.unread_ports.iter().any(|p| p == "tcp")
             || via_rules.iter().any(|p| !only_via(p))
         {
-            wrong.push(format!("it accepts tcp/{port} on interfaces other than {via}"));
+            wrong.push(format!(
+                "it accepts tcp/{port} on interfaces other than {via}"
+            ));
         } else if via_rules.is_empty() {
             wrong.push(format!("it does not accept tcp/{port} on {via}"));
         }

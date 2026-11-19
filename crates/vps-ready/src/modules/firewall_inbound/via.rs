@@ -75,9 +75,11 @@ pub(super) fn check(
         problems.extend(key_expiry(facts));
     }
     if same {
-        notes.extend(problems.into_iter().map(|p| {
-            format!("{p} (not refused: the loaded ruleset already limits SSH to {via})")
-        }));
+        notes.extend(
+            problems.into_iter().map(|p| {
+                format!("{p} (not refused: the loaded ruleset already limits SSH to {via})")
+            }),
+        );
     } else if !problems.is_empty() {
         return refuse(&problems.join("; "));
     }

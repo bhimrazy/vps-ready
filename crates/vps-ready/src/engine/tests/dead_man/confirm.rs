@@ -208,7 +208,10 @@ fn a_login_from_loopback_does_not_confirm() {
     );
     assert!(calls(&run).is_empty());
     // QEMU's user networking: logins come from its gateway, 10.0.2.2.
-    assert_eq!(engine.confirm(None, &from("10.0.2.2"), &[22], &[]).unwrap(), txn);
+    assert_eq!(
+        engine.confirm(None, &from("10.0.2.2"), &[22], &[]).unwrap(),
+        txn
+    );
 }
 
 /// Rewrites the admins of the `state pending-confirm` record of `txn`,
@@ -388,6 +391,85 @@ fn admins_are_the_keyed_users_else_the_applying_user() {
     // Without the dead-man switch, no fallback.
     facts.session = Some(session("ubuntu"));
     assert!(plan_with(&facts, &[&plain]).is_empty());
+}
+
+/// With the ruleset on disk limiting SSH to `wg0`, the pending record says
+/// so, and only a login to an address `wg0` has at confirm time confirms.
+#[test]
+fn under_ssh_via_only_a_login_through_the_interface_confirms() {
+    use crate::facts::{Address, Interface};
+    let fs = armable().with_file(
+        crate::modules::firewall_inbound::RULESET,
+        "    iifname \"wg0\" tcp dport { 22 } accept\n",
+    );
+    let mut facts = facts();
+    facts.session = Some(Session {
+        id: APPLY,
+        server: "10.77.0.1:22".parse().unwrap(),
+        ..login(0, 0)
+    });
+    let [lock, ..] = locking();
+    let plan = plan_of(&fs, &facts, &[&lock]);
+    assert_eq!(plan.ssh_via.as_deref(), Some("wg0"));
+    let (txn, _) = pending(&fs, &plan);
+    let journal = String::from_utf8(
+        fs.read(&PathBuf::from(format!("{STATE}/txn/{txn}/journal.jsonl")))
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        journal.contains(r#""ssh_port":22,"ssh_via":"wg0""#),
+        "{journal}"
+    );
+    set_uptime(&fs, 1100);
+
+    let wg0 = |ip: &str| Interface {
+        name: "wg0".into(),
+        kind: Some("wireguard".into()),
+        addresses: vec![Address {
+            ip: ip.parse().unwrap(),
+            prefix: 24,
+        }],
+        up: true,
+    };
+    let run = dm_runner();
+    let state = state(&fs);
+    let engine = Engine::lock(
+        &state,
+        Sys {
+            fs: &fs,
+            runner: &run,
+        },
+    )
+    .unwrap();
+    let public = login(951, 1050);
+    let err = refusal(engine.confirm(None, &public, &[22], &[wg0("10.77.0.1")]));
+    assert_eq!(
+        err,
+        Refusal::NotVia {
+            interface: "wg0".into(),
+            server: "203.0.113.10".parse().unwrap(),
+        }
+    );
+    assert_eq!(
+        err.to_string(),
+        "this SSH login came in on 203.0.113.10, not through wg0"
+    );
+    let private = Session {
+        server: "10.77.0.1:22".parse().unwrap(),
+        ..login(952, 1050)
+    };
+    // The address must be wg0's now.
+    assert!(matches!(
+        refusal(engine.confirm(None, &private, &[22], &[wg0("10.77.0.2")])),
+        Refusal::NotVia { .. }
+    ));
+    assert_eq!(
+        engine
+            .confirm(None, &private, &[22], &[wg0("10.77.0.1")])
+            .unwrap(),
+        txn
+    );
 }
 
 fn confirm_ports(fs: &FakeFs, session: &Session, ports: &[u16]) -> Result<String, EngineError> {

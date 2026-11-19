@@ -104,10 +104,21 @@ fn ssh_via_takes_an_interface_name() {
         let table = params(&format!("ssh_via = \"{good}\""));
         assert!(FirewallInbound.check_params(&table).is_ok(), "{good}");
     }
-    for bad in ["wg\"0", "wg 0", "wg*", "abcdefghijklmnop", ".", "..", "wg/0"] {
+    for bad in [
+        "wg\"0",
+        "wg 0",
+        "wg*",
+        "abcdefghijklmnop",
+        ".",
+        "..",
+        "wg/0",
+    ] {
         let table = params(&format!("ssh_via = {bad:?}"));
         let err = FirewallInbound.check_params(&table).unwrap_err();
-        assert!(err.to_string().contains("is not an interface name"), "{bad}: {err}");
+        assert!(
+            err.to_string().contains("is not an interface name"),
+            "{bad}: {err}"
+        );
     }
 }
 
@@ -118,7 +129,10 @@ fn refuses_a_path_that_may_not_carry_ssh() {
     let on = units("enabled");
     let wg = via_facts("10.77.0.1:22");
     // 1. Missing, down, no address.
-    assert_eq!(refused(via_steps(&wg, "wg9", &fs, &on)).split(';').next(), Some("wg9 does not exist"));
+    assert_eq!(
+        refused(via_steps(&wg, "wg9", &fs, &on)).split(';').next(),
+        Some("wg9 does not exist")
+    );
     assert!(refused(via_steps(&wg, "wg1", &fs, &on)).starts_with("wg1 is down"));
     let mut bare = wg.clone();
     bare.interfaces.iter_mut().for_each(|i| {
@@ -223,8 +237,14 @@ fn ssh_via_reads_the_planned_ruleset_then_the_one_on_disk() {
     let steps = via_steps(&facts, "wg0", &wg_fs(None), &units("enabled")).unwrap();
     let runner = FakeRunner::new();
     let none = FakeFs::new();
-    let sys = |fs| Sys { fs, runner: &runner };
-    assert_eq!(ssh_via(&steps.resources, sys(&none)).unwrap().as_deref(), Some("wg0"));
+    let sys = |fs| Sys {
+        fs,
+        runner: &runner,
+    };
+    assert_eq!(
+        ssh_via(&steps.resources, sys(&none)).unwrap().as_deref(),
+        Some("wg0")
+    );
     assert_eq!(ssh_via(&[], sys(&none)).unwrap(), None);
     let disk = FakeFs::new().with_file(RULESET, ruleset_of(&steps));
     assert_eq!(ssh_via(&[], sys(&disk)).unwrap().as_deref(), Some("wg0"));
@@ -317,8 +337,7 @@ fn ssh_009_and_fw_003_pass_on_the_loaded_table() {
     assert_eq!(fw.outcome, Outcome::Pass);
 
     // The table before `ssh_via`: SSH from anywhere.
-    facts.firewall =
-        crate::facts::firewall::parse_json(&std::fs::read(testdata(LOADED)).unwrap());
+    facts.firewall = crate::facts::firewall::parse_json(&std::fs::read(testdata(LOADED)).unwrap());
     assert_eq!(
         finding(&facts, "SSH-009").outcome,
         Outcome::Fail {
@@ -357,7 +376,6 @@ fn warns_while_ssh_depends_on_an_expiring_tailscale_key() {
     assert_eq!(finding(&facts, "SSH-009").note.as_deref(), Some(warning));
     assert!(warned(&facts));
     // Not while SSH does not depend on it.
-    facts.firewall =
-        crate::facts::firewall::parse_json(&std::fs::read(testdata(LOADED)).unwrap());
+    facts.firewall = crate::facts::firewall::parse_json(&std::fs::read(testdata(LOADED)).unwrap());
     assert_eq!(finding(&facts, "SSH-009").note, None);
 }
