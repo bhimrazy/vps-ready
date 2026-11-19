@@ -9,6 +9,7 @@ expression: "(&ifs, &routes)"
         prefix: 8
       - ip: "::1"
         prefix: 128
+    up: true
   - name: eth0
     kind: ~
     addresses:
@@ -18,11 +19,17 @@ expression: "(&ifs, &routes)"
         prefix: 64
       - ip: "fe80::5054:ff:fe12:3456"
         prefix: 64
+    up: true
   - name: wg0
     kind: wireguard
     addresses:
-      - ip: 10.77.1.1
+      - ip: 10.77.0.1
         prefix: 24
+    up: true
+  - name: wg1
+    kind: wireguard
+    addresses: []
+    up: false
   - name: tailscale0
     kind: tun
     addresses:
@@ -30,6 +37,7 @@ expression: "(&ifs, &routes)"
         prefix: 32
       - ip: "fd7a:115c:a1e0::7"
         prefix: 128
+    up: true
 - - dst: default
     dev: eth0
     gateway: 192.0.2.1
@@ -38,7 +46,7 @@ expression: "(&ifs, &routes)"
     dev: eth0
     gateway: ~
     table: ~
-  - dst: 10.77.1.0/24
+  - dst: 10.77.0.0/24
     dev: wg0
     gateway: ~
     table: ~
@@ -51,6 +59,26 @@ expression: "(&ifs, &routes)"
     gateway: ~
     table: local
   - dst: 192.0.2.255
+    dev: eth0
+    gateway: ~
+    table: local
+  - dst: "2001:db8::/64"
+    dev: eth0
+    gateway: ~
+    table: ~
+  - dst: "fe80::/64"
+    dev: eth0
+    gateway: ~
+    table: ~
+  - dst: default
+    dev: eth0
+    gateway: "fe80::1"
+    table: ~
+  - dst: "::1"
+    dev: lo
+    gateway: ~
+    table: local
+  - dst: "ff00::/8"
     dev: eth0
     gateway: ~
     table: local

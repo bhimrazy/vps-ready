@@ -273,6 +273,7 @@ interfaces:
         prefix: 8
       - ip: "::1"
         prefix: 128
+    up: true
   - name: eth0
     kind: ~
     addresses:
@@ -282,18 +283,7 @@ interfaces:
         prefix: 64
       - ip: "fe80::5054:ff:fe12:3456"
         prefix: 64
-  - name: wg0
-    kind: wireguard
-    addresses:
-      - ip: 10.77.1.1
-        prefix: 24
-  - name: tailscale0
-    kind: tun
-    addresses:
-      - ip: 100.64.0.7
-        prefix: 32
-      - ip: "fd7a:115c:a1e0::7"
-        prefix: 128
+    up: true
 routes:
   - dst: default
     dev: eth0
@@ -303,19 +293,31 @@ routes:
     dev: eth0
     gateway: ~
     table: ~
-  - dst: 10.77.1.0/24
-    dev: wg0
-    gateway: ~
-    table: ~
-  - dst: 100.64.0.0/10
-    dev: tailscale0
-    gateway: ~
-    table: "52"
   - dst: 192.0.2.10
     dev: eth0
     gateway: ~
     table: local
   - dst: 192.0.2.255
+    dev: eth0
+    gateway: ~
+    table: local
+  - dst: "2001:db8::/64"
+    dev: eth0
+    gateway: ~
+    table: ~
+  - dst: "fe80::/64"
+    dev: eth0
+    gateway: ~
+    table: ~
+  - dst: default
+    dev: eth0
+    gateway: "fe80::1"
+    table: ~
+  - dst: "::1"
+    dev: lo
+    gateway: ~
+    table: local
+  - dst: "ff00::/8"
     dev: eth0
     gateway: ~
     table: local

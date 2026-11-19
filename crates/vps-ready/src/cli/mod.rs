@@ -924,7 +924,7 @@ fn print_facts(out: &mut impl Write, facts: &Facts, color: bool) -> io::Result<(
 }
 
 /// VPN-like interfaces and whether the SSH session came in on one, e.g.
-/// `wg0 (WireGuard, 10.77.1.1/24), tailscale0 (Tailscale, Running); SSH session arrived on wg0`.
+/// `wg0 (WireGuard, 10.77.0.1/24), tailscale0 (Tailscale, Running); SSH session arrived on wg0`.
 fn vpn_line(facts: &Facts) -> String {
     let vpns: Vec<String> = facts
         .interfaces
@@ -937,7 +937,11 @@ fn vpn_line(facts: &Facts) -> String {
                     .iter()
                     .map(|a| format!("{}/{}", a.ip, a.prefix))
                     .collect();
-                format!("WireGuard, {}", addrs.join(" "))
+                if addrs.is_empty() {
+                    "WireGuard".to_owned()
+                } else {
+                    format!("WireGuard, {}", addrs.join(" "))
+                }
             } else {
                 let state = facts
                     .tailscale
@@ -1059,10 +1063,18 @@ mod tests {
     #[test]
     fn vpn_line_names_interfaces_and_the_session_interface() {
         let mut facts = host("debian-12", &[]);
-        // The captured interfaces include wg0 and tailscale0.
+        assert_eq!(vpn_line(&facts), "none");
+        let json = include_bytes!("../../testdata/network/ip-addr.json");
+        let mut notices = Vec::new();
+        let runner = crate::sys::fake::FakeRunner::new().on(
+            "ip",
+            ["-j", "-d", "addr"],
+            crate::sys::Output::success(json.to_vec()),
+        );
+        facts.interfaces = facts::network::interfaces(&runner, &mut notices);
         assert_eq!(
             vpn_line(&facts),
-            "wg0 (WireGuard, 10.77.1.1/24), tailscale0 (Tailscale, state unknown)"
+            "wg0 (WireGuard, 10.77.0.1/24), wg1 (WireGuard), tailscale0 (Tailscale, state unknown)"
         );
         let session = |server: &str| facts::Session {
             id: facts::SessionId { pid: 812, start: 1 },
@@ -1071,7 +1083,7 @@ mod tests {
             uid: 1000,
             user: None,
         };
-        facts.session = Some(session("10.77.1.1:22"));
+        facts.session = Some(session("10.77.0.1:22"));
         assert!(vpn_line(&facts).ends_with("; SSH session arrived on wg0"));
         facts.session = Some(session("192.0.2.10:22"));
         assert!(!vpn_line(&facts).contains("arrived"));

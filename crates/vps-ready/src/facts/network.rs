@@ -27,6 +27,9 @@ pub struct Interface {
     pub kind: Option<String>,
     /// Addresses of both families.
     pub addresses: Vec<Address>,
+    /// Whether the `UP` flag is set. `operstate` is `UNKNOWN` for WireGuard
+    /// and `tun` links, so the flag is the reliable source.
+    pub up: bool,
 }
 
 impl Interface {
@@ -60,7 +63,7 @@ pub struct Address {
     pub prefix: u8,
 }
 
-/// An IPv4 route from `ip -j route show table all`.
+/// A route of either family from `ip -j route show table all`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Route {
     /// `default`, a prefix such as `192.0.2.0/24`, or a bare address.
@@ -102,7 +105,8 @@ pub struct Tailscale {
     /// This node's Tailscale addresses.
     pub ips: Vec<IpAddr>,
     /// When this node's key expires (RFC 3339). `None` when expiry is
-    /// disabled for the node.
+    /// disabled for the node, or when the node is not `Running` (no network
+    /// map). Treat `None` as disabled only when `backend_state` is `Running`.
     pub key_expiry: Option<String>,
 }
 
@@ -110,6 +114,8 @@ pub struct Tailscale {
 struct RawIf {
     ifname: String,
     linkinfo: Option<RawLinkInfo>,
+    #[serde(default)]
+    flags: Vec<String>,
     #[serde(default)]
     addr_info: Vec<RawAddr>,
 }
@@ -151,12 +157,13 @@ struct RawSelf {
 
 /// `ip -j -d addr`: `-d` adds `linkinfo.info_kind`, the kernel's link type,
 /// so one call gives both the addresses and the WireGuard type.
-pub(super) fn interfaces(runner: &dyn Runner, notices: &mut Vec<String>) -> Vec<Interface> {
+pub(crate) fn interfaces(runner: &dyn Runner, notices: &mut Vec<String>) -> Vec<Interface> {
     let raw: Vec<RawIf> = ip_json(runner, &["-j", "-d", "addr"], "interfaces", notices);
     raw.into_iter()
         .map(|i| Interface {
             name: i.ifname,
             kind: i.linkinfo.and_then(|l| l.info_kind),
+            up: i.flags.iter().any(|f| f == "UP"),
             addresses: i
                 .addr_info
                 .into_iter()
@@ -169,7 +176,7 @@ pub(super) fn interfaces(runner: &dyn Runner, notices: &mut Vec<String>) -> Vec<
         .collect()
 }
 
-/// `ip -j route show table all`. IPv4 only: the tunnel subnet is IPv4.
+/// `ip -j route show table all`, which lists both families.
 pub(super) fn routes(runner: &dyn Runner, notices: &mut Vec<String>) -> Vec<Route> {
     let args = ["-j", "route", "show", "table", "all"];
     let raw: Vec<RawRoute> = ip_json(runner, &args, "routes", notices);
@@ -203,7 +210,10 @@ fn ip_json<T: for<'de> Deserialize<'de>>(
             Vec::new()
         }
         Probe::Missing => {
-            notices.push(format!("ip not found; {what} are unknown"));
+            let note = "ip not found; interfaces and routes are unknown".to_owned();
+            if !notices.contains(&note) {
+                notices.push(note);
+            }
             Vec::new()
         }
         Probe::Failed => Vec::new(),
@@ -247,31 +257,41 @@ fn parse_listen_ports(text: &str) -> BTreeMap<String, u16> {
     text.lines()
         .filter_map(|line| {
             let (name, port) = line.split_once(char::is_whitespace)?;
-            Some((name.to_owned(), port.trim().parse().ok()?))
+            // A down interface has no port and prints 0.
+            let port: u16 = port.trim().parse().ok().filter(|p| *p != 0)?;
+            Some((name.to_owned(), port))
         })
         .collect()
 }
 
 /// `None` without `tailscale`, or when its daemon does not answer.
 pub(super) fn tailscale(runner: &dyn Runner, notices: &mut Vec<String>) -> Option<Tailscale> {
+    // `--peers=false` keeps the output small on a big tailnet; `Self` stays.
     let cmd = Cmd::new("tailscale")
-        .args(["status", "--json"])
+        .args(["status", "--json", "--peers=false"])
         .timeout(Duration::from_secs(10));
-    let Probe::Ran(out) = probe(runner, &cmd, notices) else {
-        return None;
-    };
-    // A stopped or logged-out node still prints its state; an unreachable
-    // daemon prints an error and nothing on stdout.
-    match parse_tailscale(&out.stdout) {
-        Ok(ts) => Some(ts),
-        Err(err) => {
+    let out = match probe(runner, &cmd, notices) {
+        Probe::Ran(out) if out.ok() => out,
+        Probe::Ran(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let why = stderr
+                .lines()
+                .next()
+                .map_or_else(|| format!("exited with {}", out.status), str::to_owned);
             notices.push(format!(
-                "`tailscale status` exited with {} ({err}); Tailscale's state is unknown",
-                out.status
+                "`tailscale status` failed ({why}); Tailscale's state is unknown"
             ));
-            None
+            return None;
         }
-    }
+        Probe::Missing | Probe::Failed => return None,
+    };
+    parse_tailscale(&out.stdout)
+        .inspect_err(|err| {
+            notices.push(format!(
+                "parsing `tailscale status`: {err}; Tailscale's state is unknown"
+            ));
+        })
+        .ok()
 }
 
 fn parse_tailscale(json: &[u8]) -> Result<Tailscale, serde_json::Error> {
@@ -283,10 +303,7 @@ fn parse_tailscale(json: &[u8]) -> Result<Tailscale, serde_json::Error> {
             .as_ref()
             .and_then(|s| s.ips.clone())
             .unwrap_or_default(),
-        // Go's zero time means "no expiry" in some clients.
-        key_expiry: this
-            .and_then(|s| s.key_expiry)
-            .filter(|t| !t.starts_with("0001-")),
+        key_expiry: this.and_then(|s| s.key_expiry),
     })
 }
 
@@ -332,8 +349,9 @@ mod tests {
         assert!(by("wg0").is_wireguard() && by("wg0").is_vpn());
         assert!(by("tailscale0").is_tailscale() && !by("tailscale0").is_wireguard());
         assert!(!by("eth0").is_vpn());
+        assert!(by("wg0").up && !by("wg1").up);
         assert_eq!(
-            interface_with(&ifs, "10.77.1.1".parse().unwrap()).map(|i| i.name.as_str()),
+            interface_with(&ifs, "10.77.0.1".parse().unwrap()).map(|i| i.name.as_str()),
             Some("wg0")
         );
         assert!(interface_with(&ifs, "203.0.113.99".parse().unwrap()).is_none());
@@ -354,12 +372,17 @@ mod tests {
     #[test]
     fn wireguard_module_and_ports() {
         let runner = FakeRunner::new()
-            .on("wg", ["show"], Output::success("wg0\t51820\nwg1\t51821\n"))
+            .on(
+                "wg",
+                ["show"],
+                Output::success("wg0\t51820\nwg1\t51821\nwg2\t0\n"),
+            )
             .on("modprobe", ["--dry-run"], Output::success(""));
         let mut notices = Vec::new();
         let wg = wireguard(&FakeFs::new(), &runner, &mut notices);
         assert_eq!(wg.module, Some(true));
         assert_eq!(wg.listen_ports.get("wg1"), Some(&51821));
+        assert!(!wg.listen_ports.contains_key("wg2"));
         assert!(notices.is_empty());
 
         // Built in or loaded: modprobe is not asked.
@@ -402,7 +425,12 @@ mod tests {
             failed("failed to connect to local tailscaled"),
         );
         assert_eq!(tailscale(&down, &mut notices), None);
-        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert_eq!(
+            notices,
+            [
+                "`tailscale status` failed (failed to connect to local tailscaled); Tailscale's state is unknown"
+            ]
+        );
         let up = FakeRunner::new().on(
             "tailscale",
             ["status", "--json"],

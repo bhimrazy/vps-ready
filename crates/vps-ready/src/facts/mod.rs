@@ -94,7 +94,7 @@ pub struct Facts {
     pub apparmor: Option<bool>,
     /// Network interfaces with their addresses. Empty when `ip` is missing.
     pub interfaces: Vec<Interface>,
-    /// IPv4 routes of every table. Empty when `ip` is missing.
+    /// Routes of every table, both families. Empty when `ip` is missing.
     pub routes: Vec<Route>,
     /// WireGuard's kernel module and listening ports.
     pub wireguard: Wireguard,
@@ -433,7 +433,7 @@ mod tests {
         &["ip", "-j", "route", "show", "table", "all"],
         &["modprobe", "--dry-run", "wireguard"],
         &["wg", "show", "all", "listen-port"],
-        &["tailscale", "status", "--json"],
+        &["tailscale", "status", "--json", "--peers=false"],
     ];
 
     #[test]
@@ -581,14 +581,14 @@ mod tests {
         assert!(facts.listeners.is_empty());
         assert!(!facts.docker);
         // os-release, init, virtualization, ssh version, sshd activation,
-        // sshd config, ss, nft, firewalld, /proc/sys, ip addr, ip route.
-        assert_eq!(facts.notices.len(), 12, "{:?}", facts.notices);
+        // sshd config, ss, nft, firewalld, /proc/sys, ip (one notice for both calls).
+        assert_eq!(facts.notices.len(), 11, "{:?}", facts.notices);
         assert_eq!(facts.session, None);
 
         // No /proc for the session walk either.
         let env = Env { pid: Some(902) };
         let facts = collect(&FakeFs::new(), &FakeRunner::new(), &env).unwrap();
-        assert_eq!(facts.notices.len(), 13, "{:?}", facts.notices);
+        assert_eq!(facts.notices.len(), 12, "{:?}", facts.notices);
         assert!(facts.notices.iter().any(|n| n.starts_with(session::NOTICE)));
     }
 
