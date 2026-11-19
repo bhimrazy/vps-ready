@@ -14,7 +14,7 @@ use crate::facts::network::{parse_tailscale, tailscale_status};
 use crate::facts::{Facts, Init, OsFamily};
 use crate::resource::{AptSource, File, Package, Resource, Service, TailscaleUp, Validate};
 use crate::resource::{apt_source, architecture, check_key_file};
-use crate::sys::{Cmd, FileOwner, Sys};
+use crate::sys::{Cmd, FileOwner, Output, Sys};
 
 /// Tailscale's package, from Tailscale's repository.
 pub const PACKAGE: &str = "tailscale";
@@ -103,7 +103,7 @@ impl Module for NetTailscale {
             ParamDoc {
                 name: "auth_key_file",
                 default: "\"\"",
-                help: "A file holding an auth key, owned by root with mode 0600 and not a symlink; `tailscale up` reads it, vps-ready never does. Use a one-off, tagged key that is not ephemeral: a tagged node has key expiry off, and an ephemeral one is removed from the tailnet when it goes idle. Delete the file after the login. Empty: log in by hand with `sudo tailscale up --accept-dns=false`.",
+                help: "A file holding an auth key, owned by root with mode 0600, not a symlink, in directories only root can write to; `tailscale up` reads it, vps-ready never does. Use a one-off or pre-approved key, tagged and not ephemeral: a tagged node has key expiry off, and an ephemeral one is removed from the tailnet when it goes idle. On a tailnet with device approval, a key that is not pre-approved makes the login time out, and a one-off key is spent. Delete the file after the login; later applies use the node's own login. Empty: log in by hand with `sudo tailscale up --accept-dns=false`.",
             },
             ParamDoc {
                 name: "login_server",
@@ -162,7 +162,13 @@ impl Module for NetTailscale {
         let mut notes = Vec::new();
         // Tailscale's install script writes its own `tailscale.list`; a
         // second source with another `Signed-By` breaks `apt-get update`.
-        if !source.configured_elsewhere(sys)? {
+        if source.configured_elsewhere(sys)? {
+            notes.push(
+                "another apt source already names pkgs.tailscale.com, so vps-ready adds none; \
+                 Tailscale updates from that one"
+                    .to_owned(),
+            );
+        } else {
             resources.extend(apt_source(&source, &architecture(sys)?));
         }
         if params.auto_update {
@@ -189,15 +195,21 @@ impl Module for NetTailscale {
             active: true,
         }));
 
-        let running = cx
-            .facts
-            .tailscale
-            .as_ref()
-            .is_some_and(|t| t.backend_state == "Running");
+        let tailscale = cx.facts.tailscale.as_ref();
+        let running = tailscale.is_some_and(|t| t.backend_state == "Running");
+        // A node key lets `tailscale up` log in again without an auth key,
+        // e.g. after a rollback's `tailscale down` or once the key file is
+        // deleted. `NeedsLogin` with a node key means the key expired.
+        let has_login =
+            tailscale.is_some_and(|t| t.have_node_key && t.backend_state != "NeedsLogin");
         let login_server = Some(params.login_server).filter(|s| !s.is_empty());
         let hostname = Some(params.hostname).filter(|s| !s.is_empty());
         if running {
-            notes.extend(settings_note(sys));
+            notes.extend(settings_note(
+                sys,
+                login_server.as_deref(),
+                hostname.as_deref(),
+            ));
         } else if params.auth_key_file.is_empty() {
             let mut cmd = "sudo tailscale up --accept-dns=false".to_owned();
             if let Some(url) = &login_server {
@@ -208,30 +220,38 @@ impl Module for NetTailscale {
             }
             notes.push(format!(
                 "no auth_key_file: unless this node is logged in already, log in with `{cmd}` \
-                 after this apply, then apply again"
+                 after this apply"
             ));
+        } else if has_login {
+            resources.push(Resource::TailscaleUp(TailscaleUp {
+                auth_key_file: None,
+                login_server,
+                hostname,
+            }));
         } else {
             let path = Path::new(&params.auth_key_file);
             if let Err(why) = check_key_file(sys, path) {
                 return refuse(&format!(
                     "auth_key_file {}: {why}; it must be a regular file owned by root with \
-                     mode 0600",
+                     mode 0600, in directories only root can write to",
                     path.display()
                 ));
             }
             resources.push(Resource::TailscaleUp(TailscaleUp {
-                auth_key_file: path.into(),
+                auth_key_file: Some(path.into()),
                 login_server,
                 hostname,
             }));
             notes.push(format!(
-                "delete {} after the login; a one-off key is spent once used",
+                "delete {} after the login; a one-off key is spent once used, and later \
+                 applies use the node's own login",
                 path.display()
             ));
         }
         if !installed {
             notes.push(
-                "rollback leaves Tailscale installed, with /var/lib/tailscale and the node's \
+                "rollback leaves Tailscale installed and tailscaled running (`sudo systemctl \
+                 disable --now tailscaled` stops it), keeps /var/lib/tailscale and the node's \
                  login, and removes the repository it updates from; `sudo tailscale logout` \
                  removes the node from the tailnet"
                     .to_owned(),
@@ -254,6 +274,13 @@ impl Module for NetTailscale {
             .runner
             .run(&tailscale_status())
             .map_err(|e| format!("`tailscale status`: {e}"))?;
+        if !out.ok() {
+            return Err(format!(
+                "`tailscale status` exited with status {}: {}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
         let status = parse_tailscale(&out.stdout)
             .map_err(|e| format!("parsing `tailscale status --json`: {e}"))?;
         if status.backend_state != "Running" {
@@ -277,20 +304,26 @@ fn tailscale_source(facts: &Facts) -> Option<AptSource> {
     AptSource::tailscale(&facts.os.id, facts.os.codename.as_deref()?)
 }
 
-/// The prefs a node logged in by hand has that this module would not set,
-/// as a note; `None` when it has none, or `tailscale debug prefs` fails.
-/// `tailscale up` would need `--reset` to change them, and resetting a
-/// working node is not a hardening step.
-fn settings_note(sys: Sys) -> Option<String> {
+/// What a node that is logged in already has that this module would not
+/// set, as a note; `None` when there is nothing. `tailscale up` would need
+/// `--reset` to change it, and resetting a working node is not a hardening
+/// step.
+fn settings_note(sys: Sys, login_server: Option<&str>, hostname: Option<&str>) -> Option<String> {
     #[derive(Deserialize)]
     #[serde(rename_all = "PascalCase")]
     struct Prefs {
+        #[serde(default, rename = "ControlURL")]
+        control_url: String,
+        #[serde(default)]
+        hostname: String,
         #[serde(default, rename = "CorpDNS")]
         corp_dns: bool,
         #[serde(default)]
         route_all: bool,
         #[serde(default, rename = "ExitNodeID")]
         exit_node_id: String,
+        #[serde(default, rename = "ExitNodeIP")]
+        exit_node_ip: String,
         #[serde(default)]
         advertise_routes: Option<Vec<String>>,
         #[serde(default, rename = "RunSSH")]
@@ -299,23 +332,44 @@ fn settings_note(sys: Sys) -> Option<String> {
     let cmd = Cmd::new("tailscale")
         .args(["debug", "prefs"])
         .timeout(STATUS_TIMEOUT);
-    let out = sys.runner.run(&cmd).ok().filter(|o| o.ok())?;
-    let prefs: Prefs = serde_json::from_slice(&out.stdout).ok()?;
+    let prefs = sys
+        .runner
+        .run(&cmd)
+        .ok()
+        .filter(Output::ok)
+        .and_then(|out| serde_json::from_slice::<Prefs>(&out.stdout).ok());
+    let Some(prefs) = prefs else {
+        return Some(
+            "this node is logged in already, and `tailscale debug prefs` did not say with \
+             which settings; vps-ready leaves it as it is"
+                .to_owned(),
+        );
+    };
     let mut set = Vec::new();
+    if let Some(url) = login_server
+        && url != prefs.control_url
+    {
+        set.push(format!("login server {:?}, not {url}", prefs.control_url));
+    }
+    if let Some(name) = hostname
+        && name != prefs.hostname
+    {
+        set.push(format!("hostname {:?}, not {name}", prefs.hostname));
+    }
     if prefs.corp_dns {
-        set.push("--accept-dns on");
+        set.push("--accept-dns on".to_owned());
     }
     if prefs.route_all {
-        set.push("--accept-routes on");
+        set.push("--accept-routes on".to_owned());
     }
-    if !prefs.exit_node_id.is_empty() {
-        set.push("an exit node");
+    if !prefs.exit_node_id.is_empty() || !prefs.exit_node_ip.is_empty() {
+        set.push("an exit node".to_owned());
     }
     if prefs.advertise_routes.is_some_and(|r| !r.is_empty()) {
-        set.push("advertised routes");
+        set.push("advertised routes".to_owned());
     }
     if prefs.run_ssh {
-        set.push("Tailscale SSH on");
+        set.push("Tailscale SSH on".to_owned());
     }
     (!set.is_empty()).then(|| {
         format!(

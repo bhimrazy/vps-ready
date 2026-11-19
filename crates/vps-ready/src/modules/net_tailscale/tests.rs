@@ -23,7 +23,11 @@ struct Host {
     /// `tailscaled.service`: enabled, active.
     unit: Mutex<(bool, bool)>,
     backend: Mutex<String>,
+    /// Whether `tailscale up` logged in once; `down` keeps it.
+    node_key: Mutex<bool>,
     prefs: &'static str,
+    /// What `tailscale down` answers; it fails without changing the state.
+    down: Output,
     calls: Mutex<Vec<Cmd>>,
 }
 
@@ -33,7 +37,9 @@ impl Host {
             installed: Mutex::new(false),
             unit: Mutex::new((false, false)),
             backend: Mutex::new("NoState".into()),
+            node_key: Mutex::new(false),
             prefs: "{}",
+            down: Output::success(""),
             calls: Mutex::new(Vec::new()),
         }
     }
@@ -44,6 +50,7 @@ impl Host {
         *host.installed.lock().unwrap() = true;
         *host.unit.lock().unwrap() = (true, true);
         *host.backend.lock().unwrap() = state.into();
+        *host.node_key.lock().unwrap() = matches!(state, "Running" | "Stopped");
         host
     }
 
@@ -68,6 +75,7 @@ impl Runner for Host {
         let mut installed = self.installed.lock().unwrap();
         let mut unit = self.unit.lock().unwrap();
         let mut backend = self.backend.lock().unwrap();
+        let mut node_key = self.node_key.lock().unwrap();
         let out = match (cmd.program.as_str(), &args[..]) {
             ("dpkg-query", [.., "tailscale"]) => Output::success(if *installed {
                 "installed"
@@ -111,16 +119,24 @@ impl Runner for Host {
                     "null"
                 };
                 Output::success(format!(
-                    r#"{{"BackendState":"{backend}","Self":{{"TailscaleIPs":{ips}}}}}"#
+                    r#"{{"BackendState":"{backend}","HaveNodeKey":{node_key},"Self":{{"TailscaleIPs":{ips}}}}}"#
                 ))
             }
-            ("tailscale", ["up", ..]) => {
+            ("tailscale", ["up", rest @ ..]) => {
+                let with_key = rest.iter().any(|a| a.starts_with("--auth-key="));
+                assert!(
+                    with_key || *node_key,
+                    "`tailscale up` without a key or a login"
+                );
                 *backend = "Running".into();
+                *node_key = true;
                 Output::success("")
             }
             ("tailscale", ["down"]) => {
-                *backend = "Stopped".into();
-                Output::success("")
+                if self.down.ok() {
+                    *backend = "Stopped".into();
+                }
+                self.down.clone()
             }
             ("tailscale", ["debug", "prefs"]) => Output::success(self.prefs),
             (other, _) => return Err(SysError::NotFound(other.to_owned())),
@@ -140,6 +156,7 @@ fn root(mode: u32) -> FileOwner {
 /// `/etc` and apt's directories, and a root-only key file.
 fn fs() -> FakeFs {
     let fs = FakeFs::new()
+        .with_dir("/", root(0o755))
         .with_dir("/etc", root(0o755))
         .with_dir("/etc/apt", root(0o755))
         .with_dir("/etc/apt/apt.conf.d", root(0o755))
@@ -150,15 +167,21 @@ fn fs() -> FakeFs {
     fs
 }
 
-/// The captured Debian 13 host; `tailscale` in `state`, if given.
+/// The captured Debian 13 host; `tailscale` in `state`, if given, with a
+/// node key when `Running` or `Stopped`.
 fn facts(state: Option<&str>) -> Facts {
     let mut facts = host("debian-13", &[]);
     facts.tailscale = state.map(|s| Tailscale {
         backend_state: s.into(),
         ips: Vec::new(),
         key_expiry: None,
+        have_node_key: matches!(s, "Running" | "Stopped"),
     });
     facts
+}
+
+fn engine_on<'a>(fs: &'a FakeFs, runner: &'a Host) -> (StateDir, Sys<'a>) {
+    (StateDir::create(fs, STATE, 0).unwrap(), Sys { fs, runner })
 }
 
 fn table(params: &str) -> toml::Table {
@@ -308,7 +331,8 @@ fn join_argv_has_the_key_file_and_never_the_key() {
     );
     assert!(
         steps.notes.contains(
-            &"delete /root/tailscale-auth-key after the login; a one-off key is spent once used"
+            &"delete /root/tailscale-auth-key after the login; a one-off key is spent once used, \
+              and later applies use the node's own login"
                 .to_owned()
         )
     );
@@ -374,15 +398,25 @@ fn refuses_an_unsafe_key_file() {
         assert_eq!(
             err.to_string(),
             format!(
-                "auth_key_file {KEY}: {why}; it must be a regular file owned by root with mode 0600"
+                "auth_key_file {KEY}: {why}; it must be a regular file owned by root with mode \
+                 0600, in directories only root can write to"
             )
         );
     }
     let fs = FakeFs::new()
+        .with_dir("/", root(0o755))
         .with_dir("/etc", root(0o755))
         .with_symlink(KEY, "/root/real-key");
     let err = try_steps(&facts(None), &fs, &runner, WITH_KEY).unwrap_err();
     assert!(err.to_string().contains("it is a symlink"), "{err}");
+
+    let fs = self::fs().with_dir("/root", root(0o777));
+    let err = try_steps(&facts(None), &fs, &runner, WITH_KEY).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("/root is writable by group or others (mode 0777)"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -457,8 +491,7 @@ fn no_key_and_not_logged_in_installs_and_says_how_to_log_in() {
     assert_eq!(
         steps.notes[0],
         "no auth_key_file: unless this node is logged in already, log in with `sudo tailscale \
-         up --accept-dns=false --login-server=https://headscale.example.com` after this apply, \
-         then apply again"
+         up --accept-dns=false --login-server=https://headscale.example.com` after this apply"
     );
 }
 
@@ -471,6 +504,11 @@ fn leaves_a_source_configured_elsewhere() {
     );
     let steps = steps(&facts(None), &fs, &Host::new(), "");
     assert_eq!(ids(&steps), FRESH[3..6]);
+    assert_eq!(
+        steps.notes[0],
+        "another apt source already names pkgs.tailscale.com, so vps-ready adds none; \
+         Tailscale updates from that one"
+    );
 }
 
 #[test]
@@ -587,4 +625,111 @@ fn verify_needs_a_running_node_after_a_login() {
         ),
         Ok(())
     );
+}
+
+#[test]
+fn settings_that_differ_and_unreadable_settings_get_a_note() {
+    let fs = fs();
+    let runner = Host {
+        prefs: r#"{"ControlURL":"https://controlplane.tailscale.com","Hostname":"",
+            "ExitNodeIP":"100.64.0.9","CorpDNS":false}"#,
+        ..Host::with_tailscale("Running")
+    };
+    let params = "login_server = \"https://headscale.example.com\"\nhostname = \"web-1\"";
+    let steps = steps(&facts(Some("Running")), &fs, &runner, params);
+    assert_eq!(
+        steps.notes,
+        ["this node is logged in already, with login server \
+             \"https://controlplane.tailscale.com\", not https://headscale.example.com, \
+             hostname \"\", not web-1, an exit node; vps-ready leaves it as it is"]
+    );
+
+    let runner = Host {
+        prefs: "not json",
+        ..Host::with_tailscale("Running")
+    };
+    let steps = self::steps(&facts(Some("Running")), &fs, &runner, "");
+    assert_eq!(
+        steps.notes,
+        [
+            "this node is logged in already, and `tailscale debug prefs` did not say with \
+             which settings; vps-ready leaves it as it is"
+        ]
+    );
+}
+
+/// The one-off key is spent and its file deleted: a node with a node key
+/// comes back up without it, after a rollback's `tailscale down` too.
+#[test]
+fn apply_rollback_apply_again_with_a_spent_key() {
+    let (fs, runner) = (fs(), Host::new());
+    let params = table(WITH_KEY);
+    let fresh = facts(None);
+    let first = plan(&fs, &runner, &fresh, &params);
+    let (state, sys) = engine_on(&fs, &runner);
+    let engine = Engine::lock(&state, sys).unwrap();
+    engine
+        .apply(&first, &Deadman::default(), &mut |_| {})
+        .unwrap();
+    engine.rollback(Target::Last, &mut |_| {}).unwrap();
+    fs.remove(Path::new(KEY)).unwrap();
+
+    let stopped = facts(Some("Stopped"));
+    let steps = steps(&stopped, &fs, &runner, WITH_KEY);
+    let Some(Resource::TailscaleUp(up)) = steps.resources.last() else {
+        panic!("{:?}", ids(&steps));
+    };
+    assert_eq!(up.auth_key_file, None);
+    let again = plan(&fs, &runner, &stopped, &params);
+    engine
+        .apply(&again, &Deadman::default(), &mut |_| {})
+        .unwrap();
+    assert_eq!(
+        runner.tailscale(),
+        [
+            "up --auth-key=file:/root/tailscale-auth-key --accept-dns=false --timeout=60s",
+            "down",
+            "up --accept-dns=false --timeout=60s",
+        ]
+    );
+
+    // An expired node key needs a new auth key.
+    let mut expired = facts(Some("NeedsLogin"));
+    expired.tailscale.as_mut().unwrap().have_node_key = true;
+    let err = try_steps(&expired, &fs, &runner, WITH_KEY).unwrap_err();
+    assert!(err.to_string().contains("it does not exist"), "{err}");
+}
+
+/// `tailscale down` refuses to cut a session that came in over Tailscale
+/// when there is no terminal to ask on; the rollback says what to do, and
+/// finishes once the node is down.
+#[test]
+fn rollback_from_a_session_over_tailscale_says_what_to_do() {
+    let fs = fs();
+    let runner = Host {
+        down: Output {
+            status: 1,
+            stdout: b"You are connected over Tailscale; this action will disable Tailscale \
+                and result in your session disconnecting.\n"
+                .to_vec(),
+            stderr: b"aborted, no changes made\n".to_vec(),
+        },
+        ..Host::new()
+    };
+    let params = table(WITH_KEY);
+    let fresh = facts(None);
+    let first = plan(&fs, &runner, &fresh, &params);
+    let (state, sys) = engine_on(&fs, &runner);
+    let engine = Engine::lock(&state, sys).unwrap();
+    engine
+        .apply(&first, &Deadman::default(), &mut |_| {})
+        .unwrap();
+    let err = engine.rollback(Target::Last, &mut |_| {}).unwrap_err();
+    assert!(
+        format!("{err:#}").contains("this session comes through Tailscale"),
+        "{err:#}"
+    );
+    // `sudo tailscale down` by hand, then the rollback again.
+    *runner.backend.lock().unwrap() = "Stopped".into();
+    engine.rollback(Target::Last, &mut |_| {}).unwrap();
 }

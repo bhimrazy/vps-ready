@@ -12,7 +12,7 @@ expression: out
     {
       "name": "auth_key_file",
       "default": "\"\"",
-      "help": "A file holding an auth key, owned by root with mode 0600 and not a symlink; `tailscale up` reads it, vps-ready never does. Use a one-off, tagged key that is not ephemeral: a tagged node has key expiry off, and an ephemeral one is removed from the tailnet when it goes idle. Delete the file after the login. Empty: log in by hand with `sudo tailscale up --accept-dns=false`."
+      "help": "A file holding an auth key, owned by root with mode 0600, not a symlink, in directories only root can write to; `tailscale up` reads it, vps-ready never does. Use a one-off or pre-approved key, tagged and not ephemeral: a tagged node has key expiry off, and an ephemeral one is removed from the tailnet when it goes idle. On a tailnet with device approval, a key that is not pre-approved makes the login time out, and a one-off key is spent. Delete the file after the login; later applies use the node's own login. Empty: log in by hand with `sudo tailscale up --accept-dns=false`."
     },
     {
       "name": "login_server",
