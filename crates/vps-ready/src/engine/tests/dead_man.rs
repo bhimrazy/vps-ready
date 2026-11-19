@@ -1660,4 +1660,60 @@ fn the_first_deadline_covers_package_installs_and_verify_probes() {
     );
 }
 
+/// A rollback, the timer's like a manual one, uses `reload-or-restart` on
+/// an enabled firewall unit, which starts it when stopped (its table
+/// deleted) and reloads it when active; a disabled or absent one is only
+/// reloaded if running.
+#[test]
+fn a_rollback_starts_the_firewall_unit_if_enabled() {
+    let fw = Demo {
+        reloads: vec![Reload::FirewallReload],
+        deadman: true,
+        ..module("test.fw", vec![file(NEW, "created\n", 0o644)])
+    };
+    let cases = [
+        ("enabled", "reload-or-restart"),
+        ("disabled", "try-reload-or-restart"),
+        ("", "try-reload-or-restart"),
+    ];
+    for (unit_state, verb) in cases {
+        for by_timer in [false, true] {
+            let fs = armable();
+            let facts = facts();
+            let plan = plan_of(&fs, &facts, &[&fw]);
+            let (txn, _) = pending(&fs, &plan);
+            let run = FakeRunner::new()
+                .on(
+                    "systemctl",
+                    [
+                        "show",
+                        "--property=UnitFileState",
+                        "vps-ready-firewall.service",
+                    ],
+                    Output::success(format!("UnitFileState={unit_state}\n")),
+                )
+                .on("nft", ["-c"], Output::success(""))
+                .on("systemctl", Vec::<String>::new(), Output::success(""))
+                .on(COPY, ["version"], version_ok());
+            if by_timer {
+                set_uptime(&fs, 5000);
+                let out = timer(&fs, &run, &txn).unwrap();
+                assert!(matches!(out, DeadmanOutcome::RolledBack(_)), "{out:?}");
+            } else {
+                manual(&fs, &run).unwrap();
+            }
+            let fw_calls: Vec<String> = calls(&run)
+                .into_iter()
+                .filter(|c| c.contains("vps-ready-firewall"))
+                .collect();
+            let case = format!("{unit_state:?}, timer {by_timer}");
+            assert_eq!(
+                fw_calls,
+                [format!("systemctl {verb} vps-ready-firewall.service")],
+                "{case}"
+            );
+        }
+    }
+}
+
 mod confirm;

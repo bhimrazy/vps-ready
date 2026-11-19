@@ -6,7 +6,10 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::sys::{Cmd, Sys};
+use crate::facts::{parse_units, prop};
+use crate::sys::{Cmd, Output, Sys};
+
+const FIREWALL_UNIT: &str = "vps-ready-firewall.service";
 
 /// A reload a module needs after its resources are applied. A closed set,
 /// so the journal records it by name and a rollback in a later process
@@ -17,7 +20,8 @@ pub enum Reload {
     /// `sshd -t`, then `systemctl try-reload-or-restart ssh.service`.
     SshdReload,
     /// `nft -c -f /etc/vps-ready/firewall.nft`, then
-    /// `systemctl try-reload-or-restart vps-ready-firewall.service`.
+    /// `systemctl try-reload-or-restart vps-ready-firewall.service`; a
+    /// rollback starts it if enabled (see [`Reload::rollback_steps`]).
     FirewallReload,
     /// `fail2ban-client -t`, then `systemctl try-restart fail2ban.service`:
     /// only a running fail2ban, so a rollback that stopped it leaves it off.
@@ -85,7 +89,7 @@ impl Reload {
     pub fn command(self) -> Cmd {
         let args: &[&str] = match self {
             Self::SshdReload => &["try-reload-or-restart", "ssh.service"],
-            Self::FirewallReload => &["try-reload-or-restart", "vps-ready-firewall.service"],
+            Self::FirewallReload => &["try-reload-or-restart", FIREWALL_UNIT],
             Self::Fail2banRestart => &["try-restart", "fail2ban.service"],
             Self::DaemonReload => &["daemon-reload"],
             Self::DockerRestart => &["try-restart", "docker.service"],
@@ -100,8 +104,11 @@ impl Reload {
     /// reload without its Caddyfile, and the check would fail and leave it
     /// serving the removed one, so once a rollback removed the file,
     /// `systemctl disable --now caddy.service` runs instead, with no check,
-    /// and the next boot does not try to start it either. Others are
-    /// [`Reload::check`] and [`Reload::command`].
+    /// and the next boot does not try to start it either. The firewall's
+    /// unit, when enabled after the restore, gets `reload-or-restart`: a
+    /// stopped one (`systemctl stop` deletes the table) would otherwise
+    /// leave no firewall until the next boot. Others are [`Reload::check`]
+    /// and [`Reload::command`].
     #[must_use]
     pub fn rollback_steps(self, sys: Sys) -> (Option<Cmd>, Cmd) {
         if self == Self::CaddyReload && !sys.fs.exists(Path::new(CADDYFILE)) {
@@ -109,6 +116,12 @@ impl Reload {
                 .args(["disable", "--now", "caddy.service"])
                 .timeout(SYSTEMCTL_TIMEOUT);
             return (None, stop);
+        }
+        if self == Self::FirewallReload && enabled(sys, FIREWALL_UNIT) {
+            let start = Cmd::new("systemctl")
+                .args(["reload-or-restart", FIREWALL_UNIT])
+                .timeout(SYSTEMCTL_TIMEOUT);
+            return (self.check(), start);
         }
         (self.check(), self.command())
     }
@@ -124,6 +137,22 @@ impl fmt::Display for Reload {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.name())
     }
+}
+
+/// Whether systemd says `unit` is enabled; not when it cannot tell.
+fn enabled(sys: Sys, unit: &str) -> bool {
+    let cmd = Cmd::new("systemctl")
+        .args(["show", "--property=UnitFileState"])
+        .arg(unit);
+    sys.runner
+        .run(&cmd)
+        .ok()
+        .filter(Output::ok)
+        .and_then(|out| {
+            let units = parse_units(out.stdout_str().ok()?);
+            Some(prop(units.first()?, "UnitFileState") == "enabled")
+        })
+        .unwrap_or(false)
 }
 
 /// Runs `cmd`; `Err` holds its exit status and output (stderr, else

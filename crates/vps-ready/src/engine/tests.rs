@@ -897,11 +897,14 @@ fn failed(stderr: &str) -> Output {
 }
 
 /// Each command `runner` ran, as a line.
+/// The commands run, without `systemctl show` (the firewall rollback's
+/// unit state query).
 fn calls(runner: &FakeRunner) -> Vec<String> {
     runner
         .calls()
         .iter()
         .map(|c| format!("{} {}", c.program, c.args.join(" ")))
+        .filter(|c| !c.starts_with("systemctl show "))
         .collect()
 }
 
