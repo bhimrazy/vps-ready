@@ -261,6 +261,16 @@ expect_empty_plan() {
     { cat "$tmp/plan.json"; die "plan for $1 still has changes"; }
 }
 
+# expect_pending: waits until the newest transaction waits for a confirm.
+expect_pending() {
+  i=0
+  until vr history --json >"$tmp/history.json" && jq -e '.[0].state == "pending-confirm"' "$tmp/history.json" >/dev/null; do
+    i=$((i + 1)); [ "$i" -le 60 ] || { vr history; die "not pending within 60 s"; }
+    sleep 1
+  done
+  txn=$(jq -r '.[0].id' "$tmp/history.json")
+}
+
 expect_newest() {
   vr history --json >"$tmp/history.json"
   jq -e --arg s "$1" '.[0].state == $s' "$tmp/history.json" >/dev/null ||
@@ -576,16 +586,6 @@ vm "cd $apt_conf && test ! -e 52vps-ready && sha256sum -c --quiet /tmp/apt-befor
 
 deadman_file=/etc/vps-ready-deadman-test.conf
 hook=vps-ready-deadman.service
-
-# expect_pending: waits until the newest transaction waits for a confirm.
-expect_pending() {
-  i=0
-  until vr history --json >"$tmp/history.json" && jq -e '.[0].state == "pending-confirm"' "$tmp/history.json" >/dev/null; do
-    i=$((i + 1)); [ "$i" -le 60 ] || { vr history; die "not pending within 60 s"; }
-    sleep 1
-  done
-  txn=$(jq -r '.[0].id' "$tmp/history.json")
-}
 
 # Applies test.deadman with a 1-minute window in the background: apply
 # waits for a confirm, and its exit code lands in /tmp/vr-apply.rc.
