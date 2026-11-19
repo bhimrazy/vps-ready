@@ -207,8 +207,8 @@ impl Module for NetTailscale {
                 cmd.push_str(&format!(" --hostname={name}"));
             }
             notes.push(format!(
-                "no auth_key_file, so this node is not logged in: log in with `{cmd}`, then \
-                 apply again"
+                "no auth_key_file: unless this node is logged in already, log in with `{cmd}` \
+                 after this apply, then apply again"
             ));
         } else {
             let path = Path::new(&params.auth_key_file);

@@ -456,8 +456,9 @@ fn no_key_and_not_logged_in_installs_and_says_how_to_log_in() {
     assert_eq!(ids(&steps), FRESH[..6]);
     assert_eq!(
         steps.notes[0],
-        "no auth_key_file, so this node is not logged in: log in with `sudo tailscale up \
-         --accept-dns=false --login-server=https://headscale.example.com`, then apply again"
+        "no auth_key_file: unless this node is logged in already, log in with `sudo tailscale \
+         up --accept-dns=false --login-server=https://headscale.example.com` after this apply, \
+         then apply again"
     );
 }
 
