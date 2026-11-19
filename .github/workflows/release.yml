@@ -248,6 +248,7 @@ jobs:
               published "$c" "$v" && continue 2
               cargo publish -p "$c" --locked || sleep 60
             done
+            published "$c" "$v" && continue
             echo "::error::$c $v was not published"
             exit 1
           done
