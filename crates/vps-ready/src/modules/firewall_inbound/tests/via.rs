@@ -22,7 +22,11 @@ fn via_facts(server: &str) -> Facts {
         gateway: Some("192.0.2.1".parse().unwrap()),
         table: None,
     }];
-    facts.session = Some(session(server));
+    // From a laptop, not from the host itself.
+    facts.session = Some(Session {
+        client: "198.51.100.7:51234".parse().unwrap(),
+        ..session(server)
+    });
     facts.tailscale = Some(Tailscale {
         backend_state: "Running".into(),
         ips: vec!["100.64.0.7".parse().unwrap()],
@@ -42,10 +46,7 @@ fn units(state: &str) -> FakeRunner {
 
 /// A host with `wg0.conf`, and the ruleset `loaded` on disk if any.
 fn wg_fs(loaded: Option<&str>) -> FakeFs {
-    let fs = FakeFs::new()
-        .with_file(WG_CONF, "[Interface]\n")
-        .with_file("/etc/group", "sudo:x:27:admin\n")
-        .with_file("/etc/shadow", "root:*:1::::::\nadmin:!:1::::::\n");
+    let fs = FakeFs::new().with_file(WG_CONF, "[Interface]\n");
     match loaded {
         Some(text) => fs.with_file(RULESET, text),
         None => fs,
@@ -156,12 +157,24 @@ fn refuses_a_path_that_may_not_carry_ssh() {
         "this SSH session came in on 192.0.2.10, not through wg0: connect through wg0 first \
          and apply from there (`ssh -t admin@10.77.0.1 sudo vps-ready apply ...`)"
     );
-    // 4. Not back after a reboot.
+    // 3. A login from the host itself to wg0's address, over lo.
+    let mut own = wg.clone();
+    own.session.as_mut().unwrap().client = "10.77.0.1:50000".parse().unwrap();
     assert_eq!(
-        refused(via_steps(&wg, "wg0", &fs, &units("disabled"))),
-        "wg-quick@wg0.service is not enabled, so wg0 would not come back after a reboot: \
-         `sudo systemctl enable wg-quick@wg0.service`"
+        refused(via_steps(&own, "wg0", &fs, &on)),
+        "this SSH session comes from 10.77.0.1, on this server itself, so wg0 did not carry \
+         it: connect through wg0 first and apply from there (`ssh -t admin@10.77.0.1 sudo \
+         vps-ready apply ...`)"
     );
+    // 4. Not back after a reboot; enabled for this boot only does not count.
+    for state in ["disabled", "enabled-runtime"] {
+        assert_eq!(
+            refused(via_steps(&wg, "wg0", &fs, &units(state))),
+            "wg-quick@wg0.service is not enabled, so wg0 would not come back after a reboot: \
+             `sudo systemctl enable wg-quick@wg0.service`",
+            "{state}"
+        );
+    }
     let ts = via_facts("100.64.0.7:22");
     assert!(
         refused(via_steps(&ts, "tailscale0", &fs, &FakeRunner::new()))
@@ -178,12 +191,57 @@ fn refuses_a_path_that_may_not_carry_ssh() {
     unknown.tailscale = None;
     assert!(refused(via_steps(&unknown, "tailscale0", &fs, &on)).contains("is unknown"));
     assert!(via_steps(&ts, "tailscale0", &fs, &on).is_ok());
+    // Tailscale's interface under another name, by its address.
+    let mut renamed = expiring.clone();
+    renamed.interfaces.iter_mut().for_each(|i| {
+        if i.name == "tailscale0" {
+            i.name = "ts1".into();
+        }
+    });
+    renamed.session = Some(Session {
+        client: "198.51.100.7:51234".parse().unwrap(),
+        ..session("100.64.0.7:22")
+    });
+    assert!(
+        refused(via_steps(&renamed, "ts1", &fs, &on))
+            .starts_with("this node's Tailscale key expires")
+    );
+    assert!(
+        refused(via_steps(&renamed, "ts1", &fs, &FakeRunner::new()))
+            .starts_with("tailscaled.service is not enabled")
+    );
     // 6. Never private, even with the same rule loaded.
     let loaded = wg_fs(Some("iifname \"eth0\" tcp dport { 22 } accept\n"));
     for (via, why) in [
         ("lo", "lo is loopback"),
-        ("docker0", "docker0 is a bridge for containers"),
-        ("br-0123", "br-0123 is a bridge for containers"),
+        (
+            "docker0",
+            "docker0 is a bridge or link for local containers or guests",
+        ),
+        (
+            "br-0123",
+            "br-0123 is a bridge or link for local containers or guests",
+        ),
+        (
+            "virbr0",
+            "virbr0 is a bridge or link for local containers or guests",
+        ),
+        (
+            "lxcbr0",
+            "lxcbr0 is a bridge or link for local containers or guests",
+        ),
+        (
+            "podman0",
+            "podman0 is a bridge or link for local containers or guests",
+        ),
+        (
+            "cni0",
+            "cni0 is a bridge or link for local containers or guests",
+        ),
+        (
+            "veth1a2b",
+            "veth1a2b is a bridge or link for local containers or guests",
+        ),
         ("eth0", "eth0 holds the host's default route"),
     ] {
         assert_eq!(
@@ -193,8 +251,8 @@ fn refuses_a_path_that_may_not_carry_ssh() {
     }
 }
 
-/// When the ruleset on disk already limits SSH to the same interface, the
-/// SSH rule does not change, so an apply from the console still works
+/// When the ruleset on disk already has the same SSH rule (interface and
+/// ports), it does not change, so an apply from the console is planned
 /// while the VPN is down.
 #[test]
 fn the_same_ssh_via_turns_refusals_1_to_5_into_notes() {
@@ -206,29 +264,39 @@ fn the_same_ssh_via_turns_refusals_1_to_5_into_notes() {
     let not_refused: Vec<&String> = steps
         .notes
         .iter()
-        .filter(|n| n.ends_with("(not refused: the loaded ruleset already limits SSH to wg0)"))
+        .filter(|n| n.ends_with("(not refused: the loaded ruleset already has this SSH rule)"))
         .collect();
     assert_eq!(not_refused.len(), 3, "{:#?}", steps.notes);
-    // Another interface on disk is a change: refused.
-    let other = wg_fs(Some("    iifname \"tailscale0\" tcp dport { 22 } accept\n"));
-    assert!(via_steps(&console, "wg0", &other, &units("enabled")).is_err());
+    // Another interface or other ports on disk are a change: refused.
+    for rule in [
+        "iifname \"tailscale0\" tcp dport { 22 } accept",
+        "iifname \"wg0\" tcp dport { 22, 2222 } accept",
+    ] {
+        let other = wg_fs(Some(&format!("    {rule}\n")));
+        assert!(
+            via_steps(&console, "wg0", &other, &units("enabled")).is_err(),
+            "{rule}"
+        );
+    }
 }
 
 #[test]
-fn the_console_note_says_whether_a_sudo_user_has_a_password() {
+fn the_console_note_comes_last() {
     let facts = via_facts("10.77.0.1:22");
-    let last = |fs: &FakeFs| {
-        via_steps(&facts, "wg0", fs, &units("enabled"))
-            .unwrap()
-            .notes
-            .pop()
-            .unwrap()
-    };
-    assert!(last(&wg_fs(None)).contains("no sudo user has a password yet"));
-    let with = wg_fs(None).with_file("/etc/shadow", "root:*:1::::::\nadmin:$y$j9T$x:1::::::\n");
-    assert!(last(&with).contains("admin can log in there"));
-    let unreadable = FakeFs::new().with_file(WG_CONF, "");
-    assert!(last(&unreadable).contains("if you have not"));
+    let steps = via_steps(&facts, "wg0", &wg_fs(None), &units("enabled")).unwrap();
+    let last = steps.notes.last().unwrap();
+    assert!(
+        last.starts_with("if wg0 stops working, SSH is closed"),
+        "{last}"
+    );
+    assert!(
+        last.contains("make sure a sudo user has one (`sudo passwd admin`)"),
+        "{last}"
+    );
+    assert!(
+        last.ends_with("one applied from the console while wg0 is down rolls back"),
+        "{last}"
+    );
 }
 
 #[test]
@@ -254,7 +322,8 @@ fn ssh_via_reads_the_planned_ruleset_then_the_one_on_disk() {
 }
 
 /// `nft -j list table inet vps_ready` with [`via_facts`]'s ruleset for
-/// `wg0` loaded, on Debian 13.
+/// `wg0` loaded, on Debian 13, in a container with no `wg0`: the rule loads
+/// before the interface exists.
 const LOADED_VIA: &str = "nft/vps-ready-table-via.json";
 
 #[test]
@@ -336,6 +405,28 @@ fn ssh_009_and_fw_003_pass_on_the_loaded_table() {
     let fw = finding(&facts, "FW-003");
     assert_eq!(fw.outcome, Outcome::Pass);
 
+    // The interface the rule names is down or gone: SSH is closed, even on
+    // a host with no VPN interface left.
+    let mut down = facts.clone();
+    down.interfaces.iter_mut().for_each(|i| {
+        if i.name == "wg0" {
+            i.up = false;
+        }
+    });
+    let fail = |found: &str| Outcome::Fail {
+        found: found.to_owned(),
+    };
+    assert_eq!(
+        finding(&down, "SSH-009").outcome,
+        fail("SSH is limited to wg0, which is down")
+    );
+    let mut gone = facts.clone();
+    gone.interfaces.retain(|i| !i.is_vpn());
+    assert_eq!(
+        finding(&gone, "SSH-009").outcome,
+        fail("SSH is limited to wg0, which does not exist")
+    );
+
     // The table before `ssh_via`: SSH from anywhere.
     facts.firewall = crate::facts::firewall::parse_json(&std::fs::read(testdata(LOADED)).unwrap());
     assert_eq!(
@@ -375,6 +466,16 @@ fn warns_while_ssh_depends_on_an_expiring_tailscale_key() {
                    Tailscale admin console";
     assert_eq!(finding(&facts, "SSH-009").note.as_deref(), Some(warning));
     assert!(warned(&facts));
+    // Not running: SSH through it may not work.
+    let mut stopped = facts.clone();
+    stopped.tailscale.as_mut().unwrap().backend_state = "Stopped".into();
+    assert_eq!(
+        finding(&stopped, "SSH-009").note.as_deref(),
+        Some(
+            "warning: SSH is limited to tailscale0, and Tailscale is Stopped, so SSH through it \
+             may not work"
+        )
+    );
     // Not while SSH does not depend on it.
     facts.firewall = crate::facts::firewall::parse_json(&std::fs::read(testdata(LOADED)).unwrap());
     assert_eq!(finding(&facts, "SSH-009").note, None);

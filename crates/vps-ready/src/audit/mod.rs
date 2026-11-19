@@ -989,6 +989,9 @@ fn exposed_listeners(facts: &Facts) -> (Outcome, Option<String>) {
 
 /// SSH-009: no SSH port is accepted on an interface other than a VPN's.
 fn ssh_private_only(facts: &Facts) -> Outcome {
+    if let Some(found) = ssh_limited_to_missing(facts) {
+        return Outcome::Fail { found };
+    }
     if !facts.interfaces.iter().any(crate::facts::Interface::is_vpn) {
         return Outcome::Skip {
             reason: "there is no VPN interface (WireGuard or tailscale0)".to_owned(),
@@ -1040,32 +1043,82 @@ fn ssh_private_only(facts: &Facts) -> Outcome {
     }
 }
 
-/// A warning when the loaded rules accept SSH on `tailscale0` and this
-/// node's Tailscale key expires: SSH through it stops on that date.
-pub(crate) fn tailscale_expiry(facts: &Facts) -> Option<String> {
-    let at = facts
-        .tailscale
-        .as_ref()
-        .filter(|t| t.backend_state == "Running")?
-        .key_expiry
-        .as_ref()?;
+/// The interfaces that the loaded rules accept SSH ports on, by name; a
+/// wildcard and `lo` left out.
+fn ssh_interfaces(facts: &Facts) -> BTreeSet<String> {
     let ssh = crate::modules::firewall_inbound::ssh_ports(facts);
-    let via_tailscale = facts
+    facts
         .firewall
         .iter()
         .flat_map(|f| &f.input_chains)
-        .any(|c| {
-            c.interface_ports.iter().any(|p| {
-                p.interfaces.iter().any(|i| i == "tailscale0")
-                    && ssh.iter().any(|&port| p.ports.contains("tcp", port))
-            })
-        });
-    via_tailscale.then(|| {
-        format!(
-            "warning: this node's Tailscale key expires at {at}, and SSH through tailscale0 \
-             stops then; disable key expiry for this machine in the Tailscale admin console"
-        )
-    })
+        .flat_map(|c| &c.interface_ports)
+        .filter(|p| ssh.iter().any(|&port| p.ports.contains("tcp", port)))
+        .flat_map(|p| &p.interfaces)
+        .filter(|n| *n != "lo" && !n.contains('*'))
+        .cloned()
+        .collect()
+}
+
+/// When no rule accepts SSH on every interface and a rule limits it to
+/// interfaces that are absent or down: SSH is closed, VPN or not.
+fn ssh_limited_to_missing(facts: &Facts) -> Option<String> {
+    let firewall = facts.firewall.as_ref()?;
+    // Without `ip`, nothing is known about the interfaces.
+    if facts.interfaces.is_empty() {
+        return None;
+    }
+    let ssh = crate::modules::firewall_inbound::ssh_ports(facts);
+    let anywhere = firewall.input_chains.iter().any(|c| {
+        c.open_ports
+            .iter()
+            .any(|p| ssh.iter().any(|&port| p.contains("tcp", port)))
+    });
+    let broken: Vec<String> = ssh_interfaces(facts)
+        .into_iter()
+        .filter_map(|n| match facts.interfaces.iter().find(|i| i.name == n) {
+            None => Some(format!("{n}, which does not exist")),
+            Some(i) if !i.up => Some(format!("{n}, which is down")),
+            Some(_) => None,
+        })
+        .collect();
+    (!anywhere && !broken.is_empty()).then(|| format!("SSH is limited to {}", broken.join("; ")))
+}
+
+/// A warning when the loaded rules accept SSH on Tailscale's interface and
+/// SSH through it may stop: this node's key expires, or Tailscale is not
+/// running.
+pub(crate) fn tailscale_expiry(facts: &Facts) -> Option<String> {
+    let names = ssh_interfaces(facts);
+    let ips = facts
+        .tailscale
+        .as_ref()
+        .map(|t| t.ips.as_slice())
+        .unwrap_or_default();
+    let on = names.iter().find(|n| {
+        *n == "tailscale0"
+            || facts
+                .interfaces
+                .iter()
+                .any(|i| &i.name == *n && i.addresses.iter().any(|a| ips.contains(&a.ip)))
+    })?;
+    match &facts.tailscale {
+        Some(t) if t.backend_state == "Running" => t.key_expiry.as_ref().map(|at| {
+            format!(
+                "warning: this node's Tailscale key expires at {at}, and SSH through {on} \
+                 stops then; disable key expiry for this machine in the Tailscale admin \
+                 console"
+            )
+        }),
+        Some(t) => Some(format!(
+            "warning: SSH is limited to {on}, and Tailscale is {}, so SSH through it may not \
+             work",
+            t.backend_state
+        )),
+        None => Some(format!(
+            "warning: SSH is limited to {on}, and Tailscale's state is unknown (`tailscale \
+             status` failed)"
+        )),
+    }
 }
 
 /// Which incoming traffic no chain drops by default, e.g. `IPv6`.

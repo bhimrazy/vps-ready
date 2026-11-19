@@ -29,8 +29,9 @@ table inet vps_ready {
     udp sport 67 udp dport 68 accept
     # DHCPv6 client.
     ip6 saddr fe80::/10 udp dport 546 accept
-    # SSH only through wg0 (`ssh_via`). iifname matches by name, so
-    # the rule holds before the interface exists and after it is recreated.
+    # SSH only through wg0 (`ssh_via`). iifname matches the name at
+    # packet time, so the rule loads before the interface exists and holds
+    # after it is recreated.
     iifname "wg0" tcp dport { 22 } accept
     # The profile's `allow`.
     tcp dport { 80 } accept

@@ -4,4 +4,4 @@ expression: steps.notes
 ---
 - "22/tcp in `allow` is left out: `ssh_via` limits SSH to wg0"
 - wg-quick@wg0.service brings wg0 up at boot; SSH is unreachable from boot until it is up
-- "if wg0 stops working, SSH is closed. Your provider's web console logs in with a password: no sudo user has a password yet, so set one (`sudo passwd admin`); without it, recovery needs the provider's rescue mode. From the console, `sudo systemctl stop vps-ready-firewall` opens everything until the next boot, and `sudo vps-ready rollback --txn <id>` (see `sudo vps-ready history`) undoes this change"
+- "if wg0 stops working, SSH is closed. Your provider's web console logs in with a password, so make sure a sudo user has one (`sudo passwd admin`); without it, recovery needs the provider's rescue mode. From the console, `sudo systemctl stop vps-ready-firewall` opens everything until the next boot, and `sudo vps-ready rollback --txn <id>` (see `sudo vps-ready history`) undoes this change. While SSH depends on wg0, every later change that arms the safety timer needs a confirm through wg0, so one applied from the console while wg0 is down rolls back"

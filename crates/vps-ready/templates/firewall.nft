@@ -36,8 +36,9 @@ table inet vps_ready {
 {%- endif %}
 {%- endif %}
 {%- if let Some(via) = ssh_via %}
-    # SSH only through {{ via }} (`ssh_via`). iifname matches by name, so
-    # the rule holds before the interface exists and after it is recreated.
+    # SSH only through {{ via }} (`ssh_via`). iifname matches the name at
+    # packet time, so the rule loads before the interface exists and holds
+    # after it is recreated.
     iifname "{{ via }}" tcp dport { {{ ssh|join(", ") }} } accept
 {%- if !tcp.is_empty() %}
     # The profile's `allow`.

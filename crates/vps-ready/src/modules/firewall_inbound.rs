@@ -362,13 +362,10 @@ impl Module for FirewallInbound {
         notes.extend(proxied_note(cx.facts, &model));
         if let Some(via) = &model.ssh_via {
             notes.extend(left_out(&params, &model, via));
-            let loaded = ssh_via(cx.planned, sys)?;
-            notes.extend(via::check(
-                cx.facts,
-                via,
-                loaded.as_ref() == Some(via),
-                sys,
-            )?);
+            // The same interface and ports: the SSH rule does not change.
+            let loaded = ruleset_text(cx.planned, sys)?.and_then(|t| ssh_rule_of(&t));
+            let same = loaded.is_some() && loaded == ssh_rule_of(&ruleset);
+            notes.extend(via::check(cx.facts, via, same, sys)?);
         }
         let mut resources = Vec::new();
         if !cx.facts.firewall_tools.nft {
@@ -560,11 +557,18 @@ fn ruleset_text(planned: &[Resource], sys: Sys) -> Result<Option<String>, Module
 
 /// The interface of the `iifname "<if>" tcp dport { ... } accept` line
 /// that `templates/firewall.nft` renders for `ssh_via`.
-fn via_of(ruleset: &str) -> Option<String> {
-    ruleset.lines().find_map(|l| {
-        let (name, rest) = l.trim().strip_prefix("iifname \"")?.split_once('"')?;
+pub(crate) fn via_of(ruleset: &str) -> Option<String> {
+    let rule = ssh_rule_of(ruleset)?;
+    let (name, _) = rule.strip_prefix("iifname \"")?.split_once('"')?;
+    Some(name.to_owned())
+}
+
+/// That line, trimmed.
+fn ssh_rule_of(ruleset: &str) -> Option<String> {
+    ruleset.lines().map(str::trim).find_map(|l| {
+        let (_, rest) = l.strip_prefix("iifname \"")?.split_once('"')?;
         let rest = rest.trim_start();
-        (rest.starts_with("tcp dport {") && rest.ends_with("} accept")).then(|| name.to_owned())
+        (rest.starts_with("tcp dport {") && rest.ends_with("} accept")).then(|| l.to_owned())
     })
 }
 
@@ -628,7 +632,8 @@ fn check_loaded(json: &[u8], want: &Ruleset) -> Result<(), String> {
         return Ok(());
     };
     // Public SSH is closed only if nothing but the `ssh_via` rule accepts
-    // the SSH ports.
+    // the SSH ports. A rule that accepts all ports on one interface
+    // (`iifname "x" accept`) is not seen: the parser takes it as narrow.
     let only_via = |p: &crate::facts::InterfacePorts| p.interfaces == [via.as_str()];
     let mut wrong = Vec::new();
     for &port in &want.ssh {

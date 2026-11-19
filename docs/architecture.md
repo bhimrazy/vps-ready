@@ -233,7 +233,8 @@ prompt:  "Open a NEW terminal and run:
             ssh -t -o ControlPath=none -p 22 admin@203.0.113.10 sudo vps-ready confirm"
 confirm: the nearest sshd ancestor of `confirm` is a different session from apply's, started after
          the changes went live, on a port sshd listens on, logged in as the plan's admin,
-         and, under ssh_via, to an address of that interface (else Refusal::NotVia)
+         and, under ssh_via, to an address of that interface (else Refusal::NotVia) from a
+         client that is not an address of this host (else Refusal::Local)
          → journal "confirmed" → stop the timer → disable the boot hook
 timeout: the timer runs the rollback even if apply, its terminal and its SSH session are gone
 reboot:  the boot hook rolls back before sshd starts (reason deadman-reboot)
@@ -244,6 +245,7 @@ reboot:  the boot hook rolls back before sshd starts (reason deadman-reboot)
 - **New session, from the process tree.** sudo drops `SSH_CONNECTION`, so `confirm` walks `/proc` up to the nearest `sshd`/`sshd-session` process and compares its PID and start time with the session recorded at apply. tmux, screen, mosh, the console and `ControlMaster` connections all count as old. A client on loopback is refused too: the firewall accepts that traffic whatever its rules.
 - **Deadlines** are `CLOCK_BOOTTIME` seconds plus the boot ID, so an NTP step during the window changes nothing.
 - **The boot hook** `/etc/systemd/system/vps-ready-deadman.service` (`DefaultDependencies=no`, `After=vps-ready-firewall.service`, `Before=ssh.service ssh.socket docker.service`, `TimeoutStartSec=120`) is written outside any transaction and enabled only while one is armed. It rolls back a transaction armed in an earlier boot, so sshd and Docker start with the restored config; every command it runs has 20 s at most. The timer and the hook run a private copy of the binary that applied, made at arm time, so moving, removing or upgrading the installed binary (`install.sh`, the `.deb`) cannot break them, and the unattended rollback is the version that applied. The copy is one file, overwritten by the next arm and left in place after a confirm or rollback. `confirm --extend` re-arms with the same copy. A transaction armed by v0.4.0, whose hook names the installed binary, is left as it was.
+- **A manual rollback under `ssh_via`** that would limit SSH to an interface again (the ruleset it restores has `ssh_via`, the current one does not) runs only from a session through that interface: no timer covers it.
 - **The dead-man rollback is per resource.** Resources of a module with `force_restore` (`ssh.server`, `firewall.inbound`) are restored even if edited during the window; the edit is kept as `files/<n>.during`. Any other resource that changed is skipped and journaled with its by-hand step. Restores go first and the journal is best effort, so a full disk does not stop them. If a forced restore fails, the unforced ones after it (such as the admin `user.admin` set up) wait for a rerun, so the way in stays while the lock-down does. A manual `rollback` keeps the all-or-nothing check.
 - **Waiting.** `apply` counts down until the transaction leaves pending-confirm: exit 0 when confirmed, 1 when rolled back, 4 when Ctrl-C stopped the wait (the timer keeps running).
 

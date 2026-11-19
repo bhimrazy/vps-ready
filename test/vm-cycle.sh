@@ -95,9 +95,9 @@
 #       deadline public SSH works again;
 #     confirmed: firewall.inbound without ssh_via applied first, from the
 #       public session; then ssh_via through wg0: a new public login fails, a public
-#       session opened before stays up, a confirm from a login to the VM's
-#       own address is refused as not through wg0, and one through wg0
-#       confirms; SSH-009 and FW-003 pass;
+#       session opened before stays up, a confirm from a login from the VM
+#       to its own address or to wg0's is refused as local, and one through
+#       wg0 confirms; SSH-009 and FW-003 pass;
 #     after a reboot public SSH stays closed and SSH through wg0 works, and
 #       `systemd-analyze verify` finds no ordering cycle; rollback through
 #       wg0 reopens public SSH.
@@ -446,6 +446,8 @@ private_access_cycle() {
   pvm sudo vps-ready apply --yes --profile /tmp/fw.toml --deadman 2m </dev/null >"$tmp/apply.out" 2>&1 &
   apply_pid=$!
   expect_pending
+  # A login in the same second as go-live does not count as new.
+  sleep 2
   rc=0; pvm sudo vps-ready confirm || rc=$?
   [ "$rc" -eq 0 ] || die "confirm from a new public login exited $rc, expected 0"
   rc=0; wait "$apply_pid" || rc=$?
@@ -478,15 +480,18 @@ private_access_cycle() {
   vm sudo vps-ready apply --yes --profile /tmp/via.toml --deadman 2m </dev/null >"$tmp/apply.out" 2>&1 &
   apply_pid=$!
   expect_pending
+  sleep 2
   no_public_login "after ssh_via"
-  # A new login to the VM's own address arrives on lo, which the firewall
-  # accepts; confirm refuses it all the same.
-  rc=0; vm "ssh -i ~/.ssh/vr_local -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=no \
-    -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR ci@$self_ip sudo vps-ready confirm" >"$tmp/notvia.out" 2>&1 || rc=$?
-  cat "$tmp/notvia.out"
-  [ "$rc" -eq 2 ] || die "confirm from a login to $self_ip exited $rc, expected 2"
-  grep -q "came in on $self_ip, not through wg0" "$tmp/notvia.out" ||
-    die "the login to $self_ip was not refused as not through wg0"
+  # New logins from the VM to its own addresses, wg0's too, arrive on lo,
+  # which the firewall accepts; confirm refuses them all the same.
+  for to in "$self_ip" 10.77.0.1; do
+    rc=0; vm "ssh -i ~/.ssh/vr_local -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=no \
+      -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR ci@$to sudo vps-ready confirm" >"$tmp/local.out" 2>&1 || rc=$?
+    cat "$tmp/local.out"
+    [ "$rc" -eq 2 ] || die "confirm from a login to $to exited $rc, expected 2"
+    grep -q "comes from $to, on this server itself" "$tmp/local.out" ||
+      die "the login from the VM to $to was not refused as local"
+  done
   rc=0; vm sudo vps-ready confirm || rc=$?
   [ "$rc" -eq 0 ] || die "confirm through wg0 exited $rc, expected 0"
   rc=0; wait "$apply_pid" || rc=$?

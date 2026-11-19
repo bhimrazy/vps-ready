@@ -10,13 +10,16 @@ use crate::sys::{Cmd, Sys};
 
 const TAILSCALE: &str = "tailscale0";
 
+/// Interface name prefixes of bridges and virtual links for local guests
+/// and containers (libvirt, LXC, Podman, CNI, veth pairs), besides Docker's.
+const LOCAL_BRIDGES: [&str; 6] = ["br-", "virbr", "lxcbr", "podman", "cni", "veth"];
+
 /// Checks `ssh_via = via`. Refuses a path that is never private (loopback,
-/// Docker's bridges, the default route). The rest, refusals unless `same`
-/// (the loaded ruleset already limits SSH to `via`, so the SSH rule does
-/// not change and an apply from the console still works), is: `via` is up
-/// with an address, this is an SSH session through it, it comes back after
-/// a reboot, and for Tailscale its node key does not expire. Returns the
-/// notes, the console recovery one last.
+/// local bridges, the default route). The rest, refusals unless `same` (the
+/// loaded ruleset already has this SSH rule, so it does not change), is:
+/// `via` is up with an address, this is an SSH session through it from
+/// elsewhere, it comes back after a reboot, and for Tailscale its node key
+/// does not expire. Returns the notes, the console recovery one last.
 pub(super) fn check(
     facts: &Facts,
     via: &str,
@@ -40,21 +43,34 @@ pub(super) fn check(
              console, cloud-init)"
         )),
         Some(s) => {
-            let server = s.server.ip().to_canonical();
+            let (server, client) = (s.server.ip().to_canonical(), s.client.ip().to_canonical());
+            let user = s.user.as_deref().unwrap_or("<user>");
+            let to = address(facts, via)
+                .map_or_else(|| format!("<address of {via}>"), |ip| ip.to_string());
+            let how = format!(
+                "connect through {via} first and apply from there (`ssh -t {user}@{to} sudo \
+                 vps-ready apply ...`)"
+            );
+            // A login from this host to its own VPN address travels over lo.
+            let own = facts
+                .interfaces
+                .iter()
+                .any(|i| i.addresses.iter().any(|a| a.ip == client));
             if !iface.is_some_and(|i| i.addresses.iter().any(|a| a.ip == server)) {
-                let user = s.user.as_deref().unwrap_or("<user>");
-                let to = address(facts, via)
-                    .map_or_else(|| format!("<address of {via}>"), |ip| ip.to_string());
                 problems.push(format!(
-                    "this SSH session came in on {server}, not through {via}: connect through \
-                     {via} first and apply from there (`ssh -t {user}@{to} sudo vps-ready \
-                     apply ...`)"
+                    "this SSH session came in on {server}, not through {via}: {how}"
+                ));
+            } else if client.is_loopback() || own {
+                problems.push(format!(
+                    "this SSH session comes from {client}, on this server itself, so {via} did \
+                     not carry it: {how}"
                 ));
             }
         }
     }
+    let tailscale = is_tailscale(facts, via);
     let mut notes = Vec::new();
-    match boot_unit(via, sys) {
+    match boot_unit(via, tailscale, sys) {
         Some(unit) => {
             if enabled(sys, &unit) != Some(true) {
                 problems.push(format!(
@@ -71,19 +87,19 @@ pub(super) fn check(
              after a reboot, since SSH is unreachable until it is up"
         )),
     }
-    if via == TAILSCALE {
-        problems.extend(key_expiry(facts));
+    if tailscale {
+        problems.extend(key_expiry(facts, via));
     }
     if same {
         notes.extend(
             problems.into_iter().map(|p| {
-                format!("{p} (not refused: the loaded ruleset already limits SSH to {via})")
+                format!("{p} (not refused: the loaded ruleset already has this SSH rule)")
             }),
         );
     } else if !problems.is_empty() {
         return refuse(&problems.join("; "));
     }
-    notes.push(console(facts, via, sys));
+    notes.push(console(facts, via));
     Ok(notes)
 }
 
@@ -97,13 +113,29 @@ fn not_private(facts: &Facts, via: &str) -> Option<String> {
         .any(|r| r.dst == "default" && r.table.is_none() && r.dev.as_deref() == Some(via));
     if via == "lo" {
         Some("lo is loopback".to_owned())
-    } else if via == "docker0" || via.starts_with("br-") {
-        Some(format!("{via} is a bridge for containers"))
+    } else if via == "docker0" || LOCAL_BRIDGES.iter().any(|p| via.starts_with(p)) {
+        Some(format!(
+            "{via} is a bridge or link for local containers or guests"
+        ))
     } else if default {
         Some(format!("{via} holds the host's default route"))
     } else {
         None
     }
+}
+
+/// Whether `via` is Tailscale's interface: by its name, or by holding one
+/// of the node's Tailscale addresses (`--tun` can rename it).
+fn is_tailscale(facts: &Facts, via: &str) -> bool {
+    via == TAILSCALE
+        || facts.tailscale.as_ref().is_some_and(|t| {
+            facts
+                .interfaces
+                .iter()
+                .filter(|i| i.name == via)
+                .flat_map(|i| &i.addresses)
+                .any(|a| t.ips.contains(&a.ip))
+        })
 }
 
 /// An address of `via`, IPv4 first, for the `ssh` command.
@@ -120,8 +152,8 @@ fn address(facts: &Facts, via: &str) -> Option<IpAddr> {
 }
 
 /// The unit that brings `via` up at boot, when vps-ready can tell.
-fn boot_unit(via: &str, sys: Sys) -> Option<String> {
-    if via == TAILSCALE {
+fn boot_unit(via: &str, tailscale: bool, sys: Sys) -> Option<String> {
+    if tailscale {
         Some("tailscaled.service".to_owned())
     } else if sys
         .fs
@@ -133,24 +165,25 @@ fn boot_unit(via: &str, sys: Sys) -> Option<String> {
     }
 }
 
-/// Whether `unit` is enabled; `None` when systemd cannot tell.
+/// Whether `unit` is enabled for good; `enabled-runtime` is lost at the
+/// next boot. `None` when systemd cannot tell.
 fn enabled(sys: Sys, unit: &str) -> Option<bool> {
     let cmd = Cmd::new("systemctl")
         .args(["show", "--property=UnitFileState"])
         .arg(unit);
     let out = sys.runner.run(&cmd).ok().filter(|o| o.ok())?;
     let units = parse_units(out.stdout_str().ok()?);
-    Some(prop(units.first()?, "UnitFileState").starts_with("enabled"))
+    Some(prop(units.first()?, "UnitFileState") == "enabled")
 }
 
 /// Refusal 5: a node key that expires closes SSH on that date.
-fn key_expiry(facts: &Facts) -> Option<String> {
+fn key_expiry(facts: &Facts, via: &str) -> Option<String> {
     match &facts.tailscale {
         Some(t) if t.backend_state == "Running" => t.key_expiry.as_ref().map(|at| {
             format!(
-                "this node's Tailscale key expires at {at}, and then {TAILSCALE} stops \
-                 working: disable key expiry for this machine in the Tailscale admin console \
-                 (or join with a tagged auth key), then apply again"
+                "this node's Tailscale key expires at {at}, and then {via} stops working: \
+                 disable key expiry for this machine in the Tailscale admin console (or join \
+                 with a tagged auth key), then apply again"
             )
         }),
         Some(t) => Some(format!(
@@ -165,62 +198,21 @@ fn key_expiry(facts: &Facts) -> Option<String> {
     }
 }
 
-/// How to get back in from the provider's console, and whether a sudo user
-/// has a password to log in there with.
-fn console(facts: &Facts, via: &str, sys: Sys) -> String {
+/// How to get back in from the provider's console.
+fn console(facts: &Facts, via: &str) -> String {
     let user = facts
         .session
         .as_ref()
         .and_then(|s| s.user.clone())
         .filter(|u| u != "root")
         .unwrap_or_else(|| "admin".to_owned());
-    let password = match with_password(sys) {
-        Some(users) if !users.is_empty() => format!("{} can log in there", users.join(", ")),
-        Some(_) => format!(
-            "no sudo user has a password yet, so set one (`sudo passwd {user}`); without it, \
-             recovery needs the provider's rescue mode"
-        ),
-        None => format!(
-            "set a password for a sudo user (`sudo passwd {user}`) if you have not; without \
-             it, recovery needs the provider's rescue mode"
-        ),
-    };
     format!(
         "if {via} stops working, SSH is closed. Your provider's web console logs in with a \
-         password: {password}. From the console, `sudo systemctl stop vps-ready-firewall` \
-         opens everything until the next boot, and `sudo vps-ready rollback --txn <id>` (see \
-         `sudo vps-ready history`) undoes this change"
+         password, so make sure a sudo user has one (`sudo passwd {user}`); without it, \
+         recovery needs the provider's rescue mode. From the console, `sudo systemctl stop \
+         vps-ready-firewall` opens everything until the next boot, and `sudo vps-ready \
+         rollback --txn <id>` (see `sudo vps-ready history`) undoes this change. While SSH \
+         depends on {via}, every later change that arms the safety timer needs a confirm \
+         through {via}, so one applied from the console while {via} is down rolls back"
     )
-}
-
-/// Root and the members of `sudo` that have a password hash, by
-/// `/etc/shadow`; `None` when it cannot be read. Reads only whether the
-/// field is a hash, never keeps it.
-fn with_password(sys: Sys) -> Option<Vec<String>> {
-    let shadow = sys.fs.read(Path::new("/etc/shadow")).ok()?;
-    let group = sys.fs.read(Path::new("/etc/group")).unwrap_or_default();
-    let sudo: Vec<String> = String::from_utf8_lossy(&group)
-        .lines()
-        .find_map(|l| l.strip_prefix("sudo:"))
-        .and_then(|rest| rest.splitn(3, ':').nth(2))
-        .map(|members| {
-            members
-                .split(',')
-                .filter(|m| !m.is_empty())
-                .map(str::to_owned)
-                .collect()
-        })
-        .unwrap_or_default();
-    let users = String::from_utf8_lossy(&shadow)
-        .lines()
-        .filter_map(|l| {
-            let mut fields = l.split(':');
-            let (name, hash) = (fields.next()?, fields.next()?);
-            // Locked (`!...`), `*` and empty fields are no password to log
-            // in with.
-            let usable = !hash.is_empty() && !hash.starts_with(['!', '*']);
-            (usable && (name == "root" || sudo.iter().any(|m| m == name))).then(|| name.to_owned())
-        })
-        .collect();
-    Some(users)
 }
