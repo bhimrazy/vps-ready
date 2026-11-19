@@ -7,16 +7,8 @@ modules:
     title: Ban addresses that keep failing to log in over SSH
     status: applicable
     changes:
-      - id: "package:nftables"
-        summary: install nftables
-        diff: ~
-        reversibility: partial
-      - id: "package:python3-systemd"
-        summary: install python3-systemd
-        diff: ~
-        reversibility: partial
-      - id: "package:fail2ban"
-        summary: install fail2ban
+      - id: "package:nftables,python3-systemd,fail2ban"
+        summary: "install nftables, python3-systemd, fail2ban"
         diff: ~
         reversibility: partial
       - id: "file:/etc/fail2ban/jail.d/90-vps-ready.local"

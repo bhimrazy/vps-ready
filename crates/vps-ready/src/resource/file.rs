@@ -25,6 +25,9 @@ pub struct File {
     pub owner: FileOwner,
     /// Checks the desired content before the target is written.
     pub validate: Option<Validate>,
+    /// One line the plan shows after the summary in place of a diff of
+    /// `content`, e.g. for a key whose lines mean nothing to read.
+    pub describe: Option<String>,
 }
 
 /// A command that must exit 0 on the `.after` copy of a [`File`] before the
@@ -91,7 +94,7 @@ impl File {
         let Some(owner) = self.current(sys)? else {
             let summary = format!("create {} ({})", self.path.display(), fmt_owner(self.owner));
             let diff = (!self.content.is_empty()).then(|| unified(b"", &self.content));
-            return Ok(Some((summary, diff)));
+            return Ok(Some(self.described(summary, diff)));
         };
         let current = sys.fs.read(&self.path)?;
         if current == self.content && owner == self.owner {
@@ -104,7 +107,16 @@ impl File {
         };
         let summary = format!("update {} ({owner})", self.path.display());
         let diff = (current != self.content).then(|| unified(&current, &self.content));
-        Ok(Some((summary, diff)))
+        Ok(Some(self.described(summary, diff)))
+    }
+
+    /// With [`File::describe`] set and the content changing, that line
+    /// appended to `summary` instead of `diff`.
+    fn described(&self, summary: String, diff: Option<String>) -> (String, Option<String>) {
+        match (&self.describe, diff) {
+            (Some(line), Some(_)) => (format!("{summary}: {line}"), None),
+            (_, diff) => (summary, diff),
+        }
     }
 
     /// Records mode and owner, copies the current bytes to `files/<n>.before`,
@@ -238,6 +250,7 @@ mod tests {
             content: content.into(),
             owner,
             validate: None,
+            describe: None,
         })
     }
 
@@ -254,6 +267,40 @@ mod tests {
             change.diff.as_deref(),
             Some("@@ -0,0 +1,2 @@\n+a = 1\n+b = 2\n")
         );
+    }
+
+    #[test]
+    fn describe_replaces_the_diff() {
+        let File { path, owner, .. } = match resource("", root_owner()) {
+            Resource::File(f) => f,
+            other => panic!("{other:?}"),
+        };
+        let described = |content: &str| {
+            Resource::File(File {
+                path: path.clone(),
+                content: content.into(),
+                owner,
+                validate: None,
+                describe: Some("a key".into()),
+            })
+        };
+        let fs = FakeFs::new().with_dir("/etc/sysctl.d", root_owner());
+        let change = described("k\n").diff(sys(&fs)).unwrap().unwrap();
+        assert_eq!(change.summary, format!("create {PATH} (0644 0:0): a key"));
+        assert_eq!(change.diff, None);
+
+        // An owner-only change has no diff to replace.
+        let private = FileOwner {
+            mode: 0o600,
+            ..root_owner()
+        };
+        fs.write_atomic(Path::new(PATH), b"k\n", private).unwrap();
+        let change = described("k\n").diff(sys(&fs)).unwrap().unwrap();
+        assert_eq!(
+            change.summary,
+            format!("update {PATH} (0600 0:0 -> 0644 0:0)")
+        );
+        assert_eq!(change.diff, None);
     }
 
     #[test]
@@ -385,6 +432,7 @@ mod tests {
             content: Vec::new(),
             owner: root_owner(),
             validate: None,
+            describe: None,
         })
         .diff(sys(&fs))
         .unwrap_err();
@@ -510,6 +558,7 @@ mod tests {
             content: APT_CONTENT.into(),
             owner: root_owner(),
             validate: Some(Validate::new("apt-config", ["-c", Validate::PATH, "dump"])),
+            describe: None,
         })
     }
 

@@ -110,7 +110,7 @@ pub enum Reversibility { Reversible, Partial, Irreversible }
 ```
 `Result<T>` here is `std::result::Result<T, ResourceError>`. Restore depends only on the `Backup` written to the journal, so `rollback` works in a later process without rebuilding any module's plan. The plan renderer matches on `Reversibility` without a `_ =>` arm, so if a fourth label is ever added, the code that prints the plan doesn't compile until it shows that label to the user.
 
-A drop-in is a `File` whose whole content we own (preferred). `Directory` creates a missing directory (`/etc/vps-ready`) and removes it on rollback only if it is empty. `Service` is a systemd unit's enabled and active state; `User` is an account created with `useradd` or groups added to an existing one (`Partial`: a created user's home directory stays); `AuthorizedKeys` appends missing key lines and never removes one. The firewall is two `File`s and a `Service`, not a ruleset resource: the unit's `ExecStart`, `ExecReload` and `ExecStop` load and delete the table. `LineInFile` and `Command` are added only if a module cannot do without them.
+A drop-in is a `File` whose whole content we own (preferred); a `File` can carry a one-line `describe` that the plan shows instead of a diff, as the vendor apt keys do with their fingerprint. `Package` installs those of its packages that are missing, with one `apt-get update` and one `apt-get install` for a module (`Partial`: rollback leaves them installed). `Directory` creates a missing directory (`/etc/vps-ready`) and removes it on rollback only if it is empty. `Service` is a systemd unit's enabled and active state; `User` is an account created with `useradd` or groups added to an existing one (`Partial`: a created user's home directory stays); `AuthorizedKeys` appends missing key lines and never removes one. The firewall is two `File`s and a `Service`, not a ruleset resource: the unit's `ExecStart`, `ExecReload` and `ExecStop` load and delete the table. `LineInFile` and `Command` are added only if a module cannot do without them.
 
 ### Modules (`src/modules/<name>/`): policy only
 ```rust
@@ -272,9 +272,9 @@ sequenceDiagram
 ```
 
 Planned:
-- **OpenRC:** a double-forked `setsid` watchdog plus a `local.d` boot hook (M6; today the dead-man modules need systemd).
-- **firewalld:** runtime-only rules as a second safety net (M6).
-- **Non-interactive (cloud-init):** `--deadman=off` with the invariants still enforced, or `--deadman=selftest` (probe the new config via `ssh-keyscan localhost:<port>`) (M5).
+- **OpenRC:** a double-forked `setsid` watchdog plus a `local.d` boot hook (M7; today the dead-man modules need systemd).
+- **firewalld:** runtime-only rules as a second safety net (M7).
+- **Non-interactive (cloud-init):** `--deadman=off` with the invariants still enforced, or `--deadman=selftest` (probe the new config via `ssh-keyscan localhost:<port>`) (v0.6.0, with `export cloud-init`).
 
 ## State layout
 
@@ -325,7 +325,7 @@ vps-ready apply [plan.json | --profile X] [--module M] [--yes] [--deadman 5m|off
 vps-ready confirm [--txn ID] [--extend [DUR]]
 vps-ready rollback [--last | --txn ID]
 vps-ready history | drift
-vps-ready export cloud-init --profile X > user-data.yaml
+vps-ready export cloud-init --profile X > user-data.yaml   # v0.6.0
 vps-ready modules [ID]                  list modules; with an ID, why, params and the controls fixed (no root; not the files touched: that needs a plan against a host)
 vps-ready version
 ```
@@ -336,7 +336,7 @@ vps-ready version
 
 ## Profile format: TOML
 
-TOML avoids YAML's foot-guns in a security config (`no` → `false`, the Norway problem, indentation surprises). Decoding is strict, with a `schema = 1` version field (planned: a JSON Schema for editor completion, deferred from M4 to M6 with the config file, see [the M4 plan](m4-plan.md#not-in-m4)):
+TOML avoids YAML's foot-guns in a security config (`no` → `false`, the Norway problem, indentation surprises). Decoding is strict, with a `schema = 1` version field (planned: a JSON Schema for editor completion, deferred from M4 to M7 with the config file, see [the M4 plan](m4-plan.md#not-in-m4)):
 - Every module's params struct has `#[serde(deny_unknown_fields)]`, and every section is checked when the profile is parsed, so a typo is an error that names the module, not a silently ignored line.
 - Planned: the same structs derive `schemars::JsonSchema`, so the published schema can't drift from the code.
 
@@ -360,7 +360,7 @@ enabled = false
 
 Without `--profile` or `--module`, `plan` and `apply` select only `kernel.sysctl` and `updates.auto`, so an upgrade never makes a plain `apply` start changing SSH or the firewall.
 
-**cloud-init:** `vps-ready export cloud-init` emits `#cloud-config` that writes the profile, downloads a **pinned version, verifying its SHA256** (embedded in the user-data), and runs `apply --yes --deadman=off` from `runcmd`.
+**cloud-init (v0.6.0):** `vps-ready export cloud-init` emits `#cloud-config` that writes the profile, downloads a **pinned version, verifying its SHA256** (embedded in the user-data), and runs `apply --yes --deadman=off` from `runcmd`.
 
 ## Repo layout
 

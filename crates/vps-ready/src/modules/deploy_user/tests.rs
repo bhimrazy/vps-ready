@@ -385,7 +385,7 @@ fn docker_adds_the_group_and_says_it_is_root() {
     );
     // Docker installed by the same plan creates the group first.
     let docker = [Resource::Package(Package {
-        name: "docker-ce".into(),
+        names: vec!["containerd.io".into(), "docker-ce".into()],
     })];
     plan_steps(&fs, &runner, &docker, &params("docker = true")).unwrap();
 }
@@ -425,7 +425,7 @@ fn a_command_root_does_not_own_alone_is_refused() {
         ),
     ] {
         let reason = refusal(plan_steps(&fs, &runner, &[], &with(command)));
-        assert!(reason.contains(why), "{command}: {reason}");
+        assert!(reason.contains(why), "{command}");
     }
 }
 

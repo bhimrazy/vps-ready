@@ -14,8 +14,9 @@ const stops: Stop[] = [
   { m: 'M2', name: 'Engine', text: 'Plan, apply, journal, rollback', state: 'done', pill: 'v0.2.0' },
   { m: 'M3', name: 'Lockout-safe', text: 'SSH, firewall, admin user, safety timer', state: 'done', pill: 'v0.3.0' },
   { m: 'M4', name: 'Wizard', text: 'Guided setup and module explanations', state: 'done', pill: 'v0.4.0' },
-  { m: 'M5', name: 'Deploy-ready', text: 'Signed apt, dnf and apk packages', state: 'next', pill: 'next' },
-  { m: 'M6', name: 'More distros', text: 'Broader support, deeper checks' },
+  { m: 'M5', name: 'Deploy-ready', text: 'Docker, Caddy, a deploy user, a .deb', state: 'done', pill: 'v0.5.0' },
+  { m: 'M6', name: 'Private access', text: 'SSH over a VPN, then close public 22', state: 'next', pill: 'next' },
+  { m: 'M7', name: 'More distros', text: 'Broader support, deeper checks' },
 ];
 const dot = {
   done: 'border-brand bg-brand text-on-accent',
@@ -27,11 +28,11 @@ const dot = {
 <Section id="roadmap" alt>
   <SectionHead label="Roadmap">
     <Fragment slot="title">Built in small, safe releases.</Fragment>
-    Each release is tagged and signed. The guided setup ships in v0.4.0.
+    Each release is tagged and signed. Deployment readiness shipped in v0.5.0.
   </SectionHead>
 
   <div
-    class="relative grid grid-cols-7 before:absolute before:inset-x-[7%] before:top-[15px] before:h-0.5 before:bg-[linear-gradient(90deg,var(--color-brand)_0_50%,var(--color-line)_50%_100%)] max-[820px]:grid-cols-1 max-[820px]:gap-5 max-[820px]:before:inset-y-0 max-[820px]:before:right-auto max-[820px]:before:left-[15px] max-[820px]:before:h-auto max-[820px]:before:w-0.5 max-[820px]:before:bg-[linear-gradient(var(--color-brand)_0_52%,var(--color-line)_52%_100%)]"
+    class="relative grid grid-cols-8 before:absolute before:inset-x-[6.25%] before:top-[15px] before:h-0.5 before:bg-[linear-gradient(90deg,var(--color-brand)_0_71%,var(--color-line)_71%_100%)] max-[820px]:grid-cols-1 max-[820px]:gap-5 max-[820px]:before:inset-y-0 max-[820px]:before:right-auto max-[820px]:before:left-[15px] max-[820px]:before:h-auto max-[820px]:before:w-0.5 max-[820px]:before:bg-[linear-gradient(var(--color-brand)_0_72%,var(--color-line)_72%_100%)]"
   >
     {
       stops.map((s) => (

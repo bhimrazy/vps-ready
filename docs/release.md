@@ -67,7 +67,7 @@ Only the last two steps need `contents: write`, and they run in the `release` en
 
 ## Install paths (most → least trusted)
 
-1. **Package repo:** apt `signed-by=` / dnf `gpgcheck=1` / apk keys. Updates come through the system package manager. (Host on GitHub Pages or Cloudsmith; this can come later, at v0.5+.)
+1. **Package repo:** apt `signed-by=` / dnf `gpgcheck=1` / apk keys. Updates come through the system package manager. Not built. v0.5.0 ships the `.deb` as a release asset, checked like the tarballs (see below); a repository waits until someone asks for it, and `.rpm` and `.apk` until vps-ready supports those distros.
 2. **Manual verification:**
    ```sh
    cosign verify-blob --bundle checksums.txt.sigstore.json \
