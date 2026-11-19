@@ -630,7 +630,9 @@ private_access_cycle() {
   rc=0; pvm sudo vps-ready apply --yes --profile /tmp/wgonly.toml || rc=$?
   [ "$rc" -eq 0 ] || die "applying net.wireguard again exited $rc, expected 0"
   [ "$(pvm sudo wg show wg0 public-key)" = "$vm_pub" ] || die "the new apply did not reuse the key"
-  vm true || die "no login through wg0 after applying again"
+  # The runner's side gave up its handshakes while wg0 was gone; new
+  # traffic starts one again.
+  wait_ssh 60
 }
 
 if [ "$cycle" = private-access ]; then
