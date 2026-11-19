@@ -608,9 +608,10 @@ fn crash_at_any_point(modules: &[&dyn Module]) {
                 _ => None,
             })
             .flat_map(|r| {
-                r.check()
+                let (check, command) = r.rollback_steps(sys(&original_fs), &[]);
+                check
                     .iter()
-                    .chain([&r.command()])
+                    .chain([&command])
                     .map(reload::line)
                     .collect::<Vec<_>>()
             })
@@ -897,14 +898,11 @@ fn failed(stderr: &str) -> Output {
 }
 
 /// Each command `runner` ran, as a line.
-/// The commands run, without `systemctl show` (the firewall rollback's
-/// unit state query).
 fn calls(runner: &FakeRunner) -> Vec<String> {
     runner
         .calls()
         .iter()
         .map(|c| format!("{} {}", c.program, c.args.join(" ")))
-        .filter(|c| !c.starts_with("systemctl show "))
         .collect()
 }
 
@@ -939,6 +937,11 @@ const FIREWALL_RELOAD: [&str; 2] = [
     "nft -c -f /etc/vps-ready/firewall.nft",
     "systemctl try-reload-or-restart vps-ready-firewall.service",
 ];
+/// A rollback's: no backup of the unit, so it was active before.
+const FIREWALL_ROLLBACK: [&str; 2] = [
+    FIREWALL_RELOAD[0],
+    "systemctl reload-or-restart vps-ready-firewall.service",
+];
 
 #[test]
 fn reloads_run_after_their_module_and_again_after_its_restores() {
@@ -965,7 +968,7 @@ fn reloads_run_after_their_module_and_again_after_its_restores() {
     assert_eq!(host(&fs), before);
     // The firewall reload waits for the restores journaled after the sshd
     // reload, including the sysctl of the module without reloads.
-    assert_eq!(calls(&run), [FIREWALL_RELOAD, SSHD_RELOAD].concat());
+    assert_eq!(calls(&run), [FIREWALL_ROLLBACK, SSHD_RELOAD].concat());
     assert_eq!(
         names(&fs, &txn),
         [
@@ -1138,7 +1141,7 @@ fn a_failed_reload_in_rollback_does_not_stop_earlier_modules() {
         .on("nft", ["-c"], Output::success(""))
         .on(
             "systemctl",
-            ["try-reload-or-restart", "vps-ready-firewall.service"],
+            ["reload-or-restart", "vps-ready-firewall.service"],
             failed("Job failed"),
         )
         .on("sshd", ["-t"], Output::success(""))
@@ -1154,12 +1157,12 @@ fn a_failed_reload_in_rollback_does_not_stop_earlier_modules() {
         left,
         &[ByHand {
             resource: "firewall-reload".into(),
-            step: FIREWALL_RELOAD[1].into(),
+            step: FIREWALL_ROLLBACK[1].into(),
         }]
     );
     // The sshd module was still restored and reloaded.
     assert_eq!(host(&fs), before);
-    assert_eq!(calls(&broken), [FIREWALL_RELOAD, SSHD_RELOAD].concat());
+    assert_eq!(calls(&broken), [FIREWALL_ROLLBACK, SSHD_RELOAD].concat());
     let names = names(&fs, &txn);
     assert_eq!(
         names[names.len() - 5..],
@@ -1174,7 +1177,7 @@ fn a_failed_reload_in_rollback_does_not_stop_earlier_modules() {
 
     let run = runner(Output::success(""));
     rollback_with(&fs, &run).unwrap();
-    assert_eq!(calls(&run), [FIREWALL_RELOAD, SSHD_RELOAD].concat());
+    assert_eq!(calls(&run), [FIREWALL_ROLLBACK, SSHD_RELOAD].concat());
 }
 
 #[test]
