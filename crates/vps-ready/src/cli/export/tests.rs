@@ -119,6 +119,21 @@ fn a_built_in_profile_is_written_as_a_file_that_extends_it() {
 }
 
 #[test]
+fn refuses_line_breaks_that_yaml_would_change() {
+    for c in ['\u{85}', '\u{2028}', '\u{2029}', '\u{feff}'] {
+        let profile = KEYED.replace("me@laptop", &format!("me{c}@laptop"));
+        let err = export(&fs(&profile, &checksums()), PROFILE, None).unwrap_err();
+        assert!(
+            err.ends_with(&format!(
+                "contains U+{:04X}, which YAML would change; remove it",
+                u32::from(c)
+            )),
+            "{err}"
+        );
+    }
+}
+
+#[test]
 fn an_indented_profile_keeps_its_text() {
     let profile = format!("\n  # indented\n{KEYED}");
     let fs = fs(&profile, &checksums());
@@ -141,9 +156,19 @@ fn base_url_replaces_the_release_url() {
         "{text}"
     );
     assert!(!text.contains("github.com"), "{text}");
+    // Plain http for a local mirror; the hash still decides.
+    assert!(!text.contains("--proto"), "{text}");
+    let https = export(&fs, PROFILE, None).unwrap();
+    assert!(
+        https.contains("curl --proto '=https' --tlsv1.2 -fsSL"),
+        "{https}"
+    );
+    assert!(https.contains("wget -q --https-only --tries=5"), "{https}");
     for bad in [
         "ftp://example.com",
         "https://",
+        "https:///",
+        "https:///x",
         "https://example.com/$(id)",
         "https://example.com/\"x",
         "https://example.com/a b",

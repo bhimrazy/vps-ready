@@ -7,7 +7,7 @@ expression: redact(&text)
 write_files:
   - path: /etc/vps-ready/profile.toml
     permissions: "0600"
-    content: |
+    content: |2
       schema = 1
       extends = "web"
 
@@ -24,10 +24,18 @@ runcmd:
         aarch64) t=aarch64-unknown-linux-musl; sum=a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1 ;;
         *) echo "vps-ready: unsupported architecture" >&2; exit 1 ;;
       esac
-      f=/root/vps-ready-<version>-$t.tar.gz
-      curl -fsSL --retry 5 --retry-connrefused -o "$f" \
-        "https://github.com/bhimrazy/vps-ready/releases/download/v<version>/vps-ready-<version>-$t.tar.gz"
+      d=$(mktemp -d)
+      f="$d/vps-ready-<version>-$t.tar.gz"
+      u="https://github.com/bhimrazy/vps-ready/releases/download/v<version>/vps-ready-<version>-$t.tar.gz"
+      if command -v curl >/dev/null; then
+        curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-connrefused -o "$f" "$u"
+      else
+        wget -q --https-only --tries=5 -O "$f" "$u"
+      fi
       echo "$sum  $f" | sha256sum -c -
-      tar -xzf "$f" -C /root
-      install -m 0755 "/root/vps-ready-<version>-$t/vps-ready" /usr/local/bin/vps-ready
-      vps-ready apply --profile /etc/vps-ready/profile.toml --yes --deadman=off
+      tar -xzf "$f" -C "$d"
+      install -m 0755 "$d/vps-ready-<version>-$t/vps-ready" /usr/local/bin/vps-ready
+      rm -rf "$d"
+      # `sshd -T` needs it; with ssh.socket it appears only at the first login.
+      [ -d /run/sshd ] || mkdir -m 0755 /run/sshd
+      /usr/local/bin/vps-ready apply --profile /etc/vps-ready/profile.toml --yes --deadman=off

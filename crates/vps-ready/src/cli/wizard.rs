@@ -699,7 +699,7 @@ fn next_time(
     };
     if builder.is_unchanged() {
         repeat(out, builder.base())?;
-        return new_server(host, builder, None, out);
+        return new_server(host, builder, Saved::Base, out);
     }
     writeln!(out)?;
     let path = cwd.join(SAVE_AS);
@@ -715,7 +715,7 @@ fn next_time(
             "Not saved. To repeat this, save these lines to a file and run:\n  \
              sudo vps-ready apply --profile <file>\n\n{text}"
         )?;
-        return new_server(host, builder, None, out);
+        return new_server(host, builder, Saved::No, out);
     }
     let owner = FileOwner {
         mode: 0o644,
@@ -726,22 +726,47 @@ fn next_time(
     writeln!(out, "Saved {}.", path.display())?;
     writeln!(out, "Review it before you use it on another server.")?;
     repeat(out, &path.display().to_string())?;
-    new_server(host, builder, Some(&path), out)
+    new_server(host, builder, Saved::To(&path), out)
+}
+
+/// Where [`next_time`] left the answers.
+enum Saved<'a> {
+    /// Nothing to save: the built-in profile as it is.
+    Base,
+    /// Printed, not saved.
+    No,
+    To(&'a Path),
 }
 
 /// The closing line: the export that sets up a new server the same way at
-/// its first boot, from the saved profile `file`.
+/// its first boot.
 fn new_server(
     host: &Host,
     builder: &ProfileBuilder,
-    file: Option<&Path>,
+    saved: Saved,
     out: &mut dyn Write,
 ) -> anyhow::Result<()> {
-    let name = file.map_or("<file>".to_owned(), |f| f.display().to_string());
-    let first = match (export::refusal(&builder.build(host.modules)?), file) {
-        (None, _) => String::new(),
-        (Some(_), Some(_)) => format!(" (add the admin's `authorized_keys` to {name} first)"),
-        (Some(_), None) => " (with the admin's `authorized_keys` in the file)".to_owned(),
+    let refused = export::refusal(&builder.build(host.modules)?).is_some();
+    let (name, first) = match (saved, refused) {
+        (Saved::To(path), false) => (path.display().to_string(), String::new()),
+        (Saved::To(path), true) => {
+            let path = path.display().to_string();
+            let first = format!(" (add the admin's `authorized_keys` to {path} first)");
+            (path, first)
+        }
+        (Saved::No, false) => ("<file>".to_owned(), String::new()),
+        (Saved::No, true) => (
+            "<file>".to_owned(),
+            " (with the admin's `authorized_keys` in the file)".to_owned(),
+        ),
+        // A built-in profile has no keys.
+        (Saved::Base, _) => (
+            "<file>".to_owned(),
+            format!(
+                " (a file with `extends = \"{}\"` and the admin's `authorized_keys`)",
+                builder.base()
+            ),
+        ),
     };
     writeln!(
         out,

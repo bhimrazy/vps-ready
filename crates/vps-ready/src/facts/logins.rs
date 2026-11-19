@@ -38,8 +38,13 @@ fn sshd_sessions(fs: &dyn Fs) -> Result<Vec<String>, String> {
         }
         let cmdline = match fs.read(&path.join("cmdline")) {
             Ok(bytes) => bytes,
-            // It exited during the scan.
+            // It exited during the scan, or exited and was reaped.
             Err(SysError::NotFound(_)) => continue,
+            Err(SysError::Io { source, .. })
+                if source.raw_os_error() == Some(rustix::io::Errno::SRCH.raw_os_error()) =>
+            {
+                continue;
+            }
             Err(e) => return Err(e.to_string()),
         };
         let title = String::from_utf8_lossy(cmdline.split(|&b| b == 0).next().unwrap_or_default());
@@ -55,21 +60,38 @@ fn sshd_sessions(fs: &dyn Fs) -> Result<Vec<String>, String> {
 /// The logind sessions of class `user` (also `user-early` and the other
 /// `user-*` classes of newer systemd), as `logind session <id> of <name>`.
 fn logind_sessions(runner: &dyn Runner) -> Result<Vec<String>, String> {
-    let list = loginctl(runner, &["list-sessions", "--no-legend", "--no-pager"])?;
+    let list = list_sessions(runner)?;
     let mut sessions = Vec::new();
-    for id in list.lines().filter_map(|l| l.split_whitespace().next()) {
-        let props = loginctl(runner, &["show-session", id, "-p", "Name", "-p", "Class"])?;
+    for id in &list {
+        let props = match loginctl(runner, &["show-session", id, "-p", "Name", "-p", "Class"]) {
+            Ok(props) => props,
+            // It ended since the list.
+            Err(_) if !list_sessions(runner)?.contains(id) => continue,
+            Err(e) => return Err(e),
+        };
         let prop = |key: &str| {
             props
                 .lines()
                 .find_map(|l| l.strip_prefix(key)?.strip_prefix('='))
-                .unwrap_or_default()
         };
-        if prop("Class").starts_with("user") {
-            sessions.push(format!("logind session {id} of {}", prop("Name")));
+        let class =
+            prop("Class").ok_or_else(|| format!("`loginctl show-session {id}` shows no Class"))?;
+        if class.starts_with("user") {
+            let name = prop("Name").unwrap_or_default();
+            sessions.push(format!("logind session {id} of {name}"));
         }
     }
     Ok(sessions)
+}
+
+/// The IDs of the logind sessions.
+fn list_sessions(runner: &dyn Runner) -> Result<Vec<String>, String> {
+    let list = loginctl(runner, &["list-sessions", "--no-legend", "--no-pager"])?;
+    Ok(list
+        .lines()
+        .filter_map(|l| l.split_whitespace().next())
+        .map(str::to_owned)
+        .collect())
 }
 
 fn loginctl(runner: &dyn Runner, args: &[&str]) -> Result<String, String> {
@@ -174,6 +196,74 @@ mod tests {
             detect(&procs(&TMUX), &runner),
             Ok(vec!["logind session 3 of admin".to_owned()])
         );
+    }
+
+    #[test]
+    fn a_session_without_a_class_is_an_error() {
+        let runner = FakeRunner::new()
+            .on(
+                "loginctl",
+                ["list-sessions"],
+                Output::success("3 1000 admin - -\n"),
+            )
+            .on(
+                "loginctl",
+                ["show-session", "3"],
+                Output::success("Name=admin\n"),
+            );
+        assert_eq!(
+            detect(&procs(&TMUX), &runner),
+            Err("`loginctl show-session 3` shows no Class".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_failed_show_session_is_an_error_while_the_session_is_listed() {
+        let runner = FakeRunner::new()
+            .on(
+                "loginctl",
+                ["list-sessions"],
+                Output::success("3 1000 admin - -\n"),
+            )
+            .on(
+                "loginctl",
+                ["show-session", "3"],
+                Output {
+                    status: 1,
+                    stderr: b"Failed to get session\n".to_vec(),
+                    ..Output::default()
+                },
+            );
+        let err = detect(&procs(&TMUX), &runner).unwrap_err();
+        assert!(err.ends_with("exited 1: Failed to get session"), "{err}");
+    }
+
+    /// loginctl whose session 3 ends between the list and its details.
+    struct Ending(std::sync::atomic::AtomicUsize);
+
+    impl Runner for Ending {
+        fn run(&self, cmd: &Cmd) -> Result<Output, SysError> {
+            let n = self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(match (n, cmd.args[0].as_str()) {
+                (0, "list-sessions") => Output::success("3 1000 admin - -\n"),
+                (_, "list-sessions") => Output::success(""),
+                _ => Output {
+                    status: 1,
+                    ..Output::default()
+                },
+            })
+        }
+    }
+
+    #[test]
+    fn a_session_that_ended_since_the_list_is_skipped() {
+        let runner = Ending(std::sync::atomic::AtomicUsize::new(0));
+        assert_eq!(detect(&procs(&TMUX), &runner), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn an_unreadable_proc_is_an_error() {
+        assert!(detect(&FakeFs::new(), &no_logind()).is_err());
     }
 
     #[test]

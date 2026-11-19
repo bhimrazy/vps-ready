@@ -35,6 +35,16 @@ pub(super) fn cloud_init(
     if let Some(why) = refusal(&profile) {
         bail!("profile {spec}: {why}");
     }
+    // YAML 1.1 parsers break lines at these; TOML allows them in strings.
+    if let Some(c) = text
+        .chars()
+        .find(|c| matches!(c, '\u{85}' | '\u{2028}' | '\u{2029}' | '\u{feff}'))
+    {
+        bail!(
+            "profile {spec} contains U+{:04X}, which YAML would change; remove it",
+            u32::from(c)
+        );
+    }
     let version = VERSION_INFO.version;
     let sums = read(host, checksums)?;
     let mut cases = String::new();
@@ -52,6 +62,11 @@ pub(super) fn cloud_init(
         Some(url) => checked_url(url)?,
         None => format!("https://github.com/bhimrazy/vps-ready/releases/download/v{version}"),
     };
+    let (curl_https, wget_https) = if base.starts_with("https://") {
+        (" --proto '=https' --tlsv1.2", " --https-only")
+    } else {
+        ("", "")
+    };
     write!(
         out,
         "#cloud-config
@@ -59,7 +74,7 @@ pub(super) fn cloud_init(
 write_files:
   - path: {PROFILE_PATH}
     permissions: \"0600\"
-    content: {block}
+    content: |2
 {content}runcmd:
   - - sh
     - -c
@@ -68,15 +83,22 @@ write_files:
       case \"$(uname -m)\" in
 {cases}        *) echo \"vps-ready: unsupported architecture\" >&2; exit 1 ;;
       esac
-      f=/root/vps-ready-{version}-$t.tar.gz
-      curl -fsSL --retry 5 --retry-connrefused -o \"$f\" \\
-        \"{base}/vps-ready-{version}-$t.tar.gz\"
+      d=$(mktemp -d)
+      f=\"$d/vps-ready-{version}-$t.tar.gz\"
+      u=\"{base}/vps-ready-{version}-$t.tar.gz\"
+      if command -v curl >/dev/null; then
+        curl{curl_https} -fsSL --retry 5 --retry-connrefused -o \"$f\" \"$u\"
+      else
+        wget -q{wget_https} --tries=5 -O \"$f\" \"$u\"
+      fi
       echo \"$sum  $f\" | sha256sum -c -
-      tar -xzf \"$f\" -C /root
-      install -m 0755 \"/root/vps-ready-{version}-$t/vps-ready\" /usr/local/bin/vps-ready
-      vps-ready apply --profile {PROFILE_PATH} --yes --deadman=off
+      tar -xzf \"$f\" -C \"$d\"
+      install -m 0755 \"$d/vps-ready-{version}-$t/vps-ready\" /usr/local/bin/vps-ready
+      rm -rf \"$d\"
+      # `sshd -T` needs it; with ssh.socket it appears only at the first login.
+      [ -d /run/sshd ] || mkdir -m 0755 /run/sshd
+      /usr/local/bin/vps-ready apply --profile {PROFILE_PATH} --yes --deadman=off
 ",
-        block = block_indicator(&text),
         content = indent(&text, 6),
     )?;
     Ok(0)
@@ -134,19 +156,11 @@ fn checked_url(url: &str) -> anyhow::Result<String> {
     let rest = url
         .strip_prefix("https://")
         .or_else(|| url.strip_prefix("http://"));
-    if !rest.is_some_and(|r| !r.is_empty()) || !url.chars().all(safe) {
+    let host_part = rest.map(|r| r.trim_end_matches('/'));
+    if !host_part.is_some_and(|r| !r.is_empty() && !r.starts_with('/')) || !url.chars().all(safe) {
         bail!("--base-url {url:?} is not an http or https URL without spaces, quotes or `$`");
     }
     Ok(url.trim_end_matches('/').to_owned())
-}
-
-/// `|`, or `|2` when the first line with text is indented: YAML takes the
-/// block's indentation from that line otherwise.
-fn block_indicator(text: &str) -> &'static str {
-    match text.lines().find(|l| !l.trim().is_empty()) {
-        Some(line) if line.starts_with([' ', '\t']) => "|2",
-        _ => "|",
-    }
 }
 
 /// Each line of `text` after `n` spaces; empty lines stay empty.

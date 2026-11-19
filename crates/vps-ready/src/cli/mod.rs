@@ -137,7 +137,7 @@ pub enum Command {
         /// the safety timer, for a first boot (`export cloud-init`), and only
         /// when nobody is logged in.
         #[arg(long, value_name = "DUR|off", default_value = "5m", value_parser = deadman)]
-        deadman: Deadman,
+        deadman: DeadmanArg,
         /// Do not ask; required when stdin is not a terminal.
         #[arg(long, short)]
         yes: bool,
@@ -237,13 +237,13 @@ pub enum Export {
 
 /// `apply --deadman`: a window, or `off`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Deadman(pub Option<Duration>);
+pub struct DeadmanArg(pub Option<Duration>);
 
-fn deadman(text: &str) -> Result<Deadman, String> {
+fn deadman(text: &str) -> Result<DeadmanArg, String> {
     if text == "off" {
-        return Ok(Deadman(None));
+        return Ok(DeadmanArg(None));
     }
-    window(text).map(|w| Deadman(Some(w)))
+    window(text).map(|w| DeadmanArg(Some(w)))
 }
 
 /// `--module` accepts the IDs of the registry.
@@ -1143,11 +1143,11 @@ mod tests {
         };
         assert_eq!(
             apply(&["vps-ready", "apply"]),
-            Ok(Deadman(Some(Duration::from_secs(300))))
+            Ok(DeadmanArg(Some(Duration::from_secs(300))))
         );
         assert_eq!(
             apply(&["vps-ready", "apply", "--deadman=off"]),
-            Ok(Deadman(None))
+            Ok(DeadmanArg(None))
         );
         assert!(apply(&["vps-ready", "apply", "--deadman=selftest"]).is_err());
         // `confirm --extend` takes a window only.

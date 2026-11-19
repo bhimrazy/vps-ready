@@ -680,3 +680,38 @@ fn deadman_off_is_refused_when_it_cannot_tell() {
     );
     assert!(txn_ids(&fs).is_empty());
 }
+
+#[test]
+fn deadman_off_without_a_dead_man_module_skips_the_login_check() {
+    // Someone is logged in, and `host`'s runner has no loginctl: neither
+    // matters when nothing would arm the timer.
+    let fs = first_boot().with_file("/proc/812/cmdline", "sshd: admin@pts/0\0");
+    let host = host(&fs);
+    let (code, out, err) = run(|out, err| apply(&host, &only(&[]), true, None, None, out, err));
+    assert_eq!(code, 0, "{err}");
+    assert!(!out.contains("without the safety timer"), "{out}");
+    let json = run(|out, _| history(&host, true, out)).1;
+    assert!(json.contains("\"state\": \"applied\""), "{json}");
+    assert!(!json.contains("without_timer"), "{json}");
+}
+
+#[test]
+fn deadman_off_fails_on_a_module_that_does_not_apply() {
+    // kernel.sysctl does not apply in a container; a first boot must not
+    // end "done" with it skipped.
+    let fs = first_boot();
+    let host = Host {
+        facts: container,
+        ..host(&fs)
+    };
+    let (code, _, err) = run(|out, err| apply(&host, &only(&[]), true, None, None, out, err));
+    assert_eq!(code, EXIT_ERROR, "{err}");
+    assert!(
+        err.starts_with("error: kernel.sysctl does not apply to this host:"),
+        "{err}"
+    );
+    assert!(txn_ids(&fs).is_empty());
+    // With the timer, the plan shows it and goes on, as before.
+    let (code, _, err) = apply_yes(&host);
+    assert_ne!(code, EXIT_ERROR, "{err}");
+}

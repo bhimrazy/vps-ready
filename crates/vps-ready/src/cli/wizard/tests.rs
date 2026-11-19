@@ -765,9 +765,9 @@ fn an_empty_plan_of_a_profile_says_the_server_matches() {
         text.ends_with(
             "\nNothing to do: this server already matches.\n\n\
              Next time, without questions:\n  sudo vps-ready apply --profile minimal\n\n\
-             Same setup for a new server, at its first boot (with the admin's \
-             `authorized_keys` in the file):\n  vps-ready export cloud-init --profile <file> \
-             --checksums checksums.txt\n"
+             Same setup for a new server, at its first boot (a file with `extends = \
+             \"minimal\"` and the admin's `authorized_keys`):\n  vps-ready export cloud-init \
+             --profile <file> --checksums checksums.txt\n"
         ),
         "{text}"
     );

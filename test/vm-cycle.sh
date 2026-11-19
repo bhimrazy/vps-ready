@@ -77,7 +77,7 @@
 #   10.0.2.2:$VM_HTTP_PORT (default 8321), and booted as multipart user-data
 #   with the seed's own part. Nobody logs in until cloud-init's final message
 #   is on the serial console, since `--deadman=off` refuses while anyone is
-#   logged in. Then, as the admin: curl, sha256sum and tar exist, `cloud-init
+#   logged in. Then: curl or wget, sha256sum and tar exist; as the admin, `cloud-init
 #   status` is done, `history` shows one transaction applied without the
 #   timer, SSH-001..007 and FW-001 pass, root does not log in, and the
 #   exported profile plans nothing. A second fresh boot with a tampered
@@ -297,8 +297,10 @@ cloud_init_cycle() {
   boot "$tmp/first-boot"
   wait_first_boot
   wait_ssh 120
-  for tool in curl sha256sum tar; do
-    as_admin command -v "$tool" >/dev/null || die "$tool is not on the image"
+  # As the seed's user, so a missing tool shows even if nothing was applied.
+  vm 'command -v curl || command -v wget' >/dev/null || die "neither curl nor wget is on the image"
+  for tool in sha256sum tar; do
+    vm command -v "$tool" >/dev/null || die "$tool is not on the image"
   done
   status=$(as_admin cloud-init status --wait || true)
   echo "$status"
@@ -313,6 +315,7 @@ cloud_init_cycle() {
   jq -r ".findings[] | select($ids) | \"\(.id) \(.status)\"" "$tmp/audit.json"
   jq -e "[.findings[] | select(($ids) and .status != \"pass\")] | length == 0" "$tmp/audit.json" >/dev/null ||
     die "an SSH-001..007 or FW-001 control does not pass after first boot"
+  as_admin sudo sshd -T | grep -qx 'permitrootlogin no' || die "sshd -T does not show permitrootlogin no"
   # Root gets the admin's key: sshd itself must refuse it.
   as_admin 'sudo install -d -m 700 /root/.ssh && sudo cp ~/.ssh/authorized_keys /root/.ssh/'
   ! ssh -F "$sshcfg" -o BatchMode=yes -o ConnectTimeout=5 -l root vm true 2>/dev/null ||

@@ -254,6 +254,78 @@ fn a_plan_without_a_dead_man_module_arms_nothing() {
     assert!(!fs.exists(Path::new(deadman::HOOK)));
 }
 
+/// `apply --deadman=off`: no timer, no hook, no copy of the binary (here
+/// there is none to check), and `state applied` says so.
+#[test]
+fn off_applies_a_dead_man_module_without_arming() {
+    let fs = fixture();
+    let facts = facts();
+    let [lock, ..] = locking();
+    let off = Deadman {
+        binary: BIN.into(),
+        off: true,
+        ..Deadman::default()
+    };
+    let apply = |plan: &Plan, run: &FakeRunner| {
+        Engine::lock(
+            &state(&fs),
+            Sys {
+                fs: &fs,
+                runner: run,
+            },
+        )
+        .unwrap()
+        .apply(plan, &off, &mut |_| {})
+        .unwrap()
+    };
+    let unarmed = |run: &FakeRunner| {
+        let calls = calls(run);
+        assert!(
+            !calls
+                .iter()
+                .any(|c| c.starts_with("systemd-run") || c.contains("deadman") || c.contains(COPY)),
+            "{calls:?}"
+        );
+        assert!(!fs.exists(Path::new(deadman::HOOK)));
+        assert!(!fs.exists(Path::new(COPY)));
+    };
+
+    let before = host(&fs);
+    let [first, ..] = locking();
+    let failing = Demo {
+        unverified: Some("sshd -T shows passwordauthentication yes"),
+        ..first
+    };
+    let run = runner(Output::success(""));
+    let outcome = apply(&plan_of(&fs, &facts, &[&failing]), &run);
+    assert!(
+        matches!(
+            outcome,
+            ApplyOutcome::RolledBack {
+                reason: RollbackReason::VerifyFailed,
+                ..
+            }
+        ),
+        "{outcome:?}"
+    );
+    unarmed(&run);
+    assert_eq!(host(&fs), before);
+
+    let run = runner(Output::success(""));
+    let ApplyOutcome::Applied { txn } = apply(&plan_of(&fs, &facts, &[&lock]), &run) else {
+        panic!("not applied");
+    };
+    unarmed(&run);
+    assert!(matches!(
+        events(&fs, &txn).last().unwrap(),
+        Event::State {
+            state: TxnState::Applied,
+            without_timer: true,
+            ..
+        }
+    ));
+}
+
 #[test]
 fn a_failed_systemd_run_ends_the_transaction_before_any_backup() {
     let fs = armable();

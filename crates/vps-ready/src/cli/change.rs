@@ -261,7 +261,9 @@ pub(super) fn apply_profile(
     let facts = (host.facts)(host.sys)?;
     log_notices(&facts);
     let plan = engine::plan(&modules, &facts, host.sys)?;
-    if !sel.modules.is_empty() {
+    // Unattended (`--deadman=off`, a first boot), a skipped module would go
+    // unnoticed, so it fails the run.
+    if !sel.modules.is_empty() || window.is_none() {
         for m in &plan.modules {
             if let ModuleStatus::NotApplicable { reason } = &m.status {
                 bail!("{} does not apply to this host: {reason}", m.id);
@@ -273,7 +275,7 @@ pub(super) fn apply_profile(
     if n == 0 {
         return Ok(Applied::Nothing);
     }
-    if window.is_none() {
+    if window.is_none() && plan.needs_deadman() {
         nobody_logged_in(host)?;
     }
     if !yes {
