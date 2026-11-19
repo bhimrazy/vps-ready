@@ -103,7 +103,9 @@ changes nothing. It needs `/dev/kvm`, `qemu-system-x86_64`, `qemu-img`,
 cloud-init cycle); it installs `expect` and
 `curl` in the VM, and the VM needs network access for Docker's and Caddy's
 repositories. The `vm` workflow pins the images and
-runs it on four distros.
+runs each cycle (the default run, `cloud-init` and `private-access`) as its
+own job on four distros. The seed also writes `/etc/apt/apt.conf.d/80ci` so
+apt in the VM retries a flaky mirror, as the container image does.
 
 Without KVM, for example on a Mac, pass `-` as the image and point
 `VM_SSH_CONFIG` at an ssh config whose `Host vm` reaches a user with
