@@ -1,0 +1,14 @@
+---
+source: crates/vps-ready/src/modules/net_wireguard/tests.rs
+expression: "text.replace(&server_key, \"<server public key>\")"
+---
+# laptop: the client config, for the WireGuard app or /etc/wireguard/wg0.conf there
+[Interface]
+PrivateKey = <the private key of laptop, which stays on that device>
+Address = 10.86.12.2/32
+
+[Peer]
+PublicKey = <server public key>
+Endpoint = 192.0.2.10:51820
+AllowedIPs = 10.86.12.1/32
+PersistentKeepalive = 25

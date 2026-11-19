@@ -2,7 +2,7 @@
 source: crates/vps-ready/src/cli/mod.rs
 expression: "String::from_utf8(text).unwrap()"
 ---
-Audit of Debian GNU/Linux 13 (trixie): 33 controls
+Audit of Debian GNU/Linux 13 (trixie): 34 controls
 
 STATUS   ID       SEVERITY  CONTROL
 FAIL     SSH-002  high      Password authentication disabled
@@ -35,9 +35,10 @@ FAIL     SSH-005  low       X11 forwarding disabled
          the server reach into your desktop session.
          fix: sudo vps-ready apply --module ssh.server
 
-6 passed, 5 failed (1 high, 3 medium, 1 low), 0 unknown, 22 skipped
+6 passed, 5 failed (1 high, 3 medium, 1 low), 0 unknown, 23 skipped
 Skipped: there is no VPN interface (WireGuard or tailscale0) and no `ssh_via` rule.
 Skipped: kernel settings are not checked inside a container.
+Skipped: /etc/wireguard does not exist.
 Skipped: Docker is not installed.
 vps-ready can fix all 5 (SSH-002, FW-001, SSH-001, UPD-001, SSH-005): run `sudo
 vps-ready plan --module ssh.server --module firewall.inbound --module

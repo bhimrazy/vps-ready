@@ -19,7 +19,7 @@ use crate::engine::{
     Rollback, Selected, StateDir, Target, TxnInfo, TxnState, Who,
 };
 use crate::facts::{Facts, NoSession, Session};
-use crate::modules::Module;
+use crate::modules::{Module, net_wireguard};
 use crate::resource::{Backup, Resource, Reversibility};
 use crate::sys::Sys;
 
@@ -356,6 +356,7 @@ pub(super) fn apply_profile(
                  rollback --last`.",
                 plural(n, "change"),
             )?;
+            print_clients(host, &plan, &facts, out)?;
             let left = match engine::watch(&state, host.sys.fs, &txn)? {
                 engine::Watch::Pending { left, .. } => left,
                 _ => Duration::ZERO,
@@ -387,6 +388,8 @@ pub(super) fn apply_profile(
                     "Applied without the safety timer (--deadman=off); `history` says so."
                 )?;
             }
+            print_clients(host, &plan, &facts, out)?;
+
             if let Err(e) = audit_fixed(host, &plan, out) {
                 writeln!(err, "vps-ready: could not audit after apply: {e:#}")?;
             }
@@ -550,6 +553,55 @@ fn clock(at: u64) -> String {
 
 /// `history`: every transaction, newest first. Needs root, since the state
 /// dir is private; takes no lock.
+/// `wireguard-config`: the client config of each peer of `net.wireguard`,
+/// or of `peer`.
+pub(super) fn wireguard_config(
+    host: &Host,
+    peer: Option<&str>,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> anyhow::Result<u8> {
+    require_root(host, "wireguard-config")?;
+    let facts = (host.facts)(host.sys)?;
+    let (text, note) =
+        net_wireguard::clients(host.sys, &facts, peer).map_err(anyhow::Error::msg)?;
+    if text.is_empty() {
+        writeln!(err, "net.wireguard has no peers yet: add them to `peers`")?;
+    }
+    write!(out, "{text}")?;
+    if let Some(note) = note {
+        writeln!(err, "note: {note}")?;
+    }
+    Ok(0)
+}
+
+/// After an apply that changed `net.wireguard`, its client configs. Not
+/// being able to print them does not fail the apply.
+fn print_clients(host: &Host, plan: &Plan, facts: &Facts, out: &mut dyn Write) -> io::Result<()> {
+    let changed = plan
+        .modules
+        .iter()
+        .any(|m| m.id == "net.wireguard" && !m.changes().is_empty());
+    if !changed {
+        return Ok(());
+    }
+    match net_wireguard::clients(host.sys, facts, None) {
+        Ok((text, _)) if text.is_empty() => Ok(()),
+        Ok((text, note)) => {
+            writeln!(
+                out,
+                "\nWireGuard client configs (`sudo vps-ready wireguard-config` prints them \
+                 again):\n\n{text}"
+            )?;
+            match note {
+                Some(note) => writeln!(out, "note: {note}"),
+                None => Ok(()),
+            }
+        }
+        Err(e) => writeln!(out, "Could not print the WireGuard client configs: {e}"),
+    }
+}
+
 pub(super) fn history(host: &Host, json: bool, out: &mut dyn Write) -> anyhow::Result<u8> {
     require_root(host, "history")?;
     // A fresh host has no state dir; listing must not create it.
@@ -680,8 +732,12 @@ fn print_plan(
                         ),
                     }
                 }
-                Resource::Sysctl(_) | Resource::Service(_) => ('~', summary.to_owned()),
-                Resource::Package(_) | Resource::TailscaleUp(_) => ('+', summary.to_owned()),
+                Resource::Sysctl(_) | Resource::Service(_) | Resource::WireguardSync(_) => {
+                    ('~', summary.to_owned())
+                }
+                Resource::Package(_) | Resource::TailscaleUp(_) | Resource::WireguardKey(_) => {
+                    ('+', summary.to_owned())
+                }
                 Resource::User(_) if summary.starts_with("create ") => ('+', summary.to_owned()),
                 Resource::User(_) => ('~', summary.to_owned()),
             };
@@ -746,6 +802,13 @@ fn print_plan(
                 "partial: rollback runs `tailscale down` but keeps the node logged in."
             )?;
         }
+        if partial(|r| matches!(r, Resource::WireguardKey(_))) {
+            writeln!(
+                out,
+                "partial: rollback keeps the generated WireGuard key, so client configs keep \
+                 working."
+            )?;
+        }
         Ok(())
     }
 }
@@ -787,6 +850,14 @@ fn kinds(plan: &Plan) -> String {
         word(
             count(|r| matches!(r, Resource::TailscaleUp(_))),
             "tailnet login",
+        ),
+        word(
+            count(|r| matches!(r, Resource::WireguardKey(_))),
+            "WireGuard key",
+        ),
+        word(
+            count(|r| matches!(r, Resource::WireguardSync(_))),
+            "running WireGuard interface",
         ),
     ]
     .into_iter()
@@ -831,9 +902,11 @@ fn print_progress(err: &mut dyn Write, progress: &Progress) {
                 Resource::Package(_) => {
                     format!("{summary} (apt-get update, then install; can take a few minutes)")
                 }
-                Resource::Service(_) | Resource::User(_) | Resource::TailscaleUp(_) => {
-                    summary.clone()
-                }
+                Resource::Service(_)
+                | Resource::User(_)
+                | Resource::TailscaleUp(_)
+                | Resource::WireguardKey(_)
+                | Resource::WireguardSync(_) => summary.clone(),
             };
             format!("[{n}/{total}] {text}")
         }
@@ -888,6 +961,18 @@ fn print_progress(err: &mut dyn Write, progress: &Progress) {
             Backup::TailscaleUp { .. } => {
                 "tailscale down (the node stays logged in; `tailscale logout` removes it)"
                     .to_owned()
+            }
+            Backup::WireguardKey { path, .. } => format!(
+                "keep {} (client configs use its public key; remove it to make a new one)",
+                path.display()
+            ),
+            Backup::WireguardSync {
+                interface,
+                before: Some(_),
+                ..
+            } => format!("restore the running {interface}'s port and peers with `wg set`"),
+            Backup::WireguardSync { interface, .. } => {
+                format!("leave the running {interface} as it is (it was down before)")
             }
         },
         Progress::Leave(Backup::Sysctl { key, .. }) => {

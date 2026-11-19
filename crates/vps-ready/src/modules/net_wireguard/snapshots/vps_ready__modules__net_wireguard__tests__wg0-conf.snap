@@ -1,0 +1,22 @@
+---
+source: crates/vps-ready/src/modules/net_wireguard/tests.rs
+expression: conf
+---
+# Written by vps-ready (net.wireguard). `vps-ready rollback --last` restores
+# the previous state; edits here are replaced by the next apply.
+# The private key is in /etc/wireguard/wg0.key and is loaded by PostUp.
+# endpoint = 203.0.113.10
+[Interface]
+Address = 10.86.12.1/24
+ListenPort = 51820
+PostUp = wg set %i private-key /etc/wireguard/%i.key
+
+[Peer]
+# laptop
+PublicKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=
+AllowedIPs = 10.86.12.2/32
+
+[Peer]
+# phone
+PublicKey = AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=
+AllowedIPs = 10.86.12.3/32

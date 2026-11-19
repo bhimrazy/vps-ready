@@ -173,7 +173,7 @@ fn unknown_modules_and_bases_are_errors() {
     let err = parse("schema = 1\n[modules.\"ssh.sevrer\"]\n").unwrap_err();
     assert!(
         err.to_string().starts_with(
-            "unknown module `ssh.sevrer`; modules are user.admin, ssh.server, net.tailscale, deploy.docker, firewall.inbound, ssh.bruteforce"
+            "unknown module `ssh.sevrer`; modules are user.admin, ssh.server, net.tailscale, net.wireguard, deploy.docker, firewall.inbound, ssh.bruteforce"
         ),
         "{err}"
     );
@@ -355,14 +355,12 @@ fn the_private_profile_needs_one_vpn() {
     let wg = "schema = 1\nextends = \"private\"\n[modules.\"net.wireguard\"]\n";
     assert_eq!(ssh_via(&parse(wg).unwrap()), "vpn:wg0");
 
-    // The real registry suggests only the VPN modules it has.
+    // The real registry suggests the VPN modules it has: both.
     let alone = Profile::built_in("private", all()).unwrap_err().to_string();
-    assert!(
-        alone.starts_with(
-            "`ssh_via = \"vpn\"` (the private profile) needs a VPN module: add \
-             `[modules.\"net.tailscale\"]`"
-        ),
-        "{alone}"
+    assert_eq!(
+        alone,
+        "`ssh_via = \"vpn\"` (the private profile) needs a VPN module: add \
+         `[modules.\"net.tailscale\"]` or `[modules.\"net.wireguard\"]`"
     );
     let none = parse("schema = 1\nextends = \"private\"\n").unwrap_err();
     assert_eq!(

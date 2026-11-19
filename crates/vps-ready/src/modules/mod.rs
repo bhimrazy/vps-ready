@@ -19,6 +19,7 @@ pub mod deploy_user;
 pub mod firewall_inbound;
 pub mod kernel_sysctl;
 pub mod net_tailscale;
+pub mod net_wireguard;
 pub mod ssh_bruteforce;
 pub mod ssh_server;
 mod updates_auto;
@@ -32,6 +33,7 @@ pub use deploy_user::DeployUser;
 pub use firewall_inbound::FirewallInbound;
 pub use kernel_sysctl::KernelSysctl;
 pub use net_tailscale::NetTailscale;
+pub use net_wireguard::NetWireguard;
 pub use ssh_bruteforce::SshBruteforce;
 pub use ssh_server::SshServer;
 pub use updates_auto::UpdatesAuto;
@@ -247,6 +249,7 @@ pub fn all() -> &'static [&'static dyn Module] {
         &UserAdmin,
         &SshServer,
         &NetTailscale,
+        &NetWireguard,
         &DeployDocker,
         &FirewallInbound,
         &SshBruteforce::ROOT,
@@ -266,6 +269,7 @@ pub fn with_test() -> &'static [&'static dyn Module] {
         &UserAdmin,
         &SshServer,
         &NetTailscale,
+        &NetWireguard,
         &DeployDocker,
         &FirewallInbound,
         &SshBruteforce::ROOT,

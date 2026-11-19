@@ -793,3 +793,96 @@ fn apply_is_idempotent_and_rolls_back() {
 }
 
 mod via;
+
+/// The ruleset's file, planned with `planned` before it on `fs`.
+fn planned_ruleset(facts: &Facts, text: &str, planned: &[Resource], fs: &FakeFs) -> String {
+    let runner = FakeRunner::new();
+    let steps = FirewallInbound
+        .plan(
+            &PlanCx {
+                facts,
+                params: &params(text),
+                planned,
+            },
+            Sys {
+                fs,
+                runner: &runner,
+            },
+        )
+        .unwrap();
+    steps
+        .resources
+        .iter()
+        .find_map(|r| match r {
+            Resource::File(f) if f.path == Path::new(RULESET) => {
+                Some(String::from_utf8(f.content.clone()).unwrap())
+            }
+            _ => None,
+        })
+        .unwrap()
+}
+
+/// UDP for the wg0 `net.wireguard` plans, or the one on disk with its
+/// header; for the `ssh_via` interface when it is WireGuard; a note for
+/// other WireGuard ports.
+#[test]
+fn accepts_the_wireguard_port_ssh_may_depend_on() {
+    use crate::facts::network::{WG0_CONF, WG0_HEADER};
+    let line = "udp dport { 51900 } accept";
+    let conf =
+        format!("{WG0_HEADER} x\n[Interface]\nAddress = 10.86.12.1/24\nListenPort = 51900\n");
+    let planned = [Resource::File(File {
+        path: WG0_CONF.into(),
+        content: conf.clone().into_bytes(),
+        owner: root(0o600),
+        validate: None,
+        describe: None,
+    })];
+    let facts = facts();
+    let empty = FakeFs::new();
+    assert!(planned_ruleset(&facts, "", &planned, &empty).contains(line));
+    assert!(!planned_ruleset(&facts, "", &[], &empty).contains("51900"));
+    let on_disk = FakeFs::new().with_file(WG0_CONF, conf);
+    assert!(planned_ruleset(&facts, "", &[], &on_disk).contains(line));
+    let hand_made = FakeFs::new().with_file(WG0_CONF, "[Interface]\nListenPort = 51900\n");
+    assert!(!planned_ruleset(&facts, "", &[], &hand_made).contains("51900"));
+    // Already in `allow`: not twice.
+    let text = planned_ruleset(&facts, "allow = [\"51900/udp\"]", &planned, &empty);
+    assert_eq!(text.matches("51900").count(), 1, "{text}");
+
+    // An `ssh_via` WireGuard interface's port, and a note for the others.
+    let mut facts = facts;
+    facts.interfaces.push(crate::facts::Interface {
+        name: "wg1".into(),
+        kind: Some("wireguard".into()),
+        addresses: Vec::new(),
+        up: true,
+    });
+    facts.wireguard.listen_ports = [("wg1".to_owned(), 51821), ("wg2".to_owned(), 51822)].into();
+    let runner = FakeRunner::new();
+    let sys = Sys {
+        fs: &empty,
+        runner: &runner,
+    };
+    let none = params("");
+    let cx = PlanCx {
+        facts: &facts,
+        params: &none,
+        planned: &[],
+    };
+    let steps = FirewallInbound.plan(&cx, sys).unwrap();
+    assert!(
+        steps.notes.contains(
+            &"WireGuard listens on ports this firewall drops: wg1 on UDP 51821, wg2 on UDP \
+              51822; to keep one reachable, add it to `allow`, e.g. \"<port>/udp\""
+                .to_owned()
+        ),
+        "{:?}",
+        steps.notes
+    );
+    let via = params("ssh_via = \"wg1\"");
+    let cx = PlanCx { params: &via, ..cx };
+    let model = Ruleset::planned(&cx, &parse_params(&via).unwrap(), Some("wg1"), sys).unwrap();
+    assert_eq!(model.wireguard, [51821]);
+    insta::assert_snapshot!("ruleset-wireguard", model.render().unwrap());
+}

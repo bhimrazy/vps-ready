@@ -1,0 +1,41 @@
+---
+source: crates/vps-ready/src/cli/module_docs.rs
+expression: out
+---
+{
+  "id": "net.wireguard",
+  "title": "Run a WireGuard interface, for a private path to SSH",
+  "applies": false,
+  "reason": "whether the kernel has WireGuard is unknown: /sys/module/wireguard is missing and modprobe could not tell",
+  "arms_safety_timer": false,
+  "why": "A server reachable only through a private network has no SSH port for the internet to scan or brute force. WireGuard gives this host a tunnel address that only your devices' keys can reach, with no outside service; firewall.inbound can then close public SSH. WireGuard does not answer packets without a valid handshake, so its port reveals nothing.",
+  "params": [
+    {
+      "name": "port",
+      "default": "51820",
+      "help": "The UDP port WireGuard listens on; firewall.inbound accepts it."
+    },
+    {
+      "name": "address",
+      "default": "\"\"",
+      "help": "This server's tunnel address and subnet, e.g. \"10.86.12.1/24\" (IPv4, a prefix of 8 to 24). Empty: a /24 in 10.0.0.0/8 derived from /etc/machine-id, so each server gets its own. Changing it on a running wg0 is refused."
+    },
+    {
+      "name": "endpoint",
+      "default": "\"\"",
+      "help": "The address or host name clients connect to, only for the printed client config. Empty: guessed from this host's public address."
+    },
+    {
+      "name": "peers",
+      "default": "[]",
+      "help": "Your devices: { name = \"laptop\", public_key = \"<from wg pubkey>\", host = 2 }. `host` (2 to 254) is the last part of the peer's tunnel address. Public keys only: a device's private key stays on it."
+    }
+  ],
+  "controls": [
+    {
+      "id": "NET-008",
+      "severity": "medium",
+      "title": "WireGuard private keys readable only by root"
+    }
+  ]
+}

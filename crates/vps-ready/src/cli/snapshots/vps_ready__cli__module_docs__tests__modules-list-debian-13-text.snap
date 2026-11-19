@@ -16,6 +16,11 @@ net.tailscale
   Join a tailnet with Tailscale, for a private path to SSH
   Applies to this host.
 
+net.wireguard
+  Run a WireGuard interface, for a private path to SSH
+  Does not apply to this host: whether the kernel has WireGuard is unknown:
+  /sys/module/wireguard is missing and modprobe could not tell.
+
 deploy.docker
   Install Docker with logs capped and ports on loopback by default
   Applies to this host.

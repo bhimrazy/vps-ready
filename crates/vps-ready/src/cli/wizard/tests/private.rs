@@ -2,8 +2,7 @@
 //! step 2 from a login through the VPN.
 
 use super::*;
-use crate::facts::{Address, Interface, Tailscale};
-use crate::modules::{ModuleSteps, PlanCx, parse_params};
+use crate::facts::{Address, Interface, Tailscale, WireguardDir};
 
 /// A fake auth key, built here so that no key-shaped text is in the source.
 fn auth_key() -> String {
@@ -239,7 +238,15 @@ fn the_private_profile_keeps_its_vpn_module() {
     let runner = runner(|r| r);
     let host = on(&fs, &runner);
     let mut ids: Vec<&str> = host.modules.iter().map(|m| m.id()).collect();
-    ids.retain(|id| !["deploy.docker", "deploy.proxy", "deploy.user"].contains(id));
+    ids.retain(|id| {
+        ![
+            "net.wireguard",
+            "deploy.docker",
+            "deploy.proxy",
+            "deploy.user",
+        ]
+        .contains(id)
+    });
     let without: Vec<&str> = ids
         .iter()
         .copied()
@@ -269,103 +276,40 @@ fn the_private_profile_keeps_its_vpn_module() {
     assert!(answers.builder.to_toml().contains("net.tailscale"));
 }
 
-/// A stand-in for `net.wireguard`, which is not registered yet: it checks
-/// a peer as the module does and plans nothing.
-struct Wireguard;
-
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Peers {
-    peers: Vec<Peer>,
+/// The VM with WireGuard in its kernel and no `/etc/wireguard` yet, so
+/// `net.wireguard` applies.
+fn with_wireguard(sys: Sys) -> anyhow::Result<Facts> {
+    let mut facts = vm(sys)?;
+    facts.wireguard.module = Some(true);
+    facts.wireguard.dir = WireguardDir::Missing;
+    Ok(facts)
 }
 
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Peer {
-    name: String,
-    public_key: String,
-    #[allow(dead_code)]
-    host: i64,
-}
-
-/// Base64 of 32 bytes: 43 characters, the last one's low 2 bits zero, and `=`.
-fn is_key(text: &str) -> bool {
-    let b = text.as_bytes();
-    b.len() == 44
-        && b[43] == b'='
-        && b[..43]
-            .iter()
-            .all(|c| c.is_ascii_alphanumeric() || *c == b'+' || *c == b'/')
-        && b"AEIMQUYcgkosw048".contains(&b[42])
-}
-
-impl Module for Wireguard {
-    fn id(&self) -> &'static str {
-        "net.wireguard"
-    }
-    fn title(&self) -> &'static str {
-        "Run a WireGuard server for admin access"
-    }
-    fn why(&self) -> &'static str {
-        "a test stand-in"
-    }
-    fn applicable(&self, _: &Facts) -> Applicability {
-        Applicability::Applicable
-    }
-    fn check_params(&self, params: &toml::Table) -> Result<(), ModuleError> {
-        let Peers { peers } = parse_params(params)?;
-        for p in peers {
-            let name = &p.name;
-            let ok = (1..=32).contains(&name.len())
-                && name
-                    .chars()
-                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
-            if !ok {
-                return crate::modules::refuse(&format!(
-                    "peer name {name:?} is not 1 to 32 lowercase letters, digits and `-`"
-                ));
-            }
-            if !is_key(&p.public_key) {
-                return crate::modules::refuse(&format!(
-                    "peer {name}: public_key is not a WireGuard key"
-                ));
-            }
-        }
-        Ok(())
-    }
-    fn plan(&self, _: &PlanCx, _: Sys) -> Result<ModuleSteps, ModuleError> {
-        Ok(ModuleSteps::default())
-    }
-}
-
-/// The registry with [`Wireguard`] before `firewall.inbound`, as the VPN
-/// modules are.
-fn with_wireguard() -> &'static [&'static dyn Module] {
-    let mut modules = crate::modules::all().to_vec();
-    let at = modules
-        .iter()
-        .position(|m| m.id() == "firewall.inbound")
-        .unwrap();
-    modules.insert(at, &Wireguard);
-    modules.leak()
-}
-
-/// Without `net.wireguard` registered there is no WireGuard choice.
+/// A kernel without WireGuard: no WireGuard choice.
 #[test]
-fn wireguard_is_offered_only_when_registered() {
+fn wireguard_is_offered_only_where_it_applies() {
     let fs = fs();
     let runner = runner(|r| r);
-    let host = on(&fs, &runner);
+    let host = Host {
+        facts: |sys| {
+            let mut facts = with_wireguard(sys)?;
+            facts.wireguard.module = Some(false);
+            Ok(facts)
+        },
+        ..on(&fs, &runner)
+    };
     let (_, text) = wizard(&host, vec![Enter, Enter, CtrlC], "");
+    assert!(text.contains("? Private access for SSH ^C"), "{text}");
     assert!(!text.contains("WireGuard"), "{text}");
 }
 
 #[test]
 fn wireguard_asks_for_the_device_again_on_a_bad_value() {
-    let fs = fs();
+    // The tunnel's subnet comes from it.
+    let fs = fs().with_file("/etc/machine-id", "0123456789abcdef0123456789abcdef\n");
     let runner = runner(|r| r);
     let host = Host {
-        modules: with_wireguard(),
+        facts: with_wireguard,
         ..on(&fs, &runner)
     };
     let good = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
@@ -389,7 +333,7 @@ fn wireguard_asks_for_the_device_again_on_a_bad_value() {
         "{text}"
     );
     assert!(
-        text.contains("  peer laptop: public_key is not a WireGuard key\n"),
+        text.contains("  peer laptop: public_key is not a WireGuard key"),
         "{text}"
     );
     assert_eq!(

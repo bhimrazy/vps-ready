@@ -23,9 +23,9 @@ use crate::engine::{self, Engine, EngineError, StateDir};
 use crate::facts::{Facts, OsFamily, Proto, Virt};
 use crate::modules::deploy_proxy::{self, Caddyfile, Domain, Upstream};
 use crate::modules::firewall_inbound::{self, Allow};
-use crate::modules::net_tailscale;
 use crate::modules::user_admin::{self, SessionKeys};
 use crate::modules::{Applicability, Module, ModuleError};
+use crate::modules::{net_tailscale, net_wireguard};
 use crate::resource::ResourceError;
 use crate::resource::authorized_keys::is_plain_key;
 use crate::sys::{FileKind, FileOwner, Fs, SysError};
@@ -437,8 +437,8 @@ fn step_one_done(
         say(
             out,
             "  ",
-            "First add this server to your device: `sudo vps-ready wireguard-config` \
-             prints its client config.",
+            "First add the client config printed above to your device, with its private \
+             key (`sudo vps-ready wireguard-config` prints it again).",
         )?;
     }
     writeln!(
@@ -449,15 +449,18 @@ fn step_one_done(
 }
 
 /// Whether `profile` runs a module that arms the safety timer here. Under
-/// a loaded `ssh_via` on Tailscale, `net.tailscale` arms it too, if it
-/// changes anything.
+/// a loaded `ssh_via` on its interface, `net.tailscale` or `net.wireguard`
+/// arms it too, if it changes anything.
 fn arms_timer(host: &Host, facts: &Facts, profile: &Profile) -> bool {
-    let via_tailscale = firewall_inbound::ssh_via(&[], host.sys)
-        .ok()
-        .flatten()
-        .is_some_and(|via| firewall_inbound::is_tailscale(facts, &via));
+    let via = firewall_inbound::ssh_via(&[], host.sys).ok().flatten();
+    let via_tailscale = via
+        .as_deref()
+        .is_some_and(|via| firewall_inbound::is_tailscale(facts, via));
+    let via_wireguard = via.as_deref() == Some(net_wireguard::INTERFACE);
     host.modules.iter().any(|m| {
-        (m.needs_deadman() || (via_tailscale && m.id() == "net.tailscale"))
+        (m.needs_deadman()
+            || (via_tailscale && m.id() == "net.tailscale")
+            || (via_wireguard && m.id() == "net.wireguard"))
             && profile.params(m.id()).is_some()
             && m.applicable(facts) == Applicability::Applicable
     })

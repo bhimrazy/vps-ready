@@ -25,7 +25,8 @@ Audit: 14 passed, 12 failed (1 high, 5 medium, 6 low), 5 unknown. vps-ready can 
   peer name "My Laptop" is not 1 to 32 lowercase letters, digits and `-`
 ? Name of the device: laptop
 ? Its public key: AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQF=
-  peer laptop: public_key is not a WireGuard key
+  peer laptop: public_key is not a WireGuard key (44 characters of base64 for 32
+  bytes, as `wg pubkey` prints it)
 ? Name of the device: laptop
 ? Its public key:  AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE= 
 All other incoming ports are blocked.
@@ -58,14 +59,45 @@ ssh.server: Turn off root and password logins over SSH (fixes SSH-001, SSH-002, 
       +PermitRootLogin no
       +PasswordAuthentication no
       +X11Forwarding no
-net.wireguard: Run a WireGuard server for admin access: no changes
+net.wireguard: Run a WireGuard interface, for a private path to SSH
+  note: for admin access to this host only: peers reach its tunnel address and nothing else, with no forwarding, routes or NAT
+  note: the tunnel subnet 10.96.238.0/24 is derived from /etc/machine-id, with this server at 10.96.238.1; set `address` to choose another
+  note: rollback keeps the generated key /etc/wireguard/wg0.key, so client configs made meanwhile keep working; `sudo rm /etc/wireguard/wg0.key` and apply again to make a new one
+  note: firewall.inbound accepts UDP 51820 once it is applied; another firewall needs the port opened
+  note: after apply, `sudo vps-ready wireguard-config [PEER]` prints each peer's client config
+  + directory /etc/wireguard (mode 0700, root:root)                       reversible
+  + generate a private key in /etc/wireguard/wg0.key (mode 0600, root:root) with `wg genkey`; it never leaves this server  partial
+  + /etc/wireguard/wg0.conf (mode 0600, root:root)                        reversible
+      @@ -0,0 +1,12 @@
+      +# Written by vps-ready (net.wireguard). `vps-ready rollback --last` restores
+      +# the previous state; edits here are replaced by the next apply.
+      +# The private key is in /etc/wireguard/wg0.key and is loaded by PostUp.
+      +[Interface]
+      +Address = 10.96.238.1/24
+      +ListenPort = 51820
+      +PostUp = wg set %i private-key /etc/wireguard/%i.key
+      +
+      +[Peer]
+      +# laptop
+      +PublicKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=
+      +AllowedIPs = 10.96.238.2/32
+  + directory /etc/systemd/system/wg-quick@wg0.service.d (mode 0755, root:root)  reversible
+  + /etc/systemd/system/wg-quick@wg0.service.d/10-vps-ready.conf (mode 0644, root:root)  reversible
+      @@ -0,0 +1,6 @@
+      +# Written by vps-ready (net.wireguard). `vps-ready rollback --last` removes it.
+      +# The unit's reload runs `wg syncconf`, which clears the private key that
+      +# PostUp loaded, since wg0.conf holds none. vps-ready changes a running wg0
+      +# with `wg set`; with ExecReload= empty, `systemctl reload` fails instead.
+      +[Service]
+      +ExecReload=
+  ~ enable and start wg-quick@wg0.service                                 reversible
 firewall.inbound: Drop incoming traffic that no rule allows (fixes FW-001)
   note: always accepts TCP 22, the current SSH ports (this session's, root's sshd listeners and `Port`), whatever `allow` says
   note: drops incoming IPv4 TCP that carries IP options, also to containers, to blunt CVE-2026-98432 until the kernel is updated and rebooted; TCP labeled with CIPSO (NetLabel) stops working
   note: step 1 of 2: SSH stays public until you apply this profile again from a login through wg0 (`ssh -t <user>@<address of wg0> sudo vps-ready apply ...`)
   + directory /etc/vps-ready (mode 0755, root:root)                       reversible
   + /etc/vps-ready/firewall.nft (mode 0644, root:root)                    reversible
-      @@ -0,0 +1,31 @@
+      @@ -0,0 +1,34 @@
       +# Written by vps-ready (firewall.inbound). `vps-ready rollback --last`
       +# restores the previous state; edits here are replaced by the next apply.
       +# vps-ready-firewall.service loads it. It replaces only the table
@@ -95,6 +127,9 @@ firewall.inbound: Drop incoming traffic that no rule allows (fixes FW-001)
       +    ip6 saddr fe80::/10 udp dport 546 accept
       +    # The profile's `allow`, plus every current SSH port.
       +    tcp dport { 22 } accept
+      +    # WireGuard, which SSH may depend on. It does not answer packets
+      +    # without a valid handshake.
+      +    udp dport { 51820 } accept
       +  }
       +}
   + /etc/systemd/system/vps-ready-firewall.service (mode 0644, root:root)  reversible
@@ -158,7 +193,8 @@ updates.auto: Install security updates automatically (fixes UPD-001)
       +APT::Periodic::Update-Package-Lists "1";
       +APT::Periodic::Unattended-Upgrade "1";
 
-18 changes in 6 modules: 8 files, 1 directory, 6 kernel settings, 2 services, 1 user.
+24 changes in 7 modules: 10 files, 3 directories, 6 kernel settings, 3 services, 1 user, 1 WireGuard key.
 partial: rollback removes a user it created but keeps its home directory.
-Apply 18 changes? [y/N] n
+partial: rollback keeps the generated WireGuard key, so client configs keep working.
+Apply 24 changes? [y/N] n
 Nothing was changed.

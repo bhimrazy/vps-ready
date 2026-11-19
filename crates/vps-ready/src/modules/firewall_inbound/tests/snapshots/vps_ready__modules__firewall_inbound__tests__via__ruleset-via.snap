@@ -35,5 +35,8 @@ table inet vps_ready {
     iifname "wg0" tcp dport { 22 } accept
     # The profile's `allow`.
     tcp dport { 80 } accept
+    # WireGuard, which SSH may depend on. It does not answer packets
+    # without a valid handshake.
+    udp dport { 51820 } accept
   }
 }
