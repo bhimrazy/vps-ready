@@ -930,7 +930,7 @@ fn runtime_drift_plans_the_sync() {
         ]))
         .unwrap();
     let err = NetWireguard.verify(&cx, sys).unwrap_err();
-    assert!(err.starts_with("wg0 differs from wg0.conf"), "{err}");
+    assert!(err.starts_with("wg0 differs from wg0.conf"));
 }
 
 /// A key cleared from the running wg0 (as `wg syncconf` would) fails verify.
@@ -953,7 +953,7 @@ fn verify_needs_the_key_loaded() {
         planned: &[],
     };
     let err = NetWireguard.verify(&cx, sys).unwrap_err();
-    assert!(err.contains("its PostUp did not load it"), "{err}");
+    assert!(err.contains("its PostUp did not load it"));
 }
 
 #[test]
