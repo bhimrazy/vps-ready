@@ -626,7 +626,7 @@ fn root_would_help(report: &Report, facts: &Facts) -> bool {
                 // `apt-config` and `systemctl show` work without root.
                 Check::AutoUpdates | Check::RebootRequired => false,
                 // Sudo helps only when nft was refused for lack of privileges.
-                Check::InboundDefaultDeny | Check::PublishedPorts => {
+                Check::InboundDefaultDeny | Check::PublishedPorts | Check::ExposedListeners => {
                     facts.firewall.is_none()
                         && facts
                             .notices
@@ -660,7 +660,7 @@ fn root_would_help(report: &Report, facts: &Facts) -> bool {
 /// Without `all`, only failed and unknown controls get a block: failures by
 /// severity (highest first) and ID, then unknowns in catalog order. With
 /// `all`, every control does, in catalog order; a passed or skipped one is a
-/// row without details.
+/// row. A note (FW-003's open ports) follows any row's details.
 ///
 /// A failed control ends with the command to fix it, e.g. `fix: sudo
 /// vps-ready apply --module kernel.sysctl`, or `fix: not automated yet`. An
@@ -745,6 +745,13 @@ fn print_report(
             for line in wrap(&detail, WIDTH - INDENT.len()) {
                 writeln!(out, "{INDENT}{line}")?;
             }
+        }
+        for line in finding
+            .note
+            .iter()
+            .flat_map(|n| wrap(n, WIDTH - INDENT.len()))
+        {
+            writeln!(out, "{INDENT}{line}")?;
         }
         if matches!(finding.outcome, Outcome::Fail { .. }) {
             for line in wrap(&control.why, WIDTH - INDENT.len()) {
@@ -869,7 +876,9 @@ fn print_report(
 /// tool it needs: the part before the first `;`, e.g. `nft not found`.
 fn unknown_cause<'a>(check: &Check, notices: &'a [String]) -> Option<&'a str> {
     let prefixes: [&str; 2] = match check {
-        Check::InboundDefaultDeny | Check::PublishedPorts => ["nft ", "`nft "],
+        Check::InboundDefaultDeny | Check::PublishedPorts | Check::ExposedListeners => {
+            ["nft ", "`nft "]
+        }
         Check::SshdEffective { .. } => ["sshd ", "`sshd -T` "],
         _ => return None,
     };
@@ -1168,7 +1177,7 @@ mod tests {
         let mut text = Vec::new();
         print_report(&mut text, &report, "this host", false, true, false).unwrap();
         let text = String::from_utf8(text).unwrap();
-        assert!(text.contains("0 passed, 2 failed ("), "{text}");
+        assert!(text.contains("1 passed, 2 failed ("), "{text}");
         assert!(text.contains(", 8 unknown"), "{text}");
         assert!(
             text.contains("effective SSH config is unknown: `sshd -T` failed (Missing"),
