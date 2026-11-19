@@ -113,7 +113,7 @@ CI cannot join a tailnet, so before tagging a release that includes `net.tailsca
 - [ ] `ssh admin@<tailnet address>` works from another device in the tailnet. Delete the key file.
 - [ ] Apply again: the plan has no changes.
 - [ ] `rollback --last`, then apply again with the key file deleted (the one-off key is spent): the plan brings the node up with `tailscale up --accept-dns=false` and no `--auth-key`, and it is `Running` again.
-- [ ] Close public SSH: from a login through `tailscale0`, apply `ssh_via = "tailscale0"` (through the `private` profile's two steps once it ships) and confirm from a new login through `tailscale0`. `audit` shows `SSH-009` passing.
+- [ ] Close public SSH: from a login through `tailscale0`, apply `ssh_via = "tailscale0"` (or through the `private` profile's two steps) and confirm from a new login through `tailscale0`. `audit` shows `SSH-009` passing.
 - [ ] `sudo vps-ready rollback --last` from an SSH session through the tailnet shows the refusal ("this session comes through Tailscale") and changes nothing past it.
 - [ ] Reboot: `tailscaled` comes back and SSH through the tailnet works (and, with `ssh_via`, public SSH stays closed).
 - [ ] `rollback --last` until the start: the source, key and origin file are gone, `tailscale` is still installed, and the node is down but still logged in. Remove it from the tailnet with `sudo tailscale logout`.

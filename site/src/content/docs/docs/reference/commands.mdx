@@ -94,7 +94,7 @@ Prints a diff of every file and setting `apply` would change, grouped by module,
 
 | Flag | What it does |
 |---|---|
-| `--profile NAME\|PATH` | `minimal`, `web`, or the path of a [profile file](/docs/guides/profiles-and-modules/#write-your-own-profile) |
+| `--profile NAME\|PATH` | `minimal`, `web`, `private`, or the path of a [profile file](/docs/guides/profiles-and-modules/#write-your-own-profile) |
 | `--module ID` | Only this module; repeat it for more. With a profile, it must be one of the profile's modules |
 
 Without either flag, it plans `kernel.sysctl` and `updates.auto` only. Module IDs: `user.admin`, `ssh.server`, `net.tailscale`, `deploy.docker`, `firewall.inbound`, `ssh.bruteforce`, `kernel.sysctl`, `updates.auto`, `deploy.proxy`, `deploy.user`. The last two need settings (domains, keys) from a [profile file](/docs/guides/deployment-modules/).
@@ -193,7 +193,7 @@ Prints `#cloud-config` user-data to paste into the provider's user-data field wh
 
 | Flag | What it does |
 |---|---|
-| `--profile NAME\|PATH` | The profile. Its `user.admin` must list `authorized_keys`: at first boot there is no SSH session to copy keys from. A profile with `net.tailscale`'s `auth_key_file` or `firewall.inbound`'s `ssh_via` is refused ([why](/docs/guides/private-access/#harden-at-first-boot)) |
+| `--profile NAME\|PATH` | The profile. Its `user.admin` must list `authorized_keys`: at first boot there is no SSH session to copy keys from. A profile with `net.tailscale`'s `auth_key_file` or an explicit `ssh_via` in `firewall.inbound` is refused ([why](/docs/guides/private-access/#harden-at-first-boot)). The `private` profile exports, and stays in its step 1 at first boot |
 | `--checksums PATH` | The `checksums.txt` of the same release as this binary. Download it and verify its signature first, as in [Verify a release by hand](/docs/install/#verify-a-release-by-hand); the hashes in the user-data come from it |
 | `--base-url URL` | Download the tarballs from `URL` instead of the GitHub release, e.g. a mirror. The SHA-256 is checked either way |
 
