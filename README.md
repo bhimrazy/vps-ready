@@ -104,11 +104,12 @@ Hardening is grouped into modules:
 | `ssh.bruteforce` | fail2ban's `sshd` jail, reading the journal and banning in nftables | `SSH-008` | no |
 | `kernel.sysctl` | Safer kernel and network settings | `KRN-*`, `NET-*` | no |
 | `updates.auto` | Automatic security updates with `unattended-upgrades` | `UPD-001` | no |
+| `net.tailscale` | Tailscale from its own apt repository, `tailscaled` running, and a tailnet login from a root-only auth key file (never Tailscale SSH, never the tailnet's DNS) | none | no |
 | `deploy.docker` | Docker Engine from Docker's own apt repository, with safer defaults: published ports bind to 127.0.0.1, `live-restore`, local log rotation | `FW-002` | no |
 | `deploy.proxy` | Caddy from its official apt repository as a reverse proxy with automatic HTTPS for the sites you list | none | no |
 | `deploy.user` | A login for CI that can run one command, with your keys | none | no |
 
-Profiles pick the modules: **minimal** is `user.admin`, `ssh.server`, `firewall.inbound` (SSH only), `kernel.sysctl` and `updates.auto`; **web** adds ports 80 and 443 (TCP, and UDP for HTTP/3) and `ssh.bruteforce` and `deploy.docker`. A profile file can extend either and set your own admin name and keys. A plain `apply`, without `--profile` or `--module`, leaves the modules that can lock you out (and `ssh.bruteforce`, which installs packages) out, so it changes only kernel settings and automatic updates. `deploy.proxy` and `deploy.user` are in no profile: they need settings (sites, keys), so you add them in a profile file. Logging, a **paranoid** profile, private access (Tailscale, WireGuard) and backups come later.
+Profiles pick the modules: **minimal** is `user.admin`, `ssh.server`, `firewall.inbound` (SSH only), `kernel.sysctl` and `updates.auto`; **web** adds ports 80 and 443 (TCP, and UDP for HTTP/3) and `ssh.bruteforce` and `deploy.docker`. A profile file can extend either and set your own admin name and keys. A plain `apply`, without `--profile` or `--module`, leaves the modules that can lock you out (and `ssh.bruteforce`, which installs packages) out, so it changes only kernel settings and automatic updates. `net.tailscale`, `deploy.proxy` and `deploy.user` are in no profile: you add them in a profile file. Logging, a **paranoid** profile, WireGuard, SSH only through the VPN, and backups come later.
 
 ## How a run works
 

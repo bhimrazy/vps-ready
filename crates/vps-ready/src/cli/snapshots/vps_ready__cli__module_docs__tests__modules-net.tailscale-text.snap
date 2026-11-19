@@ -1,0 +1,35 @@
+---
+source: crates/vps-ready/src/cli/module_docs.rs
+expression: out
+---
+net.tailscale
+  Join a tailnet with Tailscale, for a private path to SSH
+  Applies to this host.
+
+Why
+  A server reachable only through a private network has no SSH port for the
+  internet to scan or brute force. Tailscale gives this host an address in your
+  tailnet, so you reach the same sshd over it, with the same keys;
+  firewall.inbound can then close public SSH.
+
+Params (in the module's profile table)
+  auth_key_file (default "")
+      A file holding an auth key, owned by root with mode 0600, not a symlink,
+      in directories only root can write to; `tailscale up` reads it, vps-ready
+      never does. Use a one-off or pre-approved key, tagged and not ephemeral: a
+      tagged node has key expiry off, and an ephemeral one is removed from the
+      tailnet when it goes idle. On a tailnet with device approval, a key that
+      is not pre-approved makes the login time out, and a one-off key is spent.
+      Delete the file after the login; later applies use the node's own login.
+      Empty: log in by hand with `sudo tailscale up --accept-dns=false`.
+  login_server (default "")
+      The coordination server's URL, e.g. a Headscale server's. Empty:
+      Tailscale's.
+  hostname (default "")
+      This node's name in the tailnet. Empty: the host name.
+  auto_update (default true)
+      Let unattended-upgrades (updates.auto) install Tailscale's updates; each
+      restarts tailscaled, which drops tailnet connections for a moment.
+
+Fixes these audit controls
+  none

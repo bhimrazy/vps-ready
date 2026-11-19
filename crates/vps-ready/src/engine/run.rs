@@ -18,7 +18,7 @@ use crate::modules::firewall_inbound;
 use crate::resource::sysctl::boot_id;
 use crate::resource::{
     Backup, Resource, ResourceError, Sysctl, after_path, authorized_keys, before_path, directory,
-    during_path, restore, service, user,
+    during_path, restore, service, tailscale_up, user,
 };
 use crate::sys::{Cmd, FileKind, FileOwner, Fs, FsLock, Sys, SysError};
 
@@ -1644,6 +1644,8 @@ fn unchanged(
         Backup::AuthorizedKeys { .. } => {
             authorized_keys::unchanged(sys, dir, backup).map_err(at(resource))
         }
+        // The node's state is Tailscale's: restoring only runs `tailscale down`.
+        Backup::TailscaleUp { .. } => Ok(true),
     }
 }
 
@@ -1679,6 +1681,7 @@ fn by_hand(dir: &Path, resource: &str, backup: &Backup) -> Option<ByHand> {
         Backup::Service { .. } => service::by_hand(backup)?,
         Backup::User { .. } => user::by_hand(backup)?,
         Backup::AuthorizedKeys { .. } => authorized_keys::by_hand(dir, backup)?,
+        Backup::TailscaleUp { was_running } => tailscale_up::by_hand(*was_running)?,
     };
     Some(ByHand {
         resource: resource.to_owned(),

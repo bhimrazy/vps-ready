@@ -29,6 +29,7 @@ fn via_facts(server: &str) -> Facts {
     });
     facts.tailscale = Some(Tailscale {
         backend_state: "Running".into(),
+        have_node_key: true,
         ips: vec!["100.64.0.7".parse().unwrap()],
         key_expiry: None,
     });

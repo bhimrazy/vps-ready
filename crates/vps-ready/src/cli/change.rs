@@ -645,7 +645,7 @@ fn print_plan(
                     }
                 }
                 Resource::Sysctl(_) | Resource::Service(_) => ('~', summary.to_owned()),
-                Resource::Package(_) => ('+', summary.to_owned()),
+                Resource::Package(_) | Resource::TailscaleUp(_) => ('+', summary.to_owned()),
                 Resource::User(_) if summary.starts_with("create ") => ('+', summary.to_owned()),
                 Resource::User(_) => ('~', summary.to_owned()),
             };
@@ -704,6 +704,12 @@ fn print_plan(
                 "partial: rollback removes a user it created but keeps its home directory."
             )?;
         }
+        if partial(|r| matches!(r, Resource::TailscaleUp(_))) {
+            writeln!(
+                out,
+                "partial: rollback runs `tailscale down` but keeps the node logged in."
+            )?;
+        }
         Ok(())
     }
 }
@@ -742,6 +748,10 @@ fn kinds(plan: &Plan) -> String {
         packages,
         word(count(|r| matches!(r, Resource::Service(_))), "service"),
         word(count(|r| matches!(r, Resource::User(_))), "user"),
+        word(
+            count(|r| matches!(r, Resource::TailscaleUp(_))),
+            "tailnet login",
+        ),
     ]
     .into_iter()
     .flatten()
@@ -785,7 +795,9 @@ fn print_progress(err: &mut dyn Write, progress: &Progress) {
                 Resource::Package(_) => {
                     format!("{summary} (apt-get update, then install; can take a few minutes)")
                 }
-                Resource::Service(_) | Resource::User(_) => summary.clone(),
+                Resource::Service(_) | Resource::User(_) | Resource::TailscaleUp(_) => {
+                    summary.clone()
+                }
             };
             format!("[{n}/{total}] {text}")
         }
@@ -834,6 +846,13 @@ fn print_progress(err: &mut dyn Write, progress: &Progress) {
                 ..
             } => format!("restore {}", path.display()),
             Backup::AuthorizedKeys { path, .. } => format!("remove {}", path.display()),
+            Backup::TailscaleUp { was_running: true } => {
+                "leave the tailnet login as it is (it was running before)".to_owned()
+            }
+            Backup::TailscaleUp { .. } => {
+                "tailscale down (the node stays logged in; `tailscale logout` removes it)"
+                    .to_owned()
+            }
         },
         Progress::Leave(Backup::Sysctl { key, .. }) => {
             format!("leave {key} as it is (the host rebooted since apply; the next boot sets it)")

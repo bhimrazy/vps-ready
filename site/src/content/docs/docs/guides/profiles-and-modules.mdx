@@ -25,6 +25,7 @@ vps-ready groups its changes into **modules**, and a **profile** picks which mod
 - **Plain `apply`**, with no `--profile` or `--module`, only changes kernel settings and automatic updates. Nothing in it can lock you out, so a future version can never make a plain `apply` start changing SSH or the firewall.
 - **minimal** is for any server you log into over SSH.
 - **web** is minimal plus the web ports (UDP 443 is for HTTP/3), fail2ban and Docker with safe defaults.
+- **`net.tailscale` is in no built-in profile.** Add it in your own profile; see [Tailscale](#nettailscale-tailscale) below.
 - **`deploy.proxy` (Caddy) and `deploy.user` are in no built-in profile.** They need values only you have (domains, deploy keys), so you add them in your own profile, or the guided setup adds Caddy when you give it a domain. See [Deploy an app](/docs/guides/deployment-modules/).
 
 `sudo vps-ready` with no arguments picks between these two for you and builds the profile from your answers: see the [quick start](/docs/quick-start/). To read what a module does before choosing, run `vps-ready modules` (or `vps-ready modules ssh.server` for one).
@@ -41,13 +42,14 @@ sudo vps-ready plan --profile web
 |---|---|---|---|
 | 1 | `user.admin` | yes | Creates the way in that is not root |
 | 2 | `ssh.server` | yes | Turns off root and password logins, and refuses unless that way in exists |
-| 3 | `deploy.docker` | no | Before the firewall, so the firewall knows Docker's bridges |
-| 4 | `firewall.inbound` | yes | Drops unsolicited traffic, always allowing the SSH ports in use |
-| 5 | `ssh.bruteforce` | no | Can only ban an address, and never yours |
-| 6 | `kernel.sysctl` | no | Cannot lock you out |
-| 7 | `updates.auto` | no | Cannot lock you out |
-| 8 | `deploy.proxy` | no | After the firewall, so it can read whether ports 80 and 443 are open |
-| 9 | `deploy.user` | no | Last: a login for CI, separate from the admin |
+| 3 | `net.tailscale` | no | Before the firewall: a private path to SSH that needs no open port |
+| 4 | `deploy.docker` | no | Before the firewall, so the firewall knows Docker's bridges |
+| 5 | `firewall.inbound` | yes | Drops unsolicited traffic, always allowing the SSH ports in use |
+| 6 | `ssh.bruteforce` | no | Can only ban an address, and never yours |
+| 7 | `kernel.sysctl` | no | Cannot lock you out |
+| 8 | `updates.auto` | no | Cannot lock you out |
+| 9 | `deploy.proxy` | no | After the firewall, so it can read whether ports 80 and 443 are open |
+| 10 | `deploy.user` | no | Last: a login for CI, separate from the admin |
 
 The order is fixed. The admin user comes first because turning off root and password logins is only safe once there is another way in, and the firewall comes after the admin user and SSH so it can allow the SSH port your login really uses. On their own, the three deployment modules do not touch the SSH server, the firewall's SSH rule or the admin's login, so they do not arm the safety timer. In a run with a guarded module, as in the `web` profile, they share its transaction: confirm it, or the timer undoes them too. The three guarded modules share one transaction, so a single new login confirms all of them together. To see which part fails on a tricky server, apply `--module user.admin` on its own first, then the rest.
 
@@ -122,6 +124,25 @@ Once SSH takes keys only, brute-force attempts are mostly log noise, and OpenSSH
 **Checks first:** Debian and Ubuntu only. If apt's systemd timers are turned off, the plan says so and leaves them off.
 
 **Undo:** the drop-in is removed; the package stays installed.
+
+### `net.tailscale`: Tailscale
+
+**Changes:** installs `tailscale` from Tailscale's repository (its key is built into vps-ready, fingerprint `2596 A99E AAB3 3821 893C 0A79 458C A832 957F 5868`), enables and starts `tailscaled`, and with `auto_update = true` (the default) writes `/etc/apt/apt.conf.d/52vps-ready-tailscale` so that `updates.auto` installs Tailscale's updates too. Each update restarts `tailscaled`, which drops tailnet connections for a moment; SSH sessions over it resume.
+
+```toml
+[modules."net.tailscale"]
+auth_key_file = "/root/tailscale-auth-key"     # optional
+login_server  = "https://headscale.example.com" # optional
+hostname      = "web-1"                         # optional
+```
+
+With `auth_key_file`, it logs in with `tailscale up --auth-key=file:<path> --accept-dns=false`: `tailscale` reads the key, so it never appears in vps-ready's plan, journal or the process list. The file must be owned by root with mode `0600`, not be a symlink, and sit in directories only root can write to. Delete it after the login: from then on the node logs in with its own node key, also after a rollback, even with `auth_key_file` removed from the profile. If that login has expired or the node was removed from the tailnet, the apply fails and says so: put a new key in `auth_key_file`. Use a one-off or pre-approved key, tagged and not ephemeral: a tagged node has key expiry turned off, and an ephemeral node is removed from the tailnet when it goes idle. On a tailnet with device approval, a key that is not pre-approved makes the login time out, and a one-off key is then spent. vps-ready cannot see which kind of key it is. Without `auth_key_file`, log in once with `sudo tailscale up --accept-dns=false`.
+
+**Checks first:** Debian and Ubuntu with systemd only. A node that is already logged in is left as it is, and the plan names settings it has that vps-ready would not set (accepted DNS, an exit node, Tailscale SSH). vps-ready never turns on Tailscale SSH, which would replace sshd's keys and settings with the tailnet's policy, and never accepts the tailnet's DNS. No firewall port is opened: Tailscale needs none.
+
+**Undo:** the repository, its key and the origin file are removed; `tailscale down` runs if the node was not up before, and `tailscaled` is stopped if it was off before. On a fresh install, `tailscaled` keeps running after the rollback, as the package started it: `sudo systemctl disable --now tailscaled` stops it. The package, `/var/lib/tailscale` and the node's login stay: `sudo tailscale logout` removes the node from the tailnet. From an SSH session that comes through Tailscale, the rollback stops before `tailscale down`, which would cut that session: roll back from the provider's console or a public SSH login, or run `sudo tailscale down` yourself, which cuts that session (Tailscale 1.82 and older need `--accept-risk=lose-ssh`), and roll back again.
+
+`export cloud-init` refuses a profile with `auth_key_file`: user-data can be read through the metadata service, so it must not lead to a key.
 
 ### `deploy.docker`, `deploy.proxy` and `deploy.user`: deployment
 

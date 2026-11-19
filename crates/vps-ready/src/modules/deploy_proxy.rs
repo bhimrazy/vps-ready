@@ -99,7 +99,7 @@ impl TryFrom<String> for Domain {
 }
 
 /// 1 to 63 lowercase letters, digits and `-`, not at either end.
-fn is_label(label: &str) -> bool {
+pub(crate) fn is_label(label: &str) -> bool {
     (1..=63).contains(&label.len())
         && !label.starts_with('-')
         && !label.ends_with('-')

@@ -12,6 +12,10 @@ ssh.server
   Applies to this host.
   Arms the safety timer: confirm from a new SSH session.
 
+net.tailscale
+  Join a tailnet with Tailscale, for a private path to SSH
+  Applies to this host.
+
 deploy.docker
   Install Docker with logs capped and ports on loopback by default
   Applies to this host.

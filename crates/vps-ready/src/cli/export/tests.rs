@@ -209,6 +209,29 @@ fn refuses_an_explicit_ssh_via() {
 }
 
 #[test]
+fn refuses_a_tailscale_auth_key_file() {
+    let with = |extra: &str| {
+        fs(
+            &format!("{KEYED}\n[modules.\"net.tailscale\"]\n{extra}\n"),
+            &checksums(),
+        )
+    };
+    let err = export(
+        &with("auth_key_file = \"/root/tailscale-auth-key\""),
+        PROFILE,
+        None,
+    )
+    .unwrap_err();
+    assert!(
+        err.starts_with(&format!(
+            "profile {PROFILE}: net.tailscale has `auth_key_file`, and nothing at first boot"
+        )),
+        "{err}"
+    );
+    assert!(export(&with("hostname = \"web-1\""), PROFILE, None).is_ok());
+}
+
+#[test]
 fn refuses_checksums_without_a_tarball() {
     let v = VERSION_INFO.version;
     let only_x86: String = checksums()

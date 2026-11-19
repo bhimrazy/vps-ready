@@ -21,6 +21,7 @@ mod file;
 mod package;
 pub(crate) mod service;
 pub(crate) mod sysctl;
+pub(crate) mod tailscale_up;
 pub(crate) mod user;
 
 pub use apt_source::{
@@ -33,6 +34,7 @@ pub use file::{File, Validate};
 pub use package::Package;
 pub use service::Service;
 pub use sysctl::Sysctl;
+pub use tailscale_up::{TailscaleUp, check_key_file};
 pub use user::{Password, User};
 
 /// Errors from diffing, snapshotting, applying or restoring a resource.
@@ -118,6 +120,9 @@ pub enum ResourceError {
         /// Standard error, trimmed.
         stderr: String,
     },
+    /// A step that would do harm here, and what to do instead.
+    #[error("{0}")]
+    Refused(String),
     /// The system boundary failed.
     #[error(transparent)]
     Sys(#[from] SysError),
@@ -163,6 +168,8 @@ pub enum Resource {
     User(User),
     /// Public key lines that a user's `authorized_keys` must contain.
     AuthorizedKeys(AuthorizedKeys),
+    /// This node logged in to a tailnet.
+    TailscaleUp(TailscaleUp),
 }
 
 impl Resource {
@@ -181,6 +188,7 @@ impl Resource {
             Self::Service(s) => format!("service:{}", s.unit),
             Self::User(u) => format!("user:{}", u.name),
             Self::AuthorizedKeys(k) => format!("authorized-keys:{}", k.user),
+            Self::TailscaleUp(_) => "tailscale:up".to_owned(),
         }
     }
 
@@ -194,8 +202,8 @@ impl Resource {
             | Self::Service(_)
             | Self::AuthorizedKeys(_) => Reversibility::Reversible,
             // Rollback leaves an installed package installed, and a removed
-            // user's home directory.
-            Self::Package(_) | Self::User(_) => Reversibility::Partial,
+            // user's home directory, and a node's login.
+            Self::Package(_) | Self::User(_) | Self::TailscaleUp(_) => Reversibility::Partial,
         }
     }
 
@@ -212,6 +220,7 @@ impl Resource {
             Self::User(_) => Cmd::DEFAULT_TIMEOUT * 4,
             // `getent` in snapshot and in apply.
             Self::AuthorizedKeys(_) => Cmd::DEFAULT_TIMEOUT * 2,
+            Self::TailscaleUp(_) => tailscale_up::TIMEOUT,
         }
     }
 
@@ -222,8 +231,10 @@ impl Resource {
         match self {
             Self::File(_) | Self::Directory(_) | Self::Sysctl(_) => Duration::ZERO,
             Self::Package(p) => p.diff_timeout(),
-            // `systemctl show`; `getent`.
-            Self::Service(_) | Self::AuthorizedKeys(_) => Cmd::DEFAULT_TIMEOUT,
+            // `systemctl show`; `getent`; `tailscale status`.
+            Self::Service(_) | Self::AuthorizedKeys(_) | Self::TailscaleUp(_) => {
+                Cmd::DEFAULT_TIMEOUT
+            }
             // `getent`, then `id`.
             Self::User(_) => Cmd::DEFAULT_TIMEOUT * 2,
         }
@@ -248,6 +259,7 @@ impl Resource {
             Self::Service(s) => s.diff(sys)?,
             Self::User(u) => u.diff(sys)?,
             Self::AuthorizedKeys(k) => k.diff(sys)?,
+            Self::TailscaleUp(t) => t.diff(sys)?,
         };
         Ok(change.map(|(summary, diff)| Change {
             id: self.id(),
@@ -281,6 +293,7 @@ impl Resource {
             Self::Service(s) => s.snapshot(sys),
             Self::User(u) => u.snapshot(sys),
             Self::AuthorizedKeys(k) => k.snapshot(sys, txn_dir, n),
+            Self::TailscaleUp(t) => t.snapshot(sys),
         }
     }
 
@@ -299,6 +312,7 @@ impl Resource {
             Self::Service(s) => s.apply(sys),
             Self::User(u) => return u.apply(sys).map(|uid| Applied { uid }),
             Self::AuthorizedKeys(k) => k.apply(sys),
+            Self::TailscaleUp(t) => t.apply(sys),
         }?;
         Ok(Applied::default())
     }
@@ -393,6 +407,12 @@ pub enum Backup {
         original: Option<FileCopy>,
         /// Whether apply creates its directory, `~/.ssh`.
         created_dir: bool,
+    },
+    /// A tailnet login. Holds no key.
+    #[serde(rename = "tailscale-up")]
+    TailscaleUp {
+        /// Whether the node was `Running` before apply.
+        was_running: bool,
     },
 }
 
@@ -495,6 +515,7 @@ pub fn restore(sys: Sys, txn_dir: &Path, backup: &Backup) -> Result<(), Resource
             original,
             created_dir,
         } => authorized_keys::restore(sys, txn_dir, user, path, *n, *original, *created_dir),
+        Backup::TailscaleUp { was_running } => tailscale_up::restore(sys, *was_running),
     }
 }
 
@@ -685,6 +706,10 @@ mod tests {
                     created_dir: true,
                 },
                 r#"{"kind":"authorized-keys","user":"admin","path":"/home/admin/.ssh/authorized_keys","n":2,"original":null,"created_dir":true}"#,
+            ),
+            (
+                Backup::TailscaleUp { was_running: false },
+                r#"{"kind":"tailscale-up","was_running":false}"#,
             ),
         ];
         for (backup, json) in cases {

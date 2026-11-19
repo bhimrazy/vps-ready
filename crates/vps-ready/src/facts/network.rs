@@ -108,6 +108,9 @@ pub struct Tailscale {
     /// disabled for the node, or when the node is not `Running` (no network
     /// map). Treat `None` as disabled only when `backend_state` is `Running`.
     pub key_expiry: Option<String>,
+    /// Whether the node has a node key, i.e. logged in once and not out
+    /// since, so `tailscale up` needs no auth key.
+    pub have_node_key: bool,
 }
 
 #[derive(Deserialize)]
@@ -143,6 +146,8 @@ struct RawRoute {
 struct RawTailscale {
     #[serde(rename = "BackendState")]
     backend_state: String,
+    #[serde(rename = "HaveNodeKey", default)]
+    have_node_key: bool,
     #[serde(rename = "Self")]
     this: Option<RawSelf>,
 }
@@ -266,11 +271,7 @@ fn parse_listen_ports(text: &str) -> BTreeMap<String, u16> {
 
 /// `None` without `tailscale`, or when its daemon does not answer.
 pub(super) fn tailscale(runner: &dyn Runner, notices: &mut Vec<String>) -> Option<Tailscale> {
-    // `--peers=false` keeps the output small on a big tailnet; `Self` stays.
-    let cmd = Cmd::new("tailscale")
-        .args(["status", "--json", "--peers=false"])
-        .timeout(Duration::from_secs(10));
-    let out = match probe(runner, &cmd, notices) {
+    let out = match probe(runner, &tailscale_status(), notices) {
         Probe::Ran(out) if out.ok() => out,
         Probe::Ran(out) => {
             let stderr = String::from_utf8_lossy(&out.stderr);
@@ -294,7 +295,15 @@ pub(super) fn tailscale(runner: &dyn Runner, notices: &mut Vec<String>) -> Optio
         .ok()
 }
 
-fn parse_tailscale(json: &[u8]) -> Result<Tailscale, serde_json::Error> {
+/// `tailscale status --json`; `--peers=false` keeps the output small on a
+/// big tailnet, and `Self` stays.
+pub(crate) fn tailscale_status() -> Cmd {
+    Cmd::new("tailscale")
+        .args(["status", "--json", "--peers=false"])
+        .timeout(Duration::from_secs(10))
+}
+
+pub(crate) fn parse_tailscale(json: &[u8]) -> Result<Tailscale, serde_json::Error> {
     let raw: RawTailscale = serde_json::from_slice(json)?;
     let this = raw.this;
     Ok(Tailscale {
@@ -304,6 +313,7 @@ fn parse_tailscale(json: &[u8]) -> Result<Tailscale, serde_json::Error> {
             .and_then(|s| s.ips.clone())
             .unwrap_or_default(),
         key_expiry: this.and_then(|s| s.key_expiry),
+        have_node_key: raw.have_node_key,
     })
 }
 
