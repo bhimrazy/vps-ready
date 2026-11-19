@@ -1,17 +1,20 @@
 #!/bin/sh
 # Apply, reboot and roll back with the real binary in a KVM virtual machine.
 #
-# Usage: test/vm-cycle.sh <distro> <binary> <image>     e.g. ubuntu-24.04
+# Usage: test/vm-cycle.sh <distro> <binary> <image> [cloud-init]   e.g. ubuntu-24.04
 #   <image> is a cloud image (qcow2). The script boots it with QEMU and KVM
 #   (2 vCPUs, 2 GiB, a copy-on-write overlay, so the image is not changed),
 #   seeds a throwaway SSH key and a passwordless sudo user with cloud-init,
 #   and drives the VM over SSH on 127.0.0.1:$VM_SSH_PORT (default 2222).
 #   The binary must match the VM's CPU; CI uses the x86_64 musl build.
-# Needs: qemu-system-x86_64, qemu-img, cloud-localds, ssh, jq, and /dev/kvm.
+#   With `cloud-init`, it runs only the first-boot cycle below.
+# Needs: qemu-system-x86_64, qemu-img, cloud-localds, ssh, jq, and /dev/kvm;
+#   python3 for the cloud-init cycle.
 #
 #   To run the cycle against a VM you already have, pass "-" as <image> and
 #   set VM_SSH_CONFIG to an ssh config whose `Host vm` reaches a user with
-#   passwordless sudo. The cycle changes that VM's settings.
+#   passwordless sudo. The cycle changes that VM's settings. The cloud-init
+#   cycle needs an image, since it boots fresh overlays.
 #
 # Cycles:
 #   kernel.sysctl, same boot: weaken five keys -> apply -> the controls pass
@@ -68,18 +71,34 @@
 #   argument is refused -> rollback removes Docker's and Caddy's sources, keys
 #   and config files and the deploy user, Caddy is disabled, and the cycle's
 #   user still logs in.
+#   cloud-init (only with the `cloud-init` argument): a profile whose admin
+#   key is the job's, exported with `export cloud-init --base-url` and a
+#   checksums.txt of a tarball made from <binary>, served from the runner on
+#   10.0.2.2:$VM_HTTP_PORT (default 8321), and booted as multipart user-data
+#   with the seed's own part. Nobody logs in until cloud-init's final message
+#   is on the serial console, since `--deadman=off` refuses while anyone is
+#   logged in. Then: curl or wget, sha256sum and tar exist; as the admin, `cloud-init
+#   status` is done, `history` shows one transaction applied without the
+#   timer, SSH-001..007 and FW-001 pass, root does not log in, and the
+#   exported profile plans nothing. A second fresh boot with a tampered
+#   tarball: `sha256sum -c` fails, nothing is installed or applied, and
+#   `cloud-init status` is error.
 set -eu
 cd "$(dirname "$0")/.."
 
-usage="usage: $0 <distro> <binary> <image|->"
+usage="usage: $0 <distro> <binary> <image|-> [cloud-init]"
 distro=${1:?$usage}
 bin=${2:?$usage}
 image=${3:?$usage}
+cycle=${4:-all}
 port=${VM_SSH_PORT:-2222}
+http_port=${VM_HTTP_PORT:-8321}
 tmp=$(mktemp -d)
 pid=
+www_pid=
 
 [ -f "$bin" ] || { echo "binary not found: $bin" >&2; exit 2; }
+case $cycle in all | cloud-init) ;; *) echo "$usage" >&2; exit 2 ;; esac
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 2; }
 
 cleanup() {
@@ -91,6 +110,7 @@ cleanup() {
     fi
     kill "$pid" 2>/dev/null || true
   fi
+  [ -z "$www_pid" ] || kill "$www_pid" 2>/dev/null || true
   rm -rf "$tmp"
 }
 trap cleanup EXIT
@@ -99,7 +119,29 @@ trap 'exit 130' INT TERM
 
 die() { echo "FAIL [$distro]: $*" >&2; exit 1; }
 
+# boot <user-data>: boots a fresh overlay of the image with this user-data,
+# after stopping the VM booted before. The console log starts empty.
+boot() {
+  if [ -n "$pid" ]; then
+    kill "$pid"
+    while kill -0 "$pid" 2>/dev/null; do sleep 1; done
+    pid=
+  fi
+  cloud-localds "$tmp/seed.img" "$1" "$tmp/meta-data"
+  rm -f "$tmp/disk.qcow2"
+  qemu-img create -q -f qcow2 -F qcow2 -b "$(realpath "$image")" "$tmp/disk.qcow2" 10G
+  qemu-system-x86_64 -enable-kvm -cpu host -smp 2 -m 2048 \
+    -drive file="$tmp/disk.qcow2",if=virtio,format=qcow2 \
+    -drive file="$tmp/seed.img",if=virtio,format=raw \
+    -netdev user,id=net0,hostfwd=tcp:127.0.0.1:"$port"-:22 \
+    -device virtio-net-pci,netdev=net0 \
+    -display none -serial file:"$tmp/console.log" \
+    -daemonize -pidfile "$tmp/qemu.pid"
+  pid=$(cat "$tmp/qemu.pid")
+}
+
 if [ "$image" = - ]; then
+  [ "$cycle" = all ] || { echo "the $cycle cycle needs an image" >&2; exit 2; }
   sshcfg=${VM_SSH_CONFIG:?set VM_SSH_CONFIG when <image> is -}
 else
   [ -f "$image" ] || { echo "image not found: $image" >&2; exit 2; }
@@ -116,17 +158,7 @@ users:
       - $(cat "$tmp/id.pub")
 EOF
   printf 'instance-id: vps-ready-%s\nlocal-hostname: vps-ready-vm\n' "$distro" >"$tmp/meta-data"
-  cloud-localds "$tmp/seed.img" "$tmp/user-data" "$tmp/meta-data"
-  qemu-img create -q -f qcow2 -F qcow2 -b "$(realpath "$image")" "$tmp/disk.qcow2" 10G
-
-  qemu-system-x86_64 -enable-kvm -cpu host -smp 2 -m 2048 \
-    -drive file="$tmp/disk.qcow2",if=virtio,format=qcow2 \
-    -drive file="$tmp/seed.img",if=virtio,format=raw \
-    -netdev user,id=net0,hostfwd=tcp:127.0.0.1:"$port"-:22 \
-    -device virtio-net-pci,netdev=net0 \
-    -display none -serial file:"$tmp/console.log" \
-    -daemonize -pidfile "$tmp/qemu.pid"
-  pid=$(cat "$tmp/qemu.pid")
+  [ "$cycle" = cloud-init ] || boot "$tmp/user-data"
 
   sshcfg=$tmp/ssh_config
   cat >"$sshcfg" <<EOF
@@ -217,6 +249,102 @@ expect_newest() {
 
 dropin=/etc/sysctl.d/90-vps-ready.conf
 apt_conf=/etc/apt/apt.conf.d
+
+# multipart <part>...: MIME multipart user-data of cloud-config parts, which
+# cloud-init merges.
+multipart() {
+  printf 'Content-Type: multipart/mixed; boundary="vps-ready-part"\nMIME-Version: 1.0\n'
+  for part; do
+    printf '\n--vps-ready-part\nContent-Type: text/cloud-config; charset="us-ascii"\n\n'
+    cat "$part"
+  done
+  printf '\n--vps-ready-part--\n'
+}
+
+# wait_first_boot: waits for cloud-init's final message on the serial
+# console. Nobody may log in before: `--deadman=off` would refuse.
+wait_first_boot() {
+  i=0
+  until grep -q 'Cloud-init v\. .* finished at' "$tmp/console.log" 2>/dev/null; do
+    i=$((i + 5)); [ "$i" -lt 900 ] || die "cloud-init did not finish within 900 s"
+    sleep 5
+  done
+  echo "first boot finished after about $i s"
+}
+
+cloud_init_cycle() {
+  admin=ops
+  as_admin() { ssh -F "$sshcfg" -o BatchMode=yes -o ConnectTimeout=5 -l "$admin" vm "$@"; }
+  version=$("$bin" version --json | jq -r .version)
+  name=vps-ready-$version-x86_64-unknown-linux-musl
+  mkdir -p "$tmp/www" "$tmp/$name"
+  cp "$bin" "$tmp/$name/vps-ready"
+  tar -C "$tmp" -czf "$tmp/www/$name.tar.gz" "$name"
+  (cd "$tmp/www" && sha256sum "$name.tar.gz") >"$tmp/checksums.txt"
+  # export needs both architectures; the VM fetches only its own.
+  printf '%s  vps-ready-%s-aarch64-unknown-linux-musl.tar.gz\n' \
+    "$(echo aarch64 | sha256sum | cut -d' ' -f1)" "$version" >>"$tmp/checksums.txt"
+  printf '%s\n' 'schema = 1' 'extends = "minimal"' '[modules."user.admin"]' \
+    "name = \"$admin\"" "authorized_keys = [\"$(cat "$tmp/id.pub")\"]" >"$tmp/profile.toml"
+  "$bin" export cloud-init --profile "$tmp/profile.toml" --checksums "$tmp/checksums.txt" \
+    --base-url "http://10.0.2.2:$http_port" >"$tmp/export.yaml"
+  cat "$tmp/export.yaml"
+  multipart "$tmp/user-data" "$tmp/export.yaml" >"$tmp/first-boot"
+  python3 -m http.server --bind 127.0.0.1 --directory "$tmp/www" "$http_port" >/dev/null 2>&1 &
+  www_pid=$!
+
+  echo "== $distro: cloud-init, first boot"
+  boot "$tmp/first-boot"
+  wait_first_boot
+  wait_ssh 120
+  # As the seed's user, so a missing tool shows even if nothing was applied.
+  vm 'command -v curl || command -v wget' >/dev/null || die "neither curl nor wget is on the image"
+  for tool in sha256sum tar; do
+    vm command -v "$tool" >/dev/null || die "$tool is not on the image"
+  done
+  status=$(as_admin cloud-init status --wait || true)
+  echo "$status"
+  case $status in *"status: done"*) ;; *) as_admin sudo tail -n 40 /var/log/cloud-init-output.log; die "cloud-init did not end done" ;; esac
+  as_admin sudo vps-ready history
+  as_admin sudo vps-ready history --json >"$tmp/history.json"
+  jq -e 'length == 1 and .[0].state == "applied" and .[0].without_timer == true' "$tmp/history.json" >/dev/null ||
+    die "history does not show one transaction applied without the timer"
+  rc=0; as_admin sudo vps-ready audit --json >"$tmp/audit.json" || rc=$?
+  [ "$rc" -le 1 ] || die "audit exited $rc, expected 0 or 1"
+  ids='.id | test("^(SSH-00[1-7]|FW-001)$")'
+  jq -r ".findings[] | select($ids) | \"\(.id) \(.status)\"" "$tmp/audit.json"
+  jq -e "[.findings[] | select(($ids) and .status != \"pass\")] | length == 0" "$tmp/audit.json" >/dev/null ||
+    die "an SSH-001..007 or FW-001 control does not pass after first boot"
+  as_admin sudo sshd -T | grep -qx 'permitrootlogin no' || die "sshd -T does not show permitrootlogin no"
+  # Root gets the admin's key: sshd itself must refuse it.
+  as_admin 'sudo install -d -m 700 /root/.ssh && sudo cp ~/.ssh/authorized_keys /root/.ssh/'
+  ! ssh -F "$sshcfg" -o BatchMode=yes -o ConnectTimeout=5 -l root vm true 2>/dev/null ||
+    die "root logs in after first boot"
+  rc=0; as_admin sudo vps-ready plan --json --profile /etc/vps-ready/profile.toml >"$tmp/plan.json" || rc=$?
+  [ "$rc" -eq 0 ] || die "plan exited $rc, expected 0"
+  jq -e '[.modules[].changes | length] | add == 0' "$tmp/plan.json" >/dev/null ||
+    { cat "$tmp/plan.json"; die "the exported profile still plans changes"; }
+
+  echo "== $distro: cloud-init, a tampered tarball"
+  printf x >>"$tmp/www/$name.tar.gz"
+  boot "$tmp/first-boot"
+  wait_first_boot
+  wait_ssh 120
+  status=$(vm cloud-init status --wait || true)
+  echo "$status"
+  case $status in *"status: error"*) ;; *) die "cloud-init status is not error" ;; esac
+  vm sudo grep -q 'FAILED' /var/log/cloud-init-output.log || die "sha256sum -c did not fail"
+  vm test ! -e /usr/local/bin/vps-ready || die "vps-ready was installed"
+  vm sudo test ! -e /var/lib/vps-ready || die "vps-ready applied something"
+  vm test ! -e /etc/ssh/sshd_config.d/00-vps-ready.conf || die "the sshd drop-in exists"
+  ! vm id "$admin" >/dev/null 2>&1 || die "$admin exists"
+}
+
+if [ "$cycle" = cloud-init ]; then
+  cloud_init_cycle
+  echo "OK [$distro]"
+  exit 0
+fi
 
 echo "== $distro: waiting for SSH and cloud-init"
 wait_ssh 300

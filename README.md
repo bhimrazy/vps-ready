@@ -92,7 +92,7 @@ The command is also installed as `vpsready`, without the hyphen. With Rust insta
 | `vps-ready confirm` | Run from a **new** SSH login, as the admin, to prove the new configuration works (no code to type). Without it, the change reverts automatically. `--extend` adds time | available |
 | `vps-ready rollback` | Restores the previous state from the transaction journal (`--last` or `--txn ID`); `vps-ready history` lists transactions | available |
 | `vps-ready modules [ID]` | Lists the modules and whether each applies to this server; with an ID, why it matters, its params and the audit controls it fixes. No root needed. `--json` too | available |
-| `vps-ready export cloud-init` | Turns the profile you chose into `user-data` for your next servers | M5 |
+| `vps-ready export cloud-init` | Turns a profile into `user-data` that hardens a new server at first boot, before anyone logs in (`--checksums` from the release; no network call) | v0.6 |
 
 Hardening is grouped into modules:
 

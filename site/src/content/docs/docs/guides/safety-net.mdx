@@ -92,6 +92,8 @@ sudo vps-ready confirm --extend 15m    # or any time from 1m to 30m
 sudo vps-ready apply --profile minimal --deadman 10m   # from 1m to 30m, default 5m
 ```
 
+`--deadman=off` is for a server's first boot, through [`export cloud-init`](/docs/reference/commands/#export-cloud-init), where nobody is logged in to confirm. It is refused while anyone is logged in.
+
 ## If nobody confirms
 
 When the deadline passes, the timer runs the rollback. It works even when `apply` and your terminal are long gone. The SSH server config and the firewall are always restored, even if you edited those files during the window; your edit is kept next to the journal so it is not lost. The first terminal, if it is still open, ends with:

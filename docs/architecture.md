@@ -271,10 +271,11 @@ sequenceDiagram
   end
 ```
 
+**Without the timer:** `apply --deadman=off` applies the dead-man modules without arming anything, for a first boot from `export cloud-init`, where nobody is logged in to confirm. Every plan-time invariant still holds (a keyed sudo admin before root and password logins are turned off, the SSH port kept open). It needs positive evidence that nobody could confirm: no per-session sshd process (`sshd: <user>@...` or `sshd-session: ...`) in `/proc`, and no `loginctl list-sessions` session of class `user`; a tmux, screen or mosh session has no sshd ancestor, so the applying process's own session is not enough. The check is skipped when no module in the plan needs the timer, and with `off` a module that does not apply fails the run, as with `--module`. The journal's `state applied` record carries `without_timer`, and `history` shows it. A crash mid-apply with the timer off leaves an unfinished transaction, with nothing to roll it back until `rollback --last`. There is no `selftest` mode: a loopback probe proves only that sshd answers, which is why `confirm` refuses loopback logins. The reasons are in [the M6 plan](m6-plan.md#hardened-before-exposed-export-cloud-init).
+
 Planned:
 - **OpenRC:** a double-forked `setsid` watchdog plus a `local.d` boot hook (M7; today the dead-man modules need systemd).
 - **firewalld:** runtime-only rules as a second safety net (M7).
-- **Non-interactive (cloud-init):** `--deadman=off` with the invariants still enforced, or `--deadman=selftest` (probe the new config via `ssh-keyscan localhost:<port>`) (v0.6.0, with `export cloud-init`).
 
 ## State layout
 
@@ -313,7 +314,7 @@ A new module follows the same rules: use the program's drop-in directory when it
 
 ## CLI surface (v1)
 
-Commands are `clap` derive structs in `src/cli`. Today `version`, `detect`, `audit`, `plan`, `apply`, `confirm`, `rollback` and `history` exist; the rest arrive with their milestones (see the GitHub milestones).
+Commands are `clap` derive structs in `src/cli`. Today `version`, `detect`, `audit`, `plan`, `apply`, `confirm`, `rollback`, `history`, `modules` and `export cloud-init` exist; the rest arrive with their milestones (see the GitHub milestones).
 
 ```
 vps-ready                      the guided wizard on a terminal (stdin and stdout); help and exit 2 otherwise
@@ -321,11 +322,11 @@ vps-ready detect               print facts (also --json)
 vps-ready audit [--all]         run controls → text | json | sarif | junit; non-zero exit on fail
                                text lists failed and unknown controls; --all adds passed and skipped
 vps-ready plan  [--profile X] [--module M] [--out plan.json]
-vps-ready apply [plan.json | --profile X] [--module M] [--yes] [--deadman 5m|off|selftest]
+vps-ready apply [plan.json | --profile X] [--module M] [--yes] [--deadman 5m|off]
 vps-ready confirm [--txn ID] [--extend [DUR]]
 vps-ready rollback [--last | --txn ID]
 vps-ready history | drift
-vps-ready export cloud-init --profile X > user-data.yaml   # v0.6.0
+vps-ready export cloud-init --profile X --checksums checksums.txt [--base-url URL] > user-data.yaml
 vps-ready modules [ID]                  list modules; with an ID, why, params and the controls fixed (no root; not the files touched: that needs a plan against a host)
 vps-ready version
 ```
@@ -360,7 +361,7 @@ enabled = false
 
 Without `--profile` or `--module`, `plan` and `apply` select only `kernel.sysctl` and `updates.auto`, so an upgrade never makes a plain `apply` start changing SSH or the firewall.
 
-**cloud-init (v0.6.0):** `vps-ready export cloud-init` emits `#cloud-config` that writes the profile, downloads a **pinned version, verifying its SHA256** (embedded in the user-data), and runs `apply --yes --deadman=off` from `runcmd`.
+**cloud-init:** `vps-ready export cloud-init` prints `#cloud-config` with `write_files` (the profile, as `/etc/vps-ready/profile.toml`, mode 0600) and one `runcmd` script: it downloads the running binary's version for `uname -m` with `curl` or `wget`, checks the tarball's SHA-256 before anything runs, installs it to `/usr/local/bin` and runs `apply --profile /etc/vps-ready/profile.toml --yes --deadman=off`. The hashes come from the release's `checksums.txt`, which the user downloads and verifies (`--checksums`, required): the binary cannot know its own release hashes, and `export` makes no network call. `--base-url` changes where the tarballs come from, not what runs. `export` refuses a `user.admin` without `authorized_keys` (no SSH session to copy keys from at first boot) and a `checksums.txt` without a tarball for x86_64 or aarch64. A failure leaves the image's defaults, `cloud-init status` shows `error`, and `history` shows the transaction.
 
 ## Repo layout
 

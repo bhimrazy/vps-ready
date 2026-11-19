@@ -561,3 +561,157 @@ fn confirm_refuses_a_login_other_than_the_admin() {
     );
     assert!(history_text(&host).contains("pending-confirm"));
 }
+
+/// `/proc` of a first boot: init and the sshd listener, nobody logged in.
+fn first_boot() -> FakeFs {
+    fixture()
+        .with_file("/proc/1/cmdline", "/sbin/init\0")
+        .with_file(
+            "/proc/640/cmdline",
+            "sshd: /usr/sbin/sshd -D [listener] 0 of 10-100 startups\0",
+        )
+}
+
+/// loginctl with these sessions, each `(id, name, class)`.
+fn logind(sessions: &[(&str, &str, &str)]) -> FakeRunner {
+    let list: String = sessions
+        .iter()
+        .map(|(id, name, _)| format!("{id} 1000 {name} - -\n"))
+        .collect();
+    sessions.iter().fold(
+        FakeRunner::new().on("loginctl", ["list-sessions"], Output::success(list)),
+        |runner, (id, name, class)| {
+            runner.on(
+                "loginctl",
+                ["show-session", id],
+                Output::success(format!("Name={name}\nClass={class}\n")),
+            )
+        },
+    )
+}
+
+fn apply_off(host: &Host) -> (u8, String, String) {
+    let ids = only(&["test.lockout"]);
+    run(|out, err| apply(host, &ids, true, None, None, out, err))
+}
+
+#[test]
+fn deadman_off_applies_without_the_timer_when_nobody_is_logged_in() {
+    // No binary to copy: nothing is armed, so it is not checked.
+    let fs = first_boot();
+    let runner = logind(&[("c1", "root", "background")]);
+    let host = Host {
+        facts: vm,
+        ..lockout_host(&fs, &runner)
+    };
+    let (code, out, err) = apply_off(&host);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        out.contains("Applied without the safety timer (--deadman=off); `history` says so.\n"),
+        "{out}"
+    );
+    assert_eq!(
+        calls(&runner),
+        [
+            "loginctl list-sessions --no-legend --no-pager",
+            "loginctl show-session c1 -p Name -p Class",
+        ]
+    );
+    assert_eq!(fs.read(Path::new(LOCKOUT)).unwrap(), b"locked = maybe\n");
+    let text = history_text(&host);
+    assert!(
+        text.contains("applied (without the timer)    test.lockout  1 change"),
+        "{text}"
+    );
+    let json = run(|out, _| history(&host, true, out)).1;
+    assert!(json.contains("\"without_timer\": true"), "{json}");
+}
+
+#[test]
+fn deadman_off_is_refused_while_someone_is_logged_in() {
+    let refused = |fs: &FakeFs, runner: &FakeRunner, who: &str| {
+        let host = Host {
+            facts: vm,
+            ..lockout_host(fs, runner)
+        };
+        let (code, _, err) = apply_off(&host);
+        assert_eq!(code, EXIT_ERROR, "{err}");
+        assert_eq!(
+            err,
+            format!(
+                "error: someone is logged in ({who}), so a confirm is possible: drop \
+                 `--deadman=off`\n"
+            )
+        );
+        assert!(txn_ids(fs).is_empty());
+        assert!(!fs.exists(Path::new(LOCKOUT)));
+    };
+    // In tmux, this process has no sshd ancestor, but the login that
+    // started tmux is still there.
+    let fs = first_boot()
+        .with_file("/proc/812/cmdline", "sshd-session: admin@pts/0\0")
+        .with_file("/proc/900/cmdline", "tmux\0")
+        .with_file("/proc/901/cmdline", "-bash\0");
+    refused(&fs, &logind(&[]), "sshd-session: admin@pts/0");
+    // A console login has no sshd process.
+    refused(
+        &first_boot(),
+        &logind(&[("3", "admin", "user")]),
+        "logind session 3 of admin",
+    );
+}
+
+#[test]
+fn deadman_off_is_refused_when_it_cannot_tell() {
+    let fs = first_boot();
+    let runner = FakeRunner::new();
+    let host = Host {
+        facts: vm,
+        ..lockout_host(&fs, &runner)
+    };
+    let (code, _, err) = apply_off(&host);
+    assert_eq!(code, EXIT_ERROR, "{err}");
+    assert!(
+        err.starts_with(
+            "error: `--deadman=off` needs to know that nobody is logged in, and \
+             `loginctl list-sessions --no-legend --no-pager`: not found: loginctl;"
+        ),
+        "{err}"
+    );
+    assert!(txn_ids(&fs).is_empty());
+}
+
+#[test]
+fn deadman_off_without_a_dead_man_module_skips_the_login_check() {
+    // Someone is logged in, and `host`'s runner has no loginctl: neither
+    // matters when nothing would arm the timer.
+    let fs = first_boot().with_file("/proc/812/cmdline", "sshd: admin@pts/0\0");
+    let host = host(&fs);
+    let (code, out, err) = run(|out, err| apply(&host, &only(&[]), true, None, None, out, err));
+    assert_eq!(code, 0, "{err}");
+    assert!(!out.contains("without the safety timer"), "{out}");
+    let json = run(|out, _| history(&host, true, out)).1;
+    assert!(json.contains("\"state\": \"applied\""), "{json}");
+    assert!(!json.contains("without_timer"), "{json}");
+}
+
+#[test]
+fn deadman_off_fails_on_a_module_that_does_not_apply() {
+    // kernel.sysctl does not apply in a container; a first boot must not
+    // end "done" with it skipped.
+    let fs = first_boot();
+    let host = Host {
+        facts: container,
+        ..host(&fs)
+    };
+    let (code, _, err) = run(|out, err| apply(&host, &only(&[]), true, None, None, out, err));
+    assert_eq!(code, EXIT_ERROR, "{err}");
+    assert!(
+        err.starts_with("error: kernel.sysctl does not apply to this host:"),
+        "{err}"
+    );
+    assert!(txn_ids(&fs).is_empty());
+    // With the timer, the plan shows it and goes on, as before.
+    let (code, _, err) = apply_yes(&host);
+    assert_ne!(code, EXIT_ERROR, "{err}");
+}

@@ -284,6 +284,7 @@ fn deadman() -> Deadman {
     Deadman {
         window: crate::engine::deadman::DEFAULT_WINDOW,
         binary: BIN.into(),
+        off: false,
     }
 }
 

@@ -44,6 +44,9 @@ pub struct Deadman {
     /// The binary to copy for the timer and the boot hook: this one,
     /// [`std::env::current_exe`]. [`check_binary`] must accept it.
     pub binary: std::path::PathBuf,
+    /// `apply --deadman=off`: apply without arming, for a first boot where
+    /// nobody is logged in to confirm. The caller checks that.
+    pub off: bool,
 }
 
 impl Default for Deadman {
@@ -53,6 +56,7 @@ impl Default for Deadman {
         Self {
             window: DEFAULT_WINDOW,
             binary: std::path::PathBuf::new(),
+            off: false,
         }
     }
 }

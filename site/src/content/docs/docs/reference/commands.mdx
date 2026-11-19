@@ -20,6 +20,7 @@ The command is installed as `vps-ready` and also as `vpsready`. Run `vps-ready -
 | [`rollback`](#rollback) | Undoes a transaction | yes | no |
 | [`history`](#history) | Lists transactions | yes | yes |
 | [`modules`](#modules) | Lists the modules, or explains one | no | yes |
+| [`export cloud-init`](#export-cloud-init) | Prints user-data that hardens a new server at first boot | no | no |
 | `version` | Prints version and build information, and warns when another `vps-ready` is on `PATH` | no | yes |
 
 ## Global flags
@@ -103,7 +104,7 @@ Exits 0, or 2 on error.
 ## apply
 
 ```sh
-sudo vps-ready apply [--profile NAME|PATH] [--module ID]... [--deadman DUR] [--yes | --dry-run]
+sudo vps-ready apply [--profile NAME|PATH] [--module ID]... [--deadman DUR|off] [--yes | --dry-run]
 ```
 
 Plans, shows the plan, asks `Apply N changes? [y/N]`, then snapshots each original, validates, writes atomically and verifies. Any failure restores everything. When the run includes `user.admin`, `ssh.server` or `firewall.inbound` (the deployment modules do not), it arms the [safety timer](/docs/guides/safety-net/) first and waits for a confirm from a new SSH login.
@@ -112,7 +113,7 @@ Plans, shows the plan, asks `Apply N changes? [y/N]`, then snapshots each origin
 |---|---|
 | `--profile NAME\|PATH` | As for `plan` |
 | `--module ID` | As for `plan`. A named module that does not apply to this server is an error |
-| `--deadman DUR` | How long a confirm has: `90s`, `5m`, `2m30s`, from 1m to 30m. Default `5m` |
+| `--deadman DUR\|off` | How long a confirm has: `90s`, `5m`, `2m30s`, from 1m to 30m. Default `5m`. `off` applies without the safety timer, for a first boot from [`export cloud-init`](#export-cloud-init); when a module needs the timer, it is refused while anyone is logged in (an SSH session, or a console login that `loginctl` lists), since a confirm is possible then. A module that does not apply to the server is an error with `off`, as with `--module`. `history` marks a transaction applied without the timer |
 | `-y`, `--yes` | Do not ask. Required when stdin is not a terminal |
 | `-n`, `--dry-run` | Show the plan and change nothing, like `plan` |
 
@@ -170,7 +171,7 @@ If the server rebooted since `apply`, kernel settings keep their running values 
 sudo vps-ready history
 ```
 
-Lists every transaction, newest first, with its state, modules and number of changes. Exits 0, or 2 on error.
+Lists every transaction, newest first, with its state, modules and number of changes. A transaction applied with `--deadman=off` shows `applied (without the timer)`. Exits 0, or 2 on error.
 
 ## modules
 
@@ -181,6 +182,24 @@ vps-ready modules [ID]
 Without an ID, lists every module with its title, whether it applies to this server (and why not, when it does not) and whether it arms the safety timer. With an ID, such as `ssh.server`, it adds why the module matters, its params in the profile with their defaults, and the audit controls it fixes. It does not need root, and it uses the same facts as `detect` to decide what applies. `--json` works for both forms.
 
 Exits 0, or 2 on error, including an unknown ID.
+
+## export cloud-init
+
+```sh
+vps-ready export cloud-init --profile NAME|PATH --checksums checksums.txt [--base-url URL] > user-data.yaml
+```
+
+Prints `#cloud-config` user-data to paste into the provider's user-data field when you create a server. At first boot, before anyone logs in, it writes the profile to `/etc/vps-ready/profile.toml`, downloads this version's tarball for the server's architecture, checks its SHA-256, installs the binary to `/usr/local/bin` and runs `vps-ready apply --profile /etc/vps-ready/profile.toml --yes --deadman=off`. It needs `curl` or `wget`, `sha256sum` and `tar` on the image. It changes nothing where it runs, needs no root and makes no network call.
+
+| Flag | What it does |
+|---|---|
+| `--profile NAME\|PATH` | The profile. Its `user.admin` must list `authorized_keys`: at first boot there is no SSH session to copy keys from |
+| `--checksums PATH` | The `checksums.txt` of the same release as this binary. Download it and verify its signature first, as in [Verify a release by hand](/docs/install/#verify-a-release-by-hand); the hashes in the user-data come from it |
+| `--base-url URL` | Download the tarballs from `URL` instead of the GitHub release, e.g. a mirror. The SHA-256 is checked either way |
+
+The image's own SSH settings apply for the first minute or so, until `runcmd` runs; keep the provider's firewall closed until first boot finishes. Do not log in while it runs: any login during first boot, including a provisioning tool that waits for SSH, makes the apply refuse `--deadman=off`. If anything fails (a login, a download, the hash, the apply), the server keeps the image's defaults: check `cloud-init status` (it shows `error`) and `/var/log/cloud-init-output.log` before you open the server up.
+
+Exits 0, or 2 on error.
 
 <Aside type="note">
 The state lives in `/var/lib/vps-ready` (root only): one directory per transaction under `txn/`, named after its UTC start time, such as `20261023T114246Z`.

@@ -9,7 +9,7 @@ use std::path::Path;
 use anyhow::bail;
 
 use super::change::{self, Applied, Host, Selection, plural};
-use super::{EXIT_INTERRUPTED, wrap};
+use super::{EXIT_INTERRUPTED, export, wrap};
 use crate::VERSION_INFO;
 use crate::audit::{self, Outcome, Severity};
 use crate::config::{Profile, ProfileBuilder};
@@ -68,7 +68,7 @@ pub(super) fn run<R: BufRead>(
         Some(profile),
         &Selection::default(),
         false,
-        engine::deadman::DEFAULT_WINDOW,
+        Some(engine::deadman::DEFAULT_WINDOW),
         Some(&mut input),
         out,
         err,
@@ -699,7 +699,7 @@ fn next_time(
     };
     if builder.is_unchanged() {
         repeat(out, builder.base())?;
-        return Ok(());
+        return new_server(host, builder, Saved::Base, out);
     }
     writeln!(out)?;
     let path = cwd.join(SAVE_AS);
@@ -715,7 +715,7 @@ fn next_time(
             "Not saved. To repeat this, save these lines to a file and run:\n  \
              sudo vps-ready apply --profile <file>\n\n{text}"
         )?;
-        return Ok(());
+        return new_server(host, builder, Saved::No, out);
     }
     let owner = FileOwner {
         mode: 0o644,
@@ -726,6 +726,53 @@ fn next_time(
     writeln!(out, "Saved {}.", path.display())?;
     writeln!(out, "Review it before you use it on another server.")?;
     repeat(out, &path.display().to_string())?;
+    new_server(host, builder, Saved::To(&path), out)
+}
+
+/// Where [`next_time`] left the answers.
+enum Saved<'a> {
+    /// Nothing to save: the built-in profile as it is.
+    Base,
+    /// Printed, not saved.
+    No,
+    To(&'a Path),
+}
+
+/// The closing line: the export that sets up a new server the same way at
+/// its first boot.
+fn new_server(
+    host: &Host,
+    builder: &ProfileBuilder,
+    saved: Saved,
+    out: &mut dyn Write,
+) -> anyhow::Result<()> {
+    let refused = export::refusal(&builder.build(host.modules)?).is_some();
+    let (name, first) = match (saved, refused) {
+        (Saved::To(path), false) => (path.display().to_string(), String::new()),
+        (Saved::To(path), true) => {
+            let path = path.display().to_string();
+            let first = format!(" (add the admin's `authorized_keys` to {path} first)");
+            (path, first)
+        }
+        (Saved::No, false) => ("<file>".to_owned(), String::new()),
+        (Saved::No, true) => (
+            "<file>".to_owned(),
+            " (with the admin's `authorized_keys` in the file)".to_owned(),
+        ),
+        // A built-in profile has no keys.
+        (Saved::Base, _) => (
+            "<file>".to_owned(),
+            format!(
+                " (a file with `extends = \"{}\"` and the admin's `authorized_keys`)",
+                builder.base()
+            ),
+        ),
+    };
+    writeln!(
+        out,
+        "\nSame setup for a new server, at its first boot{first}:\n  \
+         vps-ready export cloud-init --profile {name} --checksums checksums.txt"
+    )?;
     Ok(())
 }
 

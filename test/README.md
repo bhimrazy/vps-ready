@@ -89,8 +89,13 @@ modules: the `web` profile with `deploy.proxy` for `app.localhost` and
 published with `-p 8080:80` answers through Caddy and not on the VM's own
 address, the deploy key runs only its command, and `rollback --last` removes
 Docker's and Caddy's sources, keys and config files and the deploy user, and
-disables Caddy. It needs `/dev/kvm`, `qemu-system-x86_64`, `qemu-img`,
-`cloud-localds` (cloud-image-utils), `ssh` and `jq`; it installs `expect` and
+disables Caddy. With a fourth argument, `cloud-init`, it runs only the
+first-boot cycle instead: user-data from `export cloud-init`, with a tarball
+of the binary served from the runner, boots a fresh overlay that hardens
+itself before anyone logs in, and a second boot with a tampered tarball
+changes nothing. It needs `/dev/kvm`, `qemu-system-x86_64`, `qemu-img`,
+`cloud-localds` (cloud-image-utils), `ssh` and `jq` (and `python3` for the
+cloud-init cycle); it installs `expect` and
 `curl` in the VM, and the VM needs network access for Docker's and Caddy's
 repositories. The `vm` workflow pins the images and
 runs it on four distros.

@@ -183,7 +183,7 @@ fn session(fs: &dyn Fs, sshd: u32, name: &str, child: u32, uid: u32) -> Result<S
 /// `<name>: <user>@<ttys>`, where `<ttys>` is `notty` or a comma-separated
 /// list of `pts/N` (more than one through `ControlMaster`). The `[priv]`
 /// process (`sshd: admin [priv]`) and the listener do not match.
-fn is_session_title(name: &str, title: &str) -> bool {
+pub(super) fn is_session_title(name: &str, title: &str) -> bool {
     let Some((user, ttys)) = title
         .strip_prefix(name)
         .and_then(|t| t.strip_prefix(": "))

@@ -45,6 +45,7 @@ insta.workspace = true
 predicates.workspace = true
 proptest.workspace = true
 tempfile.workspace = true
+yaml-rust2.workspace = true
 
 [lints]
 workspace = true

@@ -48,3 +48,6 @@ enabled = false
 
 [modules."user.admin"]
 enabled = false
+
+Same setup for a new server, at its first boot:
+  vps-ready export cloud-init --profile <file> --checksums checksums.txt

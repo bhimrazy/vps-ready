@@ -1,0 +1,41 @@
+---
+source: crates/vps-ready/src/cli/export/tests.rs
+expression: redact(&text)
+---
+#cloud-config
+# vps-ready <version> (export cloud-init): hardens this server at first boot.
+write_files:
+  - path: /etc/vps-ready/profile.toml
+    permissions: "0600"
+    content: |2
+      schema = 1
+      extends = "web"
+
+      [modules."user.admin"]
+      name = "ops"
+      authorized_keys = ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGroot me@laptop"]
+runcmd:
+  - - sh
+    - -c
+    - |
+      set -eu
+      case "$(uname -m)" in
+        x86_64) t=x86_64-unknown-linux-musl; sum=b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2 ;;
+        aarch64) t=aarch64-unknown-linux-musl; sum=a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1 ;;
+        *) echo "vps-ready: unsupported architecture" >&2; exit 1 ;;
+      esac
+      d=$(mktemp -d)
+      f="$d/vps-ready-<version>-$t.tar.gz"
+      u="https://github.com/bhimrazy/vps-ready/releases/download/v<version>/vps-ready-<version>-$t.tar.gz"
+      if command -v curl >/dev/null; then
+        curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-connrefused -o "$f" "$u"
+      else
+        wget -q --tries=5 --retry-connrefused -O "$f" "$u"
+      fi
+      echo "$sum  $f" | sha256sum -c -
+      tar -xzf "$f" -C "$d"
+      install -m 0755 "$d/vps-ready-<version>-$t/vps-ready" /usr/local/bin/vps-ready
+      rm -rf "$d"
+      # `sshd -T` needs it; with ssh.socket it appears only at the first login.
+      [ -d /run/sshd ] || mkdir -m 0755 /run/sshd
+      /usr/local/bin/vps-ready apply --profile /etc/vps-ready/profile.toml --yes --deadman=off

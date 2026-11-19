@@ -664,7 +664,15 @@ fn answers_are_saved_after_asking() {
         text.contains("? /root/vps-ready.toml exists. Replace it? (y/N) no\nNot saved."),
         "{text}"
     );
-    assert!(text.ends_with(&builder.to_toml()), "{text}");
+    assert!(
+        text.ends_with(&format!(
+            "{}\nSame setup for a new server, at its first boot (with the admin's \
+             `authorized_keys` in the file):\n  vps-ready export cloud-init --profile <file> \
+             --checksums checksums.txt\n",
+            builder.to_toml()
+        )),
+        "{text}"
+    );
     assert_eq!(saved(&fs), "old\n");
 
     let text = next(vec![Enter, Say(true)]);
@@ -672,9 +680,34 @@ fn answers_are_saved_after_asking() {
     assert!(
         text.ends_with(
             "Saved /root/vps-ready.toml.\nReview it before you use it on another server.\n\n\
-             Next time, without questions:\n  sudo vps-ready apply --profile /root/vps-ready.toml\n"
+             Next time, without questions:\n  sudo vps-ready apply --profile /root/vps-ready.toml\n\n\
+             Same setup for a new server, at its first boot (add the admin's `authorized_keys` \
+             to /root/vps-ready.toml first):\n  vps-ready export cloud-init --profile \
+             /root/vps-ready.toml --checksums checksums.txt\n"
         ),
         "{text}"
+    );
+
+    // With keys, the export works as saved.
+    let mut keyed = builder.clone();
+    let mut admin = toml::Table::new();
+    admin.insert(
+        "authorized_keys".into(),
+        toml::Value::Array(vec![
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGroot me@laptop".into(),
+        ]),
+    );
+    keyed.set_params("user.admin", admin);
+    let log = Transcript::default();
+    let mut script = Script::new(vec![Enter, Say(true)], &log);
+    next_time(&host, &keyed, &mut script, Path::new(CWD), &mut log.clone()).unwrap();
+    assert!(
+        log.text().ends_with(
+            "\nSame setup for a new server, at its first boot:\n  vps-ready export cloud-init \
+             --profile /root/vps-ready.toml --checksums checksums.txt\n"
+        ),
+        "{}",
+        log.text()
     );
 
     fs.remove(&path).unwrap();
@@ -731,7 +764,10 @@ fn an_empty_plan_of_a_profile_says_the_server_matches() {
     assert!(
         text.ends_with(
             "\nNothing to do: this server already matches.\n\n\
-             Next time, without questions:\n  sudo vps-ready apply --profile minimal\n"
+             Next time, without questions:\n  sudo vps-ready apply --profile minimal\n\n\
+             Same setup for a new server, at its first boot (a file with `extends = \
+             \"minimal\"` and the admin's `authorized_keys`):\n  vps-ready export cloud-init \
+             --profile <file> --checksums checksums.txt\n"
         ),
         "{text}"
     );
@@ -808,7 +844,7 @@ fn yes_applies_the_answers() {
     assert!(text.contains("Apply 8 changes? [y/N] y\n"), "{text}");
     assert!(text.contains("\nApplied 8 changes (transaction "), "{text}");
     assert!(
-        text.ends_with("apply --profile /root/vps-ready.toml\n"),
+        text.ends_with("--profile /root/vps-ready.toml --checksums checksums.txt\n"),
         "{text}"
     );
     assert_eq!(txns(&fs).len(), 1);
