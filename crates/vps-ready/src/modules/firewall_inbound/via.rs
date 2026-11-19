@@ -4,7 +4,7 @@
 use std::net::IpAddr;
 use std::path::Path;
 
-use crate::facts::{Facts, parse_units, prop};
+use crate::facts::{Facts, Interface, parse_units, prop};
 use crate::modules::{ModuleError, refuse};
 use crate::sys::{Cmd, Sys};
 
@@ -125,17 +125,21 @@ fn not_private(facts: &Facts, via: &str) -> Option<String> {
 }
 
 /// Whether `via` is Tailscale's interface: by its name, or by holding one
-/// of the node's Tailscale addresses (`--tun` can rename it).
-fn is_tailscale(facts: &Facts, via: &str) -> bool {
+/// of the node's Tailscale addresses (`--tun` can rename it). See
+/// [`Interface::is_tailscale`] for the name alone.
+pub(crate) fn is_tailscale(facts: &Facts, via: &str) -> bool {
+    let ips = facts.tailscale.as_ref().map_or(&[][..], |t| &t.ips);
+    is_tailscale_in(&facts.interfaces, ips, via)
+}
+
+/// [`is_tailscale`] from the interfaces and the node's Tailscale addresses.
+pub(crate) fn is_tailscale_in(interfaces: &[Interface], ips: &[IpAddr], via: &str) -> bool {
     via == TAILSCALE
-        || facts.tailscale.as_ref().is_some_and(|t| {
-            facts
-                .interfaces
-                .iter()
-                .filter(|i| i.name == via)
-                .flat_map(|i| &i.addresses)
-                .any(|a| t.ips.contains(&a.ip))
-        })
+        || interfaces
+            .iter()
+            .filter(|i| i.name == via)
+            .flat_map(|i| &i.addresses)
+            .any(|a| ips.contains(&a.ip))
 }
 
 /// An address of `via`, IPv4 first, for the `ssh` command.

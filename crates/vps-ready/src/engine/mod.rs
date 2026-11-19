@@ -224,9 +224,46 @@ pub enum EngineError {
         /// The interface the restored ruleset limits SSH to.
         via: String,
     },
+    /// A rollback would stop `tailscaled` or take the node down while SSH
+    /// depends on it: through `ssh_via`, or this session.
+    #[error("{}", cuts_tailscale(.txn, .via.as_deref(), *.pending))]
+    CutsTailscale {
+        /// Transaction ID.
+        txn: String,
+        /// The Tailscale interface SSH is limited to after the rollback.
+        via: Option<String>,
+        /// Whether the transaction is pending a confirm.
+        pending: bool,
+    },
     /// Two steps of a plan change the same resource.
     #[error("the plan changes {0} twice")]
     DuplicateResource(String),
+}
+
+fn cuts_tailscale(txn: &str, via: Option<&str>, pending: bool) -> String {
+    let start = format!(
+        "refusing to roll back transaction {txn}: it stops tailscaled or takes this node \
+         out of the tailnet"
+    );
+    let Some(via) = via else {
+        return format!(
+            "{start}, and this session comes through Tailscale, so the rollback would cut it; \
+             run the rollback from another path (the provider's console or a public SSH login)"
+        );
+    };
+    let timer = if pending {
+        format!(
+            ". It is pending: unless confirmed through {via}, its safety timer rolls it back \
+             anyway"
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        "{start}, and SSH is accepted only on {via}, so nobody could log in afterwards; \
+         remove `ssh_via` from firewall.inbound and apply, or roll back the transaction that \
+         set it, first{timer}"
+    )
 }
 
 fn deadman_note(txn: &str) -> String {
