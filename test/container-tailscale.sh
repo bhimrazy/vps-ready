@@ -8,9 +8,10 @@
 #
 # Cycle: apply --yes with updates.auto and net.tailscale (no auth key, so no
 # login) -> plan has no changes -> `tailscale version` runs, tailscaled is
-# active and NeedsLogin -> unattended-upgrade --dry-run lists the Tailscale
-# origin -> rollback --last -> Tailscale's source, key and origin file are
-# gone, the package stays. The container is capped at 1 GB and 1 CPU and is
+# active and NeedsLogin, `tailscale debug prefs` has the fields the plan reads
+# -> unattended-upgrade --dry-run lists the Tailscale origin for this codename
+# -> rollback --last -> Tailscale's source, key and origin file are gone, the
+# package stays and tailscaled keeps running, as the package started it. The container is capped at 1 GB and 1 CPU and is
 # removed afterwards.
 set -eu
 cd "$(dirname "$0")/.."
@@ -86,12 +87,16 @@ until backend=$(ct tailscale status --json --peers=false | jq -r .BackendState);
   i=$((i + 1)); [ "$i" -lt 30 ] || die "BackendState is $backend, expected NeedsLogin"
   sleep 1
 done
+ct tailscale debug prefs | jq -e 'has("CorpDNS") and has("RunSSH") and has("ExitNodeID")' \
+  >/dev/null || die "tailscale debug prefs lacks the fields the plan reads"
 
 echo "== $distro: unattended-upgrade --dry-run"
+# shellcheck disable=SC2016 # expanded by the container's shell
+codename=$(ct sh -c '. /etc/os-release && echo "$VERSION_CODENAME"')
 ct unattended-upgrade --dry-run --debug >"$tmp/uu.log" 2>&1 || {
   cat "$tmp/uu.log"; die "unattended-upgrade --dry-run failed"
 }
-grep -q 'origin=Tailscale,codename=' "$tmp/uu.log" || {
+grep -q "origin=Tailscale,codename=$codename" "$tmp/uu.log" || {
   cat "$tmp/uu.log"; die "unattended-upgrade does not list the Tailscale origin"
 }
 
@@ -102,5 +107,9 @@ for f in $managed; do ct test ! -e "$f" || die "$f is left after rollback"; done
 # shellcheck disable=SC2016 # dpkg-query's format, not the shell's
 ct dpkg-query -W -f '${Status}\n' tailscale | grep -q 'install ok installed' ||
   die "tailscale should stay installed"
+[ "$(ct systemctl is-active tailscaled.service)" = active ] ||
+  die "tailscaled should keep running after rollback"
+[ "$(ct systemctl is-enabled tailscaled.service)" = enabled ] ||
+  die "tailscaled should stay enabled after rollback"
 
 echo "OK [$distro]"
