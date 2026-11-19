@@ -229,7 +229,9 @@ impl Resource {
             Self::File(_) | Self::Directory(_) | Self::Sysctl(_) => Duration::ZERO,
             Self::Package(p) => p.diff_timeout(),
             // `systemctl show`; `getent`; `tailscale status`.
-            Self::Service(_) | Self::AuthorizedKeys(_) | Self::TailscaleUp(_) => Cmd::DEFAULT_TIMEOUT,
+            Self::Service(_) | Self::AuthorizedKeys(_) | Self::TailscaleUp(_) => {
+                Cmd::DEFAULT_TIMEOUT
+            }
             // `getent`, then `id`.
             Self::User(_) => Cmd::DEFAULT_TIMEOUT * 2,
         }

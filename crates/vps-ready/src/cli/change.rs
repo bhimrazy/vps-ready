@@ -767,7 +767,9 @@ fn print_progress(err: &mut dyn Write, progress: &Progress) {
                 Resource::Package(_) => {
                     format!("{summary} (apt-get update, then install; can take a few minutes)")
                 }
-                Resource::Service(_) | Resource::User(_) | Resource::TailscaleUp(_) => summary.clone(),
+                Resource::Service(_) | Resource::User(_) | Resource::TailscaleUp(_) => {
+                    summary.clone()
+                }
             };
             format!("[{n}/{total}] {text}")
         }

@@ -175,9 +175,20 @@ mod tests {
     }
 
     fn key_fs(mode: u32, uid: u32) -> FakeFs {
-        let fs = FakeFs::new().with_dir("/root", FileOwner { mode: 0o700, uid: 0, gid: 0 });
-        fs.write_atomic(Path::new(KEY), b"tskey-auth-secret", FileOwner { mode, uid, gid: 0 })
-            .unwrap();
+        let fs = FakeFs::new().with_dir(
+            "/root",
+            FileOwner {
+                mode: 0o700,
+                uid: 0,
+                gid: 0,
+            },
+        );
+        fs.write_atomic(
+            Path::new(KEY),
+            b"tskey-auth-secret",
+            FileOwner { mode, uid, gid: 0 },
+        )
+        .unwrap();
         fs
     }
 
@@ -220,15 +231,27 @@ mod tests {
 
     #[test]
     fn key_file_checks() {
-        let sys = |fs| Sys {
-            fs,
-            runner: &FakeRunner::new(),
+        let runner = FakeRunner::new();
+        let sys = |fs: &FakeFs| {
+            check_key_file(
+                Sys {
+                    fs,
+                    runner: &runner,
+                },
+                Path::new(KEY),
+            )
         };
-        assert_eq!(check_key_file(sys(&key_fs(0o600, 0)), Path::new(KEY)), Ok(()));
-        assert_eq!(check_key_file(sys(&key_fs(0o400, 0)), Path::new(KEY)), Ok(()));
+        assert_eq!(sys(&key_fs(0o600, 0)), Ok(()));
+        assert_eq!(sys(&key_fs(0o400, 0)), Ok(()));
         for (fs, why) in [
-            (key_fs(0o640, 0), "its mode 0640 lets other users read it; `chmod 600` it"),
-            (key_fs(0o604, 0), "its mode 0604 lets other users read it; `chmod 600` it"),
+            (
+                key_fs(0o640, 0),
+                "its mode 0640 lets other users read it; `chmod 600` it",
+            ),
+            (
+                key_fs(0o604, 0),
+                "its mode 0604 lets other users read it; `chmod 600` it",
+            ),
             (key_fs(0o600, 1000), "it is owned by uid 1000, not root"),
             (FakeFs::new(), "it does not exist"),
             (
@@ -237,10 +260,17 @@ mod tests {
             ),
             (FakeFs::new().with_fifo(KEY), "it is not a regular file"),
         ] {
-            assert_eq!(check_key_file(sys(&fs), Path::new(KEY)), Err(why.to_owned()));
+            assert_eq!(sys(&fs), Err(why.to_owned()));
         }
+        let fs = FakeFs::new();
         assert_eq!(
-            check_key_file(sys(&FakeFs::new()), Path::new("tailscale-auth-key")),
+            check_key_file(
+                Sys {
+                    fs: &fs,
+                    runner: &runner
+                },
+                Path::new("tailscale-auth-key")
+            ),
             Err("it is not an absolute path".to_owned())
         );
     }
@@ -251,9 +281,18 @@ mod tests {
         let resource = Resource::TailscaleUp(up());
         for (runner, change) in [
             (FakeRunner::new(), true),
-            (FakeRunner::new().on("tailscale", ["status"], status("NeedsLogin")), true),
-            (FakeRunner::new().on("tailscale", ["status"], status("Stopped")), true),
-            (FakeRunner::new().on("tailscale", ["status"], status("Running")), false),
+            (
+                FakeRunner::new().on("tailscale", ["status"], status("NeedsLogin")),
+                true,
+            ),
+            (
+                FakeRunner::new().on("tailscale", ["status"], status("Stopped")),
+                true,
+            ),
+            (
+                FakeRunner::new().on("tailscale", ["status"], status("Running")),
+                false,
+            ),
         ] {
             let sys = Sys {
                 fs: &fs,
@@ -282,7 +321,12 @@ mod tests {
         };
         let err = Resource::TailscaleUp(up()).apply(sys).unwrap_err();
         assert!(matches!(err, ResourceError::Unsafe { .. }), "{err:?}");
-        assert!(!runner.calls().iter().any(|c| c.args.first().is_some_and(|a| a == "up")));
+        assert!(
+            !runner
+                .calls()
+                .iter()
+                .any(|c| c.args.first().is_some_and(|a| a == "up"))
+        );
     }
 
     #[test]

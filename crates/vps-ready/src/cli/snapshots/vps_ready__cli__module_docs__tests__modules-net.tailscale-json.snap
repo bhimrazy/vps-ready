@@ -1,0 +1,34 @@
+---
+source: crates/vps-ready/src/cli/module_docs.rs
+expression: out
+---
+{
+  "id": "net.tailscale",
+  "title": "Join a tailnet with Tailscale, for a private path to SSH",
+  "applies": true,
+  "arms_safety_timer": false,
+  "why": "A server reachable only through a private network has no SSH port for the internet to scan or brute force. Tailscale gives this host an address in your tailnet, so you reach the same sshd over it, with the same keys; firewall.inbound can then close public SSH.",
+  "params": [
+    {
+      "name": "auth_key_file",
+      "default": "\"\"",
+      "help": "A file holding an auth key, owned by root with mode 0600 and not a symlink; `tailscale up` reads it, vps-ready never does. Use a one-off, tagged key that is not ephemeral: a tagged node has key expiry off, and an ephemeral one is removed from the tailnet when it goes idle. Delete the file after the login. Empty: log in by hand with `sudo tailscale up --accept-dns=false`."
+    },
+    {
+      "name": "login_server",
+      "default": "\"\"",
+      "help": "The coordination server's URL, e.g. a Headscale server's. Empty: Tailscale's."
+    },
+    {
+      "name": "hostname",
+      "default": "\"\"",
+      "help": "This node's name in the tailnet. Empty: the host name."
+    },
+    {
+      "name": "auto_update",
+      "default": "true",
+      "help": "Let unattended-upgrades (updates.auto) install Tailscale's updates; each restarts tailscaled, which drops tailnet connections for a moment."
+    }
+  ],
+  "controls": []
+}

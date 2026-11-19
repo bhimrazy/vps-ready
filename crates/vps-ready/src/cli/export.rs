@@ -106,8 +106,22 @@ write_files:
 
 /// Why `export` refuses `profile`, if it does: at first boot there is no
 /// SSH session to copy keys from, and root's keys on cloud images carry a
-/// `command=` that `user.admin` skips.
+/// `command=` that `user.admin` skips. User-data is readable by any process
+/// on the host through the metadata service, so it must not lead to an auth
+/// key either.
 pub(super) fn refusal(profile: &Profile) -> Option<&'static str> {
+    if profile
+        .params("net.tailscale")
+        .and_then(|t| t.get("auth_key_file"))
+        .and_then(toml::Value::as_str)
+        .is_some_and(|path| !path.is_empty())
+    {
+        return Some(
+            "net.tailscale has `auth_key_file`, and nothing at first boot puts a key there \
+             safely: user-data is readable through the metadata service. Leave it out, and \
+             log in with `sudo tailscale up --accept-dns=false` after the first boot",
+        );
+    }
     let admin = profile.params("user.admin")?;
     let keys = admin.get("authorized_keys").and_then(toml::Value::as_array);
     match keys {

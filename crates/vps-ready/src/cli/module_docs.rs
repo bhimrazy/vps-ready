@@ -184,6 +184,7 @@ mod tests {
             "user.admin",
             "firewall.inbound",
             "kernel.sysctl",
+            "net.tailscale",
             "deploy.proxy",
             "deploy.user",
         ] {
