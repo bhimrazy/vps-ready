@@ -64,23 +64,15 @@ vps-ready supports the first kind only. It runs the connector. The user creates 
 
 **Updates.** With `auto_update = true`, `/etc/apt/apt.conf.d/52vps-ready-cloudflared` adds `Unattended-Upgrade::Origins-Pattern { "origin=cloudflared,codename=any"; };`. The repository's `Release` file says `Origin: cloudflared` and `Codename: any`, so `${distro_codename}` would never match. cloudflared's own updater does nothing for package-manager installs (Cloudflare's run parameters page), and the unit passes `--no-autoupdate` anyway.
 
-**Restart after an upgrade.** The package's `postinst` only creates a symlink and a marker file (cloudflared's `postinst.sh`); it restarts nothing. Without a restart, an unattended upgrade leaves the old binary running until the next reboot. vps-ready adds a path unit:
+**Restart after an upgrade.** The package's `postinst` only creates a symlink and a marker file (cloudflared's `postinst.sh`); it restarts nothing. Without a restart, an unattended upgrade leaves the old binary running until the next reboot. vps-ready adds a path unit, `vps-ready-cloudflared-restart.path` with `PathChanged=/usr/bin/cloudflared`, which starts `vps-ready-cloudflared-restart.service`.
 
-```ini
-# /etc/systemd/system/vps-ready-cloudflared-restart.path
-[Path]
-PathChanged=/usr/bin/cloudflared
+A path unit rather than an apt `DPkg::Post-Invoke` hook: it fires for any way the binary is replaced (unattended-upgrades, `apt`, `dpkg -i`), runs only when the binary changes rather than after every dpkg run on the host, and is `File`s and a `Service` that rollback removes like the rest. It is installed only together with the connector unit, so a host without a token does not get a failing unit at every upgrade.
 
-[Install]
-WantedBy=multi-user.target
-
-# /etc/systemd/system/vps-ready-cloudflared-restart.service
-[Service]
-Type=oneshot
-ExecStart=/usr/bin/systemctl try-restart vps-ready-cloudflared.service
-```
-
-A path unit rather than an apt `DPkg::Post-Invoke` hook: it fires for any way the binary is replaced (unattended-upgrades, `apt`, `dpkg -i`), runs only when the binary changes rather than after every dpkg run on the host, and is two `File`s and a `Service` that rollback removes like the rest. `systemd.path(5)` documents a trigger when a file open for writing is closed, but not an atomic rename, which is how dpkg replaces a file; the layer 2 cycle checks that an upgrade does trigger it (below). If it does not, the path unit watches `/usr/bin` with `PathChanged=` on the directory instead, and the restart service compares `/proc/<MainPID>/exe` with the file on disk before restarting.
+**The restart must converge, not just fire once.** dpkg hard-links the old binary to `cloudflared.dpkg-tmp` before it renames the new one into place, and the link count change (an attribute change) can trigger the path unit before the rename. systemd also stops watching while the triggered service runs and does not look again afterwards. So a plain `try-restart` can start the old binary again and then miss the rename. The restart service is a short `sh` script in the unit, rendered from a template and checked with `sh -n`:
+1. Wait, for at most 60 seconds, until neither `/usr/bin/cloudflared.dpkg-new` nor `/usr/bin/cloudflared.dpkg-tmp` exists.
+2. `systemctl try-restart vps-ready-cloudflared.service`. Under `Type=notify` this returns once the new process is connected, or fails at `TimeoutStartSec`.
+3. Compare the inode of `/proc/<MainPID>/exe` with that of `/usr/bin/cloudflared`. If they match, or the unit is not running, stop. Otherwise go back to step 1, at most five times, 5 seconds apart.
+4. If they still differ, exit non-zero with "cloudflared runs an old binary", which shows in `systemctl --failed` and in `drift` (through `net.tunnel`'s verify, which makes the same comparison).
 
 **The connector unit.** Since 2025.4.0, `cloudflared service install <token>` writes the token to a file under `/etc/cloudflared` and passes `--token-file`, so the token is no longer in `ExecStart` (cloudflared's `linux_service.go` at 2026.11.1). vps-ready still writes its own unit, for what that one lacks: it runs cloudflared as root, unsandboxed, and its `cloudflared.service` is the name Cloudflare's dashboard instructions create, so the two would collide.
 
@@ -97,7 +89,7 @@ Wants=network-online.target
 Type=notify
 TimeoutStartSec=30
 LoadCredential=token:/root/cloudflared-token
-ExecStart=/usr/bin/cloudflared tunnel --no-autoupdate --config /dev/null --metrics 127.0.0.1:20241 run --token-file ${CREDENTIALS_DIRECTORY}/token
+ExecStart=/usr/bin/cloudflared tunnel --config /etc/vps-ready/cloudflared.yml --metrics 127.0.0.1:20241 run --token-file ${CREDENTIALS_DIRECTORY}/token
 DynamicUser=yes
 NoNewPrivileges=yes
 ProtectSystem=strict
@@ -105,8 +97,8 @@ ProtectHome=yes
 PrivateTmp=yes
 CapabilityBoundingSet=
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
-IPAddressDeny=link-local multicast 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7
-IPAddressAllow=localhost <each nameserver in /etc/resolv.conf>
+IPAddressDeny=link-local multicast 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 168.63.129.16 fc00::/7
+IPAddressAllow=localhost <each nameserver in /etc/resolv.conf at apply time>
 Restart=on-failure
 RestartSec=5s
 
@@ -118,7 +110,7 @@ WantedBy=multi-user.target
 - `LoadCredential=` (systemd 247; Debian 12 has 252, Ubuntu 22.04 has 249) copies the root-only file into a directory only the service's user can read, and `DynamicUser=yes` makes that user a fresh unprivileged one. cloudflared never runs as root.
 - The token is never in argv, the unit file, the journal, the plan or the profile. The profile holds only the path, and vps-ready never opens the file. The file must be a regular file owned by root with no group or other permissions, and not a symlink, as for `net.tailscale`'s `auth_key_file`.
 - **A rotated token** takes effect at the next start, since `LoadCredential=` copies the file then. The docs say to run `systemctl restart vps-ready-cloudflared` after replacing it.
-- **`--config /dev/null`.** Without `--config`, cloudflared searches `/etc/cloudflared` and `/usr/local/etc/cloudflared` for a config file (cloudflared's `config/configuration.go`), so a stray `config.yml` from an earlier setup would change what the connector does. The layer 2 cycle checks that an empty config is accepted. If it is not, the plan refuses while a `config.yml` or `config.yaml` exists in either directory, naming the file.
+- **Its own config file.** Without `--config`, cloudflared searches `/etc/cloudflared` and `/usr/local/etc/cloudflared` for a config file (cloudflared's `config/configuration.go`), so a stray `config.yml` from an earlier setup would change what the connector does. The unit names `/etc/vps-ready/cloudflared.yml` instead, a `File` (0644, no secrets) holding the header comment and `no-autoupdate: true`. It is not empty on purpose: an empty config (`--config /dev/null`) makes cloudflared log an error-level line at every start, which would look like a fault in `journalctl`.
 - **Starting is the gate.** Under `Type=notify`, cloudflared sends `READY=1` only after its first connection to the edge is registered (`notifySystemd` in cloudflared's `tunnel/cmd.go`). So the `Service` resource's start fails when the token is bad or port 7844 is blocked, and the apply rolls back. `TimeoutStartSec=30` is set explicitly: Cloudflare's unit uses 15, and 30 leaves room for the QUIC to HTTP/2 fallback on networks that drop UDP.
 - `--edge-ip-version` defaults to `4`. On a host with no IPv4 default route, the unit gets `--edge-ip-version auto`, with a note.
 - **The metrics port.** `127.0.0.1:20241`, fixed so verify can find it. The plan refuses when something else already listens there. Any local user can read the metrics (connection counts, the tunnel's ID, the cloudflared version) but not the token. The plan says so.
@@ -126,7 +118,7 @@ WantedBy=multi-user.target
 - **No token file:** the module installs `cloudflared`, the update origin and the path unit, plans no connector unit, and says "create a tunnel in the Cloudflare dashboard, save its token to a root-only file, set `token_file` and apply again". This mirrors `net.tailscale` without a key.
 - **Not applicable** when a `cloudflared.service` (Cloudflare's own install) or another cloudflared unit exists. That is a hand-made setup, and `deploy.proxy`'s `behind_tunnel` works with it.
 
-**Verify** reads back what the start already proved: `cloudflared tunnel --metrics 127.0.0.1:20241 ready` exits 0 while the connector has at least one registered connection (the `/ready` endpoint returns 200, 503 otherwise).
+**Verify** reads back what the start already proved: `cloudflared tunnel --metrics 127.0.0.1:20241 ready` exits 0 while the connector has at least one registered connection (the `/ready` endpoint returns 200, 503 otherwise). It also checks that the running process's binary is `/usr/bin/cloudflared` (the inode comparison above), and whether the address filter is in effect (see [Trust model](#trust-model)).
 
 **Blast radius of a failure.** A failed start or verify rolls back the whole transaction, as any failure does. In the wizard's first apply, that includes the SSH and firewall hardening. Keeping the transaction whole is the engine's rule, and splitting it would leave a half-applied profile. So the error names the tunnel as the cause ("the tunnel did not connect: check the token in /etc/vps-ready/cloudflared-token and that outbound port 7844 is open, then apply again"), and the wizard checks the token file's format before planning.
 
@@ -136,13 +128,15 @@ WantedBy=multi-user.target
 note: in the Cloudflare dashboard, give this tunnel a published route for each site:
         app.example.com  ->  http://127.0.0.1:80
       With deploy.proxy, Caddy answers on 127.0.0.1:80. Without it, point the
-      route at your app's local address instead.
+      route at your app's loopback address instead. Only loopback targets work:
+      the connector cannot reach Docker bridges or private networks, so such a
+      route answers 502.
 note: anyone who controls this Cloudflare account can route the internet to any
       address this host reaches on loopback, including SSH. Turn on two-factor
       login for the account, and add no routes to ssh:// or other local services.
 ```
 
-**Rollback** stops, disables and removes both units, the path unit, the apt source, the key and the origin file. The package stays, as for every `Package`, and the token file stays (it is the user's). The tunnel then shows as down in the dashboard; deleting it there is the by-hand step.
+**Rollback** stops, disables and removes the connector unit, the path unit and its service, `/etc/vps-ready/cloudflared.yml`, the apt source, the key and the origin file. The package stays, as for every `Package`, and the token file stays (it is the user's). The tunnel then shows as down in the dashboard; deleting it there is the by-hand step.
 
 **Export.** `export cloud-init` refuses `token_file`, for the reason it refuses Tailscale's `auth_key_file`: user-data is readable through the metadata service. `net.tunnel` without `token_file` is exported, and the first login sets the token and applies again.
 
@@ -153,7 +147,9 @@ note: anyone who controls this Cloudflare account can route the internet to any
 A remotely-managed tunnel's routes are set at Cloudflare. Whoever controls the account (or a stolen API token with tunnel rights) can add a route from a public hostname to any address the connector can reach: `ssh://127.0.0.1:22`, a database on loopback, the cloud metadata service at `169.254.169.254`, or the provider's private network. Such a route goes around `ssh_via` and the inbound firewall, while `SSH-009` and `FW-003` still pass, since both look at inbound traffic.
 
 What M7 does about it:
-- **The unit limits where the connector can connect.** `IPAddressDeny=` drops link-local (the metadata service), multicast and the private ranges (RFC 1918, `100.64.0.0/10`, `fc00::/7`). `IPAddressAllow=` keeps loopback and the resolvers in `/etc/resolv.conf`, which on some clouds are themselves link-local or private. On Google Cloud the resolver is the metadata address, so the metadata service stays reachable there, and the plan says so. Loopback cannot be limited by port this way, so loopback SSH and loopback databases stay reachable through a route.
+- **The unit limits where the connector can connect.** `IPAddressDeny=` drops link-local (the metadata service at `169.254.169.254`), multicast, the private ranges (RFC 1918, `100.64.0.0/10`, `fc00::/7`) and Azure's platform address `168.63.129.16`. `IPAddressAllow=` keeps loopback and the resolvers in `/etc/resolv.conf`, which on some clouds are themselves link-local or private. On Google Cloud the resolver is the metadata address and on Azure it is `168.63.129.16`, so those stay reachable there, and the plan says so. Loopback cannot be limited by port this way, so loopback SSH and loopback databases stay reachable through a route.
+- **The resolvers are read at apply time.** IPv6 link-local entries lose their zone ID (`fe80::1%eth0` becomes `fe80::1`), which `IPAddressAllow=` does not accept. A Tailscale node logged in by hand with `--accept-dns` lists `100.100.100.100`, which is then allowed like any resolver (`net.tailscale` itself joins with `--accept-dns=false`). When the resolvers change later (a new DHCP lease, a network change), the connector may fail to resolve the edge until the next apply; `drift` shows it as the connector unit's `IPAddressAllow=` line differing, with "the resolvers in /etc/resolv.conf changed since the last apply: apply again".
+- **The filter can be silently off.** systemd enforces `IPAddressDeny=` with cgroup BPF programs. Without them (inside LXC or OpenVZ, or a kernel without cgroup BPF), systemd only logs a warning and runs the unit unfiltered. The plan notes it when the host is a container (`systemd-detect-virt --container`) or has no unified cgroup hierarchy, and verify looks for systemd's "does not support BPF/cgroup firewalling" message for this unit since its start and turns it into a note: "the connector's address filter is not in effect on this host".
 - **The plan's note** (above), and the docs, say to turn on two-factor login for the account and to add no routes other than the web ones.
 - **`SSH-009` gains a caveat:** when a cloudflared connector runs, its finding says "a Cloudflare Tunnel connector runs on this host; its account can route to SSH on loopback". The control still passes, since the inbound path is closed.
 - Limiting the connector's loopback ports through the firewall (an output rule matched on the unit's cgroup) is listed under Not in M7.
@@ -220,6 +216,7 @@ The tunnel choice adds `net.tunnel` and `behind_tunnel = true`, and leaves `allo
 - **Resolved, not as written:** `schema = 1`, no `extends`, and each applied module's full params after the merge with its base profile, with defaults written out as values. If a later release changes the built-in `web` profile or a default, drift does not report a change nobody applied.
 - **What was applied, not what was asked:** the `private` profile's staged `ssh_via = "vpn"` is recorded as the interface it resolved to (`ssh_via = "tailscale0"`) after step 2, and as absent after step 1, when SSH stayed public.
 - **Merged per module:** `apply --module kernel.sysctl` replaces only that module's table. A module dropped with `enabled = false` stays in the file (vps-ready does not undo it), with its last params.
+- **A missing or partial record counts as a change.** When `config.toml` is missing, or lacks a table for a selected module, the plan includes writing it, even on a host that is otherwise converged. So "run `apply` once" always records the modules it selects, and never ends with "nothing to do" while drift still cannot compare.
 - It holds no secrets: Tailscale and the tunnel are given as paths, and authorized keys are public.
 - `export cloud-init` keeps writing `/etc/vps-ready/profile.toml`; the first apply then writes `config.toml` like any other.
 
@@ -235,7 +232,8 @@ net.tunnel  verify: vps-ready-cloudflared.service is not active
 3 drifted. To restore: sudo vps-ready apply --profile /etc/vps-ready/config.toml
 ```
 
-- **Refusals become notes.** Many plan-time refusals are about the applying session (no SSH session, not through `ssh_via`, not logged in with a security key), and drift often runs from cron. In drift they are reported as notes and do not count as drift.
+- **Session refusals become notes, and the comparison goes on.** Many plan-time refusals are about the applying session (no SSH session, not through `ssh_via`, not logged in with a security key, `security_keys` refusal 4), and drift often runs from cron. In drift they are reported as notes, do not count as drift, and do not stop the module's comparison: `ssh.server` is still compared when its refusal 4 fires.
+- **Other refusals are drift.** A refusal about the host's state, not the session, means it no longer matches what was applied (the admin's `sk-` key removed, the `ssh_via` interface gone, an old `cloudflared`). Drift reports it with the module, and it counts.
 - **Drift complements audit.** `audit` asks "is this host secure"; `drift` asks "is this host still what was applied". A drifted file that still passes every control shows only in `drift`; a failed control that no module manages shows only in `audit`.
 - Exit codes: 0 no drift, 1 drift, 2 error (as `audit`). `--json` lists each drifted resource with its module.
 - **No `state.json`.** The plan already compares every resource with the host (file content, sysctl runtime values, service state, `wg0`'s runtime peers), so a hash store would repeat it and could itself go stale. The journal adds the one thing the plan lacks: when the file was last written, and by which transaction, from the newest `files/<n>.after` for that path.
@@ -243,6 +241,7 @@ net.tunnel  verify: vps-ready-cloudflared.service is not active
 - **No `config.toml`:**
   - with no transactions in the journal: "nothing has been applied on this host yet", exit 0;
   - with transactions (applied before 0.8.0): "this host was set up before vps-ready 0.8.0 recorded what it applied; run `apply` once with your profile", exit 2. It never reports "no drift" for a host it cannot compare.
+- **Partly recorded:** a module that appears in a journal transaction but has no table in `config.toml` (a pre-0.8 host whose first later apply used `--module`) is listed as "not recorded", and drift exits 2 even when everything recorded matches. The list says which modules an apply still has to record.
 - No `drift --fix`; the printed `apply` is the fix, behind the same plan, prompt and timer. No drift timer or notifications in M7.
 
 ### JSON Schema for profiles
@@ -257,7 +256,7 @@ net.tunnel  verify: vps-ready-cloudflared.service is not active
 
 **SARIF 2.1.0**, the only version GitHub code scanning accepts:
 - `tool.driver.rules`: every control in the catalog, with `id` (the control ID), `shortDescription` (title), `fullDescription` (why), `help` (the fix command), and `properties.security-severity`: high 8.0, medium 5.5, low 3.0, which fall in GitHub's high, medium and low bands.
-- `results`: fail as `kind: fail` (level from severity), unknown as `kind: open`. Pass and skip are not included, even with `--all`. Code scanning closes an alert when a later run under the same `automationDetails.id` no longer reports it, so a fixed control closes its alert; listing passes would add nothing there, and how other consumers display them varies.
+- `results`: fail as `kind: fail` (level from severity), unknown as `kind: open`. GitHub ignores `kind`, so an unknown shows as an alert at `note` level, and the docs say so. Pass and skip are not included, even with `--all`. Code scanning closes an alert when a later run under the same `automationDetails.id` no longer reports it, so a fixed control closes its alert; listing passes would add nothing there, and how other consumers display them varies.
 - **Locations.** Code scanning shows a result only with at least one location, and these findings are about a host, not a source file. Each result gets a `logicalLocation` (the host name) and a `physicalLocation` whose URI is `<host>/<control ID>` under a `HOST` base, with `region.startLine = 1`. Code scanning then lists them, linking to a file that does not exist, and the docs say so.
 - **One run per host:** `runs[].automationDetails.id` is `vps-ready/audit/<host>/`, so uploads from several hosts to one repository do not close each other's alerts.
 - **Fingerprints:** `partialFingerprints.primaryLocationLineHash`, the only key code scanning uses, set from the host name and control ID, so a re-run updates an alert instead of adding one.
@@ -297,14 +296,18 @@ single_security_key = false  # true accepts an admin with only one sk- key
 
 ```sshconfig
 Match User deploy
-	PubkeyAcceptedAlgorithms ssh-ed25519,ecdsa-sha2-nistp256,rsa-sha2-512,rsa-sha2-256
+	PubkeyAcceptedAlgorithms +sk-ssh-ed25519@openssh.com
 ```
 
-A `Match` block in an included file ends at the end of that file (sshd_config(5); OpenSSH's own `servcfginclude.sh` test), so it cannot swallow the rest of `sshd_config`. Before the PR merges, a VM check on all five releases captures the full `sshd -T -C user=<u>,host=<h>,addr=<a>` output for the admin and for the deploy account, before and after the drop-in, and diffs them. The only differences allowed are `pubkeyacceptedalgorithms` (and `pubkeyauthoptions` with `pin`) for the admin; the deploy account's output must not change at all. The deploy account's keys are already `restrict`ed (and optionally forced to one command), which is why it alone is exempt.
+A list that starts with `+` is appended to sshd's built-in default set (sshd_config(5)), and the default already contains `sk-ssh-ed25519@openssh.com`. So inside the `Match`, the deploy account's set should come out as exactly the default, whatever key types or certificates its keys use, without vps-ready writing the default list itself. A `Match` block in an included file ends at the end of that file (sshd_config(5); OpenSSH's own `servcfginclude.sh` test), so it cannot swallow the rest of `sshd_config`.
+
+Before the PR merges, a VM check on all five releases captures the full `sshd -T -C user=<u>,host=<h>,addr=<a>` output for the admin and for the deploy account, before and after the drop-in, and diffs them. The only differences allowed are `pubkeyacceptedalgorithms` (and `pubkeyauthoptions` with `pin`) for the admin; the deploy account's output must not change at all. **If the `+` form does not restore the default** on some release, the fallback there is an explicit list: the deploy account's `pubkeyacceptedalgorithms` row becomes the one allowed difference, and the plan refuses while a deploy key's type (a certificate type, or ECDSA P-384 or P-521, for example) is outside that list. The deploy account's keys are already `restrict`ed (and optionally forced to one command), which is why it alone is exempt.
+
+This narrows an M3 invariant: `ssh.server` "never writes ... crypto lists" ([the M3 plan](m3-plan.md)), enforced by the unit test `never_writes_ports_listeners_groups_methods_or_crypto`. With `security_keys = "required"` it writes `PubkeyAcceptedAlgorithms`, and only then; the test changes to allow exactly that keyword under that param.
 
 **Refused at plan time when `PubkeyAcceptedAlgorithms` would change:**
 1. The plan's admin has no `sk-` key in `authorized_keys` (on the host or in the plan).
-2. **The admin has only one `sk-` key** and `single_security_key` is not set. A lost or broken key then means console recovery. The message says to register a second key (a spare kept elsewhere), or to set `single_security_key = true` to accept the risk.
+2. **The admin has only one `sk-` key** and `single_security_key` is not set. A lost or broken key then means console recovery. The message says to register a second key (a spare kept elsewhere) and to log in with it once before applying, since an untested spare is no spare. With `pin = true`, both keys must have been made with `ssh-keygen -O verify-required` and have a PIN set, or sshd refuses them. The other way out is `single_security_key = true`, to accept the risk.
 3. **The applying session did not log in with a security key.** sshd logs `Accepted publickey for admin from ... ssh2: ED25519-SK SHA256:...` for every login. vps-ready finds that line in the journal for the session's sshd process: matched on the current `_BOOT_ID`, the process's `_PID`, a timestamp after the process's start time (from `/proc/<pid>/stat`, so a reused PID cannot match an older line), and `_COMM` of `sshd-session` on OpenSSH 9.8 and later (Debian 13, Ubuntu 26.04) or `sshd` before. The message gives the command to log in with the key first. As with `ssh_via`'s refusal 3, this is the precondition, not the proof.
 4. No SSH session (the console, cloud-init), or `--deadman=off`.
 5. `export cloud-init` with `security_keys = "required"`: no session can prove a key at first boot. The export says to apply it after the first login.
@@ -346,13 +349,13 @@ A `Match` block in an included file ends at the end of that file (sshd_config(5)
 
 **MSRV.** It matters only to `cargo install` and `sshd-config` users; release binaries are static. Policy: raised only in a minor release, to a Rust stable at least six months old, and named in the release notes. The CI check stays.
 
-**Distro support.** A release stays supported for as long as its distro gives it free security updates: Ubuntu's standard support (not ESM) and, for Debian, Debian LTS, which follows the end of regular security support by about two years. Debian 12's regular security support ended in June 2026 and its LTS runs to June 2028, so Debian 12 stays. A release leaves the list in a minor release, announced one release ahead. Ubuntu 22.04's standard support ends in 2027, so 1.x drops it in a minor release then.
+**Distro support.** A release stays supported for as long as its distro gives it free security updates: Ubuntu's standard support (not ESM) and, for Debian, Debian LTS, which follows the end of regular security support by about two years. Debian 12's regular security support ended in June 2026 and its LTS runs to June 2028, so Debian 12 stays. Support also needs the vendor repositories the modules use (Docker, Caddy, Tailscale, Cloudflare) to still publish for the release; when one stops, its module becomes not applicable there, with a note. A release leaves the list in a minor release, announced one release ahead. Ubuntu 22.04's standard support ends in 2027, so 1.x drops it in a minor release then.
 
 **Journal format.** The `begin` record already carries the writer's version. From v0.7.0 it also carries `format: 1`, and a binary that meets a higher format refuses that transaction with "written by vps-ready X; roll it back with that version or newer", instead of failing on an unknown record kind.
 
 **Before tagging 1.0.0:**
 - Every piece above shipped in a 0.x release.
-- **Real use:** the last 0.9.x ran on the maintainer's own hosts for at least four weeks, through at least one unattended upgrade of each vendor package in use, with no breaking change. Then `1.0.0-rc.1`, for at least two weeks, with no breaking change.
+- **Real use:** the last 0.9.x ran on the maintainer's own hosts for at least four weeks, with `net.tunnel` and `security_keys = "required"` in use on at least one of them. cloudflared must go through a real unattended upgrade in that time; for the other vendor packages, a downgrade followed by an unattended upgrade is enough. Then `1.0.0-rc.1`, for at least two weeks. A breaking change, or a fix that changes a stable surface, in either period restarts its clock.
 - A review of every module param, flag and control title, since 1.0 freezes their names; renames happen in 0.9.x.
 - Journal fixtures from 0.7.0 onward read and roll back in a layer 1 test.
 - All VM cycles pass on all five releases, and the manual release gates (Tailscale, the tunnel) pass.
@@ -380,6 +383,7 @@ No new resource kinds. `net.tunnel` is `File`s (the units, the origin), `apt_sou
 - `scope.md`: backups move to non-goals, with the pairing note below; the wedge's "backups" removed.
 - `security-baseline.md`: the `ops.backup` row marked out of scope; FIDO2 marked as built, TOTP as deferred; the order's step 7 gains the tunnel.
 - `m6-plan.md`: the tunnel section points here.
+- `m3-plan.md`: `ssh.server`'s "never writes crypto lists" invariant gains "except `PubkeyAcceptedAlgorithms` under `security_keys = "required"`", with the matching change to its unit test.
 - `testing.md`, `release.md`: the new cycles and the manual tunnel gate.
 
 **Backups, out of scope.** vps-ready hardens and then gets out of the way; backups need storage, credentials and a restore story that belong to a backup tool. The docs gain a short "Pairing with a backup tool" page:
@@ -412,24 +416,27 @@ No new resource kinds. `net.tunnel` is `File`s (the units, the origin), `apt_sou
 ## Testing
 
 **Layer 1:**
-- `net.tunnel`: the apt source (suite `any`) and embedded key fingerprint; the origin file; the connector unit, the path unit and its service (`insta`), with `--edge-ip-version auto` on an IPv6-only fixture and `IPAddressAllow=` from a `resolv.conf` fixture; the token path appears only in `LoadCredential=`, and the token never in any output (a test writes a marker token and greps every byte the engine wrote); key-file checks (group or other bits, symlink, not root's) refused; no `token_file` plans the install and the note; an old `cloudflared` refused; a listener on port 20241 refused; a hand-made `cloudflared.service` not applicable; export refuses `token_file`; rollback removes the units and keeps the package.
+- `net.tunnel`: the apt source (suite `any`) and embedded key fingerprint; the origin file; the connector unit, the path unit and its service (`insta`), with `--edge-ip-version auto` on an IPv6-only fixture and `IPAddressAllow=` from `resolv.conf` fixtures (a link-local resolver with a zone ID, stripped; Tailscale's `100.100.100.100`; Azure's `168.63.129.16`); the container note; the token path appears only in `LoadCredential=`, and the token never in any output (a test writes a marker token and greps every byte the engine wrote); key-file checks (group or other bits, symlink, not root's) refused; no `token_file` plans the install and the note; an old `cloudflared` refused; a listener on port 20241 refused; a hand-made `cloudflared.service` not applicable; export refuses `token_file`; rollback removes the units and keeps the package.
 - The wizard's token file: written with `O_EXCL` and 0600 before the plan, never a resource, and its bytes absent from the journal.
 - `deploy.proxy` `behind_tunnel`: the Caddyfile (`insta`); no DNS note; the "drop 80 and 443 from `allow`" note; the "nothing forwards" note; switching modes.
 - Journal `format`: written from v0.7.0; a higher format refused by name; fixtures from each 0.x since 0.7.0 roll back.
 - `config.toml`: resolved with defaults written out, merged per module, the resolved `ssh_via` after step 2 and none after step 1; written in the transaction and restored by rollback; no secret content.
-- `drift`: none after apply; a hand edit, a runtime sysctl, a stopped service (through verify), each reported with module and transaction; a session refusal becomes a note; exit codes; `--json`; no `config.toml` with and without journal transactions.
+- `drift`: none after apply; a hand edit, a runtime sysctl, a stopped service (through verify), each reported with module and transaction; a session refusal becomes a note and the module is still compared; a host-state refusal counts as drift; changed resolvers; exit codes; `--json`; no `config.toml` with and without journal transactions; a partial `config.toml` lists the unrecorded modules and exits 2; an apply on a converged host with a missing or partial `config.toml` plans writing it.
 - JSON Schema: every built-in and test profile validates; a typo fails; every registered module has an entry; the schema snapshot changes only with a params change.
 - SARIF: validates against the SARIF 2.1.0 schema; rules for every control; `startLine`, `automationDetails.id` and `primaryLocationLineHash` stable across runs; no pass or skip results. JUnit: parses; counts match the text report.
 - `security_keys`: the drop-in with and without the `Match` block (`insta`); refusals 1 to 6, each from a fixture (journal lines for `ED25519`, `ED25519-SK`, `ECDSA-SK`, from `sshd` and `sshd-session`, a reused PID with an older line, a line from another boot, rotated away); the other-accounts note; `pin`; `SSH-010` skipped without `sk-` keys.
 
 **Layer 2 (containers):**
 - `net.tunnel` installs from Cloudflare's real repository on all images, and `cloudflared --version` is at least 2025.4.0.
-- With a dummy token file, starting the unit fails within `TimeoutStartSec` (no `READY=1`), and the apply reports the tunnel as the cause and rolls back. `--config /dev/null` is accepted.
-- **Upgrade restart:** install the previous version from the repository (`apt-get install cloudflared=<previous>`) and keep the connector unit active without an account: a test-only drop-in sets `Type=simple` and an `ExecStart` running a long-lived cloudflared subcommand that needs no tunnel (picked in the PR). Then upgrade with `apt-get install cloudflared` and check that the path unit fired and `/proc/<MainPID>/exe` is the new binary, not `(deleted)`.
+- With a dummy token file, starting the unit fails within `TimeoutStartSec` (no `READY=1`), and the apply reports the tunnel as the cause and rolls back. cloudflared accepts `/etc/vps-ready/cloudflared.yml` and logs no config error.
+- **Upgrade restart:** install the previous version from the repository (`apt-get install cloudflared=<previous>`) and keep the connector unit active without an account: a test-only drop-in replaces `ExecStart` with a long-lived cloudflared subcommand that needs no tunnel (picked in the PR), wrapped so that `READY=1` is sent only after a few seconds. The unit stays `Type=notify`, so `try-restart` blocks about as long as in production, which is what exposes the race. Then upgrade with `apt-get install cloudflared`, and check that the restart service ends successfully and `/proc/<MainPID>/exe` has the inode of the new `/usr/bin/cloudflared`. Run it ten times in a row, since the race depends on timing.
+- The restart script: it passes `sh -n`, and with the binary held stale (a test-only bind mount) it retries five times and fails with its message.
 - `unattended-upgrade --dry-run` lists the origin; rollback removes the source.
 - Caddy behind the tunnel answers `curl -H 'Host: app.example.com' -H 'Cf-Connecting-Ip: 192.0.2.7' -H 'X-Forwarded-For: 198.51.100.9' http://127.0.0.1/`; the upstream (a small echo server) sees `X-Forwarded-For: 192.0.2.7` only; `X-Forwarded-Proto: http` gets a 308; nothing listens on a public address.
 
-**Layer 3 (VMs):** a `security-keys` cycle on all five releases. No hardware key is needed. The authenticator is decided up front: OpenSSH's software test authenticator (`sk-dummy.so`, from `regress/misc/sk-dummy` in the OpenSSH source), built in the job from each release's own `openssh` source package so it matches that release's middleware API, and loaded on the client side with `SSH_SK_PROVIDER`. The cycle checks:
+**Layer 3 (VMs), the connector's address filter:** on all five releases, add a dummy interface with a private address (`10.99.0.1/32`) and a listener on it. A process started with the connector unit's own `IPAddressDeny=` and `IPAddressAllow=` (`systemd-run --wait --pipe -p DynamicUser=yes` with the properties read from the installed unit) cannot connect to `10.99.0.1` and can connect to a loopback listener; and verify reports no filter warning. Containers are not used for this, since they may not enforce it.
+
+**Layer 3 (VMs), security keys:** a `security-keys` cycle on all five releases. No hardware key is needed. The authenticator is decided up front: OpenSSH's software test authenticator (`sk-dummy.so`, from `regress/misc/sk-dummy` in the OpenSSH source), built in the job from each release's own `openssh` source package so it matches that release's middleware API, and loaded on the client side with `SSH_SK_PROVIDER`. The cycle checks:
 1. Refusal 3 from a session with a plain key; refusal 2 with one `sk-` key; the apply from a session with an `sk-` key and two registered.
 2. During the window, a new plain-key login as admin is refused; a confirm from a new `sk-` login succeeds; the deploy account still logs in with its plain key.
 3. Not confirmed: at the deadline, plain keys work again.
@@ -441,7 +448,7 @@ If the build of the test authenticator fails on a release, step 2 for that relea
 - loads the site through Cloudflare, over `http://` (redirected) and `https://`;
 - checks that the app sees the visitor's address (and only it, in `X-Forwarded-For`) and the right `Host`;
 - checks from outside that no TCP port answers (with Tailscale for SSH);
-- adds a route to `http://169.254.169.254` and checks it fails;
+- adds a route to a listener on a private address of the VM and checks the visitor gets an error, not the page;
 - reboots, and records it all in the release PR.
 
 ## PR sequence
@@ -487,15 +494,19 @@ Checked against upstream docs and sources while writing this plan; items marked 
 | The package's `postinst` makes a symlink and a marker file and restarts nothing | cloudflared source at 2026.11.1, `postinst.sh` |
 | `service install <token>` writes the token to a file under `/etc/cloudflared` and passes `--token-file`; its unit is `cloudflared.service` with `Type=notify`, `TimeoutStartSec=15`, no `User=` and no sandboxing | cloudflared source at 2026.11.1, `cmd/cloudflared/linux_service.go` |
 | `READY=1` is sent only after the first connection is registered | cloudflared source at 2026.11.1, `cmd/cloudflared/tunnel/cmd.go` (`notifySystemd`) |
-| Without `--config`, the config search covers `/etc/cloudflared` and `/usr/local/etc/cloudflared`; `--config /dev/null` accepted | cloudflared source at 2026.11.1, `config/configuration.go`; VM (layer 2) |
+| Without `--config`, the config search covers `/etc/cloudflared` and `/usr/local/etc/cloudflared` | cloudflared source at 2026.11.1, `config/configuration.go` |
+| An empty config logs an error line at start; `no-autoupdate: true` in the file is accepted | VM (layer 2) |
 | `--token-file` / `TUNNEL_TOKEN_FILE` need 2025.4.0 and work for remotely-managed tunnels only; `--edge-ip-version` defaults to 4; `--protocol auto` prefers QUIC and falls back to HTTP/2; the updater does nothing for package-manager installs | Cloudflare docs, tunnel run parameters |
 | Remotely managed: created in the dashboard, configuration at Cloudflare; locally managed: created with `cloudflared tunnel create`, configuration in a local directory | Cloudflare docs, tunnel useful terms |
 | Outbound port 7844 TCP and UDP to the edge; no inbound port | Cloudflare docs, tunnel with firewall |
 | `httpHostHeader` defaults to empty | Cloudflare docs, origin parameters. That an empty value passes the visitor's `Host` through: release gate |
 | Metrics server on loopback (20241 to 20245 by default); `/ready` returns 200 with at least one registered connection, 503 otherwise; `cloudflared tunnel ready` | Cloudflare docs, tunnel metrics; cloudflared source, `metrics/readiness.go` |
-| The sandboxing lines and `IPAddressDeny=` work for the connector; the path unit fires on a dpkg upgrade | VM (layer 2) |
+| The sandboxing lines work for the connector; the restart converges after a dpkg upgrade | VM (layer 2) |
+| `IPAddressDeny=` is enforced with cgroup BPF, and without it systemd only warns | systemd.resource-control(5); VM (layer 3; containers may not enforce it) |
+| A `+` list in `PubkeyAcceptedAlgorithms` is appended to the default set, which already holds `sk-ssh-ed25519@openssh.com` | sshd_config(5); VM (the `sshd -T -C` diff) |
+| dpkg hard-links the old file to `.dpkg-tmp` before renaming the new one into place | VM (layer 2) |
 | `LoadCredential=` added in systemd 247, readable by the unit's user including a `DynamicUser`; `${CREDENTIALS_DIRECTORY}` in `ExecStart` | systemd.exec(5) |
-| `PathChanged=` triggers when a file open for writing is closed; path units use inotify; trigger rate limits | systemd.path(5) |
+| `PathChanged=` triggers when a file open for writing is closed; path units use inotify | systemd.path(5); the restart converges whichever event fires |
 | systemd versions: Debian 12 252, Debian 13 257, Ubuntu 22.04 249, Ubuntu 24.04 255, Ubuntu 26.04 259 | Debian and Ubuntu package indexes; Ubuntu 26.04 release notes |
 | `http://` site addresses turn off automatic HTTPS for the site; `default_bind`; `trusted_proxies`; `client_ip_headers`; `auto_https` values | Caddy docs, Automatic HTTPS; Caddy docs, global options |
 | `header_up X-Forwarded-For {client_ip}` replaces the header Caddy would otherwise append to | Caddy docs, `reverse_proxy` directive; VM (layer 2) |
@@ -512,18 +523,18 @@ Checked against upstream docs and sources while writing this plan; items marked 
 
 1. **Releases: v0.7.0 the tunnel and the journal `format` field, v0.8.0 `drift`, `config.toml`, SARIF/JUnit and the JSON Schema, v0.9.0 Ubuntu 26.04 then security keys, then v1.0.0.** Recommended: the owner's split, with the schema next to `config.toml`, the journal field early, and auditd out. Alternative: auditd in v0.9.0.
 2. **Cloudflare Tunnel, remotely-managed tunnels only, with the trust model stated.** Recommended: the host needs only a token for one tunnel, not the account-wide `cert.pem`; the account's control over routes is stated in the plan's note, the docs and `SSH-009`'s finding. Alternative: also support locally-managed tunnels with a config file.
-3. **vps-ready's own connector unit with `LoadCredential=`, `DynamicUser=yes`, sandboxing, `IPAddressDeny=` and `--config /dev/null`,** not `cloudflared service install`. Recommended: Cloudflare's unit also uses `--token-file` now, but runs as root without sandboxing and under the name the dashboard's own instructions use. Alternative: Cloudflare's unit with a vps-ready drop-in for the sandboxing.
+3. **vps-ready's own connector unit with `LoadCredential=`, `DynamicUser=yes`, sandboxing, `IPAddressDeny=` (noted when not enforced) and its own config file,** not `cloudflared service install`. Recommended: Cloudflare's unit also uses `--token-file` now, but runs as root without sandboxing and under the name the dashboard's own instructions use. Alternative: Cloudflare's unit with a vps-ready drop-in for the sandboxing.
 4. **The token only through a root-only file the user creates (or the wizard writes outside the transaction); without it, install only with a note; `export` refuses `token_file`.** Recommended: the same rules as Tailscale's auth key.
-5. **cloudflared updates through unattended-upgrades (`origin=cloudflared,codename=any`), with a path unit that restarts the connector when `/usr/bin/cloudflared` changes.** Recommended: the connector faces the internet, and the package does not restart it. Alternatives: an apt `DPkg::Post-Invoke` hook (apt only, runs after every dpkg run); or leave updates to the user.
+5. **cloudflared updates through unattended-upgrades (`origin=cloudflared,codename=any`), with a path unit, installed only with the connector, whose restart script waits for dpkg to finish, restarts, and compares the running binary's inode with the file, retrying up to five times.** Recommended: the connector faces the internet, the package does not restart it, and a single `try-restart` can race dpkg's rename. Alternatives: an apt `DPkg::Post-Invoke` hook (apt only, runs after every dpkg run); or leave updates to the user.
 6. **`Type=notify` start is the gate (`TimeoutStartSec=30`), `cloudflared tunnel ready` the read-back, on a fixed loopback metrics port; a tunnel failure rolls back the whole transaction, including the wizard's SSH hardening, with an error naming the tunnel.** Recommended: one transaction stays whole. Alternative: apply `net.tunnel` in a transaction of its own after the rest.
 7. **`deploy.proxy` `behind_tunnel`: plain HTTP on loopback, TLS at the edge, an HTTPS redirect on `X-Forwarded-Proto: http`, the visitor's address from `Cf-Connecting-Ip` only, and `X-Forwarded-For` rewritten to that one address.** Recommended: no second secret, no port to open, and no visitor-controlled address. Alternatives: the DNS challenge with a Cloudflare API token for TLS to the origin; or no Caddy, with the tunnel pointing straight at the app (still possible without `deploy.proxy`).
 8. **No safety timer for `net.tunnel`,** and no new built-in profile; the wizard offers it only with `private`. Recommended: it cannot change the SSH path vps-ready manages; the account-level risk is handled by the trust model, not the timer.
 9. **`config.toml` resolved (no `extends`, defaults written out), recording what was applied (the resolved `ssh_via`), merged per module, written in the same transaction.** Recommended: drift reports only what an apply did, and rollback keeps it in step. Alternative: a copy of the profile as written.
-10. **`drift` is a read-only plan plus each module's `verify` against `config.toml`, with session refusals as notes and no `state.json`;** exit 1 on drift, exit 2 for a host applied before 0.8.0; no `--fix`. Recommended: one comparison path, the plan's, already tested. Alternative: a hash store written at apply.
+10. **`drift` is a read-only plan plus each module's `verify` against `config.toml`, with session refusals as notes and no `state.json`;** host-state refusals count as drift; exit 1 on drift, exit 2 for a host applied before 0.8.0 or with modules not recorded; a missing or partial `config.toml` makes `apply` plan a change; no `--fix`. Recommended: one comparison path, the plan's, already tested. Alternative: a hash store written at apply.
 11. **The JSON Schema in M7, generated with `schemars`.** Recommended: it is the published contract of `schema = 1` that 1.0 freezes. Alternative: defer it past 1.0 and keep the dependency out.
 12. **`audit --format text|json|sarif|junit`, with `--json` kept.** Recommended over a separate flag per format.
 13. **SARIF with the host as a logical location, a synthetic `<host>/<control>` physical location at line 1, one `automationDetails.id` per host, `primaryLocationLineHash` fingerprints, and fail and unknown results only.** Recommended: code scanning shows the results, keeps hosts apart, and closes fixed ones. Alternative: logical locations only, valid SARIF that code scanning does not display.
-14. **`security_keys = "required"` accepts only the `sk-` types. It is refused unless the admin has two `sk-` keys (or `single_security_key = true`) and the applying session logged in with one, found in the journal by boot, PID, start time and command. The timer's new-login confirm is the proof. `deploy.user` is exempt through a `Match` block; other accounts without `sk-` keys are listed in a note; verify checks the new keyword; `pin` is opt-in; CI uses OpenSSH's `sk-dummy`.** Recommended as a set. The `Match` VM diff decides whether the exemption ships or `security_keys` refuses alongside `deploy.user`.
+14. **`security_keys = "required"` accepts only the `sk-` types. It is refused unless the admin has two `sk-` keys (or `single_security_key = true`) and the applying session logged in with one, found in the journal by boot, PID, start time and command. The timer's new-login confirm is the proof. `deploy.user` is exempt through a `Match` block with `PubkeyAcceptedAlgorithms +sk-ssh-ed25519@openssh.com`, which restores the default set (an explicit list and a key-type refusal if the VM diff shows otherwise); this narrows M3's "never writes crypto lists"; other accounts without `sk-` keys are listed in a note; verify checks the new keyword; `pin` is opt-in; CI uses OpenSSH's `sk-dummy`.** Recommended as a set. The `Match` VM diff decides between the `+` form and the explicit-list fallback.
 15. **Defer TOTP.** Recommended: a PAM mistake can refuse every login, including the console's, and security keys cover the need. Alternative: TOTP as an opt-in in v0.9.0.
 16. **auditd after 1.0, opt-in only, never in a built-in profile.** Recommended: an opt-in module is additive in 1.x, so it need not land before the freeze, and its value on a single VPS without log shipping is small. Alternative: in v0.9.0.
 17. **CrowdSec deferred; backups out of scope, with a pairing page.** Recommended: CrowdSec overlaps the fail2ban jail and adds a third-party service; backups need storage and credentials vps-ready should not hold.
