@@ -9,6 +9,10 @@ ARG BASE=debian:13
 FROM ${BASE}
 
 ENV DEBIAN_FRONTEND=noninteractive
+# CI only: retry flaky mirrors, both here and in vps-ready's own apt calls.
+# UPD-001 reads apt's Periodic settings, which this file does not touch.
+RUN printf '%s\n' 'Acquire::Retries "5";' 'Acquire::http::Timeout "30";' 'Acquire::https::Timeout "30";' \
+      >/etc/apt/apt.conf.d/80ci
 RUN apt-get update \
  && apt-get install -y --no-install-recommends systemd systemd-sysv dbus openssh-server openssh-client iproute2 nftables netbase sudo ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
