@@ -1712,6 +1712,13 @@ impl crate::sys::Runner for UnitRunner {
     }
 }
 
+fn reloads_of(run: &UnitRunner) -> Vec<String> {
+    calls(&run.inner)
+        .into_iter()
+        .filter(|c| c.starts_with("systemctl") && c.contains("reload-or-restart"))
+        .collect()
+}
+
 /// A rollback, manual, by the timer, by the boot hook or after a failed
 /// verify, restarts the firewall unit only if it was active before the
 /// transaction: stopped since, its table is gone. One stopped before (the
@@ -1755,12 +1762,20 @@ fn a_rollback_restarts_the_firewall_unit_if_it_was_active() {
             "try-reload-or-restart",
             (true, false),
         ),
-        // Active but disabled before. (Stopped since, a manual rollback
-        // refuses the changed unit.)
+        // Active but disabled before.
         (
             true,
             (false, true),
             false,
+            "reload-or-restart",
+            (false, true),
+        ),
+        // The same, stopped since: a manual rollback refuses the changed
+        // unit; a forced one disables it and starts it again.
+        (
+            true,
+            (false, true),
+            true,
             "reload-or-restart",
             (false, true),
         ),
@@ -1791,7 +1806,29 @@ fn a_rollback_restarts_the_firewall_unit_if_it_was_active() {
                         run.set((true, false));
                     }
                     match path {
-                        "manual" => drop(engine().rollback(Target::Last, &mut |_| {}).unwrap()),
+                        "manual" if stopped && with_service => {
+                            let err = engine().rollback(Target::Last, &mut |_| {}).unwrap_err();
+                            assert!(
+                                matches!(err, EngineError::Changed { .. }),
+                                "{case}: {err:?}"
+                            );
+                            // Only apply's reload ran, and the unit is as left.
+                            assert_eq!(
+                                reloads_of(&run),
+                                [format!("systemctl try-reload-or-restart {FW_UNIT}")],
+                                "{case}"
+                            );
+                            assert_eq!(*run.unit.lock().unwrap(), (true, false), "{case}");
+                            continue;
+                        }
+                        "manual" => {
+                            let mut told = false;
+                            let mut seen =
+                                |p: Progress| told |= matches!(p, Progress::FirewallStart);
+                            drop(engine().rollback(Target::Last, &mut seen).unwrap());
+                            // The admin is told when the unit may be started.
+                            assert_eq!(told, verb == "reload-or-restart", "{case}");
+                        }
                         "timer" => {
                             set_uptime(&fs, 5000);
                             let out = engine()
@@ -1811,15 +1848,19 @@ fn a_rollback_restarts_the_firewall_unit_if_it_was_active() {
                 }
                 (_, out) => panic!("{case}: {out:?}"),
             }
-            let reloads: Vec<String> = calls(&run.inner)
-                .into_iter()
-                .filter(|c| c.starts_with("systemctl") && c.contains("reload-or-restart"))
-                .collect();
+            let reloads = reloads_of(&run);
             let want = [
                 format!("systemctl try-reload-or-restart {FW_UNIT}"),
                 format!("systemctl {verb} {FW_UNIT}"),
             ];
             assert_eq!(reloads, want, "{case}");
+            // The timer and the boot hook leave a unit changed since apply
+            // (enabled stays), and the reload still starts it.
+            let after = if stopped && with_service && matches!(path, "timer" | "boot") {
+                (true, true)
+            } else {
+                after
+            };
             assert_eq!(*run.unit.lock().unwrap(), after, "{case}");
         }
     }

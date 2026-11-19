@@ -587,11 +587,8 @@ fn crash_at_any_point(modules: &[&dyn Module]) {
             Some(line) => &[b"", &line[..line.len() / 2]],
             None => &[b""],
         };
-        let records: Vec<Event> = journal::parse(&journal, &lines[..kept].concat())
-            .unwrap()
-            .into_iter()
-            .map(|r| r.event)
-            .collect();
+        let journaled = journal::parse(&journal, &lines[..kept].concat()).unwrap();
+        let records: Vec<Event> = journaled.iter().map(|r| r.event.clone()).collect();
         let has = |name: &str, id: &str| {
             records.iter().any(|e| match e {
                 Event::Backup { resource, .. } | Event::Applied { resource, .. } => {
@@ -608,7 +605,7 @@ fn crash_at_any_point(modules: &[&dyn Module]) {
                 _ => None,
             })
             .flat_map(|r| {
-                let (check, command) = r.rollback_steps(sys(&original_fs), &[]);
+                let (check, command) = r.rollback_steps(sys(&original_fs), &journaled);
                 check
                     .iter()
                     .chain([&command])

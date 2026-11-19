@@ -129,6 +129,9 @@ pub enum Progress<'a> {
     },
     /// A dead-man rollback left a resource that changed since apply.
     Skip(&'a ByHand),
+    /// A rollback starts the firewall unit (it was active before apply and
+    /// may have been stopped since) instead of only reloading it if running.
+    FirewallStart,
     /// A rollback did not run a reload because its check failed.
     ReloadSkipped {
         /// The reload.
@@ -1220,7 +1223,9 @@ impl<'a> Engine<'a> {
                     .filter_map(|u| match u {
                         Undo::Restore {
                             resource, backup, ..
-                        } if !earlier_boot(backup, boot) => by_hand(&dir, resource, backup),
+                        } if !earlier_boot(backup, boot) => {
+                            by_hand(self.sys, &dir, resource, backup)
+                        }
                         _ => None,
                     })
                     .collect(),
@@ -1233,7 +1238,7 @@ impl<'a> Engine<'a> {
                 if earlier_boot(backup, boot) || unchanged(self.sys, &dir, resource, backup, uid)? {
                     continue;
                 }
-                changed.extend(by_hand(&dir, resource, backup).map(|mut step| {
+                changed.extend(by_hand(self.sys, &dir, resource, backup).map(|mut step| {
                     if let Backup::File {
                         n, original: None, ..
                     } = backup
@@ -1333,7 +1338,7 @@ impl<'a> Engine<'a> {
                 // up before it, such as the admin `ssh.server` relies on, so
                 // the unforced restores wait for a rerun.
                 if forced_failed && !force {
-                    held.extend(by_hand(&dir, resource, backup).map(|mut step| {
+                    held.extend(by_hand(self.sys, &dir, resource, backup).map(|mut step| {
                         step.step = format!("only after the steps above succeed, {}", step.step);
                         step
                     }));
@@ -1346,7 +1351,7 @@ impl<'a> Engine<'a> {
                             false
                         });
                     if !same && !force {
-                        if let Some(step) = by_hand(&dir, resource, backup) {
+                        if let Some(step) = by_hand(self.sys, &dir, resource, backup) {
                             progress(Progress::Skip(&step));
                             let line = Event::Skipped {
                                 resource: resource.clone(),
@@ -1376,10 +1381,11 @@ impl<'a> Engine<'a> {
                     Err(e) if best_effort => {
                         tracing::error!("{e}; restoring the others");
                         forced_failed |= force;
-                        let step = by_hand(&dir, resource, backup).unwrap_or_else(|| ByHand {
-                            resource: resource.clone(),
-                            step: "see the journal".into(),
-                        });
+                        let step =
+                            by_hand(self.sys, &dir, resource, backup).unwrap_or_else(|| ByHand {
+                                resource: resource.clone(),
+                                step: "see the journal".into(),
+                            });
                         unrestored.push((step, e));
                         continue;
                     }
@@ -1468,6 +1474,9 @@ impl<'a> Engine<'a> {
         }
         progress(Progress::Reload(reload));
         let (check, command) = reload.rollback_steps(self.sys, &open.records);
+        if reload == Reload::FirewallReload && command != reload.command() {
+            progress(Progress::FirewallStart);
+        }
         if let Some(check) = check
             && let Err(reason) = reload::run(self.sys, &check)
         {
@@ -1826,7 +1835,7 @@ fn at(resource: &str) -> impl FnOnce(ResourceError) -> EngineError {
 
 /// How to restore `backup` by hand; `None` for a package, which rollback
 /// leaves as it is, and for a service or user that apply left as it was.
-fn by_hand(dir: &Path, resource: &str, backup: &Backup) -> Option<ByHand> {
+fn by_hand(sys: Sys, dir: &Path, resource: &str, backup: &Backup) -> Option<ByHand> {
     let step = match backup {
         Backup::File {
             path,
@@ -1848,7 +1857,7 @@ fn by_hand(dir: &Path, resource: &str, backup: &Backup) -> Option<ByHand> {
         Backup::Directory { .. } => directory::by_hand(backup)?,
         Backup::Sysctl { key, value, .. } => format!("sysctl -w '{key}={value}'"),
         Backup::Package { .. } => return None,
-        Backup::Service { .. } => service::by_hand(backup)?,
+        Backup::Service { .. } => service::by_hand(sys, backup)?,
         Backup::User { .. } => user::by_hand(backup)?,
         Backup::AuthorizedKeys { .. } => authorized_keys::by_hand(dir, backup)?,
         Backup::TailscaleUp { was_running } => tailscale_up::by_hand(*was_running)?,
