@@ -224,6 +224,17 @@ pub enum EngineError {
         /// The interface the restored ruleset limits SSH to.
         via: String,
     },
+    /// A rollback would stop `tailscaled`, which the transaction started,
+    /// from a session through Tailscale's interface.
+    #[error(
+        "refusing to roll back transaction {txn}: it stops tailscaled, which it started, and \
+         this session comes through Tailscale, so the rollback would cut it; run the rollback \
+         from another path (the provider's console or a public SSH login)"
+    )]
+    StopsTailscale {
+        /// Transaction ID.
+        txn: String,
+    },
     /// Two steps of a plan change the same resource.
     #[error("the plan changes {0} twice")]
     DuplicateResource(String),

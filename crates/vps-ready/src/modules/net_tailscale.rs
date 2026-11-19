@@ -7,6 +7,7 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use super::deploy_proxy::is_label;
+use super::firewall_inbound::{self, is_tailscale};
 use super::{
     Applicability, Module, ModuleError, ModuleSteps, ParamDoc, PlanCx, parse_params, refuse,
 };
@@ -19,7 +20,8 @@ use crate::sys::{Cmd, FileOwner, Output, Sys};
 /// Tailscale's package, from Tailscale's repository.
 pub const PACKAGE: &str = "tailscale";
 
-const UNIT: &str = "tailscaled.service";
+/// Tailscale's daemon.
+pub(crate) const UNIT: &str = "tailscaled.service";
 
 /// Adds Tailscale's repository to unattended-upgrades' origins. The list
 /// adds to the one in `52vps-ready` and `50unattended-upgrades`.
@@ -252,11 +254,15 @@ impl Module for NetTailscale {
                     .to_owned(),
             );
         }
+        // With the loaded ruleset limiting SSH to Tailscale, a change here
+        // can close SSH, so it needs the timer and a confirm through it.
+        let deadman = firewall_inbound::ssh_via(cx.planned, sys)?
+            .is_some_and(|via| is_tailscale(cx.facts, &via));
         Ok(ModuleSteps {
             resources,
             reloads: Vec::new(),
             notes,
-            deadman: false,
+            deadman,
         })
     }
 

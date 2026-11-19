@@ -14,7 +14,8 @@ use super::plan::{Plan, Step};
 use super::reload::{self, Reload, SYSTEMCTL_TIMEOUT};
 use super::{EngineError, StateDir, Txn, id};
 use crate::facts::Interface;
-use crate::modules::firewall_inbound;
+use crate::facts::network::interface_with;
+use crate::modules::{firewall_inbound, net_tailscale};
 use crate::resource::sysctl::boot_id;
 use crate::resource::{
     Backup, Resource, ResourceError, Sysctl, after_path, authorized_keys, before_path, directory,
@@ -658,12 +659,13 @@ impl<'a> Engine<'a> {
     /// has processes, and its by-hand step ends their session. It also
     /// refuses to restore a ruleset that limits SSH to an interface the
     /// current one does not, unless the session comes through it: no timer
-    /// covers a manual rollback.
+    /// covers a manual rollback. And it refuses to stop `tailscaled` from a
+    /// session through Tailscale's interface.
     ///
     /// # Errors
     ///
-    /// [`EngineError::OwnAccount`], [`EngineError::ViaRollback`], or those
-    /// of [`Engine::rollback`].
+    /// [`EngineError::OwnAccount`], [`EngineError::ViaRollback`],
+    /// [`EngineError::StopsTailscale`], or those of [`Engine::rollback`].
     pub fn rollback_by(
         &self,
         target: Target,
@@ -705,6 +707,17 @@ impl<'a> Engine<'a> {
                 txn: txn.id().to_owned(),
                 user: user.to_owned(),
                 later,
+            });
+        }
+        // `tailscale down` refuses to cut such a session itself; stopping
+        // the daemon does not ask.
+        let over_tailscale = who
+            .server
+            .and_then(|ip| interface_with(who.interfaces, ip.to_canonical()))
+            .is_some_and(Interface::is_tailscale);
+        if over_tailscale && stops_tailscaled(&records) {
+            return Err(EngineError::StopsTailscale {
+                txn: txn.id().to_owned(),
             });
         }
         // A pending, expired or unfinished transaction only returns to what
@@ -1402,6 +1415,26 @@ impl<'a> Engine<'a> {
 }
 
 /// The accounts `records` created and no rollback removed yet.
+/// Whether rolling back `records` stops `tailscaled`, which apply started.
+fn stops_tailscaled(records: &[Record]) -> bool {
+    records.iter().any(|r| match &r.event {
+        Event::Backup {
+            resource,
+            backup:
+                Backup::Service {
+                    unit,
+                    was_active: false,
+                    active: true,
+                    ..
+                },
+            ..
+        } if unit == net_tailscale::UNIT => !records.iter().any(
+            |r| matches!(&r.event, Event::Restored { resource: done } if done == resource),
+        ),
+        _ => false,
+    })
+}
+
 fn created_users(records: &[Record]) -> impl Iterator<Item = &str> {
     records.iter().filter_map(move |r| match &r.event {
         Event::Backup {

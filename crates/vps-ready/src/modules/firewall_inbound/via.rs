@@ -126,7 +126,7 @@ fn not_private(facts: &Facts, via: &str) -> Option<String> {
 
 /// Whether `via` is Tailscale's interface: by its name, or by holding one
 /// of the node's Tailscale addresses (`--tun` can rename it).
-fn is_tailscale(facts: &Facts, via: &str) -> bool {
+pub(crate) fn is_tailscale(facts: &Facts, via: &str) -> bool {
     via == TAILSCALE
         || facts.tailscale.as_ref().is_some_and(|t| {
             facts

@@ -663,3 +663,5 @@ fn check_loaded(json: &[u8], want: &Ruleset) -> Result<(), String> {
 #[cfg(test)]
 mod tests;
 mod via;
+
+pub(crate) use via::is_tailscale;
