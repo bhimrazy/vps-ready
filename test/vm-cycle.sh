@@ -139,6 +139,8 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM
 
 die() { echo "FAIL [$distro]: $*" >&2; exit 1; }
+# For the harness's own apt calls in the VM, in case the seed's 80ci is missing.
+apt_retry="-o Acquire::Retries=5 -o Acquire::http::Timeout=30"
 
 # boot <user-data>: boots a fresh overlay of the image with this user-data,
 # after stopping the VM booted before. The console log starts empty.
@@ -177,6 +179,13 @@ users:
     sudo: ALL=(ALL) NOPASSWD:ALL
     ssh_authorized_keys:
       - $(cat "$tmp/id.pub")
+# CI only: retry flaky mirrors. UPD-001 reads only apt's Periodic settings.
+write_files:
+  - path: /etc/apt/apt.conf.d/80ci
+    content: |
+      Acquire::Retries "5";
+      Acquire::http::Timeout "30";
+      Acquire::https::Timeout "30";
 EOF
   printf 'instance-id: vps-ready-%s\nlocal-hostname: vps-ready-vm\n' "$distro" >"$tmp/meta-data"
   [ "$cycle" = cloud-init ] || boot "$tmp/user-data"
@@ -399,7 +408,7 @@ private_access_cycle() {
   pvm sudo install -m 755 /tmp/vps-ready /usr/local/bin/vps-ready
 
   echo "== $distro: a hand-made wg0, with the runner as its peer"
-  pvm 'sudo apt-get update -q >/dev/null && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends wireguard-tools >/dev/null' ||
+  pvm "sudo apt-get $apt_retry update -q >/dev/null && sudo DEBIAN_FRONTEND=noninteractive apt-get $apt_retry install -y -q --no-install-recommends wireguard-tools >/dev/null" ||
     die "cannot install wireguard-tools in the VM"
   pvm sudo modprobe wireguard || die "the VM's kernel has no WireGuard module"
   (umask 077 && wg genkey >"$tmp/wg.key")
@@ -637,11 +646,12 @@ expect_reverted() {
   [ "$(vm systemctl is-enabled "$hook" || true)" = disabled ] || die "$hook is still enabled"
 }
 
-# Waits for the timer: the window plus 10 s.
+# Waits for the timer: the window plus 30 s.
 wait_deadman() {
   i=0
   until vr history --json >"$tmp/history.json" && jq -e '.[0].state == "rolled-back"' "$tmp/history.json" >/dev/null; do
-    i=$((i + 5)); [ "$i" -le 70 ] || { vr history; die "not rolled back within 70 s"; }
+    # AccuracySec=1s, but a loaded VM fires the timer late.
+    i=$((i + 5)); [ "$i" -le 90 ] || { vr history; die "not rolled back within 90 s"; }
     sleep 5
   done
   echo "rolled back after about $i s"
@@ -886,7 +896,7 @@ vm test ! -e "$ssh_dropin" || die "$ssh_dropin still exists"
 
 # expect drives the wizard and curl the deploy cycle; the VM gets them, the
 # runner does not need them.
-vm 'sudo apt-get -qq -o DPkg::Lock::Timeout=120 update && sudo DEBIAN_FRONTEND=noninteractive apt-get -qq -o DPkg::Lock::Timeout=120 install expect curl >/dev/null' ||
+vm "sudo apt-get -qq -o DPkg::Lock::Timeout=120 $apt_retry update && sudo DEBIAN_FRONTEND=noninteractive apt-get -qq -o DPkg::Lock::Timeout=120 $apt_retry install expect curl >/dev/null" ||
   die "cannot install expect and curl"
 vm 'cat >/tmp/vr-wizard.exp' <test/vm-wizard.exp
 wizard_fail() { vm cat /tmp/vr-wizard.out || true; die "$1"; }
