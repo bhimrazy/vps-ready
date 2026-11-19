@@ -108,6 +108,9 @@ pub struct Tailscale {
     /// disabled for the node, or when the node is not `Running` (no network
     /// map). Treat `None` as disabled only when `backend_state` is `Running`.
     pub key_expiry: Option<String>,
+    /// Whether the node has a node key, i.e. logged in once and not out
+    /// since, so `tailscale up` needs no auth key.
+    pub have_node_key: bool,
 }
 
 #[derive(Deserialize)]
@@ -143,6 +146,8 @@ struct RawRoute {
 struct RawTailscale {
     #[serde(rename = "BackendState")]
     backend_state: String,
+    #[serde(rename = "HaveNodeKey", default)]
+    have_node_key: bool,
     #[serde(rename = "Self")]
     this: Option<RawSelf>,
 }
@@ -308,6 +313,7 @@ pub(crate) fn parse_tailscale(json: &[u8]) -> Result<Tailscale, serde_json::Erro
             .and_then(|s| s.ips.clone())
             .unwrap_or_default(),
         key_expiry: this.and_then(|s| s.key_expiry),
+        have_node_key: raw.have_node_key,
     })
 }
 

@@ -120,6 +120,9 @@ pub enum ResourceError {
         /// Standard error, trimmed.
         stderr: String,
     },
+    /// A step that would do harm here, and what to do instead.
+    #[error("{0}")]
+    Refused(String),
     /// The system boundary failed.
     #[error(transparent)]
     Sys(#[from] SysError),

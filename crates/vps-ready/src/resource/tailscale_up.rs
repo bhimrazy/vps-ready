@@ -3,9 +3,9 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use super::{Backup, ResourceError, run};
+use super::{Backup, ResourceError, failed};
 use crate::facts::network::{parse_tailscale, tailscale_status};
-use crate::sys::{Cmd, FileKind, Sys, SysError};
+use crate::sys::{Cmd, FileKind, Output, Sys, SysError};
 
 /// How long `tailscale up` waits for the node to come up (`--timeout`).
 const UP_TIMEOUT: &str = "60s";
@@ -14,18 +14,20 @@ const UP_TIMEOUT: &str = "60s";
 /// [`UP_TIMEOUT`].
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(90);
 
-/// The longest snapshot and apply may run: `tailscale status`, then
+/// The longest snapshot and apply may run: `tailscale status` in each, then
 /// `tailscale up`.
-pub(super) const TIMEOUT: Duration = Duration::from_secs(10 + 90);
+pub(super) const TIMEOUT: Duration = Duration::from_secs(2 * 10 + 90);
 
-/// This node logged in to a tailnet with an auth key that `tailscale up`
-/// reads from a file itself (`--auth-key=file:<path>`), so the key never
-/// passes through vps-ready. Tailscale's DNS settings are not accepted, and
-/// Tailscale SSH stays off.
+/// This node up in a tailnet. With an auth key file, `tailscale up` reads
+/// the key itself (`--auth-key=file:<path>`), so the key never passes
+/// through vps-ready; without one, the node logs in with the node key it
+/// has. Tailscale's DNS settings are not accepted, and Tailscale SSH stays
+/// off.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TailscaleUp {
-    /// A root-only file holding the auth key; see [`check_key_file`].
-    pub auth_key_file: PathBuf,
+    /// A root-only file holding the auth key, see [`check_key_file`];
+    /// `None` for a node that has a node key.
+    pub auth_key_file: Option<PathBuf>,
     /// Coordination server, e.g. Headscale's URL; Tailscale's when `None`.
     pub login_server: Option<String>,
     /// This node's name in the tailnet; the host name when `None`.
@@ -35,15 +37,14 @@ pub struct TailscaleUp {
 impl TailscaleUp {
     /// The summary of the change, or `None` when the node is `Running`.
     pub(super) fn diff(&self, sys: Sys) -> Result<Option<(String, Option<String>)>, ResourceError> {
-        Ok((!running(sys)?).then(|| {
-            (
-                format!(
-                    "log in to the tailnet with the auth key in {}",
-                    self.auth_key_file.display()
-                ),
-                None,
-            )
-        }))
+        let summary = match &self.auth_key_file {
+            Some(path) => format!(
+                "log in to the tailnet with the auth key in {}",
+                path.display()
+            ),
+            None => "bring the node up in the tailnet, with the login it has".to_owned(),
+        };
+        Ok((!running(sys)?).then_some((summary, None)))
     }
 
     pub(super) fn snapshot(&self, sys: Sys) -> Result<Backup, ResourceError> {
@@ -57,20 +58,38 @@ impl TailscaleUp {
         if running(sys)? {
             return Ok(());
         }
-        check_key_file(sys, &self.auth_key_file).map_err(|reason| ResourceError::Unsafe {
-            path: self.auth_key_file.clone(),
-            reason,
-        })?;
-        run(sys, &self.command())?;
-        Ok(())
+        if let Some(path) = &self.auth_key_file {
+            check_key_file(sys, path).map_err(|reason| ResourceError::Unsafe {
+                path: path.clone(),
+                reason,
+            })?;
+        }
+        let out = sys.runner.run(&self.command())?;
+        if out.ok() {
+            return Ok(());
+        }
+        // Tailscale's own messages may quote the key.
+        match failed("tailscale", &out) {
+            ResourceError::Command {
+                program,
+                status,
+                stderr,
+            } => Err(ResourceError::Command {
+                program,
+                status,
+                stderr: redact(&stderr),
+            }),
+            other => Err(other),
+        }
     }
 
     /// `tailscale up`, with no `--ssh` and no routes or exit node.
     pub(crate) fn command(&self) -> Cmd {
-        let mut cmd = Cmd::new("tailscale")
-            .arg("up")
-            .arg(format!("--auth-key=file:{}", self.auth_key_file.display()))
-            .arg("--accept-dns=false");
+        let mut cmd = Cmd::new("tailscale").arg("up");
+        if let Some(path) = &self.auth_key_file {
+            cmd = cmd.arg(format!("--auth-key=file:{}", path.display()));
+        }
+        cmd = cmd.arg("--accept-dns=false");
         if let Some(url) = &self.login_server {
             cmd = cmd.arg(format!("--login-server={url}"));
         }
@@ -82,9 +101,28 @@ impl TailscaleUp {
     }
 }
 
+/// `text` with every `tskey-...` auth key cut to `tskey-…`.
+fn redact(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find("tskey-") {
+        out.push_str(&rest[..i]);
+        out.push_str("tskey-…");
+        let after = &rest[i + "tskey-".len()..];
+        let end = after
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+            .unwrap_or(after.len());
+        rest = &after[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Why `path` cannot hold an auth key, if it cannot: it must be a regular
-/// file, not a symlink, owned by root, with no group or other permissions.
-/// Only its metadata is read, never its content.
+/// file owned by root with no group or other permissions, and it and every
+/// parent directory must not be a symlink, and the directories must be
+/// owned by root and not writable by group or others (unless sticky), so
+/// nobody else can swap the file. Only metadata is read, never the content.
 ///
 /// # Errors
 ///
@@ -92,6 +130,32 @@ impl TailscaleUp {
 pub fn check_key_file(sys: Sys, path: &Path) -> Result<(), String> {
     if !path.is_absolute() {
         return Err("it is not an absolute path".to_owned());
+    }
+    // `Path::components` drops a `.` inside the path, so split the text.
+    if path
+        .to_str()
+        .is_none_or(|s| s.split('/').any(|c| c == "." || c == ".."))
+    {
+        return Err("it has a `.` or `..` component".to_owned());
+    }
+    for dir in path.ancestors().skip(1) {
+        let meta = sys
+            .fs
+            .metadata(dir)
+            .map_err(|e| format!("cannot check {}: {e}", dir.display()))?;
+        let shown = dir.display();
+        if meta.kind != FileKind::Dir {
+            return Err(format!("{shown} is a {:?}, not a directory", meta.kind));
+        }
+        if meta.uid != 0 {
+            return Err(format!("{shown} is owned by uid {}, not root", meta.uid));
+        }
+        if meta.mode & 0o022 != 0 && meta.mode & 0o1000 == 0 {
+            return Err(format!(
+                "{shown} is writable by group or others (mode {:04o})",
+                meta.mode
+            ));
+        }
     }
     let meta = match sys.fs.metadata(path) {
         Ok(meta) => meta,
@@ -115,15 +179,35 @@ pub fn check_key_file(sys: Sys, path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// `tailscale down` if the node was not `Running` before apply. It
-/// disconnects but keeps the login, never `logout`: that expires the node
-/// key, and applying again would need a new auth key.
+/// `tailscale down` if the node was not `Running` before apply and is
+/// now. It disconnects but keeps the login, never `logout`: that expires
+/// the node key, and applying again would need a new auth key. A node that
+/// is not running, or a `tailscale` that is gone, needs nothing.
 pub(super) fn restore(sys: Sys, was_running: bool) -> Result<(), ResourceError> {
-    if was_running {
+    if was_running || !running(sys)? {
         return Ok(());
     }
-    run(sys, &down())?;
-    Ok(())
+    let out = sys.runner.run(&down())?;
+    if out.ok() {
+        return Ok(());
+    }
+    // `tailscale down` asks before cutting an SSH session that came in over
+    // Tailscale, and without a terminal the answer is no. Its
+    // `--accept-risk=lose-ssh` would cut the session doing the rollback.
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    if said.contains("connected over Tailscale") || said.contains("aborted, no changes made") {
+        return Err(ResourceError::Refused(
+            "this session comes through Tailscale, and `tailscale down` would cut it; run \
+             the rollback from another path (the provider's console or a public SSH login), \
+             or run `sudo tailscale down` yourself and roll back again"
+                .to_owned(),
+        ));
+    }
+    Err(failed("tailscale", &out))
 }
 
 /// How to restore by hand; `None` if the node was `Running` before.
@@ -138,7 +222,7 @@ fn down() -> Cmd {
 /// Whether `tailscale status` says `Running`. Without `tailscale`, or when
 /// its daemon does not answer, the node is not.
 fn running(sys: Sys) -> Result<bool, ResourceError> {
-    let out = match sys.runner.run(&tailscale_status()) {
+    let out: Output = match sys.runner.run(&tailscale_status()) {
         Ok(out) if out.ok() => out,
         Ok(_) | Err(SysError::NotFound(_)) => return Ok(false),
         Err(e) => return Err(e.into()),
@@ -152,17 +236,19 @@ fn running(sys: Sys) -> Result<bool, ResourceError> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::super::{Resource, restore as restore_backup};
     use super::*;
     use crate::sys::fake::{FakeFs, FakeRunner};
-    use crate::sys::{FileOwner, Fs, Output};
+    use crate::sys::{FileOwner, Fs, Runner};
 
     const KEY: &str = "/root/tailscale-auth-key";
     const TXN: &str = "/var/lib/vps-ready/txn/20261119T120000Z";
 
     fn up() -> TailscaleUp {
         TailscaleUp {
-            auth_key_file: KEY.into(),
+            auth_key_file: Some(KEY.into()),
             login_server: None,
             hostname: None,
         }
@@ -174,15 +260,26 @@ mod tests {
         ))
     }
 
+    fn fail(stdout: &str, stderr: &str) -> Output {
+        Output {
+            status: 1,
+            stdout: stdout.into(),
+            stderr: stderr.into(),
+        }
+    }
+
+    const fn root(mode: u32) -> FileOwner {
+        FileOwner {
+            mode,
+            uid: 0,
+            gid: 0,
+        }
+    }
+
     fn key_fs(mode: u32, uid: u32) -> FakeFs {
-        let fs = FakeFs::new().with_dir(
-            "/root",
-            FileOwner {
-                mode: 0o700,
-                uid: 0,
-                gid: 0,
-            },
-        );
+        let fs = FakeFs::new()
+            .with_dir("/", root(0o755))
+            .with_dir("/root", root(0o700));
         fs.write_atomic(
             Path::new(KEY),
             b"tskey-auth-secret",
@@ -192,11 +289,55 @@ mod tests {
         fs
     }
 
+    /// `tailscale` whose state `up` and `down` change; `down` answers
+    /// with `down` and, when it fails, leaves the state.
+    struct Tailscale {
+        state: Mutex<String>,
+        down: Output,
+        calls: Mutex<Vec<String>>,
+    }
+
+    impl Tailscale {
+        fn new(state: &str, down: Output) -> Self {
+            Self {
+                state: Mutex::new(state.into()),
+                down,
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl Runner for Tailscale {
+        fn run(&self, cmd: &Cmd) -> Result<Output, SysError> {
+            let verb = cmd.args[0].clone();
+            self.calls.lock().unwrap().push(verb.clone());
+            let mut state = self.state.lock().unwrap();
+            Ok(match verb.as_str() {
+                "status" => status(&state),
+                "up" => {
+                    *state = "Running".into();
+                    Output::success("")
+                }
+                "down" => {
+                    if self.down.ok() {
+                        *state = "Stopped".into();
+                    }
+                    self.down.clone()
+                }
+                other => panic!("tailscale {other}"),
+            })
+        }
+    }
+
     #[test]
     fn command_reads_the_key_from_the_file() {
         let full = TailscaleUp {
             login_server: Some("https://headscale.example.com".into()),
             hostname: Some("web-1".into()),
+            ..up()
+        };
+        let node_key = TailscaleUp {
+            auth_key_file: None,
             ..up()
         };
         for (r, argv) in [
@@ -220,6 +361,7 @@ mod tests {
                     "--timeout=60s",
                 ],
             ),
+            (node_key, vec!["up", "--accept-dns=false", "--timeout=60s"]),
         ] {
             let cmd = r.command();
             assert_eq!(cmd.program, "tailscale");
@@ -232,18 +374,23 @@ mod tests {
     #[test]
     fn key_file_checks() {
         let runner = FakeRunner::new();
-        let sys = |fs: &FakeFs| {
+        let check = |fs: &FakeFs, path: &str| {
             check_key_file(
                 Sys {
                     fs,
                     runner: &runner,
                 },
-                Path::new(KEY),
+                Path::new(path),
             )
         };
-        assert_eq!(sys(&key_fs(0o600, 0)), Ok(()));
-        assert_eq!(sys(&key_fs(0o400, 0)), Ok(()));
-        for (fs, why) in [
+        assert_eq!(check(&key_fs(0o600, 0), KEY), Ok(()));
+        assert_eq!(check(&key_fs(0o400, 0), KEY), Ok(()));
+        let bare = || {
+            FakeFs::new()
+                .with_dir("/", root(0o755))
+                .with_dir("/root", root(0o700))
+        };
+        let cases = [
             (
                 key_fs(0o640, 0),
                 "its mode 0640 lets other users read it; `chmod 600` it",
@@ -253,25 +400,66 @@ mod tests {
                 "its mode 0604 lets other users read it; `chmod 600` it",
             ),
             (key_fs(0o600, 1000), "it is owned by uid 1000, not root"),
-            (FakeFs::new(), "it does not exist"),
+            (bare(), "it does not exist"),
             (
-                FakeFs::new().with_symlink(KEY, "/root/real-key"),
+                bare().with_symlink(KEY, "/root/real-key"),
                 "it is a symlink",
             ),
-            (FakeFs::new().with_fifo(KEY), "it is not a regular file"),
-        ] {
-            assert_eq!(sys(&fs), Err(why.to_owned()));
+            (bare().with_fifo(KEY), "it is not a regular file"),
+        ];
+        for (fs, why) in cases {
+            assert_eq!(check(&fs, KEY), Err(why.to_owned()));
         }
-        let fs = FakeFs::new();
-        assert_eq!(
+        for path in ["tailscale-auth-key", "/root/./key", "/root/../root/key"] {
+            assert!(check(&FakeFs::new(), path).is_err(), "{path}");
+        }
+    }
+
+    #[test]
+    fn key_file_parents_are_checked() {
+        let runner = FakeRunner::new();
+        let with_dir = |dir: &str, owner: FileOwner| {
+            let fs = FakeFs::new()
+                .with_dir("/", root(0o755))
+                .with_dir(dir, owner);
+            let path = Path::new(dir).join("key");
+            fs.write_atomic(&path, b"k", root(0o600)).unwrap();
+            (fs, path)
+        };
+        let check = |(fs, path): (FakeFs, PathBuf)| {
             check_key_file(
                 Sys {
                     fs: &fs,
-                    runner: &runner
+                    runner: &runner,
                 },
-                Path::new("tailscale-auth-key")
-            ),
-            Err("it is not an absolute path".to_owned())
+                &path,
+            )
+        };
+        assert_eq!(check(with_dir("/root", root(0o700))), Ok(()));
+        // A sticky directory: nobody else can remove or rename the file.
+        assert_eq!(check(with_dir("/tmp", root(0o1777))), Ok(()));
+        assert_eq!(
+            check(with_dir("/keys", root(0o777))),
+            Err("/keys is writable by group or others (mode 0777)".to_owned())
+        );
+        assert_eq!(
+            check(with_dir(
+                "/home",
+                FileOwner {
+                    mode: 0o755,
+                    uid: 1000,
+                    gid: 1000
+                }
+            )),
+            Err("/home is owned by uid 1000, not root".to_owned())
+        );
+        let fs = FakeFs::new()
+            .with_dir("/", root(0o755))
+            .with_dir("/real", root(0o700))
+            .with_symlink("/keys", "/real");
+        assert_eq!(
+            check((fs, PathBuf::from("/keys/key"))),
+            Err("/keys is a Symlink, not a directory".to_owned())
         );
     }
 
@@ -330,13 +518,43 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_up_hides_the_key() {
+        let fs = key_fs(0o600, 0);
+        let runner = FakeRunner::new()
+            .on("tailscale", ["status"], status("NeedsLogin"))
+            .on(
+                "tailscale",
+                ["up"],
+                fail(
+                    "",
+                    "backend error: invalid key: tskey-auth-kAB12_cd-EF34 not valid\n",
+                ),
+            );
+        let sys = Sys {
+            fs: &fs,
+            runner: &runner,
+        };
+        let err = Resource::TailscaleUp(up()).apply(sys).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "`tailscale` exited with status 1: backend error: invalid key: tskey-… not valid"
+        );
+    }
+
+    #[test]
+    fn redacts_every_key() {
+        assert_eq!(
+            redact("a tskey-auth-x1_Y-2, tskey-client-z. tskey-"),
+            "a tskey-…, tskey-…. tskey-…"
+        );
+        assert_eq!(redact("no key"), "no key");
+    }
+
+    #[test]
     fn rollback_runs_down_only_if_it_was_not_running() {
         let fs = key_fs(0o600, 0);
         for (state, downs) in [("NeedsLogin", 1), ("Running", 0)] {
-            let runner = FakeRunner::new()
-                .on("tailscale", ["status"], status(state))
-                .on("tailscale", ["up"], Output::success(""))
-                .on("tailscale", ["down"], Output::success(""));
+            let runner = Tailscale::new(state, Output::success(""));
             let sys = Sys {
                 fs: &fs,
                 runner: &runner,
@@ -351,15 +569,71 @@ mod tests {
             );
             resource.apply(sys).unwrap();
             restore_backup(sys, Path::new(TXN), &backup).unwrap();
-            let calls = runner.calls();
-            let count = |verb: &str| {
-                calls
-                    .iter()
-                    .filter(|c| c.args.first().is_some_and(|a| a == verb))
-                    .count()
-            };
+            let calls = runner.calls.lock().unwrap();
+            let count = |verb: &str| calls.iter().filter(|c| *c == verb).count();
             assert_eq!((count("up"), count("down")), (downs, downs), "{state}");
             assert_eq!(by_hand(state == "Running").is_none(), downs == 0);
         }
+    }
+
+    /// A rollback that cannot run `tailscale down` finishes when there is
+    /// nothing to bring down: the node is down already, `tailscaled` does
+    /// not answer, or `tailscale` is gone.
+    #[test]
+    fn restore_needs_nothing_from_a_node_that_is_not_running() {
+        let fs = FakeFs::new();
+        let backup = Backup::TailscaleUp { was_running: false };
+        let stopped = Tailscale::new("Stopped", fail("", "should not run"));
+        let no_daemon = FakeRunner::new().on(
+            "tailscale",
+            ["status"],
+            fail("", "failed to connect to local tailscaled"),
+        );
+        let gone = FakeRunner::new();
+        for runner in [&stopped as &dyn Runner, &no_daemon, &gone] {
+            restore_backup(Sys { fs: &fs, runner }, Path::new(TXN), &backup).unwrap();
+        }
+        assert_eq!(*stopped.calls.lock().unwrap(), ["status"]);
+    }
+
+    #[test]
+    fn restore_refuses_to_cut_a_session_over_tailscale() {
+        let fs = FakeFs::new();
+        let backup = Backup::TailscaleUp { was_running: false };
+        let runner = Tailscale::new(
+            "Running",
+            fail(
+                "You are connected over Tailscale; this action will disable Tailscale and \
+                 result in your session disconnecting.\nTo skip this warning, use \
+                 --accept-risk=lose-ssh\n",
+                "aborted, no changes made\n",
+            ),
+        );
+        let err = restore_backup(
+            Sys {
+                fs: &fs,
+                runner: &runner,
+            },
+            Path::new(TXN),
+            &backup,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .starts_with("this session comes through Tailscale"),
+            "{err}"
+        );
+
+        let runner = Tailscale::new("Running", fail("", "permission denied\n"));
+        let err = restore_backup(
+            Sys {
+                fs: &fs,
+                runner: &runner,
+            },
+            Path::new(TXN),
+            &backup,
+        )
+        .unwrap_err();
+        assert!(matches!(err, ResourceError::Command { .. }), "{err:?}");
     }
 }

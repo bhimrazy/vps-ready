@@ -34,7 +34,9 @@ pub const CADDY_FINGERPRINT: &str = "65760C51EDEA2017CEA2CA15155B6D79CA56EA34";
 
 /// Tailscale's armored public key, from
 /// <https://pkgs.tailscale.com/stable/debian/bookworm.gpg>, byte-identical
-/// to the one for every Debian and Ubuntu codename.
+/// to the one for every Debian and Ubuntu codename. Retrieved 2026-11-19;
+/// file SHA-256
+/// `53c6f7dfbd774839d9f37e6c5022ba952108aba9a0e556a56f292a9eb605d7cf`.
 pub const TAILSCALE_KEY: &str = include_str!("../../keys/tailscale.asc");
 
 /// The fingerprint of [`TAILSCALE_KEY`]'s primary key. Tailscale does not
