@@ -90,6 +90,8 @@ capture nft            nft -j list ruleset
 capture firewall-units systemctl show --property=Id,LoadState,ActiveState,UnitFileState firewalld.service nftables.service
 capture apt-periodic   apt-config dump APT::Periodic
 capture apt-units      systemctl show --property=Id,LoadState,ActiveState,UnitFileState apt-daily.timer apt-daily-upgrade.timer apt-daily.service apt-daily-upgrade.service
+capture ip-addr         ip -j -d addr
+capture ip-route        ip -j route show table all
 capture docker-packages dpkg-query -W '--showformat=${Package} ${db:Status-Status} ${Version}\n' docker-ce docker.io podman-docker containerd runc
 
 # First match wins. A cloud provider's 50-cloud-init.conf turns passwords on;

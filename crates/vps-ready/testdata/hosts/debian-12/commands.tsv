@@ -10,6 +10,8 @@ firewall-units	0	systemctl	show	--property=Id,LoadState,ActiveState,UnitFileStat
 apt-periodic	0	apt-config	dump	APT::Periodic
 apt-units	0	systemctl	show	--property=Id,LoadState,ActiveState,UnitFileState	apt-daily.timer	apt-daily-upgrade.timer	apt-daily.service	apt-daily-upgrade.service
 docker-packages	1	dpkg-query	-W	--showformat=${Package} ${db:Status-Status} ${Version}\n	docker-ce	docker.io	podman-docker	containerd	runc
+ip-addr	0	ip	-j	-d	addr
+ip-route	0	ip	-j	route	show	table	all
 sshd-T-before-login	0	sshd	-T
 listeners-before-login	0	ss	-tulnpH
 sshd-T-dropin-99	0	sshd	-T
