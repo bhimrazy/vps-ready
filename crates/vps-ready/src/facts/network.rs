@@ -266,11 +266,7 @@ fn parse_listen_ports(text: &str) -> BTreeMap<String, u16> {
 
 /// `None` without `tailscale`, or when its daemon does not answer.
 pub(super) fn tailscale(runner: &dyn Runner, notices: &mut Vec<String>) -> Option<Tailscale> {
-    // `--peers=false` keeps the output small on a big tailnet; `Self` stays.
-    let cmd = Cmd::new("tailscale")
-        .args(["status", "--json", "--peers=false"])
-        .timeout(Duration::from_secs(10));
-    let out = match probe(runner, &cmd, notices) {
+    let out = match probe(runner, &tailscale_status(), notices) {
         Probe::Ran(out) if out.ok() => out,
         Probe::Ran(out) => {
             let stderr = String::from_utf8_lossy(&out.stderr);
@@ -294,7 +290,15 @@ pub(super) fn tailscale(runner: &dyn Runner, notices: &mut Vec<String>) -> Optio
         .ok()
 }
 
-fn parse_tailscale(json: &[u8]) -> Result<Tailscale, serde_json::Error> {
+/// `tailscale status --json`; `--peers=false` keeps the output small on a
+/// big tailnet, and `Self` stays.
+pub(crate) fn tailscale_status() -> Cmd {
+    Cmd::new("tailscale")
+        .args(["status", "--json", "--peers=false"])
+        .timeout(Duration::from_secs(10))
+}
+
+pub(crate) fn parse_tailscale(json: &[u8]) -> Result<Tailscale, serde_json::Error> {
     let raw: RawTailscale = serde_json::from_slice(json)?;
     let this = raw.this;
     Ok(Tailscale {
