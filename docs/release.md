@@ -103,6 +103,19 @@ cargo install vps-ready --locked   # compiles from source; add --version <versio
   3. Push the tag: the `crates` job then publishes `sshd-config` 0.3.0 before `vps-ready`.
 - If `vps-ready` uploads but `vpsready` fails, re-running the job fails on the already-published `vps-ready`. To recover, turn off trusted publishing only for `vpsready` in its crates.io settings, run `cargo publish -p vpsready --locked` with a short-lived token, then turn the setting back on and revoke the token.
 
+## Manual checks before a release
+
+CI cannot join a tailnet, so before tagging a release that includes `net.tailscale`, the maintainer runs this on one fresh Debian 13 and one fresh Ubuntu 24.04 VM and pastes the result into the release PR:
+
+- [ ] Create a one-off, tagged, non-ephemeral auth key in the admin console. Copy it to `/root/tailscale-auth-key` with mode `0600`.
+- [ ] Apply a profile with `[modules."net.tailscale"] auth_key_file = "/root/tailscale-auth-key"`. The plan and the journal (`/var/lib/vps-ready/txn/<id>/`) show the path, never the key; `ps` during the apply shows `--auth-key=file:`.
+- [ ] `tailscale status --json`: `BackendState` is `Running`, `Self.TailscaleIPs` is set, and `Self.KeyExpiry` is absent (tagged key). `tailscale debug prefs` has `CorpDNS: false` and `RunSSH: false`.
+- [ ] `ssh admin@<tailnet address>` works from another device in the tailnet. Delete the key file.
+- [ ] Apply again: the plan has no changes.
+- [ ] Once `ssh_via` has shipped: through the `private` profile's two steps, close public SSH (`ssh_via = "tailscale0"`) and confirm from a login through `tailscale0`.
+- [ ] Reboot: `tailscaled` comes back and SSH through the tailnet works (and, with `ssh_via`, public SSH stays closed).
+- [ ] `rollback --last` until the start: the source, key and origin file are gone, `tailscale` is still installed, and the node is down but still logged in. Remove it from the tailnet with `sudo tailscale logout`.
+
 ## No self-update
 
 A root tool that replaces itself is extra attack surface for a program that usually runs once per box. Provide `vps-ready version --check` (notify only) and let packages handle upgrades.
