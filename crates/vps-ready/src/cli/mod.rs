@@ -396,6 +396,7 @@ pub fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
         let mut term = crate::tui::Terminal::new(cli.color_enabled())?;
         let host = change::Host {
             sigint_ends: Some(term.sigint_ends()),
+            defer: Some(term.defer()),
             ..real_host(cli)
         };
         let cwd = std::env::current_dir()?;
@@ -623,6 +624,7 @@ fn real_host(cli: &Cli) -> change::Host<'static> {
         stop: std::sync::Arc::new(AtomicBool::new(false)),
         catch_sigint: true,
         sigint_ends: None,
+        defer: None,
         tty: io::stderr().is_terminal(),
         poll: Duration::from_secs(1),
     }

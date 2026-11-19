@@ -50,6 +50,9 @@ pub(super) struct Host<'a> {
     /// Set by the wizard, whose handler ends the process on Ctrl-C while
     /// this is true; the wait for a confirm clears it.
     pub sigint_ends: Option<Arc<AtomicBool>>,
+    /// Set by the wizard: holds back the signals that end the process while
+    /// it has a secret file to remove.
+    pub defer: Option<crate::tui::Defer>,
     /// Whether stderr is a terminal, for a countdown on one line.
     pub tty: bool,
     /// How often the wait for a confirm reads the journal.
@@ -207,7 +210,7 @@ pub(super) fn apply(
     let profile = sel.load(host)?;
     let whole = profile.is_some() && sel.modules.is_empty();
     Ok(
-        match apply_profile(host, profile, sel, yes, window, input, &mut || {}, out, err)? {
+        match apply_profile(host, profile, sel, yes, window, input, &mut Plain, out, err)? {
             Applied::Nothing => {
                 writeln!(out, "\n{}", nothing_to_do(whole))?;
                 0
@@ -240,9 +243,30 @@ pub(super) enum Applied {
     Ran(u8),
 }
 
+/// What a caller of [`apply_profile`] does around the engine's apply.
+pub(super) trait Around {
+    /// After the yes, before the engine starts; `false` declines.
+    ///
+    /// # Errors
+    ///
+    /// Stops the apply before it starts.
+    fn before(&mut self) -> anyhow::Result<bool>;
+    /// Once the engine is done, before any wait for a confirm.
+    fn after(&mut self);
+}
+
+/// Nothing around the apply.
+pub(super) struct Plain;
+
+impl Around for Plain {
+    fn before(&mut self) -> anyhow::Result<bool> {
+        Ok(true)
+    }
+    fn after(&mut self) {}
+}
+
 /// [`apply`] with `profile` loaded; `sel` picks its modules. Checks root
-/// itself too, for callers that did not load a profile first. `applied`
-/// runs once the engine is done, before any wait for a confirm.
+/// itself too, for callers that did not load a profile first.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn apply_profile(
     host: &Host,
@@ -251,7 +275,7 @@ pub(super) fn apply_profile(
     yes: bool,
     window: Option<Duration>,
     input: Option<&mut dyn BufRead>,
-    applied: &mut dyn FnMut(),
+    around: &mut dyn Around,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> anyhow::Result<Applied> {
@@ -304,6 +328,10 @@ pub(super) fn apply_profile(
             return Ok(Applied::Declined);
         }
     }
+    if !around.before()? {
+        writeln!(out, "Nothing was changed.")?;
+        return Ok(Applied::Declined);
+    }
     // An interrupted apply leaves its transaction unfinished; `rollback
     // --last` resumes and finishes it.
     writeln!(
@@ -316,7 +344,7 @@ pub(super) fn apply_profile(
         off: window.is_none(),
     };
     let outcome = engine.apply(&plan, &deadman, &mut |p| print_progress(err, &p));
-    applied();
+    around.after();
     match outcome? {
         ApplyOutcome::NothingToDo => writeln!(out, "Nothing to do.")?,
         ApplyOutcome::Pending { txn, deadline } => {

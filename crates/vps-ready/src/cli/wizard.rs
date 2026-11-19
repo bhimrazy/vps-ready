@@ -7,11 +7,9 @@ use std::io::{BufRead, Write};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::bail;
-use signal_hook::SigId;
-use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 use zeroize::Zeroizing;
 
 use super::change::{self, Applied, Host, Selection, plural};
@@ -31,7 +29,7 @@ use crate::modules::{Applicability, Module, ModuleError};
 use crate::resource::ResourceError;
 use crate::resource::authorized_keys::is_plain_key;
 use crate::sys::{FileKind, FileOwner, Fs, SysError};
-use crate::tui::{Item, Prompt, PromptError};
+use crate::tui::{Defer, Item, Prompt, PromptError};
 
 /// Where the answers are saved, in the current directory.
 const SAVE_AS: &str = "vps-ready.toml";
@@ -87,14 +85,13 @@ pub(super) fn run<R: BufRead>(
     };
     // The key goes only into the profile applied now, never the saved one.
     let mut applied = builder.clone();
-    let mut key_file = match auth_key {
+    let mut key = match auth_key {
         Some(key) => {
-            let file = KeyFile::write(host, &key)?;
             applied.set_params(
                 "net.tailscale",
                 toml::Table::from_iter([("auth_key_file".to_owned(), AUTH_KEY_FILE.into())]),
             );
-            Some(file)
+            Some(KeyFile::placeholder(host, key)?)
         }
         None => None,
     };
@@ -110,6 +107,7 @@ pub(super) fn run<R: BufRead>(
     }
     writeln!(out)?;
     let mut input = stdin();
+    let mut plain = change::Plain;
     let applied = change::apply_profile(
         host,
         Some(profile),
@@ -117,13 +115,21 @@ pub(super) fn run<R: BufRead>(
         false,
         Some(engine::deadman::DEFAULT_WINDOW),
         Some(&mut input),
-        // Gone before the wait for a confirm.
-        &mut || drop(key_file.take()),
+        match &mut key {
+            Some(key) => key as &mut dyn change::Around,
+            None => &mut plain,
+        },
         out,
         err,
     );
-    drop(key_file);
-    match applied? {
+    let signal = key.take().and_then(KeyFile::finish);
+    let applied = applied?;
+    if let Some(sig) = signal {
+        // Now that the key is gone and the outcome is printed.
+        writeln!(out, "Stopped by signal {sig}.")?;
+        return Ok(u8::try_from(128 + sig).unwrap_or(EXIT_INTERRUPTED));
+    }
+    match applied {
         // "Nothing was changed." ends it.
         Applied::Declined => return Ok(0),
         Applied::Ran(code) if code != 0 => return Ok(code),
@@ -158,59 +164,40 @@ fn timer_note(out: &mut dyn Write, via: Option<&str>) -> std::io::Result<()> {
     )
 }
 
-/// The signals that would end the wizard while [`KeyFile`] lives.
-const ENDING: [c_int; 3] = [SIGHUP, SIGINT, SIGTERM];
-
-/// [`AUTH_KEY_FILE`] while it exists: dropping it removes the file. Until
-/// then the signals in [`ENDING`] are only noted, and the drop ends the
-/// process with the first one after removing the file. A crash or SIGKILL
+/// [`AUTH_KEY_FILE`] for one apply. It is created empty before the plan,
+/// which checks its owner and mode, and holds the key only from the yes
+/// until the engine is done, while [`Defer`] holds back the signals that
+/// would end the wizard. Dropping it removes the file; a crash or SIGKILL
 /// leaves it for [`remove_key_file`] at the next start.
 struct KeyFile<'a> {
     fs: &'a dyn Fs,
-    sigint_ends: Option<Arc<AtomicBool>>,
-    caught: Arc<AtomicUsize>,
-    handlers: Vec<SigId>,
+    key: Zeroizing<String>,
+    defer: Option<Defer>,
+    /// Set when a held-back signal arrived, so a wait for a confirm ends.
+    stop: Arc<AtomicBool>,
+    /// The last signal held back.
+    signal: Option<c_int>,
 }
 
 impl<'a> KeyFile<'a> {
-    /// Writes `key` to [`AUTH_KEY_FILE`], root's with mode 0600, in a
+    /// Creates [`AUTH_KEY_FILE`] empty, root's with mode 0600, in a
     /// directory only root can write to, as `net.tailscale` requires.
-    fn write(host: &Host<'a>, key: &str) -> anyhow::Result<Self> {
-        let caught = Arc::new(AtomicUsize::new(0));
-        let mut file = Self {
+    fn placeholder(host: &Host<'a>, key: Zeroizing<String>) -> anyhow::Result<Self> {
+        let file = Self {
             fs: host.sys.fs,
-            sigint_ends: host.sigint_ends.clone(),
-            caught: Arc::clone(&caught),
-            handlers: Vec::new(),
+            key,
+            defer: host.defer.clone(),
+            stop: Arc::clone(&host.stop),
+            signal: None,
         };
-        // Before the file exists, so no signal can leave it behind.
-        for sig in ENDING {
-            let value = usize::try_from(sig).unwrap_or_default();
-            let id = signal_hook::flag::register_usize(sig, Arc::clone(&caught), value)?;
-            file.handlers.push(id);
-        }
-        if let Some(ends) = &file.sigint_ends {
-            ends.store(false, Ordering::SeqCst);
-        }
-        file.create(key)?;
-        Ok(file)
-    }
-
-    fn create(&self, key: &str) -> anyhow::Result<()> {
-        let fs = self.fs;
         let path = Path::new(AUTH_KEY_FILE);
         let Some(dir) = path.parent() else {
             bail!("{AUTH_KEY_FILE} has no directory");
         };
-        let root = |mode| FileOwner {
-            mode,
-            uid: 0,
-            gid: 0,
-        };
-        if !fs.exists(dir) {
-            fs.create_dir(dir, root(0o700))?;
+        if !file.fs.exists(dir) {
+            file.fs.create_dir(dir, root_only(0o700))?;
         }
-        let meta = fs.metadata(dir)?;
+        let meta = file.fs.metadata(dir)?;
         if meta.kind != FileKind::Dir || meta.uid != 0 || meta.mode & 0o022 != 0 {
             bail!(
                 "{} is not a directory only root can write to, so the auth key is not \
@@ -218,30 +205,74 @@ impl<'a> KeyFile<'a> {
                 dir.display()
             );
         }
-        // Through a temp file created with O_EXCL and mode 0600.
-        fs.write_atomic(path, key.as_bytes(), root(0o600))?;
-        Ok(())
+        file.write(b"")?;
+        Ok(file)
+    }
+
+    /// Through a temp file created with O_EXCL and mode 0600.
+    fn write(&self, bytes: &[u8]) -> Result<(), SysError> {
+        self.fs
+            .write_atomic(Path::new(AUTH_KEY_FILE), bytes, root_only(0o600))
+    }
+
+    /// Removes the file and lets the signals end the process again.
+    /// Returns the last one held back, for the caller to end with.
+    fn finish(mut self) -> Option<c_int> {
+        self.release();
+        self.signal
+    }
+
+    fn release(&mut self) {
+        if let Err(e) = remove_key_file(self.fs) {
+            tracing::warn!("removing {AUTH_KEY_FILE}: {e}; delete it yourself");
+        }
+        if let Some(sig) = self.defer.as_ref().and_then(Defer::release) {
+            self.signal = Some(sig);
+            self.stop.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// Whether a held-back signal arrived.
+    fn signalled(&self) -> bool {
+        self.defer.as_ref().is_some_and(Defer::pending)
+    }
+}
+
+impl change::Around for KeyFile<'_> {
+    /// Writes the key, unless a signal came first: that declines.
+    fn before(&mut self) -> anyhow::Result<bool> {
+        if let Some(defer) = &self.defer {
+            defer.hold();
+        }
+        if !self.signalled() {
+            self.write(self.key.as_bytes())?;
+        }
+        if self.signalled() {
+            self.release();
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    /// Removes the file before a wait for a confirm. A signal held back
+    /// meanwhile stops that wait, so the outcome is printed first.
+    fn after(&mut self) {
+        self.release();
     }
 }
 
 impl Drop for KeyFile<'_> {
     fn drop(&mut self) {
-        if let Err(e) = remove_key_file(self.fs) {
-            tracing::warn!("removing {AUTH_KEY_FILE}: {e}; delete it yourself");
-        }
-        for id in self.handlers.drain(..) {
-            signal_hook::low_level::unregister(id);
-        }
-        if let Some(ends) = &self.sigint_ends {
-            ends.store(true, Ordering::SeqCst);
-        }
-        let sig = self.caught.load(Ordering::SeqCst);
-        if let Ok(sig) = c_int::try_from(sig)
-            && sig != 0
-        {
-            // As the signal would have, now that the key is gone.
-            let _ = signal_hook::low_level::emulate_default_handler(sig);
-        }
+        self.release();
+    }
+}
+
+/// Mode `mode`, owned by root.
+fn root_only(mode: u32) -> FileOwner {
+    FileOwner {
+        mode,
+        uid: 0,
+        gid: 0,
     }
 }
 
@@ -351,7 +382,7 @@ fn run_step_two(
         false,
         Some(engine::deadman::DEFAULT_WINDOW),
         Some(input),
-        &mut || {},
+        &mut change::Plain,
         out,
         err,
     )?;

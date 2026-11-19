@@ -4,10 +4,12 @@
 
 use std::io;
 
+mod defer;
 #[cfg(test)]
 pub(crate) mod script;
 mod term;
 
+pub use defer::Defer;
 pub use term::Terminal;
 
 /// Follows the question of a [`Prompt::multi_select`].

@@ -90,28 +90,30 @@ fn a_pasted_auth_key_is_used_once_and_removed() {
     assert!(!saved.contains(&key), "{saved}");
 }
 
-/// While the file exists Ctrl-C is the wizard's to handle, so that it
-/// can remove the file first.
+/// The file is root's and empty for the plan, holds the key from the yes
+/// until the engine is done, and is gone after.
 #[test]
-fn the_key_file_is_root_only_and_removed_when_dropped() {
+fn the_key_file_holds_the_key_only_around_the_apply() {
     let fs = fs_with_run();
     let runner = runner(|r| r);
-    let ends = Arc::new(AtomicBool::new(true));
     let host = Host {
-        sigint_ends: Some(Arc::clone(&ends)),
+        defer: Some(Defer::unregistered()),
         ..on(&fs, &runner)
     };
     let key = auth_key();
-    let file = KeyFile::write(&host, &key).unwrap();
-    let (bytes, meta) = fs.read_nofollow(Path::new(AUTH_KEY_FILE)).unwrap();
-    assert_eq!(bytes, key.as_bytes());
+    let read = || fs.read_nofollow(Path::new(AUTH_KEY_FILE)).unwrap();
+    let mut file = KeyFile::placeholder(&host, Zeroizing::new(key.clone())).unwrap();
+    let (bytes, meta) = read();
+    assert!(bytes.is_empty());
     assert_eq!((meta.mode, meta.uid, meta.gid), (0o600, 0, 0));
     let dir = fs.metadata(Path::new("/run/vps-ready")).unwrap();
     assert_eq!((dir.kind, dir.mode, dir.uid), (FileKind::Dir, 0o700, 0));
-    assert!(!ends.load(Ordering::SeqCst));
-    drop(file);
+    assert!(change::Around::before(&mut file).unwrap());
+    assert_eq!(read().0, key.as_bytes());
+    change::Around::after(&mut file);
     assert!(!fs.exists(Path::new(AUTH_KEY_FILE)));
-    assert!(ends.load(Ordering::SeqCst));
+    assert_eq!(file.finish(), None);
+    assert!(!host.stop.load(Ordering::SeqCst));
 
     // A directory others can write to is not used.
     let open = FileOwner {
@@ -121,8 +123,47 @@ fn the_key_file_is_root_only_and_removed_when_dropped() {
     };
     let fs = fs_with_run().with_dir("/run/vps-ready", open);
     let host = on(&fs, &runner);
-    let err = KeyFile::write(&host, &key).err().unwrap();
+    let err = KeyFile::placeholder(&host, Zeroizing::new(key))
+        .err()
+        .unwrap();
     assert!(err.to_string().contains("only root can write to"), "{err}");
+    assert!(!fs.exists(Path::new(AUTH_KEY_FILE)));
+}
+
+/// A signal held back before the engine starts declines: the key is never
+/// written, and the wizard ends with that signal after saying so.
+#[test]
+fn a_signal_at_the_yes_declines_and_writes_no_key() {
+    let fs = fs_with_run();
+    let runner = runner(|r| r);
+    let defer = Defer::unregistered();
+    let host = Host {
+        defer: Some(defer.clone()),
+        ..on(&fs, &runner)
+    };
+    let key = auth_key();
+    let mut file = KeyFile::placeholder(&host, Zeroizing::new(key.clone())).unwrap();
+    defer.note(15);
+    assert!(!change::Around::before(&mut file).unwrap());
+    assert!(!fs.exists(Path::new(AUTH_KEY_FILE)));
+    assert_eq!(file.finish(), Some(15));
+    assert!(host.stop.load(Ordering::SeqCst));
+
+    // The same through the wizard.
+    let fs = fs_with_run();
+    let defer = Defer::unregistered();
+    defer.note(15);
+    let host = Host {
+        defer: Some(defer),
+        ..on(&fs, &runner)
+    };
+    let questions = vec![Enter, Enter, Pick(1), Type(key), Enter, Enter];
+    let (code, text) = wizard(&host, questions, "y\n");
+    assert_eq!(code, 128 + 15, "{text}");
+    assert!(
+        text.ends_with("[y/N] y\nNothing was changed.\nStopped by signal 15.\n"),
+        "{text}"
+    );
     assert!(!fs.exists(Path::new(AUTH_KEY_FILE)));
 }
 

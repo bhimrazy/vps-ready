@@ -8,7 +8,7 @@ use dialoguer::console::{Term, style};
 use dialoguer::theme::{ColorfulTheme, SimpleTheme, Theme};
 use dialoguer::{Confirm, Input, MultiSelect, Password, Select};
 
-use super::{Item, MULTI_HINT, Prompt, PromptError};
+use super::{Defer, Item, MULTI_HINT, Prompt, PromptError};
 
 /// Asks on stdout and reads keys from the terminal.
 ///
@@ -21,6 +21,7 @@ pub struct Terminal {
     theme: Box<dyn Theme>,
     color: bool,
     ends: Arc<AtomicBool>,
+    defer: Defer,
 }
 
 impl Terminal {
@@ -35,6 +36,7 @@ impl Terminal {
             signal_hook::consts::SIGINT,
             Arc::clone(&ends),
         )?;
+        let defer = Defer::register(Arc::clone(&ends))?;
         let theme: Box<dyn Theme> = if color {
             Box::new(ColorfulTheme::default())
         } else {
@@ -45,6 +47,7 @@ impl Terminal {
             theme,
             color,
             ends,
+            defer,
         })
     }
 
@@ -53,6 +56,12 @@ impl Terminal {
     #[must_use]
     pub fn sigint_ends(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.ends)
+    }
+
+    /// Holds back the signals that end the process, see [`Defer`].
+    #[must_use]
+    pub fn defer(&self) -> Defer {
+        self.defer.clone()
     }
 
     fn ask<T>(&self, f: impl FnOnce(&Term) -> dialoguer::Result<T>) -> Result<T, PromptError> {

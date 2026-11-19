@@ -243,7 +243,7 @@ impl Module for NetTailscale {
                 login_server,
                 hostname,
             }));
-            // The wizard removes its own file, and every run removes a leftover.
+            // The wizard removes its own file, and each wizard start a leftover.
             if path != Path::new(WIZARD_KEY_FILE) {
                 notes.push(format!(
                     "delete {} after the login; a one-off key is spent once used, and later \
