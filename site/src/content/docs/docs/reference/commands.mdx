@@ -113,7 +113,7 @@ Plans, shows the plan, asks `Apply N changes? [y/N]`, then snapshots each origin
 |---|---|
 | `--profile NAME\|PATH` | As for `plan` |
 | `--module ID` | As for `plan`. A named module that does not apply to this server is an error |
-| `--deadman DUR\|off` | How long a confirm has: `90s`, `5m`, `2m30s`, from 1m to 30m. Default `5m`. `off` applies without the safety timer, for a first boot from [`export cloud-init`](#export-cloud-init); it is refused while anyone is logged in (an SSH session, or a console login that `loginctl` lists), since a confirm is possible then. `history` marks such a transaction |
+| `--deadman DUR\|off` | How long a confirm has: `90s`, `5m`, `2m30s`, from 1m to 30m. Default `5m`. `off` applies without the safety timer, for a first boot from [`export cloud-init`](#export-cloud-init); when a module needs the timer, it is refused while anyone is logged in (an SSH session, or a console login that `loginctl` lists), since a confirm is possible then. A module that does not apply to the server is an error with `off`, as with `--module`. `history` marks a transaction applied without the timer |
 | `-y`, `--yes` | Do not ask. Required when stdin is not a terminal |
 | `-n`, `--dry-run` | Show the plan and change nothing, like `plan` |
 
@@ -189,7 +189,7 @@ Exits 0, or 2 on error, including an unknown ID.
 vps-ready export cloud-init --profile NAME|PATH --checksums checksums.txt [--base-url URL] > user-data.yaml
 ```
 
-Prints `#cloud-config` user-data to paste into the provider's user-data field when you create a server. At first boot, before anyone logs in, it writes the profile to `/etc/vps-ready/profile.toml`, downloads this version's tarball for the server's architecture, checks its SHA-256, installs the binary to `/usr/local/bin` and runs `vps-ready apply --profile /etc/vps-ready/profile.toml --yes --deadman=off`. It needs `curl`, `sha256sum` and `tar` on the image. It changes nothing where it runs, needs no root and makes no network call.
+Prints `#cloud-config` user-data to paste into the provider's user-data field when you create a server. At first boot, before anyone logs in, it writes the profile to `/etc/vps-ready/profile.toml`, downloads this version's tarball for the server's architecture, checks its SHA-256, installs the binary to `/usr/local/bin` and runs `vps-ready apply --profile /etc/vps-ready/profile.toml --yes --deadman=off`. It needs `curl` or `wget`, `sha256sum` and `tar` on the image. It changes nothing where it runs, needs no root and makes no network call.
 
 | Flag | What it does |
 |---|---|
@@ -197,7 +197,7 @@ Prints `#cloud-config` user-data to paste into the provider's user-data field wh
 | `--checksums PATH` | The `checksums.txt` of the same release as this binary. Download it and verify its signature first, as in [Verify a release by hand](/docs/install/#verify-a-release-by-hand); the hashes in the user-data come from it |
 | `--base-url URL` | Download the tarballs from `URL` instead of the GitHub release, e.g. a mirror. The SHA-256 is checked either way |
 
-The image's own SSH settings apply for the first minute or so, until `runcmd` runs; keep the provider's firewall closed until first boot finishes. If anything fails (a download, the hash, the apply), the server keeps the image's defaults: check `cloud-init status` (it shows `error`) and `/var/log/cloud-init-output.log` before you open the server up.
+The image's own SSH settings apply for the first minute or so, until `runcmd` runs; keep the provider's firewall closed until first boot finishes. Do not log in while it runs: any login during first boot, including a provisioning tool that waits for SSH, makes the apply refuse `--deadman=off`. If anything fails (a login, a download, the hash, the apply), the server keeps the image's defaults: check `cloud-init status` (it shows `error`) and `/var/log/cloud-init-output.log` before you open the server up.
 
 Exits 0, or 2 on error.
 
