@@ -1,6 +1,6 @@
 # M5 plan: deployment readiness (v0.5.0)
 
-> **Status: done for v0.5.0.** The modules, vendor apt sources, the `.deb` and the SBOM shipped in v0.5.0. The plan is kept as the design record. The v0.6.0 direction at the end moved to the [M6 plan](m6-plan.md), which is not built yet.
+> **Status: done for v0.5.0.** The modules, vendor apt sources, the `.deb` and the SBOM shipped in v0.5.0. The plan is kept as the design record. The v0.6.0 direction at the end moved to the [M6 plan](m6-plan.md).
 
 M5 takes a server that M3 and M4 hardened and gets it ready to run an app: Docker installed with safe defaults, a reverse proxy with automatic HTTPS, a deploy user for CI, and a way to install vps-ready itself as a package. The milestone as written also had Tailscale with public port 22 closed, and a cloud-init export. Those two change the safety model (a confirm that must arrive over the tailnet, and an apply with no one to confirm at all), so this plan moves them to a second release, v0.6.0, where they get their own design and VM time.
 
@@ -15,7 +15,7 @@ Debian 12/13 and Ubuntu 22.04/24.04 with systemd, as in M4.
 | Release | Contents |
 |---|---|
 | **v0.5.0 (M5)** | `deploy.docker` (with the `FW-002` fix), `deploy.proxy` (Caddy), `deploy.user`, vendor apt sources, a `.deb` package, an SBOM |
-| **v0.6.0 (M5, part 2)** | Closing public 22 behind any private network, `net.tailscale`, `apply --deadman=off\|selftest`, `export cloud-init` |
+| **v0.6.0 (M5, part 2)** | Closing public 22 behind any private network, `net.tailscale`, `apply --deadman=off\|selftest`, `export cloud-init`. Now the [M6 plan](m6-plan.md), which cut `selftest` |
 
 None of the v0.5.0 modules touches sshd, the firewall's SSH rule or the admin's login, so they do not arm the safety timer. They cannot lock out an admin who logs in through the host's own sshd. They can stop containers (see the Docker restart below), which matters only to someone who reaches the host through a container, and the plan says when that will happen. The v0.6.0 items all change the SSH path or turn the timer off, so they are reviewed together as one change to the safety model.
 
@@ -139,16 +139,16 @@ This plan departs from earlier docs; PR 8 updates them:
 
 | Planned before | M5 | When |
 |---|---|---|
-| `net.tailscale`, close public 22 | | v0.6.0, see the direction below |
-| A WireGuard module (keys, peers, client config) | | When asked for; until then, a hand-made `wg0` works with the close-22 step |
-| `--deadman=off\|selftest` | | v0.6.0, with the export |
-| `export cloud-init` | | v0.6.0; a small `#cloud-config` that pins version and SHA256 (AWS limits user data to 16 KB) |
+| `net.tailscale`, close public 22 | | v0.6.0, see the [M6 plan](m6-plan.md) |
+| A WireGuard module (keys, peers, client config) | | `net.wireguard` in the [M6 plan](m6-plan.md); a hand-made `wg0` works with the close-22 step either way |
+| `--deadman=off\|selftest` | | v0.6.0, with the export ([M6 plan](m6-plan.md)); `selftest` was cut |
+| `export cloud-init` | | v0.6.0 ([M6 plan](m6-plan.md)); a small `#cloud-config` that pins version and SHA256 (AWS limits user data to 16 KB) |
 | `.rpm`, `.apk` | `.deb` only | If vps-ready supports those distros |
 | apt repository | Release assets | When asked for |
 | Filtering Docker's `forward` hook | Loopback by default, `FW-002` reports the rest | If loopback proves not enough |
 | Rootless Docker, Podman | Docker Engine | If asked for |
 | Nginx, Traefik | Caddy | Decision D12 |
-| `/etc/vps-ready/config.toml` | | M6, with `drift` |
+| `/etc/vps-ready/config.toml` | | M7, with `drift` |
 
 ### Direction for v0.6.0: private access
 
