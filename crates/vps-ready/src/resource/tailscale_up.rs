@@ -74,11 +74,20 @@ impl TailscaleUp {
                 program,
                 status,
                 stderr,
-            } => Err(ResourceError::Command {
-                program,
-                status,
-                stderr: redact(&stderr),
-            }),
+            } => {
+                let mut stderr = redact(&stderr);
+                if self.auth_key_file.is_none() {
+                    stderr.push_str(
+                        "; the node's login may have expired or been removed: put a new auth \
+                         key in auth_key_file and apply again",
+                    );
+                }
+                Err(ResourceError::Command {
+                    program,
+                    status,
+                    stderr,
+                })
+            }
             other => Err(other),
         }
     }
@@ -179,12 +188,14 @@ pub fn check_key_file(sys: Sys, path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// `tailscale down` if the node was not `Running` before apply and is
-/// now. It disconnects but keeps the login, never `logout`: that expires
-/// the node key, and applying again would need a new auth key. A node that
-/// is not running, or a `tailscale` that is gone, needs nothing.
+/// `tailscale down` if the node was not `Running` before apply. It
+/// disconnects but keeps the login, never `logout`: that expires the node
+/// key, and applying again would need a new auth key. Also from `Starting`
+/// or `NeedsMachineAuth`, where the node would still join once approved. A
+/// `Stopped` node, a daemon that does not answer, or a `tailscale` that is
+/// gone needs nothing.
 pub(super) fn restore(sys: Sys, was_running: bool) -> Result<(), ResourceError> {
-    if was_running || !running(sys)? {
+    if was_running || backend_state(sys)?.is_none_or(|s| s == "Stopped") {
         return Ok(());
     }
     let out = sys.runner.run(&down())?;
@@ -203,7 +214,8 @@ pub(super) fn restore(sys: Sys, was_running: bool) -> Result<(), ResourceError> 
         return Err(ResourceError::Refused(
             "this session comes through Tailscale, and `tailscale down` would cut it; run \
              the rollback from another path (the provider's console or a public SSH login), \
-             or run `sudo tailscale down` yourself and roll back again"
+             or run `sudo tailscale down` yourself, which cuts this session (Tailscale 1.82 \
+             and older need `--accept-risk=lose-ssh`), and roll back again"
                 .to_owned(),
         ));
     }
@@ -219,19 +231,24 @@ fn down() -> Cmd {
     Cmd::new("tailscale").arg("down").timeout(COMMAND_TIMEOUT)
 }
 
-/// Whether `tailscale status` says `Running`. Without `tailscale`, or when
-/// its daemon does not answer, the node is not.
+/// Whether `tailscale status` says `Running`.
 fn running(sys: Sys) -> Result<bool, ResourceError> {
+    Ok(backend_state(sys)?.is_some_and(|s| s == "Running"))
+}
+
+/// `BackendState` from `tailscale status`; `None` without `tailscale`, or
+/// when its daemon does not answer.
+fn backend_state(sys: Sys) -> Result<Option<String>, ResourceError> {
     let out: Output = match sys.runner.run(&tailscale_status()) {
         Ok(out) if out.ok() => out,
-        Ok(_) | Err(SysError::NotFound(_)) => return Ok(false),
+        Ok(_) | Err(SysError::NotFound(_)) => return Ok(None),
         Err(e) => return Err(e.into()),
     };
     let status = parse_tailscale(&out.stdout).map_err(|_| ResourceError::Unexpected {
         program: "tailscale".to_owned(),
         output: String::from_utf8_lossy(&out.stdout).into_owned(),
     })?;
-    Ok(status.backend_state == "Running")
+    Ok(Some(status.backend_state))
 }
 
 #[cfg(test)]
@@ -580,7 +597,7 @@ mod tests {
     /// nothing to bring down: the node is down already, `tailscaled` does
     /// not answer, or `tailscale` is gone.
     #[test]
-    fn restore_needs_nothing_from_a_node_that_is_not_running() {
+    fn restore_needs_nothing_from_a_stopped_or_unreachable_node() {
         let fs = FakeFs::new();
         let backup = Backup::TailscaleUp { was_running: false };
         let stopped = Tailscale::new("Stopped", fail("", "should not run"));
@@ -594,6 +611,50 @@ mod tests {
             restore_backup(Sys { fs: &fs, runner }, Path::new(TXN), &backup).unwrap();
         }
         assert_eq!(*stopped.calls.lock().unwrap(), ["status"]);
+
+        // A node awaiting approval, or still starting, would join later.
+        for state in ["NeedsMachineAuth", "Starting", "NeedsLogin"] {
+            let pending = Tailscale::new(state, Output::success(""));
+            restore_backup(
+                Sys {
+                    fs: &fs,
+                    runner: &pending,
+                },
+                Path::new(TXN),
+                &backup,
+            )
+            .unwrap();
+            assert_eq!(
+                *pending.calls.lock().unwrap(),
+                ["status", "down"],
+                "{state}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_failed_keyless_up_says_to_use_a_new_key() {
+        let fs = FakeFs::new();
+        let runner = FakeRunner::new()
+            .on("tailscale", ["status"], status("Stopped"))
+            .on("tailscale", ["up"], fail("", "timeout waiting for Running"));
+        let keyless = TailscaleUp {
+            auth_key_file: None,
+            ..up()
+        };
+        let err = Resource::TailscaleUp(keyless)
+            .apply(Sys {
+                fs: &fs,
+                runner: &runner,
+            })
+            .unwrap_err();
+        assert!(
+            err.to_string().ends_with(
+                "timeout waiting for Running; the node's login may have expired or been \
+                 removed: put a new auth key in auth_key_file and apply again"
+            ),
+            "{err}"
+        );
     }
 
     #[test]

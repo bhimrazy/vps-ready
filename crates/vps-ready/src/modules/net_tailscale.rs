@@ -197,11 +197,6 @@ impl Module for NetTailscale {
 
         let tailscale = cx.facts.tailscale.as_ref();
         let running = tailscale.is_some_and(|t| t.backend_state == "Running");
-        // A node key lets `tailscale up` log in again without an auth key,
-        // e.g. after a rollback's `tailscale down` or once the key file is
-        // deleted. `NeedsLogin` with a node key means the key expired.
-        let has_login =
-            tailscale.is_some_and(|t| t.have_node_key && t.backend_state != "NeedsLogin");
         let login_server = Some(params.login_server).filter(|s| !s.is_empty());
         let hostname = Some(params.hostname).filter(|s| !s.is_empty());
         if running {
@@ -210,6 +205,12 @@ impl Module for NetTailscale {
                 login_server.as_deref(),
                 hostname.as_deref(),
             ));
+        } else if has_login(cx.facts) {
+            resources.push(Resource::TailscaleUp(TailscaleUp {
+                auth_key_file: None,
+                login_server,
+                hostname,
+            }));
         } else if params.auth_key_file.is_empty() {
             let mut cmd = "sudo tailscale up --accept-dns=false".to_owned();
             if let Some(url) = &login_server {
@@ -222,12 +223,6 @@ impl Module for NetTailscale {
                 "no auth_key_file: unless this node is logged in already, log in with `{cmd}` \
                  after this apply"
             ));
-        } else if has_login {
-            resources.push(Resource::TailscaleUp(TailscaleUp {
-                auth_key_file: None,
-                login_server,
-                hostname,
-            }));
         } else {
             let path = Path::new(&params.auth_key_file);
             if let Err(why) = check_key_file(sys, path) {
@@ -264,10 +259,11 @@ impl Module for NetTailscale {
         })
     }
 
-    /// After a login with a key, the node is `Running` with an address.
+    /// After a login, with a key or the node's own, the node is `Running`
+    /// with an address.
     fn verify(&self, cx: &PlanCx, sys: Sys) -> Result<(), String> {
         let params: Params = cx.params().map_err(|e| e.to_string())?;
-        if params.auth_key_file.is_empty() {
+        if params.auth_key_file.is_empty() && !has_login(cx.facts) {
             return Ok(());
         }
         let out = sys
@@ -298,6 +294,17 @@ impl Module for NetTailscale {
     fn verify_timeout(&self) -> Duration {
         STATUS_TIMEOUT
     }
+}
+
+/// Whether the node has a node key that `tailscale up` can log in with
+/// again without an auth key, e.g. after a rollback's `tailscale down` or
+/// once the key file is deleted. `NeedsLogin` with a node key means the
+/// key expired.
+fn has_login(facts: &Facts) -> bool {
+    facts
+        .tailscale
+        .as_ref()
+        .is_some_and(|t| t.have_node_key && t.backend_state != "NeedsLogin")
 }
 
 fn tailscale_source(facts: &Facts) -> Option<AptSource> {

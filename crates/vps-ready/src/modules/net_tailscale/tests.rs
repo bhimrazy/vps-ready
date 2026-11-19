@@ -733,3 +733,37 @@ fn rollback_from_a_session_over_tailscale_says_what_to_do() {
     *runner.backend.lock().unwrap() = "Stopped".into();
     engine.rollback(Target::Last, &mut |_| {}).unwrap();
 }
+
+/// With both the key file and the param gone, a node with a node key still
+/// comes back up, and verify checks it.
+#[test]
+fn a_node_key_needs_no_auth_key_file_param() {
+    let fs = fs();
+    let runner = Host::with_tailscale("Stopped");
+    let stopped = facts(Some("Stopped"));
+    let steps = steps(&stopped, &fs, &runner, "");
+    let Some(Resource::TailscaleUp(up)) = steps.resources.last() else {
+        panic!("{:?}", ids(&steps));
+    };
+    assert_eq!(up.auth_key_file, None);
+
+    let empty = table("");
+    let cx = PlanCx {
+        facts: &stopped,
+        params: &empty,
+        planned: &[],
+    };
+    let sys = Sys {
+        fs: &fs,
+        runner: &runner,
+    };
+    assert_eq!(
+        NetTailscale.verify(&cx, sys),
+        Err(
+            "Tailscale is Stopped, not Running, after `tailscale up`; `tailscale status` says why"
+                .into()
+        )
+    );
+    *runner.backend.lock().unwrap() = "Running".into();
+    assert_eq!(NetTailscale.verify(&cx, sys), Ok(()));
+}
