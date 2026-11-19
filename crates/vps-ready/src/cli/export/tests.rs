@@ -163,7 +163,10 @@ fn base_url_replaces_the_release_url() {
         https.contains("curl --proto '=https' --tlsv1.2 -fsSL"),
         "{https}"
     );
-    assert!(https.contains("wget -q --https-only --tries=5"), "{https}");
+    assert!(
+        https.contains("wget -q --tries=5 --retry-connrefused -O"),
+        "{https}"
+    );
     for bad in [
         "ftp://example.com",
         "https://",

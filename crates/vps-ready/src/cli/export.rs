@@ -62,10 +62,10 @@ pub(super) fn cloud_init(
         Some(url) => checked_url(url)?,
         None => format!("https://github.com/bhimrazy/vps-ready/releases/download/v{version}"),
     };
-    let (curl_https, wget_https) = if base.starts_with("https://") {
-        (" --proto '=https' --tlsv1.2", " --https-only")
+    let curl_https = if base.starts_with("https://") {
+        " --proto '=https' --tlsv1.2"
     } else {
-        ("", "")
+        ""
     };
     write!(
         out,
@@ -89,7 +89,7 @@ write_files:
       if command -v curl >/dev/null; then
         curl{curl_https} -fsSL --retry 5 --retry-connrefused -o \"$f\" \"$u\"
       else
-        wget -q{wget_https} --tries=5 -O \"$f\" \"$u\"
+        wget -q --tries=5 --retry-connrefused -O \"$f\" \"$u\"
       fi
       echo \"$sum  $f\" | sha256sum -c -
       tar -xzf \"$f\" -C \"$d\"

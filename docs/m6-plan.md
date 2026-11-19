@@ -47,7 +47,7 @@ vps-ready export cloud-init --profile vps-ready.toml --checksums checksums.txt [
 write_files:
   - path: /etc/vps-ready/profile.toml
     permissions: "0600"
-    content: |
+    content: |2
       schema = 1
       extends = "web"
       [modules."user.admin"]
@@ -63,17 +63,25 @@ runcmd:
         aarch64) t=aarch64-unknown-linux-musl; sum=<sha256 from checksums.txt> ;;
         *) echo "vps-ready: unsupported architecture" >&2; exit 1 ;;
       esac
-      f=/root/vps-ready-0.6.0-$t.tar.gz
-      curl -fsSL --retry 5 --retry-connrefused -o "$f" \
-        "https://github.com/bhimrazy/vps-ready/releases/download/v0.6.0/vps-ready-0.6.0-$t.tar.gz"
+      d=$(mktemp -d)
+      f="$d/vps-ready-0.6.0-$t.tar.gz"
+      u="https://github.com/bhimrazy/vps-ready/releases/download/v0.6.0/vps-ready-0.6.0-$t.tar.gz"
+      if command -v curl >/dev/null; then
+        curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-connrefused -o "$f" "$u"
+      else
+        wget -q --tries=5 --retry-connrefused -O "$f" "$u"
+      fi
       echo "$sum  $f" | sha256sum -c -
-      tar -xzf "$f" -C /root
-      install -m 0755 "/root/vps-ready-0.6.0-$t/vps-ready" /usr/local/bin/vps-ready
-      vps-ready apply --profile /etc/vps-ready/profile.toml --yes --deadman=off
+      tar -xzf "$f" -C "$d"
+      install -m 0755 "$d/vps-ready-0.6.0-$t/vps-ready" /usr/local/bin/vps-ready
+      rm -rf "$d"
+      # `sshd -T` needs it; with ssh.socket it appears only at the first login.
+      [ -d /run/sshd ] || mkdir -m 0755 /run/sshd
+      /usr/local/bin/vps-ready apply --profile /etc/vps-ready/profile.toml --yes --deadman=off
 ```
 
 - **The hashes come from `checksums.txt`,** which the user downloads from the release and verifies first (`cosign verify-blob` or `gh attestation verify`, as the install page shows). The binary cannot know its own release hashes, and `export` makes no network call. The tarball's SHA-256 is checked on the server before anything runs, so `--base-url` (a mirror, or the VM test's local server) cannot change what runs.
-- **Small:** one profile and a dozen lines, far below AWS's 16 KB user-data limit. Plain `#cloud-config` with `write_files` and `runcmd`, which every provider's cloud-init supports. It does not touch cloud-init's own users or keys. It needs `curl`, `sha256sum` and `tar` on the image; the VM cycle checks all four images have them.
+- **Small:** one profile and a dozen lines, far below AWS's 16 KB user-data limit. Plain `#cloud-config` with `write_files` and `runcmd`, which every provider's cloud-init supports. It does not touch cloud-init's own users or keys. It needs `curl` or `wget`, `sha256sum` and `tar` on the image; the VM cycle checks all four images have them.
 - **When it runs:** `runcmd` runs in cloud-init's final stage, after the network and sshd are up, so the image's own sshd settings apply for the first minute or so. Some providers set a root password on their images; a provider firewall kept closed until first boot finishes covers that minute, and the docs say so.
 - **Failures are visible, and leave the image as it was:** `set -e` makes `runcmd` fail on a bad hash, a failed download or a failed apply (which rolls back as any apply does). The server then runs with the image's defaults, unhardened; `cloud-init status` shows `error`, `/var/log/cloud-init-output.log` has the reason, and `vps-ready history` shows the transaction. The docs say to check `cloud-init status` before opening the server up.
 - **Refused by `export`:**
@@ -413,7 +421,7 @@ The wizard adds one question after the ports, asked only when `firewall.inbound`
 **Layer 2 (containers):** `net.tailscale` install from Tailscale's real repository on all four images (`tailscale version` runs, `tailscaled` starts, `BackendState` is `NeedsLogin`, `unattended-upgrade --dry-run` lists the Tailscale origin, rollback removes the source, key and origin file). `wireguard-tools` installs; `net.wireguard` is not applicable (no kernel module in the container), which is itself checked.
 
 **Layer 3 (VMs), first boot:** a new cycle, `cloud-init`, on all four images. The harness already boots each image with a NoCloud seed. This cycle builds a profile whose admin key is the job's key, runs `export cloud-init --base-url http://10.0.2.2:<port>` with a `checksums.txt` made from the tarball built in the job, serves that tarball from the runner, and combines the export with the harness's own cloud-config as multipart user-data (cloud-init merges the parts). It boots a fresh overlay and, over SSH as the admin, checks:
-- `curl`, `sha256sum` and `tar` exist on the image;
+- `curl` or `wget`, `sha256sum` and `tar` exist on the image;
 - `cloud-init status --wait` ends `done`; `vps-ready history` shows one transaction applied without the timer;
 - `SSH-001` to `SSH-007` and `FW-001` pass, a root login is refused, and `plan --profile /etc/vps-ready/profile.toml` plans nothing;
 - a second fresh boot with a tampered tarball: `sha256sum -c` fails, nothing is applied, the image's defaults are unchanged, and `cloud-init status` is `error`.

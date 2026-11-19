@@ -30,7 +30,7 @@ runcmd:
       if command -v curl >/dev/null; then
         curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-connrefused -o "$f" "$u"
       else
-        wget -q --https-only --tries=5 -O "$f" "$u"
+        wget -q --tries=5 --retry-connrefused -O "$f" "$u"
       fi
       echo "$sum  $f" | sha256sum -c -
       tar -xzf "$f" -C "$d"
