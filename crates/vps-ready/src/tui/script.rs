@@ -17,7 +17,7 @@ pub(crate) enum Answer {
     Pick(usize),
     /// Exactly these items checked, for `multi_select`.
     Check(Vec<usize>),
-    /// This text, for `input`.
+    /// This text, for `input` and `password`.
     Type(String),
     /// Yes or no, for `confirm`.
     Say(bool),
@@ -119,6 +119,17 @@ impl Prompt for Script {
             other => panic!("{other:?} for input {question:?}"),
         };
         writeln!(self.log, "? {question}: {text}")?;
+        Ok(text)
+    }
+
+    fn password(&mut self, question: &str) -> Result<String, PromptError> {
+        let text = match self.next(question)? {
+            Answer::Enter => String::new(),
+            Answer::Type(text) => text,
+            other => panic!("{other:?} for password {question:?}"),
+        };
+        let shown = if text.is_empty() { "" } else { "[hidden]" };
+        writeln!(self.log, "? {question}: {shown}")?;
         Ok(text)
     }
 

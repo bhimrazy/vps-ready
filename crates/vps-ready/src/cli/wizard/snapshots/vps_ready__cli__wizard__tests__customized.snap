@@ -12,6 +12,9 @@ Audit: 14 passed, 12 failed (1 high, 5 medium, 6 low), 5 unknown. vps-ready can 
   new account: logs in with 1 key copied from /root/.ssh/authorized_keys; sudo
   without a password.
   Root and password logins will be turned off, so this key is how you log in.
+? Private access for SSH
+  > None: SSH stays reachable from the internet, with keys only
+    Tailscale (the private profile)
 All other incoming ports are blocked.
 ? More ports to open, e.g. 8080/tcp or 53/udp (Enter for none): 
 ? Pick which modules to run yourself? (y/N) yes
