@@ -168,6 +168,26 @@ fn not_private(facts: &Facts, via: &str) -> Option<String> {
     }
 }
 
+/// The interface the loaded `vps_ready` table limits SSH to, when it is
+/// one `ssh_via` takes as private. Audit counts it as a VPN's, since a
+/// NetBird or ZeroTier link has no type that says so.
+pub(crate) fn private_via(facts: &Facts) -> Option<String> {
+    let ssh = super::ssh_ports(facts);
+    facts
+        .firewall
+        .as_ref()?
+        .input_chains
+        .iter()
+        .filter(|c| c.family == "inet" && c.table == "vps_ready")
+        .flat_map(|c| &c.interface_ports)
+        .find_map(|p| match p.interfaces.as_slice() {
+            [name] if ssh.iter().any(|&port| p.ports.contains("tcp", port)) => Some(name),
+            _ => None,
+        })
+        .filter(|name| not_private(facts, name).is_none())
+        .cloned()
+}
+
 /// Whether `via` is Tailscale's interface: by its name, or by holding one
 /// of the node's Tailscale addresses (`--tun` can rename it). See
 /// [`Interface::is_tailscale`] for the name alone.
