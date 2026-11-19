@@ -354,11 +354,7 @@ mod tests {
     #[test]
     fn wireguard_module_and_ports() {
         let runner = FakeRunner::new()
-            .on(
-                "wg",
-                ["show"],
-                Output::success("wg0\t51820\nwg1\t51821\n"),
-            )
+            .on("wg", ["show"], Output::success("wg0\t51820\nwg1\t51821\n"))
             .on("modprobe", ["--dry-run"], Output::success(""));
         let mut notices = Vec::new();
         let wg = wireguard(&FakeFs::new(), &runner, &mut notices);

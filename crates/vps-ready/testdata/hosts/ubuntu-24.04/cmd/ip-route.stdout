@@ -1,0 +1,6 @@
+[{"type":"unicast","dst":"default","gateway":"192.0.2.1","dev":"eth0","protocol":"dhcp","prefsrc":"192.0.2.10","metric":100,"flags":[]},
+{"type":"unicast","dst":"192.0.2.0/24","dev":"eth0","protocol":"kernel","scope":"link","prefsrc":"192.0.2.10","flags":[]},
+{"type":"unicast","dst":"10.77.1.0/24","dev":"wg0","protocol":"kernel","scope":"link","prefsrc":"10.77.1.1","flags":[]},
+{"type":"unicast","dst":"100.64.0.0/10","dev":"tailscale0","table":"52","protocol":"static","scope":"global","flags":[]},
+{"type":"local","dst":"192.0.2.10","dev":"eth0","table":"local","protocol":"kernel","scope":"host","prefsrc":"192.0.2.10","flags":[]},
+{"type":"broadcast","dst":"192.0.2.255","dev":"eth0","table":"local","protocol":"kernel","scope":"link","prefsrc":"192.0.2.10","flags":[]}]

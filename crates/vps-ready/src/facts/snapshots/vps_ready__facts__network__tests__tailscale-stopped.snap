@@ -1,0 +1,9 @@
+---
+source: crates/vps-ready/src/facts/network.rs
+expression: ts
+---
+backend_state: Stopped
+ips:
+  - 100.64.0.7
+  - "fd7a:115c:a1e0::7"
+key_expiry: "2027-05-18T09:30:00Z"
