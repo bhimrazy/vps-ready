@@ -25,7 +25,7 @@ Debian 12/13 and Ubuntu 22.04/24.04 with systemd, as in M5. Earlier docs use "M6
 
 `--deadman=selftest` is cut, and a web tunnel module (`net.tunnel`) is deferred (see [Hardened before exposed](#hardened-before-exposed-export-cloud-init) and [Web through a tunnel](#web-through-a-tunnel-nettunnel-deferred)).
 
-The registry order becomes `user.admin`, `ssh.server`, `net.tailscale`, `net.wireguard`, `firewall.inbound`, `ssh.bruteforce`, `kernel.sysctl`, `updates.auto`, then the deploy modules. The VPN modules come before the firewall so that `firewall.inbound` sees their planned resources, as it already does for `deploy.docker`.
+The registry order becomes `user.admin`, `ssh.server`, `net.tailscale`, `net.wireguard`, `deploy.docker`, `firewall.inbound`, `ssh.bruteforce`, `kernel.sysctl`, `updates.auto`, `deploy.proxy`, `deploy.user`: a deploy module that feeds `firewall.inbound` (`deploy.docker`, for its bridges) stays before it, and the others stay after it. The VPN modules come before the firewall so that `firewall.inbound` sees their planned resources, as it already does for `deploy.docker`.
 
 **The flow is two applies.** The first sets up the VPN (and opens its port). The admin then connects through it and runs the second apply, with `ssh_via`, from that private session. Public SSH is never closed before the private path has carried a real login. The `private` profile and the wizard follow the same two steps.
 
@@ -352,7 +352,7 @@ A use-after-free in the kernel's handling of IPv4 TCP options when building a SY
 | New | Backup | Unchanged when | By hand |
 |---|---|---|---|
 | `WireguardKey` | `{ path, created, public_key }` | the file exists with the recorded public key | none: rollback keeps it; `rm` it to rotate |
-| `TailscaleUp` | `{ was_running }` | always (the node's state is Tailscale's) | `tailscale down`, or `tailscale logout` |
+| `TailscaleUp` | `{ was_running }` | always (the node's state is Tailscale's) | `tailscale down` if it was not running before; `tailscale logout` to remove the node from the tailnet |
 
 - Both are `partial`. Neither backup holds a secret.
 - `Reload::WireguardSync`, above. No restart reload.

@@ -35,7 +35,7 @@ flowchart TB
   cli["CLI / TUI<br/>src/cli (clap, wizard) · src/tui (dialoguer prompts) · src/report"]
   engine["Engine · src/engine<br/>order modules → collect resources → diff →<br/>snapshot → validate → apply → verify<br/>journal · deadman · rollback · lock"]
   modules["Modules (policy) · src/modules/*<br/>ssh, firewall, user, docker, ...<br/>+ templates/"]
-  resources["Resources (idempotent primitives) · src/resource<br/>File, Directory, Sysctl, Package, Service, User, AuthorizedKeys"]
+  resources["Resources (idempotent primitives) · src/resource<br/>File, Directory, Sysctl, Package, Service, User, AuthorizedKeys, TailscaleUp"]
   platform["Platform · src/platform<br/>PkgManager · ServiceManager · Firewall · Sshd<br/>apt/dnf/apk, systemd/openrc, ufw/firewalld/nft"]
   facts["Facts (read-only) · src/facts<br/>os-release, init, virt, cloud, sshd -T, ss,<br/>SSH session, docker present"]
   sys["sys · src/sys<br/>Runner (exec) + Fs (rooted): real or fake"]
@@ -95,7 +95,7 @@ Small traits chosen from facts: `PkgManager`, `ServiceManager`, `Firewall`, `Ssh
 ### Resources (`src/resource`)
 Idempotent primitives. The set of kinds is closed, so `Resource` is an enum rather than a trait object: every `match` handles every kind, and it serializes with `serde` for the journal and `plan --json`.
 ```rust
-pub enum Resource { File(File), Directory(Directory), Sysctl(Sysctl), Package(Package), Service(Service), User(User), AuthorizedKeys(AuthorizedKeys) }
+pub enum Resource { File(File), Directory(Directory), Sysctl(Sysctl), Package(Package), Service(Service), User(User), AuthorizedKeys(AuthorizedKeys), TailscaleUp(TailscaleUp) }
 
 impl Resource {
     pub fn id(&self) -> String;                                         // e.g. "file:/etc/sysctl.d/90-vps-ready.conf"

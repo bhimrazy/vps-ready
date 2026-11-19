@@ -112,6 +112,7 @@ CI cannot join a tailnet, so before tagging a release that includes `net.tailsca
 - [ ] `tailscale status --json`: `BackendState` is `Running`, `Self.TailscaleIPs` is set, and `Self.KeyExpiry` is absent (tagged key). `tailscale debug prefs` has `CorpDNS: false` and `RunSSH: false`.
 - [ ] `ssh admin@<tailnet address>` works from another device in the tailnet. Delete the key file.
 - [ ] Apply again: the plan has no changes.
+- [ ] `rollback --last`, then apply again with the key file deleted (the one-off key is spent): the plan brings the node up with `tailscale up --accept-dns=false` and no `--auth-key`, and it is `Running` again.
 - [ ] Once `ssh_via` has shipped: through the `private` profile's two steps, close public SSH (`ssh_via = "tailscale0"`) and confirm from a login through `tailscale0`.
 - [ ] Reboot: `tailscaled` comes back and SSH through the tailnet works (and, with `ssh_via`, public SSH stays closed).
 - [ ] `rollback --last` until the start: the source, key and origin file are gone, `tailscale` is still installed, and the node is down but still logged in. Remove it from the tailnet with `sudo tailscale logout`.
