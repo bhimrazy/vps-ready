@@ -573,7 +573,7 @@ private_access_cycle() {
 
   echo "== $distro: under ssh_via, a second peer through wg0"
   { echo 'schema = 1'; wg_module "$laptop, $phone"; printf '%s\n' '[modules."firewall.inbound"]' 'ssh_via = "wg0"'; } |
-    pvm 'cat >/tmp/wg2.toml'
+    vm 'cat >/tmp/wg2.toml'
   vm 'sleep 40; echo still here' >"$tmp/old-wg.out" 2>&1 &
   old_pid=$!
   vm sudo vps-ready apply --yes --profile /tmp/wg2.toml --deadman 2m </dev/null >"$tmp/apply.out" 2>&1 &
@@ -591,7 +591,7 @@ private_access_cycle() {
   # Moving this session's own peer is refused.
   laptop4="{ name = \"laptop\", public_key = \"$runner_pub\", host = 4 }"
   { echo 'schema = 1'; wg_module "$laptop4, $phone"; printf '%s\n' '[modules."firewall.inbound"]' 'ssh_via = "wg0"'; } |
-    pvm 'cat >/tmp/wg3.toml'
+    vm 'cat >/tmp/wg3.toml'
   rc=0; vr apply --yes --profile /tmp/wg3.toml >"$tmp/own.out" 2>&1 || rc=$?
   cat "$tmp/own.out"
   [ "$rc" -eq 2 ] || die "changing this session's own peer exited $rc, expected 2"
