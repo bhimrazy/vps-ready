@@ -770,6 +770,121 @@ fn deadman_off_is_refused_under_ssh_via() {
     assert!(txn_ids(&fs).is_empty());
 }
 
+const PRIVATE: &str = "/srv/private.toml";
+
+/// A first boot with `tailscale0` up (100.64.0.7), Tailscale running with
+/// no key expiry, and nobody logged in.
+fn tailscale_vm(sys: Sys) -> anyhow::Result<Facts> {
+    let mut facts = vm(sys)?;
+    let ip = FakeRunner::new().on(
+        "ip",
+        ["-j", "-d", "addr"],
+        Output::success(std::fs::read(crate::facts::fixtures::testdata(
+            "network/ip-addr.json",
+        ))?),
+    );
+    facts.interfaces = crate::facts::network::interfaces(&ip, &mut Vec::new());
+    facts.tailscale = Some(crate::facts::Tailscale {
+        backend_state: "Running".into(),
+        have_node_key: true,
+        ips: vec!["100.64.0.7".parse()?],
+        key_expiry: None,
+    });
+    Ok(facts)
+}
+
+/// [`tailscale_vm`] from a login through `tailscale0`.
+fn tailscale_session(sys: Sys) -> anyhow::Result<Facts> {
+    let mut facts = tailscale_vm(sys)?;
+    facts.session = Some(Session {
+        server: "100.64.0.7:22".parse()?,
+        ..applying()
+    });
+    Ok(facts)
+}
+
+/// `apply --profile` the private profile with net.tailscale, only
+/// firewall.inbound, `--deadman=off`.
+fn apply_private_off(host: &Host) -> (u8, String, String) {
+    let sel = Selection {
+        profile: Some(PRIVATE.to_owned()),
+        modules: vec!["firewall.inbound".to_owned()],
+    };
+    run(|out, err| apply(host, &sel, true, None, None, out, err))
+}
+
+/// Step 1 of the private profile keeps SSH public, so `--deadman=off`
+/// applies it at first boot; step 2 limits SSH to tailscale0, so it is
+/// refused (refusal 7).
+#[test]
+fn deadman_off_in_the_private_profile_only_in_step_1() {
+    let fs = first_boot().with_file(
+        PRIVATE,
+        "schema = 1\nextends = \"private\"\n[modules.\"net.tailscale\"]\n",
+    );
+    fs.create_dir_all(Path::new("/etc/systemd/system"), 0o755)
+        .unwrap();
+    let runner = logind(&[])
+        .on(
+            "nft",
+            ["-j"],
+            Output::success(
+                std::fs::read(crate::facts::fixtures::testdata("nft/vps-ready-table.json"))
+                    .unwrap(),
+            ),
+        )
+        .on("nft", Vec::<String>::new(), Output::success(""))
+        .on(
+            "systemctl",
+            ["show", "--property=UnitFileState"],
+            Output::success("UnitFileState=enabled\n"),
+        )
+        .on(
+            "systemctl",
+            ["show"],
+            Output::success("LoadState=loaded\nActiveState=active\nUnitFileState=enabled\n"),
+        )
+        .on("systemctl", Vec::<String>::new(), Output::success(""));
+    let step2 = Host {
+        modules: crate::modules::all(),
+        facts: tailscale_session,
+        ..lockout_host(&fs, &runner)
+    };
+    let (code, _, err) = apply_private_off(&step2);
+    assert_eq!(code, EXIT_ERROR, "{err}");
+    assert!(
+        err.starts_with(
+            "error: `--deadman=off` is refused with `ssh_via`: only a confirm through \
+             tailscale0 shows that SSH still works"
+        ),
+        "{err}"
+    );
+    assert!(txn_ids(&fs).is_empty());
+
+    let step1 = Host {
+        facts: tailscale_vm,
+        ..step2
+    };
+    let (code, out, err) = apply_private_off(&step1);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        out.contains("step 1 of 2: SSH stays public until you apply this profile again"),
+        "{out}"
+    );
+    assert!(
+        out.contains("Applied without the safety timer (--deadman=off)"),
+        "{out}"
+    );
+    let ruleset = fs
+        .read(Path::new(crate::modules::firewall_inbound::RULESET))
+        .unwrap();
+    assert!(
+        !String::from_utf8(ruleset)
+            .unwrap()
+            .contains("iifname \"tailscale0\"")
+    );
+}
+
 #[test]
 fn deadman_off_is_refused_when_it_cannot_tell() {
     let fs = first_boot();

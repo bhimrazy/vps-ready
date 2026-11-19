@@ -347,7 +347,7 @@ TOML avoids YAML's foot-guns in a security config (`no` → `false`, the Norway 
 - Every module's params struct has `#[serde(deny_unknown_fields)]`, and every section is checked when the profile is parsed, so a typo is an error that names the module, not a silently ignored line.
 - Planned: the same structs derive `schemars::JsonSchema`, so the published schema can't drift from the code.
 
-The built-in profiles are `minimal` (`user.admin`, `ssh.server`, `firewall.inbound` allowing `22/tcp`, `kernel.sysctl`, `updates.auto`) and `web` (the same, plus `80/tcp`, `443/tcp`, `443/udp` and `ssh.bruteforce`). A file can extend one of them (one level), override a module's fields, or drop a module with `enabled = false`; tables merge one level deep and lists replace:
+The built-in profiles are `minimal` (`user.admin`, `ssh.server`, `firewall.inbound` allowing `22/tcp`, `kernel.sysctl`, `updates.auto`) `web` (the same, plus `80/tcp`, `443/tcp`, `443/udp` and `ssh.bruteforce`) and `private` (`web`'s hardening without Docker, nothing in `allow`, and `ssh_via = "vpn"`). A file can extend one of them (one level), override a module's fields, or drop a module with `enabled = false`; tables merge one level deep and lists replace:
 
 ```toml
 schema  = 1

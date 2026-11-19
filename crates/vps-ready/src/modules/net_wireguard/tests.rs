@@ -1397,3 +1397,87 @@ fn a_hand_made_wg0_is_left_alone() {
         Applicability::NotApplicable { .. }
     ));
 }
+
+/// The planned ruleset of `plan`, and `firewall.inbound`'s notes.
+fn firewall_of(plan: &Plan) -> (String, Vec<String>) {
+    let module = plan
+        .modules
+        .iter()
+        .find(|m| m.id == "firewall.inbound")
+        .unwrap();
+    let text = module
+        .changes()
+        .iter()
+        .find_map(|s| match &s.resource {
+            Resource::File(f) if f.path == Path::new(RULESET) => {
+                Some(String::from_utf8(f.content.clone()).unwrap())
+            }
+            _ => None,
+        })
+        .unwrap_or_default();
+    (text, module.notes.clone())
+}
+
+/// `extends = "private"` with net.wireguard: step 1, from a public
+/// session, brings up wg0, opens its port and keeps SSH public; step 2,
+/// the same profile from a login through wg0, limits SSH to it.
+#[test]
+fn the_private_profile_with_wireguard_in_two_steps() {
+    use crate::config::Profile;
+    let text = format!(
+        "schema = 1\nextends = \"private\"\n[modules.\"net.wireguard\"]\n{ADDRESS}\n{}\n",
+        peers(&[("laptop", 1, 2)])
+    );
+    let profile = Profile::parse(&text, crate::modules::all()).unwrap();
+    let selected = |id: &str| Selected {
+        module: *crate::modules::all().iter().find(|m| m.id() == id).unwrap(),
+        params: profile.params(id).unwrap(),
+    };
+    let modules = [selected("net.wireguard"), selected("firewall.inbound")];
+    let fs = fs();
+    let runner = Host::new(&fs);
+
+    let public = facts();
+    let step1 = engine::plan(
+        &modules,
+        &public,
+        Sys {
+            fs: &fs,
+            runner: &runner,
+        },
+    )
+    .unwrap();
+    let (ruleset, notes) = firewall_of(&step1);
+    assert!(!ruleset.contains("iifname \"wg0\""), "{ruleset}");
+    assert!(ruleset.contains("udp dport { 51820 } accept"), "{ruleset}");
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.starts_with("step 1 of 2: SSH stays public")),
+        "{notes:?}"
+    );
+    assert_eq!(step1.ssh_via, None);
+    let (state, sys) = engine_on(&fs, &runner);
+    let engine = Engine::lock(&state, sys).unwrap();
+    // `firewall.inbound` arms the timer; without a binary, apply it
+    // without, as a first boot would.
+    let off = Deadman {
+        off: true,
+        ..Deadman::default()
+    };
+    let first = engine::plan(&[modules[0]], &public, sys).unwrap();
+    engine.apply(&first, &off, &mut |_| {}).unwrap();
+
+    let mut through = with_wg0(facts(), "10.86.12.1");
+    through.session = Some(session("10.86.12.1:22", "10.86.12.2:40000"));
+    let step2 = engine::plan(&modules, &through, sys).unwrap();
+    let (ruleset, notes) = firewall_of(&step2);
+    assert!(
+        ruleset.contains("iifname \"wg0\" tcp dport { 22 } accept"),
+        "{ruleset}\n{notes:?}"
+    );
+    assert!(ruleset.contains("udp dport { 51820 } accept"), "{ruleset}");
+    assert_eq!(step2.ssh_via.as_deref(), Some(INTERFACE));
+    // net.wireguard itself has nothing to change by then.
+    assert!(step2.modules[0].changes().is_empty());
+}

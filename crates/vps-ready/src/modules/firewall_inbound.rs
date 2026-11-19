@@ -10,9 +10,9 @@ use serde::Deserialize;
 
 use super::{
     Applicability, DOCKER_PACKAGE, Module, ModuleError, ModuleSteps, ParamDoc, PlanCx,
-    net_wireguard, parse_params,
+    net_wireguard, parse_params, refuse,
 };
-
+use crate::config::STAGED_VIA;
 use crate::engine::Reload;
 use crate::facts::{Facts, Init, OsFamily, Proto};
 use crate::resource::{Directory, File, Package, Resource, Service, Validate};
@@ -70,25 +70,38 @@ struct Params {
 
 /// `ssh_via`: an interface name, or `""` for none. A name is what the
 /// kernel allows (at most 15 bytes), narrowed to letters, digits, `_`, `-`
-/// and `.` so that it is safe in a quoted nft string.
+/// and `.` so that it is safe in a quoted nft string. The profile turns
+/// `"vpn"` into [`STAGED_VIA`] and a name: `staged`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "String")]
-struct Via(Option<String>);
+struct Via {
+    name: Option<String>,
+    /// Step 1 of 2 (SSH stays public) until a session comes through it.
+    staged: bool,
+}
 
 impl TryFrom<String> for Via {
     type Error = String;
 
     fn try_from(s: String) -> Result<Self, String> {
-        if s.is_empty() {
-            return Ok(Self(None));
+        let (name, staged) = match s.strip_prefix(STAGED_VIA) {
+            Some(name) => (name, true),
+            None => (s.as_str(), false),
+        };
+        if name.is_empty() {
+            return Ok(Self::default());
         }
-        let ok = s.len() <= 15
-            && s != "."
-            && s != ".."
-            && s.chars()
+        let ok = name.len() <= 15
+            && name != "."
+            && name != ".."
+            && name
+                .chars()
                 .all(|c| c.is_ascii_alphanumeric() || "_-.".contains(c));
         if ok {
-            Ok(Self(Some(s)))
+            Ok(Self {
+                name: Some(name.to_owned()),
+                staged,
+            })
         } else {
             Err(format!(
                 "{s:?} is not an interface name (up to 15 letters, digits, `_`, `-` or `.`)"
@@ -147,7 +160,7 @@ struct Ruleset {
 impl Ruleset {
     fn new(facts: &Facts, params: &Params) -> Self {
         let ssh = ssh_ports(facts);
-        let ssh_via = params.ssh_via.0.clone();
+        let ssh_via = params.ssh_via.name.clone();
         let mut tcp = match ssh_via {
             Some(_) => BTreeSet::new(),
             None => ssh.clone(),
@@ -290,7 +303,7 @@ impl Module for FirewallInbound {
             ParamDoc {
                 name: "ssh_via",
                 default: "\"\"",
-                help: "Accept SSH only on this interface, e.g. \"tailscale0\" or \"wg0\", from a session through it; empty for any.",
+                help: "Accept SSH only on this interface, e.g. \"tailscale0\" or \"wg0\", from a session through it; \"vpn\" for the profile's VPN module's interface, which keeps SSH public until applied from a session through it (the private profile), so an interface named vpn cannot be used; empty for any.",
             },
         ]
     }
@@ -393,10 +406,10 @@ impl Module for FirewallInbound {
     /// The ruleset is checked with `nft -c` before it is written; the unit
     /// loads it when it starts.
     fn plan(&self, cx: &PlanCx, sys: Sys) -> Result<ModuleSteps, ModuleError> {
-        let params: Params = cx.params()?;
+        let mut params: Params = cx.params()?;
+        let mut notes: Vec<String> = stage(cx, &mut params, sys)?.into_iter().collect();
         let model = Ruleset::planned(cx, &params, sys)?;
         let ruleset = model.render()?;
-        let mut notes = Vec::new();
         notes.extend(wireguard_note(cx.facts, &model));
         if !cx.facts.docker && docker_planned(cx) {
             notes.extend(docker_notes(cx.facts, "deploy.docker installs Docker"));
@@ -452,7 +465,8 @@ impl Module for FirewallInbound {
     /// Reads the loaded table back: it must drop by default and accept every
     /// port the ruleset accepts.
     fn verify(&self, cx: &PlanCx, sys: Sys) -> Result<(), String> {
-        let params: Params = cx.params().map_err(|e| e.to_string())?;
+        let mut params: Params = cx.params().map_err(|e| e.to_string())?;
+        stage(cx, &mut params, sys).map_err(|e| e.to_string())?;
         let want = Ruleset::planned(cx, &params, sys).map_err(|e| e.to_string())?;
         let cmd = Cmd::new("nft")
             .args(["-j", "list", "table", "inet", "vps_ready"])
@@ -474,6 +488,39 @@ impl Module for FirewallInbound {
     fn verify_timeout(&self) -> Duration {
         NFT_TIMEOUT
     }
+}
+
+/// Step 1 of a staged `ssh_via` (the private profile's `"vpn"`): while
+/// this is not a session through the interface and the loaded ruleset does
+/// not limit SSH to it yet, drops it from `params`, so SSH stays public,
+/// and returns the note. Otherwise `params` stays, and the checks of an
+/// explicit `ssh_via` apply. Refused while the loaded ruleset limits SSH to
+/// another interface: dropping it would reopen SSH publicly.
+fn stage(cx: &PlanCx, params: &mut Params, sys: Sys) -> Result<Option<String>, ModuleError> {
+    let Via {
+        name: Some(via),
+        staged: true,
+    } = &params.ssh_via
+    else {
+        return Ok(None);
+    };
+    if via::through(cx.facts, via) {
+        return Ok(None);
+    }
+    match ssh_via(cx.planned, sys)? {
+        Some(loaded) if loaded == *via => return Ok(None),
+        Some(loaded) => {
+            return refuse(&format!(
+                "SSH is already limited to {loaded}, and step 1 would reopen it publicly: keep \
+                 `ssh_via = \"{loaded}\"` while {via} comes up, then apply this from a login \
+                 through {via}; or set `ssh_via = \"\"` to reopen it on purpose"
+            ));
+        }
+        None => {}
+    }
+    let note = via::step_one(cx.facts, via);
+    params.ssh_via = Via::default();
+    Ok(Some(note))
 }
 
 /// What accepting input from Docker's bridges means, after `why`, e.g.
