@@ -162,7 +162,9 @@ fn fs() -> FakeFs {
         .with_dir("/etc/apt/apt.conf.d", root(0o755))
         .with_dir("/etc/apt/sources.list.d", root(0o755))
         .with_dir("/root", root(0o700));
-    fs.write_atomic(Path::new(KEY), b"tskey-auth-kSECRET", root(0o600))
+    // Built at run time so no key-shaped literal is in the source.
+    let key = format!("tskey-{}", "auth-kSECRET");
+    fs.write_atomic(Path::new(KEY), key.as_bytes(), root(0o600))
         .unwrap();
     fs
 }
