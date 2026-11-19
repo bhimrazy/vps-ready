@@ -130,6 +130,10 @@ pub enum Event {
         /// `pending-confirm`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         ssh_port: Option<u16>,
+        /// With `applied`: a module needed the dead-man switch, and
+        /// `apply --deadman=off` ran without it.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        without_timer: bool,
     },
 }
 
@@ -162,6 +166,7 @@ impl Event {
             unit: None,
             admins: Vec::new(),
             ssh_port: None,
+            without_timer: false,
         }
     }
 }
@@ -555,6 +560,7 @@ mod tests {
                 unit: Some("vps-ready-deadman-20261025T120000Z-2".into()),
                 admins: vec!["admin".into()],
                 ssh_port: Some(22),
+                without_timer: false,
             }),
             r#"{"at":7,"event":"state","state":"pending-confirm","deadline":{"boottime":1575,"wall":1792932341},"live_since":1275,"session":{"pid":812,"start":10433},"unit":"vps-ready-deadman-20261025T120000Z-2","admins":["admin"],"ssh_port":22}"#
         );
@@ -628,6 +634,7 @@ mod tests {
                     unit: Some("u".into()),
                     admins: Vec::new(),
                     ssh_port: None,
+                    without_timer: false,
                 }),
                 rec(state(TxnState::PendingConfirm {
                     deadline: DEADLINE,
@@ -739,6 +746,7 @@ mod tests {
                 unit: Some("u-2".into()),
                 admins: Vec::new(),
                 ssh_port: None,
+                without_timer: false,
             }),
         ];
         assert_eq!(replay(&pending_txn).unwrap(), pending());

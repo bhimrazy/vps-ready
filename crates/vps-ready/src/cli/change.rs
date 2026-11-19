@@ -190,13 +190,14 @@ pub(super) fn plan_profile(
 }
 
 /// `apply`: plans under the lock, asks, applies, then audits what it fixed.
-/// `window` is the dead-man window. `input` is stdin when it is a terminal.
+/// `window` is the dead-man window, `None` for `--deadman=off`. `input` is
+/// stdin when it is a terminal.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn apply(
     host: &Host,
     sel: &Selection,
     yes: bool,
-    window: Duration,
+    window: Option<Duration>,
     input: Option<&mut dyn BufRead>,
     out: &mut dyn Write,
     err: &mut dyn Write,
@@ -247,7 +248,7 @@ pub(super) fn apply_profile(
     profile: Option<Profile>,
     sel: &Selection,
     yes: bool,
-    window: Duration,
+    window: Option<Duration>,
     input: Option<&mut dyn BufRead>,
     out: &mut dyn Write,
     err: &mut dyn Write,
@@ -272,6 +273,9 @@ pub(super) fn apply_profile(
     if n == 0 {
         return Ok(Applied::Nothing);
     }
+    if window.is_none() {
+        nobody_logged_in(host)?;
+    }
     if !yes {
         let Some(input) = input else {
             bail!("stdin is not a terminal; pass --yes to apply without asking");
@@ -292,8 +296,9 @@ pub(super) fn apply_profile(
         "If this is interrupted, run `sudo vps-ready rollback --last` to undo it."
     )?;
     let deadman = Deadman {
-        window,
+        window: window.unwrap_or(engine::deadman::DEFAULT_WINDOW),
         binary: host.binary.clone(),
+        off: window.is_none(),
     };
     match engine.apply(&plan, &deadman, &mut |p| print_progress(err, &p))? {
         ApplyOutcome::NothingToDo => writeln!(out, "Nothing to do.")?,
@@ -323,6 +328,12 @@ pub(super) fn apply_profile(
                 plural(n, "change"),
                 journal.display()
             )?;
+            if deadman.off && plan.needs_deadman() {
+                writeln!(
+                    out,
+                    "Applied without the safety timer (--deadman=off); `history` says so."
+                )?;
+            }
             if let Err(e) = audit_fixed(host, &plan, out) {
                 writeln!(err, "vps-ready: could not audit after apply: {e:#}")?;
             }
@@ -338,6 +349,21 @@ pub(super) fn apply_profile(
         }
     }
     Ok(Applied::Ran(0))
+}
+
+/// `--deadman=off` needs positive evidence that nobody could confirm.
+fn nobody_logged_in(host: &Host) -> anyhow::Result<()> {
+    match crate::facts::logins::detect(host.sys.fs, host.sys.runner) {
+        Ok(logins) if logins.is_empty() => Ok(()),
+        Ok(logins) => bail!(
+            "someone is logged in ({}), so a confirm is possible: drop `--deadman=off`",
+            logins.join(", ")
+        ),
+        Err(why) => bail!(
+            "`--deadman=off` needs to know that nobody is logged in, and {why}; drop \
+             `--deadman=off`"
+        ),
+    }
 }
 
 /// `rollback`: undoes one transaction.
@@ -828,6 +854,9 @@ fn print_history(out: &mut dyn Write, txns: &[TxnInfo]) -> io::Result<()> {
             (true, _) => format!("unfinished ({})", t.state),
             (false, Some(0)) => format!("{} (deadline passed)", t.state),
             (false, Some(secs)) => format!("{} (reverts in {})", t.state, short(secs)),
+            (false, None) if t.without_timer && t.state == TxnState::Applied => {
+                format!("{} (without the timer)", t.state)
+            }
             (false, None) => t.state.to_string(),
         })
         .collect();

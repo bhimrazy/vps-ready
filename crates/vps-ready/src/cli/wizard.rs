@@ -68,7 +68,7 @@ pub(super) fn run<R: BufRead>(
         Some(profile),
         &Selection::default(),
         false,
-        engine::deadman::DEFAULT_WINDOW,
+        Some(engine::deadman::DEFAULT_WINDOW),
         Some(&mut input),
         out,
         err,

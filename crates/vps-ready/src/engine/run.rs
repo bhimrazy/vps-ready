@@ -185,6 +185,10 @@ pub struct TxnInfo {
     /// once its deadline or boot passed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reverts_in: Option<u64>,
+    /// Whether `apply --deadman=off` applied it without the dead-man timer
+    /// a module needed.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub without_timer: bool,
 }
 
 /// How a rollback treats resources that changed since apply.
@@ -348,7 +352,7 @@ impl<'a> Engine<'a> {
                 return Err(EngineError::PlanChanged(step.change.id.clone()));
             }
         }
-        let armed = plan.needs_deadman();
+        let armed = plan.needs_deadman() && !deadman.off;
         let copy;
         let mut deadman = deadman;
         if armed {
@@ -427,8 +431,14 @@ impl<'a> Engine<'a> {
         self.verify(plan)?;
         progress(Progress::Verified);
         if !armed {
-            open.append(Event::state(TxnState::Applied))
-                .map_err(failed)?;
+            open.append(Event::State {
+                state: TxnState::Applied,
+                unit: None,
+                admins: Vec::new(),
+                ssh_port: None,
+                without_timer: plan.needs_deadman(),
+            })
+            .map_err(failed)?;
             return Ok(ApplyOutcome::Applied { txn });
         }
         let deadline = self.go_live(open, plan, deadman, timer).map_err(failed)?;
@@ -500,6 +510,7 @@ impl<'a> Engine<'a> {
             unit: Some(unit),
             admins: plan.admins(),
             ssh_port: plan.facts.session.as_ref().map(|s| s.server.port()),
+            without_timer: false,
         })?;
         Ok(deadline)
     }
@@ -1462,6 +1473,15 @@ pub fn history(state: &StateDir, fs: &dyn Fs) -> Result<Vec<TxnInfo>, EngineErro
                 })
                 .collect(),
             reverts_in,
+            without_timer: records.iter().any(|r| {
+                matches!(
+                    r.event,
+                    Event::State {
+                        without_timer: true,
+                        ..
+                    }
+                )
+            }),
         });
     }
     Ok(infos)

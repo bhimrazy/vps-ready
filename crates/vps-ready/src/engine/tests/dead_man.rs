@@ -64,6 +64,7 @@ fn deadman_cfg() -> Deadman {
     Deadman {
         window: WINDOW,
         binary: BIN.into(),
+        off: false,
     }
 }
 
@@ -222,6 +223,7 @@ fn arms_before_the_first_change_and_waits_for_a_confirm() {
             unit: Some(unit(2)),
             admins: vec!["admin".into()],
             ssh_port: Some(22),
+            without_timer: false,
         }
     );
 

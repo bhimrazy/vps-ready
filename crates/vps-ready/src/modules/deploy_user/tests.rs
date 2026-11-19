@@ -656,6 +656,7 @@ fn creates_the_deploy_user_and_rolls_back() {
     let deadman = Deadman {
         window: crate::engine::deadman::DEFAULT_WINDOW,
         binary: BIN.into(),
+        off: false,
     };
     let outcome = engine.apply(&first, &deadman, &mut |_| {}).unwrap();
     assert!(
@@ -733,6 +734,7 @@ fn deadman() -> Deadman {
     Deadman {
         window: crate::engine::deadman::DEFAULT_WINDOW,
         binary: BIN.into(),
+        off: false,
     }
 }
 

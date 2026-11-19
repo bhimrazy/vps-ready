@@ -425,6 +425,7 @@ mod tests {
                     unit: None,
                     admins: Vec::new(),
                     ssh_port: None,
+                    without_timer: false,
                     state: TxnState::Applied,
                 },
             },

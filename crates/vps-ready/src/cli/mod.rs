@@ -1,8 +1,8 @@
 //! Command-line interface: argument definitions and command dispatch.
 //!
 //! Today: the wizard (no command, on a terminal), `version`, `detect`,
-//! `audit`, `plan`, `apply`, `rollback`, `confirm`, `history` and
-//! `modules`. Further commands are added as their milestones land; see the
+//! `audit`, `plan`, `apply`, `rollback`, `confirm`, `history`, `modules`
+//! and `export cloud-init`. Further commands are added as their milestones land; see the
 //! GitHub milestones.
 
 use std::cmp::Reverse;
@@ -26,6 +26,7 @@ use crate::modules;
 use crate::sys::{RealFs, RealRunner, Sys};
 
 mod change;
+mod export;
 mod module_docs;
 mod wizard;
 
@@ -132,9 +133,11 @@ pub enum Command {
         #[arg(long = "module", value_name = "ID", value_parser = module_ids())]
         modules: Vec<String>,
         /// How long a confirm has, from 1m to 30m, for changes that can lock
-        /// you out (e.g. `90s`, `5m`, `2m30s`).
-        #[arg(long, value_name = "DUR", default_value = "5m", value_parser = window)]
-        deadman: Duration,
+        /// you out (e.g. `90s`, `5m`, `2m30s`). `off` applies them without
+        /// the safety timer, for a first boot (`export cloud-init`), and only
+        /// when nobody is logged in.
+        #[arg(long, value_name = "DUR|off", default_value = "5m", value_parser = deadman)]
+        deadman: Deadman,
         /// Do not ask; required when stdin is not a terminal.
         #[arg(long, short)]
         yes: bool,
@@ -204,6 +207,43 @@ pub enum Command {
         #[arg(value_name = "ID", value_parser = module_ids())]
         id: Option<String>,
     },
+    /// Print a profile in another form. Changes nothing, needs no root and
+    /// makes no network call.
+    #[command(subcommand)]
+    Export(Export),
+}
+
+/// What `export` prints.
+#[derive(Debug, Subcommand)]
+pub enum Export {
+    /// `#cloud-config` user-data that hardens a new server at its first
+    /// boot, before anyone logs in: it installs this version, checked
+    /// against its SHA-256, and runs `apply --yes --deadman=off`.
+    CloudInit {
+        /// The profile: minimal, web or the path of a profile file. It must
+        /// give user.admin its `authorized_keys`.
+        #[arg(long, value_name = "NAME|PATH")]
+        profile: String,
+        /// The checksums.txt of this version's release, downloaded and
+        /// verified first (see the install page).
+        #[arg(long, value_name = "PATH")]
+        checksums: PathBuf,
+        /// Download the tarballs from URL instead of the GitHub release,
+        /// e.g. a mirror. The SHA-256 is still checked.
+        #[arg(long, value_name = "URL")]
+        base_url: Option<String>,
+    },
+}
+
+/// `apply --deadman`: a window, or `off`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Deadman(pub Option<Duration>);
+
+fn deadman(text: &str) -> Result<Deadman, String> {
+    if text == "off" {
+        return Ok(Deadman(None));
+    }
+    window(text).map(|w| Deadman(Some(w)))
 }
 
 /// `--module` accepts the IDs of the registry.
@@ -462,7 +502,7 @@ pub fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
                 &real_host(cli),
                 &sel,
                 *yes,
-                *deadman,
+                deadman.0,
                 input,
                 &mut out,
                 &mut io::stderr(),
@@ -512,6 +552,21 @@ pub fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
         }
         Command::History => {
             let n = change::history(&real_host(cli), cli.json, &mut out)?;
+            code = ExitCode::from(n);
+        }
+        Command::Export(Export::CloudInit {
+            profile,
+            checksums,
+            base_url,
+        }) => {
+            no_json(cli, "export")?;
+            let n = export::cloud_init(
+                &real_host(cli),
+                profile,
+                checksums,
+                base_url.as_deref(),
+                &mut out,
+            )?;
             code = ExitCode::from(n);
         }
         Command::Modules { id } => {

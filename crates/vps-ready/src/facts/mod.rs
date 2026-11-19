@@ -17,6 +17,7 @@ pub mod bridges;
 pub mod docker;
 pub mod firewall;
 pub mod listeners;
+pub mod logins;
 pub mod os_release;
 pub mod reboot;
 pub mod session;
