@@ -1,0 +1,1 @@
+{"Version":"1.80.0","TUN":true,"BackendState":"Stopped","HaveNodeKey":true,"AuthURL":"","TailscaleIPs":["100.64.0.7","fd7a:115c:a1e0::7"],"Self":{"ID":"nExample1CNTRL","HostName":"vps","Online":false,"TailscaleIPs":["100.64.0.7","fd7a:115c:a1e0::7"],"KeyExpiry":"2027-05-18T09:30:00Z"},"Peer":null}
