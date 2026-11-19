@@ -110,7 +110,7 @@ pub enum Command {
     /// Show what `apply` would change. Does not need root, but then skips
     /// what only root can read.
     Plan {
-        /// The profile to plan: minimal, web or the path of a profile file.
+        /// The profile to plan: minimal, web, private or the path of a profile file.
         #[arg(long, value_name = "NAME|PATH")]
         profile: Option<String>,
         /// Plan only this module (repeatable). Default: the modules of the
@@ -125,7 +125,7 @@ pub enum Command {
     /// failure did not complete, and 4 when the changes are live and revert
     /// at a deadline unless confirmed.
     Apply {
-        /// The profile to apply: minimal, web or the path of a profile file.
+        /// The profile to apply: minimal, web, private or the path of a profile file.
         #[arg(long, value_name = "NAME|PATH")]
         profile: Option<String>,
         /// Apply only this module (repeatable). Default: the modules of the
@@ -220,8 +220,8 @@ pub enum Export {
     /// boot, before anyone logs in: it installs this version, checked
     /// against its SHA-256, and runs `apply --yes --deadman=off`.
     CloudInit {
-        /// The profile: minimal, web or the path of a profile file. It must
-        /// give user.admin its `authorized_keys`.
+        /// The profile: minimal, web, private or the path of a profile file.
+        /// It must give user.admin its `authorized_keys`.
         #[arg(long, value_name = "NAME|PATH")]
         profile: String,
         /// The checksums.txt of this version's release, downloaded and

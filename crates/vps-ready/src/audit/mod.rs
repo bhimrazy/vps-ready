@@ -128,16 +128,18 @@ pub enum Check {
     /// No port is open to the internet but SSH's, TCP 80 and 443, UDP 443,
     /// the DHCP clients' (UDP 68 and 546) and WireGuard's listen ports: a
     /// listening socket beyond loopback, link-local and private interfaces
-    /// (`lo`, `tailscale0`, WireGuard, Docker's bridges), that the input
-    /// chains let in on an interface that is not private. Docker's
+    /// (`lo`, `tailscale0`, WireGuard, Docker's bridges, the `ssh_via`
+    /// interface of vps-ready's table), that the input chains let in on an
+    /// interface that is not private. Docker's
     /// published ports are left to [`Check::PublishedPorts`]. The open
     /// ports are in the finding's note either way; unknown when a rule nft
     /// does not show may open one. WireGuard's listen ports need
     /// wireguard-tools (`wg`).
     ExposedListeners,
     /// SSH is accepted only through a VPN: the input chains drop every SSH
-    /// port unless it arrives on `lo`, `tailscale0` or a WireGuard
-    /// interface. Skipped when the host has none of the last two. The
+    /// port unless it arrives on `lo`, `tailscale0`, a WireGuard interface
+    /// or the `ssh_via` interface of vps-ready's table (`nb0`). Skipped
+    /// when the host has none of the last three. The
     /// finding's note warns when SSH depends on `tailscale0` and the node's
     /// key expires.
     SshPrivateOnly,
@@ -893,8 +895,10 @@ fn exposed_listeners(facts: &Facts) -> (Outcome, Option<String>) {
     }
     // Interfaces known not to face the internet; the names stand in when
     // `ip` is missing. Docker's bridges carry its containers' traffic.
+    let via = crate::modules::firewall_inbound::private_via(facts);
     let private = |name: &str| {
         matches!(name, "lo" | "tailscale0")
+            || via.as_deref() == Some(name)
             || facts
                 .interfaces
                 .iter()
@@ -992,9 +996,11 @@ fn ssh_private_only(facts: &Facts) -> Outcome {
     if let Some(found) = ssh_limited_to_missing(facts) {
         return Outcome::Fail { found };
     }
-    if !facts.interfaces.iter().any(crate::facts::Interface::is_vpn) {
+    let via = crate::modules::firewall_inbound::private_via(facts);
+    if via.is_none() && !facts.interfaces.iter().any(crate::facts::Interface::is_vpn) {
         return Outcome::Skip {
-            reason: "there is no VPN interface (WireGuard or tailscale0)".to_owned(),
+            reason: "there is no VPN interface (WireGuard or tailscale0) and no `ssh_via` rule"
+                .to_owned(),
         };
     }
     let Some(firewall) = &facts.firewall else {
@@ -1003,6 +1009,7 @@ fn ssh_private_only(facts: &Facts) -> Outcome {
     };
     let vpn = |name: &str| {
         matches!(name, "lo" | "tailscale0")
+            || via.as_deref() == Some(name)
             || facts
                 .interfaces
                 .iter()
