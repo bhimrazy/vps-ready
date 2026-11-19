@@ -1374,7 +1374,7 @@ impl<'a> Engine<'a> {
             left.append(&mut held);
             left.extend(failed.iter().map(|(reload, _)| ByHand {
                 resource: reload.name().to_owned(),
-                step: reload::line(&reload.rollback_steps(self.sys).1),
+                step: reload::line(&reload.rollback_steps(self.sys, &open.records).1),
             }));
             let source = match unrestored.into_iter().next() {
                 Some((_, e)) => e,
@@ -1440,7 +1440,7 @@ impl<'a> Engine<'a> {
             return Ok(());
         }
         progress(Progress::Reload(reload));
-        let (check, command) = reload.rollback_steps(self.sys);
+        let (check, command) = reload.rollback_steps(self.sys, &open.records);
         if let Some(check) = check
             && let Err(reason) = reload::run(self.sys, &check)
         {

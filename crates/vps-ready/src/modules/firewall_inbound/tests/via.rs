@@ -444,6 +444,65 @@ fn ssh_009_and_fw_003_pass_on_the_loaded_table() {
     ));
 }
 
+/// The table limits SSH to `name`, a `tun` link with `ip`, on the hosts
+/// of [`via_facts`].
+fn via_on(name: &str, ip: &str) -> Facts {
+    let json = std::fs::read_to_string(testdata(LOADED_VIA)).unwrap();
+    let mut facts = via_facts(&format!("{ip}:22"));
+    facts.firewall = crate::facts::firewall::parse_json(json.replace("wg0", name).as_bytes());
+    facts.ipv6 = true;
+    if !facts.interfaces.iter().any(|i| i.name == name) {
+        facts.interfaces.push(crate::facts::Interface {
+            name: name.into(),
+            kind: Some("tun".into()),
+            addresses: vec![crate::facts::Address {
+                ip: ip.parse().unwrap(),
+                prefix: 16,
+            }],
+            up: true,
+        });
+    }
+    facts
+}
+
+/// `ssh_via` on a VPN that is neither WireGuard nor Tailscale (NetBird's
+/// `nb0`) is private for SSH-009 and FW-003, with or without another VPN.
+#[test]
+fn ssh_009_and_fw_003_pass_through_any_vpn_interface() {
+    use crate::audit::Outcome;
+    let mut facts = via_on("nb0", "10.78.0.1");
+    assert_eq!(finding(&facts, "SSH-009").outcome, Outcome::Pass);
+    let fw = finding(&facts, "FW-003");
+    assert_eq!(fw.outcome, Outcome::Pass);
+    assert_eq!(fw.note.as_deref(), Some("no port is open to the internet"));
+    facts.interfaces.retain(|i| !i.is_vpn());
+    assert_eq!(finding(&facts, "SSH-009").outcome, Outcome::Pass);
+
+    // An interface with the default route is never private.
+    let fail = |on: &str| Outcome::Fail {
+        found: format!("SSH is accepted beyond a VPN: tcp/22 on {on}"),
+    };
+    let public = via_on("eth0", "192.0.2.10");
+    assert_eq!(finding(&public, "SSH-009").outcome, fail("eth0"));
+    // Nor is a second NIC with a public address.
+    let public = via_on("eth1", "203.0.113.7");
+    assert_eq!(finding(&public, "SSH-009").outcome, fail("eth1"));
+    // Nor any without the routes, which could show it is the way out.
+    let mut unknown = via_on("nb0", "10.78.0.1");
+    unknown.routes.clear();
+    assert_eq!(finding(&unknown, "SSH-009").outcome, fail("nb0"));
+    unknown.interfaces.retain(|i| !i.is_vpn());
+    assert!(matches!(
+        finding(&unknown, "SSH-009").outcome,
+        Outcome::Skip { .. }
+    ));
+    // Nor a wildcard, which names no interface that exists.
+    let json = std::fs::read_to_string(testdata(LOADED_VIA)).unwrap();
+    let mut wildcard = via_on("nb0", "10.78.0.1");
+    wildcard.firewall = crate::facts::firewall::parse_json(json.replace("wg0", "nb*").as_bytes());
+    assert_eq!(finding(&wildcard, "SSH-009").outcome, fail("nb*"));
+}
+
 /// An expiring node key under a `tailscale0` rule is warned about in
 /// SSH-009 and the plan; with expiry disabled it is not.
 #[test]

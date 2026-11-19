@@ -70,7 +70,7 @@ PASS     FW-003   low       Only expected ports are open to the internet
 SKIP     MAC-001  medium    AppArmor enabled
 
 5 passed, 6 failed (1 high, 3 medium, 2 low), 0 unknown, 22 skipped
-Skipped: there is no VPN interface (WireGuard or tailscale0).
+Skipped: there is no VPN interface (WireGuard or tailscale0) and no `ssh_via` rule.
 Skipped: kernel settings are not checked inside a container.
 Skipped: Docker is not installed.
 vps-ready can fix all 6 (SSH-001, SSH-002, SSH-005, SSH-008, UPD-001, FW-001):
