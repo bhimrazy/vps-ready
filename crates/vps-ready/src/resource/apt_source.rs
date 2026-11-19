@@ -32,6 +32,17 @@ pub const CADDY_KEY: &str = include_str!("../../keys/caddy.asc");
 /// gives it for the `caddy/stable` repository.
 pub const CADDY_FINGERPRINT: &str = "65760C51EDEA2017CEA2CA15155B6D79CA56EA34";
 
+/// Tailscale's armored public key, from
+/// <https://pkgs.tailscale.com/stable/debian/bookworm.gpg>, byte-identical
+/// to the one for every Debian and Ubuntu codename. Retrieved 2026-11-19;
+/// file SHA-256
+/// `53c6f7dfbd774839d9f37e6c5022ba952108aba9a0e556a56f292a9eb605d7cf`.
+pub const TAILSCALE_KEY: &str = include_str!("../../keys/tailscale.asc");
+
+/// The fingerprint of [`TAILSCALE_KEY`]'s primary key. Tailscale does not
+/// publish it; it is the key that signs the repository's `InRelease` files.
+pub const TAILSCALE_FINGERPRINT: &str = "2596A99EAAB33821893C0A79458CA832957F5868";
+
 /// A vendor's apt repository.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AptSource {
@@ -67,6 +78,25 @@ impl AptSource {
             uri,
             suite: codename.to_owned(),
             component: "stable",
+        })
+    }
+
+    /// Tailscale's stable repository for the distribution `id` (`debian` or
+    /// `ubuntu`) and its `codename`; `None` as for [`AptSource::docker`].
+    #[must_use]
+    pub fn tailscale(id: &str, codename: &str) -> Option<Self> {
+        let uri = match id {
+            "debian" => "https://pkgs.tailscale.com/stable/debian",
+            "ubuntu" => "https://pkgs.tailscale.com/stable/ubuntu",
+            _ => return None,
+        };
+        plain_word(codename).then(|| Self {
+            name: "tailscale",
+            key: TAILSCALE_KEY,
+            fingerprint: TAILSCALE_FINGERPRINT,
+            uri,
+            suite: codename.to_owned(),
+            component: "main",
         })
     }
 
@@ -295,6 +325,37 @@ mod tests {
     }
 
     #[test]
+    fn tailscale_sources_for_each_codename() {
+        let hosts = [
+            ("debian", "bookworm"),
+            ("debian", "trixie"),
+            ("ubuntu", "jammy"),
+            ("ubuntu", "noble"),
+        ];
+        for (id, codename) in hosts {
+            let source = AptSource::tailscale(id, codename).unwrap();
+            let resources = apt_source(&source, "amd64");
+            let files = files(&resources);
+            assert_eq!(files[0].1, TAILSCALE_KEY);
+            assert_eq!(
+                files[1].1,
+                format!(
+                    "# Written by vps-ready. `vps-ready rollback --last` removes it.\n\
+                     Types: deb\n\
+                     URIs: https://pkgs.tailscale.com/stable/{id}\n\
+                     Suites: {codename}\n\
+                     Components: main\n\
+                     Architectures: amd64\n\
+                     Signed-By: /etc/apt/keyrings/tailscale.asc\n"
+                ),
+                "{id} {codename}"
+            );
+        }
+        assert_eq!(AptSource::tailscale("fedora", "bookworm"), None);
+        assert_eq!(AptSource::tailscale("debian", "a b"), None);
+    }
+
+    #[test]
     fn caddy_uses_its_fixed_suite() {
         for arch in ["amd64", "arm64"] {
             assert_eq!(
@@ -502,6 +563,7 @@ mod tests {
         for (key, fingerprint) in [
             (DOCKER_KEY, DOCKER_FINGERPRINT),
             (CADDY_KEY, CADDY_FINGERPRINT),
+            (TAILSCALE_KEY, TAILSCALE_FINGERPRINT),
         ] {
             let Some(found) = gpg_fingerprints(key) else {
                 return;

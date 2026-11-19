@@ -33,7 +33,7 @@ pub(super) fn cloud_init(
 ) -> anyhow::Result<u8> {
     let (text, profile) = load(host, spec)?;
     if let Some(why) = refusal(&profile) {
-        bail!("profile {spec}: {why}");
+        bail!("profile {spec}: {}", why.reason());
     }
     // YAML 1.1 parsers break lines at these; TOML allows them in strings.
     if let Some(c) = text
@@ -104,19 +104,47 @@ write_files:
     Ok(0)
 }
 
-/// Why `export` refuses `profile`, if it does: at first boot there is no
-/// SSH session to copy keys from, and root's keys on cloud images carry a
-/// `command=` that `user.admin` skips.
-pub(super) fn refusal(profile: &Profile) -> Option<&'static str> {
-    let admin = profile.params("user.admin")?;
-    let keys = admin.get("authorized_keys").and_then(toml::Value::as_array);
-    match keys {
-        Some(keys) if !keys.is_empty() => None,
-        _ => Some(
-            "user.admin needs `authorized_keys`: at first boot there is no SSH session to \
-             copy keys from",
-        ),
+/// Why `export` refuses a profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Refusal {
+    /// At first boot there is no SSH session to copy keys from, and root's
+    /// keys on cloud images carry a `command=` that `user.admin` skips.
+    NoAdminKeys,
+    /// User-data is readable by any process on the host through the
+    /// metadata service, so it must not lead to an auth key.
+    TailscaleAuthKey,
+}
+
+impl Refusal {
+    pub(super) const fn reason(self) -> &'static str {
+        match self {
+            Self::NoAdminKeys => {
+                "user.admin needs `authorized_keys`: at first boot there is no SSH session to \
+                 copy keys from"
+            }
+            Self::TailscaleAuthKey => {
+                "net.tailscale has `auth_key_file`, and nothing at first boot puts a key there \
+                 safely: user-data is readable through the metadata service. Leave it out, and \
+                 log in with `sudo tailscale up --accept-dns=false` after the first boot"
+            }
+        }
     }
+}
+
+/// Why `export` refuses `profile`, if it does.
+pub(super) fn refusal(profile: &Profile) -> Option<Refusal> {
+    if let Some(admin) = profile.params("user.admin") {
+        let keys = admin.get("authorized_keys").and_then(toml::Value::as_array);
+        if keys.is_none_or(Vec::is_empty) {
+            return Some(Refusal::NoAdminKeys);
+        }
+    }
+    profile
+        .params("net.tailscale")
+        .and_then(|t| t.get("auth_key_file"))
+        .and_then(toml::Value::as_str)
+        .is_some_and(|path| !path.is_empty())
+        .then_some(Refusal::TailscaleAuthKey)
 }
 
 /// The profile's text as written to the server, and the profile. A

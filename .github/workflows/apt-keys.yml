@@ -42,7 +42,11 @@ jobs:
           for pair in \
             "docker https://download.docker.com/linux/debian/gpg" \
             "docker https://download.docker.com/linux/ubuntu/gpg" \
-            "caddy https://dl.cloudsmith.io/public/caddy/stable/gpg.key"; do
+            "caddy https://dl.cloudsmith.io/public/caddy/stable/gpg.key" \
+            "tailscale https://pkgs.tailscale.com/stable/debian/bookworm.gpg" \
+            "tailscale https://pkgs.tailscale.com/stable/debian/trixie.gpg" \
+            "tailscale https://pkgs.tailscale.com/stable/ubuntu/jammy.gpg" \
+            "tailscale https://pkgs.tailscale.com/stable/ubuntu/noble.gpg"; do
             set -- $pair
             curl -fsSL --proto '=https' --tlsv1.2 -o vendor.asc "$2"
             if ! diff -u --label embedded --label vendor <(keys "crates/vps-ready/keys/$1.asc") <(keys vendor.asc) >diff.txt; then

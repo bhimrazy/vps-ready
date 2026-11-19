@@ -16,6 +16,12 @@ expression: out
     "arms_safety_timer": true
   },
   {
+    "id": "net.tailscale",
+    "title": "Join a tailnet with Tailscale, for a private path to SSH",
+    "applies": true,
+    "arms_safety_timer": false
+  },
+  {
     "id": "deploy.docker",
     "title": "Install Docker with logs capped and ports on loopback by default",
     "applies": true,

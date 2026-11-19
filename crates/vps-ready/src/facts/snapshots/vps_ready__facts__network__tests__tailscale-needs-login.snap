@@ -5,3 +5,4 @@ expression: ts
 backend_state: NeedsLogin
 ips: []
 key_expiry: ~
+have_node_key: false

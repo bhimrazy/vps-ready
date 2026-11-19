@@ -1,0 +1,41 @@
+---
+source: crates/vps-ready/src/modules/net_tailscale/tests.rs
+expression: plan
+---
+modules:
+  - id: net.tailscale
+    title: "Join a tailnet with Tailscale, for a private path to SSH"
+    status: applicable
+    changes:
+      - id: "directory:/etc/apt/keyrings"
+        summary: "create directory /etc/apt/keyrings (0755 0:0)"
+        diff: ~
+        reversibility: reversible
+      - id: "file:/etc/apt/keyrings/tailscale.asc"
+        summary: "create /etc/apt/keyrings/tailscale.asc (0644 0:0): PGP public key, fingerprint 2596 A99E AAB3 3821 893C 0A79 458C A832 957F 5868 (52 lines)"
+        diff: ~
+        reversibility: reversible
+      - id: "file:/etc/apt/sources.list.d/tailscale.sources"
+        summary: "create /etc/apt/sources.list.d/tailscale.sources (0644 0:0)"
+        diff: "@@ -0,0 +1,7 @@\n+# Written by vps-ready. `vps-ready rollback --last` removes it.\n+Types: deb\n+URIs: https://pkgs.tailscale.com/stable/debian\n+Suites: trixie\n+Components: main\n+Architectures: amd64\n+Signed-By: /etc/apt/keyrings/tailscale.asc\n"
+        reversibility: reversible
+      - id: "file:/etc/apt/apt.conf.d/52vps-ready-tailscale"
+        summary: "create /etc/apt/apt.conf.d/52vps-ready-tailscale (0644 0:0)"
+        diff: "@@ -0,0 +1,2 @@\n+// Written by vps-ready (net.tailscale). `vps-ready rollback --last` removes it.\n+Unattended-Upgrade::Origins-Pattern { \"origin=Tailscale,codename=${distro_codename}\"; };\n"
+        reversibility: reversible
+      - id: "package:tailscale"
+        summary: install tailscale
+        diff: ~
+        reversibility: partial
+      - id: "service:tailscaled.service"
+        summary: enable and start tailscaled.service
+        diff: ~
+        reversibility: reversible
+      - id: "tailscale:up"
+        summary: log in to the tailnet with the auth key in /root/tailscale-auth-key
+        diff: ~
+        reversibility: partial
+    notes:
+      - "no port is opened: Tailscale needs none, and firewall.inbound's established,related rule covers its replies; tailscaled's own nftables chains (ts-input) coexist with vps-ready's table"
+      - "delete /root/tailscale-auth-key after the login; a one-off key is spent once used, and later applies use the node's own login"
+      - "rollback leaves Tailscale installed and tailscaled running (`sudo systemctl disable --now tailscaled` stops it), keeps /var/lib/tailscale and the node's login, and removes the repository it updates from; `sudo tailscale logout` removes the node from the tailnet"
