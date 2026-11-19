@@ -104,7 +104,8 @@ pub struct Ports {
 }
 
 impl Ports {
-    fn contains(&self, proto: &str, port: u16) -> bool {
+    /// Whether it holds `port` of `proto`.
+    pub(crate) fn contains(&self, proto: &str, port: u16) -> bool {
         self.proto == proto && (self.first..=self.last).contains(&port)
     }
 }
@@ -117,7 +118,9 @@ pub struct InterfacePorts {
     /// pass each match, so not every name may reach the rule. Empty when no
     /// match lists plain names, e.g. `iifname != "eth0"`.
     pub interfaces: Vec<String>,
-    /// The ports.
+    /// The ports, flattened so `detect --json` keeps the shape of a
+    /// [`Ports`] entry.
+    #[serde(flatten)]
     pub ports: Ports,
 }
 
@@ -140,8 +143,7 @@ pub struct InputChain {
     /// this chain or one it reaches through such rules.
     pub open_ports: Vec<Ports>,
     /// Ports it accepts that way only on some input interfaces (`ufw allow
-    /// in on wg0 to any port 5432`). Whether that is the public interface
-    /// is not known, so they may be open.
+    /// in on wg0 to any port 5432`).
     pub interface_ports: Vec<InterfacePorts>,
     /// Protocols with such a rule whose ports nft does not show (iptables
     /// `multiport`, as ufw writes `allow 80,443/tcp`): any of their ports

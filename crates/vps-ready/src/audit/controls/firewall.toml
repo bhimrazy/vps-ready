@@ -20,5 +20,5 @@ check = { kind = "published_ports" }
 id = "FW-003"
 severity = "low"
 title = "Only expected ports are open to the internet"
-why = "Anyone can reach and attack a service the firewall lets in, such as a database or an admin panel listening on all addresses. SSH, a web server (80 and 443) and the DHCP client are expected; every port open to the internet is listed either way. A firewall at your provider also protects the server, but this check cannot see it."
+why = "Anyone can reach and attack a service the firewall lets in, such as a database or an admin panel listening on all addresses. SSH, a web server (80 and 443), the DHCP clients and WireGuard are expected; every port open to the internet is listed either way, and ports open only on a VPN or a Docker bridge do not count. A firewall at your provider also protects the server, but this check cannot see it."
 check = { kind = "exposed_listeners" }

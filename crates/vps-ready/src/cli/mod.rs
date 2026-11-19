@@ -660,7 +660,7 @@ fn root_would_help(report: &Report, facts: &Facts) -> bool {
 /// Without `all`, only failed and unknown controls get a block: failures by
 /// severity (highest first) and ID, then unknowns in catalog order. With
 /// `all`, every control does, in catalog order; a passed or skipped one is a
-/// row, with a passed one's note (FW-003's open ports) under it.
+/// row. A note (FW-003's open ports) follows any row's details.
 ///
 /// A failed control ends with the command to fix it, e.g. `fix: sudo
 /// vps-ready apply --module kernel.sysctl`, or `fix: not automated yet`. An
@@ -745,6 +745,13 @@ fn print_report(
             for line in wrap(&detail, WIDTH - INDENT.len()) {
                 writeln!(out, "{INDENT}{line}")?;
             }
+        }
+        for line in finding
+            .note
+            .iter()
+            .flat_map(|n| wrap(n, WIDTH - INDENT.len()))
+        {
+            writeln!(out, "{INDENT}{line}")?;
         }
         if matches!(finding.outcome, Outcome::Fail { .. }) {
             for line in wrap(&control.why, WIDTH - INDENT.len()) {
