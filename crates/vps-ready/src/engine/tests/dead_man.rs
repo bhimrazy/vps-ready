@@ -285,6 +285,31 @@ fn a_module_that_needs_the_dead_man_on_this_host_arms_it() {
     assert!(!plan_of(&fs, &facts, &[&none]).needs_deadman());
 }
 
+/// A pending transaction that reopened public SSH goes back to `ssh_via` on
+/// rollback, as its timer would: `rollback --last` stays open from anywhere.
+#[test]
+fn rolling_back_a_pending_change_back_to_ssh_via_is_not_refused() {
+    use crate::modules::firewall_inbound::RULESET;
+    let via = "    iifname \"wg0\" tcp dport { 22 } accept\n";
+    let fs = armable()
+        .with_dir("/etc/vps-ready", owner(0o755))
+        .with_file(RULESET, via);
+    let facts = facts();
+    let reopen = Demo {
+        deadman: true,
+        force: true,
+        ..module(
+            "test.reopen",
+            vec![file(RULESET, "    tcp dport { 22 } accept\n", 0o644)],
+        )
+    };
+    let plan = plan_of(&fs, &facts, &[&reopen]);
+    pending(&fs, &plan);
+    let done = manual(&fs, &dm_runner()).unwrap();
+    assert!(done.skipped.is_empty(), "{done:?}");
+    assert_eq!(fs.read(Path::new(RULESET)).unwrap(), via.as_bytes());
+}
+
 /// `apply --deadman=off`: no timer, no hook, no copy of the binary (here
 /// there is none to check), and `state applied` says so.
 #[test]

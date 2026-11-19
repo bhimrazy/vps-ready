@@ -363,8 +363,8 @@ impl Module for FirewallInbound {
         if let Some(via) = &model.ssh_via {
             notes.extend(left_out(&params, &model, via));
             // The same interface and ports: the SSH rule does not change.
-            let loaded = ruleset_text(cx.planned, sys)?.and_then(|t| ssh_rule_of(&t));
-            let same = loaded.is_some() && loaded == ssh_rule_of(&ruleset);
+            let on_disk = ruleset_text(cx.planned, sys)?.and_then(|t| ssh_rule_of(&t));
+            let same = on_disk.is_some() && on_disk == ssh_rule_of(&ruleset);
             notes.extend(via::check(cx.facts, via, same, sys)?);
         }
         let mut resources = Vec::new();

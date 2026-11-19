@@ -260,7 +260,11 @@ fn only_the_admins_the_plan_gave_keys_confirm() {
     .unwrap();
     assert_eq!(
         engine.waiting(None).unwrap(),
-        (txn.clone(), vec!["admin".to_owned(), "deploy".to_owned()])
+        crate::engine::Pending {
+            txn: txn.clone(),
+            admins: vec!["admin".to_owned(), "deploy".to_owned()],
+            ssh_via: None,
+        }
     );
     let deploy = Session {
         user: Some("deploy".into()),

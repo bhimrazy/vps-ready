@@ -404,7 +404,8 @@ pub(super) fn rollback(
     let interfaces = crate::facts::network::interfaces(host.sys.runner, &mut Vec::new());
     let who = Who {
         own: &own,
-        server: session.map(|s| s.server.ip()),
+        server: session.as_ref().map(|s| s.server.ip()),
+        client: session.map(|s| s.client.ip()),
         interfaces: &interfaces,
     };
     let done = Engine::lock(&state, host.sys)?.rollback_by(target, &who, &mut |p| {

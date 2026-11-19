@@ -307,9 +307,26 @@ fn a_rollback_that_restores_ssh_via_needs_a_session_through_it() {
             "{err:?}"
         );
     }
+    // Through wg0's address, but from the host itself: over lo.
+    for client in ["10.77.0.1", "127.0.0.1"] {
+        let who = Who {
+            server: Some("10.77.0.1".parse().unwrap()),
+            client: Some(client.parse().unwrap()),
+            interfaces: &wg0,
+            ..Who::default()
+        };
+        let err = engine
+            .rollback_by(Target::Last, &who, &mut |_| {})
+            .unwrap_err();
+        assert!(
+            matches!(err, EngineError::ViaRollback { .. }),
+            "{client}: {err:?}"
+        );
+    }
     assert_ne!(fs.read(Path::new(RULESET)).unwrap(), via.as_bytes());
     let who = Who {
         server: Some("10.77.0.1".parse().unwrap()),
+        client: Some("198.51.100.7".parse().unwrap()),
         interfaces: &wg0,
         ..Who::default()
     };

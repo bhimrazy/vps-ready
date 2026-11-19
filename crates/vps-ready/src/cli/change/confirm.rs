@@ -54,7 +54,11 @@ pub(in crate::cli) fn confirm(
         )?;
         return Ok(0);
     }
-    let (id, admins) = engine.waiting(txn)?;
+    let engine::Pending {
+        txn: id,
+        admins,
+        ssh_via,
+    } = engine.waiting(txn)?;
     let facts = (host.facts)(host.sys)?;
     let ports = facts.ssh.ports();
     let again = |session| again(host, &admins, session, &ports);
@@ -87,7 +91,14 @@ pub(in crate::cli) fn confirm(
             again(Some(&session))
         ),
         Err(EngineError::Refused(r @ Refusal::Local(_))) => {
-            bail!("{r}. Confirm from your own computer. {}", again(None))
+            // Under `ssh_via`, the way in is the VPN's address.
+            match ssh_via.as_deref().and_then(|v| via_address(&facts, v)) {
+                Some(ip) => bail!(
+                    "{r}. Confirm from your own computer: `{}`",
+                    ssh_line_to(host, &admins, Some(&session), &ports, Some(ip))
+                ),
+                None => bail!("{r}. Confirm from your own computer. {}", again(None)),
+            }
         }
         Err(EngineError::Refused(r @ (Refusal::OtherSshd { .. } | Refusal::NotAdmin { .. }))) => {
             bail!("{r}. {}", again(Some(&session)))
@@ -307,6 +318,7 @@ fn via_address(facts: &Facts, interface: &str) -> Option<IpAddr> {
         .iter()
         .filter(|i| i.name == interface)
         .flat_map(|i| i.addresses.iter().map(|a| a.ip))
+        // A link-local address needs a zone (`%wg0`) to be used.
         .filter(|ip| !matches!(ip, IpAddr::V6(v6) if v6.is_unicast_link_local()))
         .collect();
     ips.sort_by_key(IpAddr::is_ipv6);

@@ -145,6 +145,7 @@ fn address(facts: &Facts, via: &str) -> Option<IpAddr> {
         .iter()
         .filter(|i| i.name == via)
         .flat_map(|i| i.addresses.iter().map(|a| a.ip))
+        // A link-local address needs a zone (`%wg0`) to be used.
         .filter(|ip| !matches!(ip, IpAddr::V6(v6) if v6.is_unicast_link_local()))
         .collect();
     ips.sort_by_key(IpAddr::is_ipv6);

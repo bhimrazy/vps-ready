@@ -76,6 +76,8 @@ pub struct Who<'a> {
     pub own: &'a [String],
     /// The server address of the SSH session it runs in, if any.
     pub server: Option<IpAddr>,
+    /// The client address of that session.
+    pub client: Option<IpAddr>,
     /// The host's interfaces now.
     pub interfaces: &'a [Interface],
 }
@@ -705,13 +707,30 @@ impl<'a> Engine<'a> {
                 later,
             });
         }
-        if let Some(via) = self.restores_via(&txn, &records)? {
+        // A pending, expired or unfinished transaction only returns to what
+        // the dead-man would restore, so `rollback --last` stays open for it.
+        let done = matches!(
+            journal::replay(&records)?,
+            TxnState::Applied | TxnState::Confirmed
+        ) && !journal::is_unfinished(&records);
+        if done && let Some(via) = self.restores_via(&txn, &records)? {
             let server = who.server.map(|s| s.to_canonical());
+            let client = who.client.map(|c| c.to_canonical());
+            let host = |ip: Option<IpAddr>| {
+                ip.is_some_and(|ip| {
+                    ip.is_loopback()
+                        || who
+                            .interfaces
+                            .iter()
+                            .any(|i| i.addresses.iter().any(|a| a.ip == ip))
+                })
+            };
             let through = who
                 .interfaces
                 .iter()
                 .any(|i| i.name == via && i.addresses.iter().any(|a| Some(a.ip) == server));
-            if !through {
+            // As for a confirm: a session from this host came over lo.
+            if !through || host(client) {
                 return Err(EngineError::ViaRollback {
                     txn: txn.id().to_owned(),
                     via,

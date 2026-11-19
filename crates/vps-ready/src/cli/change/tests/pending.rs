@@ -618,6 +618,32 @@ fn confirm_under_ssh_via_needs_a_login_through_the_interface() {
         "error: this SSH login connected to 10.0.2.15, which is not an address of wg0; log in through wg0: \
          `ssh -t -o ControlPath=none -p 22 admin@10.77.0.1 sudo vps-ready confirm`\n"
     );
+    // From the server itself to wg0's address: refused, with wg0's address.
+    fn from_host(sys: Sys) -> Result<Session, NoSession> {
+        Ok(Session {
+            client: "10.77.0.1:50022".parse().unwrap(),
+            server: "10.77.0.1:22".parse().unwrap(),
+            ..new_login(sys)?
+        })
+    }
+    let local = Host {
+        session: from_host,
+        facts: with_wg0,
+        ..lockout_host(&fs, &runner)
+    };
+    let (code, _, err) = confirm_cmd(&local, None);
+    assert_eq!(code, 2);
+    assert!(
+        err.starts_with("error: this SSH login comes from 10.77.0.1, on this server itself"),
+        "{err}"
+    );
+    assert!(
+        err.ends_with(
+            "Confirm from your own computer: `ssh -t -o ControlPath=none -p 22 \
+             admin@10.77.0.1 sudo vps-ready confirm`\n"
+        ),
+        "{err}"
+    );
     assert!(history_text(&host).contains("pending-confirm"));
 }
 

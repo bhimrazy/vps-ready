@@ -131,6 +131,17 @@ struct Waiting {
     ssh_via: Option<String>,
 }
 
+/// The transaction a confirm would act on, from [`Engine::waiting`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pending {
+    /// Transaction ID.
+    pub txn: String,
+    /// Who may confirm it; empty means any user.
+    pub admins: Vec<String>,
+    /// The interface a confirm must come in through, if any.
+    pub ssh_via: Option<String>,
+}
+
 /// How [`Engine::extend`] moved a deadline.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Extended {
@@ -154,9 +165,12 @@ impl Engine<'_> {
     ///
     /// [`EngineError::Refused`] says why not; others if a journal cannot be
     /// read.
-    pub fn waiting(&self, id: Option<&str>) -> Result<(String, Vec<String>), EngineError> {
-        self.waiting_txn(id)
-            .map(|w| (w.txn.id().to_owned(), w.admins))
+    pub fn waiting(&self, id: Option<&str>) -> Result<Pending, EngineError> {
+        self.waiting_txn(id).map(|w| Pending {
+            txn: w.txn.id().to_owned(),
+            admins: w.admins,
+            ssh_via: w.ssh_via,
+        })
     }
 
     fn waiting_txn(&self, id: Option<&str>) -> Result<Waiting, EngineError> {
@@ -282,7 +296,9 @@ impl Engine<'_> {
         }
         if let Some(via) = w.ssh_via {
             // A login from this host to its own VPN address travels over lo,
-            // which the firewall accepts: the VPN carried nothing.
+            // which the firewall accepts: the VPN carried nothing. One from
+            // a container hops through a Docker bridge, also accepted, and is
+            // not caught here: its client is the container's address.
             if interfaces
                 .iter()
                 .any(|i| i.addresses.iter().any(|a| a.ip == client))

@@ -13,7 +13,7 @@ mod state;
 #[cfg(test)]
 mod tests;
 
-pub use confirm::{Extended, Refusal, Watch, watch};
+pub use confirm::{Extended, Pending, Refusal, Watch, watch};
 pub use deadman::Deadman;
 pub use journal::{Deadline, Event, Record, RollbackReason, TxnState};
 pub use plan::{ModulePlan, ModuleStatus, Plan, Selected, Step, plan};
@@ -214,8 +214,9 @@ pub enum EngineError {
     /// and no confirm, from a session that does not come through it.
     #[error(
         "refusing to roll back transaction {txn}: it limits SSH to {via} again, and this \
-         session does not come through {via}, so nothing shows that SSH still works \
-         afterwards; roll back from a session through {via}"
+         session does not come through {via} from another machine, so nothing shows that \
+         SSH still works afterwards; run the rollback directly in an SSH login through \
+         {via} (tmux and screen sessions have no SSH login)"
     )]
     ViaRollback {
         /// Transaction ID.
