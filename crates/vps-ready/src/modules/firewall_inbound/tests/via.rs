@@ -481,3 +481,159 @@ fn warns_while_ssh_depends_on_an_expiring_tailscale_key() {
     facts.firewall = crate::facts::firewall::parse_json(&std::fs::read(testdata(LOADED)).unwrap());
     assert_eq!(finding(&facts, "SSH-009").note, None);
 }
+
+/// The private profile's `ssh_via = "vpn"`, as the profile resolves it
+/// with net.tailscale.
+const STAGED: &str = "vpn:tailscale0";
+
+/// Step 1 of the private profile: from a session that does not come
+/// through the interface, SSH stays public with a note instead of refusal
+/// 3, even before the interface exists.
+#[test]
+fn a_staged_ssh_via_keeps_ssh_public_until_a_session_comes_through() {
+    let fs = FakeFs::new();
+    let off = FakeRunner::new();
+    let public = via_facts("192.0.2.10:22");
+    let mut fresh = public.clone();
+    fresh.interfaces.retain(|i| i.name != "tailscale0");
+    fresh.tailscale = None;
+    let mut first_boot = fresh.clone();
+    first_boot.session = None;
+    for facts in [&public, &fresh, &first_boot] {
+        let steps = via_steps(facts, STAGED, &fs, &off).unwrap();
+        let text = ruleset_of(&steps);
+        assert_eq!(via_of(&text), None);
+        assert_eq!(tcp_ports(&text), [22, 80].into());
+        assert!(
+            steps.notes[0].starts_with(
+                "step 1 of 2: SSH stays public until you apply this profile again from a login \
+                 through tailscale0"
+            ),
+            "{:#?}",
+            steps.notes
+        );
+        assert!(!steps.notes.iter().any(|n| n.contains("SSH is closed")));
+    }
+    assert_eq!(
+        via_steps(&public, STAGED, &fs, &off).unwrap().notes[0],
+        "step 1 of 2: SSH stays public until you apply this profile again from a login \
+         through tailscale0 (`ssh -t admin@100.64.0.7 sudo vps-ready apply ...`)"
+    );
+    // A login from the host itself to its own Tailscale address.
+    let mut own = via_facts("100.64.0.7:22");
+    own.session.as_mut().unwrap().client = "100.64.0.7:50000".parse().unwrap();
+    let steps = via_steps(&own, STAGED, &fs, &off).unwrap();
+    assert_eq!(via_of(&ruleset_of(&steps)), None);
+}
+
+/// Step 2: from a session through the interface it is an explicit
+/// `ssh_via`, with its refusals; after that, nothing changes, also from the
+/// console.
+#[test]
+fn a_staged_ssh_via_closes_public_ssh_from_a_session_through_it() {
+    let fs = FakeFs::new();
+    let on = units("enabled");
+    let ts = via_facts("100.64.0.7:22");
+    let step2 = via_steps(&ts, STAGED, &fs, &on).unwrap();
+    let text = ruleset_of(&step2);
+    let explicit = via_steps(&ts, "tailscale0", &fs, &on).unwrap();
+    assert_eq!(text, ruleset_of(&explicit));
+    assert_eq!(step2.notes, explicit.notes);
+    assert_eq!(via_of(&text).as_deref(), Some("tailscale0"));
+    assert_eq!(tcp_ports(&text), [80].into());
+    // Refusals 4 and 5 as for an explicit `ssh_via`.
+    assert!(
+        refused(via_steps(&ts, STAGED, &fs, &FakeRunner::new()))
+            .starts_with("tailscaled.service is not enabled")
+    );
+    let mut expiring = ts.clone();
+    expiring.tailscale.as_mut().unwrap().key_expiry = Some("2027-05-18T09:30:00Z".into());
+    assert!(
+        refused(via_steps(&expiring, STAGED, &fs, &on))
+            .starts_with("this node's Tailscale key expires")
+    );
+
+    // Applied: with the same rule on disk, from the VPN, the console or a
+    // public session (a provider's private network), it renders the same.
+    let loaded = FakeFs::new().with_file(RULESET, text.as_str());
+    let mut console = ts.clone();
+    console.session = None;
+    for facts in [&ts, &console, &via_facts("192.0.2.10:22")] {
+        let again = via_steps(facts, STAGED, &loaded, &on).unwrap();
+        assert_eq!(ruleset_of(&again), text);
+        assert!(!again.notes.iter().any(|n| n.starts_with("step 1")));
+    }
+}
+
+/// The two applies of the private profile, as plans: step 1 limits
+/// nothing, so `--deadman=off` (first boot) is not refused; step 2 limits
+/// SSH, so it is (refusal 7); a third apply plans nothing.
+#[test]
+fn the_private_profile_takes_two_applies_then_none() {
+    let table = params(&format!("ssh_via = \"{STAGED}\""));
+    let selected = [Selected {
+        module: &FirewallInbound,
+        params: &table,
+    }];
+    let runner = FakeRunner::new().on(
+        "systemctl",
+        ["show"],
+        Output::success("LoadState=loaded\nActiveState=active\nUnitFileState=enabled\n"),
+    );
+    let fs = FakeFs::new();
+    fs.create_dir_all(Path::new("/etc/systemd/system"), 0o755)
+        .unwrap();
+    let sys = Sys {
+        fs: &fs,
+        runner: &runner,
+    };
+    let public = via_facts("192.0.2.10:22");
+    let through = via_facts("100.64.0.7:22");
+
+    let step1 = engine::plan(&selected, &public, sys).unwrap();
+    assert_eq!(step1.ssh_via, None);
+    let step2 = engine::plan(&selected, &through, sys).unwrap();
+    assert_eq!(step2.ssh_via.as_deref(), Some("tailscale0"));
+    for step in step2.steps() {
+        match &step.resource {
+            Resource::Directory(d) => fs.create_dir(&d.path, d.owner).unwrap(),
+            Resource::File(f) => fs.write_atomic(&f.path, &f.content, f.owner).unwrap(),
+            _ => {}
+        }
+    }
+    for facts in [&through, &public] {
+        let third = engine::plan(&selected, facts, sys).unwrap();
+        assert_eq!(third.steps().count(), 0);
+        assert_eq!(third.ssh_via.as_deref(), Some("tailscale0"));
+    }
+}
+
+/// Verify checks the ruleset of the step it planned.
+#[test]
+fn verify_follows_the_step_of_a_staged_ssh_via() {
+    let json = std::fs::read(testdata(LOADED)).unwrap();
+    let runner = FakeRunner::new().on(
+        "nft",
+        ["-j", "list", "table", "inet", "vps_ready"],
+        Output::success(json),
+    );
+    let fs = FakeFs::new();
+    let table = params(&format!("ssh_via = \"{STAGED}\""));
+    let verify = |facts: &Facts| {
+        FirewallInbound.verify(
+            &PlanCx {
+                facts,
+                params: &table,
+                planned: &[],
+            },
+            Sys {
+                fs: &fs,
+                runner: &runner,
+            },
+        )
+    };
+    // The table of `facts()` with no params: SSH public, as in step 1.
+    assert_eq!(verify(&via_facts("192.0.2.10:22")), Ok(()));
+    let err = verify(&via_facts("100.64.0.7:22")).unwrap_err();
+    assert!(err.contains("other than tailscale0"), "{err}");
+}

@@ -208,6 +208,31 @@ fn refuses_an_explicit_ssh_via() {
     assert!(export(&fs(&empty, &checksums()), PROFILE, None).is_ok());
 }
 
+/// The private profile's `ssh_via = "vpn"` is exported: at first boot it
+/// stays in step 1, with SSH public. On its own it has no VPN.
+#[test]
+fn exports_the_private_profile() {
+    let private = "schema = 1
+extends = \"private\"
+
+[modules.\"user.admin\"]
+authorized_keys = [\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGroot me@laptop\"]
+
+[modules.\"net.tailscale\"]
+hostname = \"web-1\"
+";
+    let text = export(&fs(private, &checksums()), PROFILE, None).unwrap();
+    insta::assert_snapshot!("cloud-init-private", redact(&text));
+    let (doc, _) = parsed_script(&text);
+    assert_eq!(doc["write_files"][0]["content"].as_str(), Some(private));
+
+    let err = export(&fs("", &checksums()), "private", None).unwrap_err();
+    assert!(err.starts_with("the private profile needs a VPN"), "{err}");
+    let explicit = format!("{private}\n[modules.\"firewall.inbound\"]\nssh_via = \"tailscale0\"\n");
+    let err = export(&fs(&explicit, &checksums()), PROFILE, None).unwrap_err();
+    assert!(err.contains("firewall.inbound has `ssh_via`"), "{err}");
+}
+
 #[test]
 fn refuses_a_tailscale_auth_key_file() {
     let with = |extra: &str| {

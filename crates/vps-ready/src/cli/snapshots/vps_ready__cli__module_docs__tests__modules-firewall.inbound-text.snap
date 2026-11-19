@@ -19,7 +19,9 @@ Params (in the module's profile table)
       are always accepted, only on `ssh_via` when it is set.
   ssh_via (default "")
       Accept SSH only on this interface, e.g. "tailscale0" or "wg0", from a
-      session through it; empty for any.
+      session through it; "vpn" for the profile's VPN module's interface, which
+      keeps SSH public until applied from a session through it (the private
+      profile); empty for any.
 
 Fixes these audit controls
   FW-001 [medium] Incoming traffic denied by default

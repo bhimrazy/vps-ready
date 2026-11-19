@@ -1,5 +1,6 @@
 //! Profiles: TOML files that select the modules to run and set their
-//! params. `minimal` and `web` are embedded; a user file may extend one.
+//! params. `minimal`, `web` and `private` are embedded; a user file may
+//! extend one.
 
 use std::collections::BTreeMap;
 
@@ -9,10 +10,24 @@ use crate::modules::{Module, ModuleError};
 
 /// The built-in profiles by name. They list only registered modules: each
 /// module's PR adds its section.
-const BUILT_IN: [(&str, &str); 2] = [
+const BUILT_IN: [(&str, &str); 3] = [
     ("minimal", include_str!("profiles/minimal.toml")),
     ("web", include_str!("profiles/web.toml")),
+    ("private", include_str!("profiles/private.toml")),
 ];
+
+/// The VPN modules, each with the interface it brings up, which
+/// firewall.inbound's `ssh_via = "vpn"` resolves to.
+pub(crate) const VPNS: [(&str, &str); 2] =
+    [("net.tailscale", "tailscale0"), ("net.wireguard", "wg0")];
+
+/// `ssh_via = "vpn"`: the interface of the profile's one VPN module.
+const VPN: &str = "vpn";
+
+/// What [`Profile::resolve`] turns `ssh_via = "vpn"` into, before the
+/// interface: firewall.inbound then keeps SSH public until a session comes
+/// through that interface (step 1 of 2 of the private profile).
+pub(crate) const STAGED_VIA: &str = "vpn:";
 
 /// The only `schema` value.
 const SCHEMA: u32 = 1;
@@ -29,7 +44,7 @@ pub enum ProfileError {
     #[error("unsupported schema {0}; this version reads schema 1")]
     Schema(u32),
     /// `extends` names no built-in profile.
-    #[error("cannot extend `{0}`; the built-in profiles are minimal and web")]
+    #[error("cannot extend `{0}`; the built-in profiles are minimal, web and private")]
     UnknownBase(String),
     /// A section names no registered module.
     #[error("unknown module `{module}`; modules are {known}")]
@@ -42,6 +57,9 @@ pub enum ProfileError {
     /// `enabled` is not a boolean.
     #[error("module `{0}`: `enabled` must be true or false")]
     Enabled(String),
+    /// firewall.inbound's `ssh_via = "vpn"` without exactly one VPN module.
+    #[error("{0}")]
+    Vpn(String),
     /// A section's params are invalid for its module.
     #[error("module `{module}`: {source}")]
     Params {
@@ -146,6 +164,7 @@ impl Profile {
                 modules.insert(id, table);
             }
         }
+        resolve_vpn(&mut modules, registry)?;
         Ok(Self { modules })
     }
 
@@ -154,6 +173,54 @@ impl Profile {
     pub fn params(&self, id: &str) -> Option<&toml::Table> {
         self.modules.get(id)
     }
+}
+
+/// Turns firewall.inbound's `ssh_via = "vpn"` into [`STAGED_VIA`] and the
+/// interface of the one enabled VPN module in `modules`.
+fn resolve_vpn(
+    modules: &mut BTreeMap<String, toml::Table>,
+    registry: &[&dyn Module],
+) -> Result<(), ProfileError> {
+    let via = modules
+        .get("firewall.inbound")
+        .and_then(|t| t.get("ssh_via"))
+        .and_then(toml::Value::as_str);
+    if via != Some(VPN) {
+        return Ok(());
+    }
+    let vpns: Vec<_> = VPNS
+        .iter()
+        .filter(|(id, _)| modules.contains_key(*id))
+        .collect();
+    let interface = match vpns[..] {
+        [(_, interface)] => interface,
+        [] => {
+            let add: Vec<_> = VPNS
+                .iter()
+                .filter(|(id, _)| registry.iter().any(|m| m.id() == *id))
+                .map(|(id, _)| format!("`[modules.\"{id}\"]`"))
+                .collect();
+            return Err(ProfileError::Vpn(format!(
+                "the private profile needs a VPN (`ssh_via = \"vpn\"`): add {}",
+                add.join(" or ")
+            )));
+        }
+        _ => {
+            let ids: Vec<_> = vpns.iter().map(|(id, _)| *id).collect();
+            return Err(ProfileError::Vpn(format!(
+                "the private profile takes one VPN (`ssh_via = \"vpn\"`), and this enables \
+                 {}: leave one out with `enabled = false`",
+                ids.join(" and ")
+            )));
+        }
+    };
+    if let Some(firewall) = modules.get_mut("firewall.inbound") {
+        firewall.insert(
+            "ssh_via".to_owned(),
+            toml::Value::String(format!("{STAGED_VIA}{interface}")),
+        );
+    }
+    Ok(())
 }
 
 /// The name and sections of the built-in profile `name` in `built_in`.
