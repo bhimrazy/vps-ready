@@ -73,5 +73,5 @@ fix = "ssh.bruteforce"
 id = "SSH-009"
 severity = "low"
 title = "SSH reachable only through a private network"
-why = "With SSH accepted only through a VPN (WireGuard or Tailscale), the internet cannot reach sshd at all: no login attempts, and no exposure to the next sshd flaw. firewall.inbound does this with `ssh_via`, applied from a session that already comes through the VPN; `apply --module firewall.inbound` alone does not set it. Skipped on hosts without a VPN interface."
+why = "With SSH accepted only through a VPN (WireGuard, Tailscale or the interface `ssh_via` names), the internet cannot reach sshd at all: no login attempts, and no exposure to the next sshd flaw. firewall.inbound does this with `ssh_via`, applied from a session that already comes through the VPN; `apply --module firewall.inbound` alone does not set it. The `ssh_via` interface counts only with private addresses and no default route; on a cloud that maps a public address 1:1 to a private one on a second NIC, that NIC looks private too. Skipped on hosts without a VPN interface or an `ssh_via` rule."
 check = { kind = "ssh_private_only" }

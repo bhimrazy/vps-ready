@@ -42,7 +42,7 @@ FAIL     SSH-008  low       Repeated failed logins are slowed down
          fix: sudo vps-ready apply --module ssh.bruteforce
 
 5 passed, 6 failed (1 high, 3 medium, 2 low), 0 unknown, 23 skipped
-Skipped: there is no VPN interface (WireGuard or tailscale0).
+Skipped: there is no VPN interface (WireGuard or tailscale0) and no `ssh_via` rule.
 Skipped: kernel settings are not checked inside a container.
 Skipped: /etc/wireguard does not exist.
 Skipped: Docker is not installed.

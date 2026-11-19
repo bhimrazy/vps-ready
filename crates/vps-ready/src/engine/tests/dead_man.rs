@@ -1660,4 +1660,169 @@ fn the_first_deadline_covers_package_installs_and_verify_probes() {
     );
 }
 
+const FW_UNIT: &str = "vps-ready-firewall.service";
+
+/// The firewall's unit as `systemctl` changes it, `(enabled, active)`;
+/// every other command answers success. Calls are recorded in `inner`.
+struct UnitRunner {
+    unit: std::sync::Mutex<(bool, bool)>,
+    inner: FakeRunner,
+}
+
+impl UnitRunner {
+    fn new(state: (bool, bool)) -> Self {
+        Self {
+            unit: std::sync::Mutex::new(state),
+            inner: FakeRunner::new()
+                .on("systemctl", Vec::<String>::new(), Output::success(""))
+                .on("nft", ["-c"], Output::success(""))
+                .on("systemd-run", Vec::<String>::new(), Output::success(""))
+                .on(COPY, ["version"], version_ok()),
+        }
+    }
+
+    fn set(&self, state: (bool, bool)) {
+        *self.unit.lock().unwrap() = state;
+    }
+}
+
+impl crate::sys::Runner for UnitRunner {
+    fn run(&self, cmd: &crate::sys::Cmd) -> Result<Output, SysError> {
+        let out = self.inner.run(cmd)?;
+        if cmd.program != "systemctl" || !cmd.args.iter().any(|a| a == FW_UNIT) {
+            return Ok(out);
+        }
+        let mut unit = self.unit.lock().unwrap();
+        match cmd.args[0].as_str() {
+            "show" => {
+                let (enabled, active) = *unit;
+                return Ok(Output::success(format!(
+                    "LoadState=loaded\nUnitFileState={}\nActiveState={}\n",
+                    if enabled { "enabled" } else { "disabled" },
+                    if active { "active" } else { "inactive" },
+                )));
+            }
+            "enable" => unit.0 = true,
+            "disable" => unit.0 = false,
+            "start" | "reload-or-restart" => unit.1 = true,
+            "stop" => unit.1 = false,
+            _ => {}
+        }
+        Ok(out)
+    }
+}
+
+/// A rollback, manual, by the timer, by the boot hook or after a failed
+/// verify, restarts the firewall unit only if it was active before the
+/// transaction: stopped since, its table is gone. One stopped before (the
+/// admin may have stopped it to get in) stays stopped.
+#[test]
+fn a_rollback_restarts_the_firewall_unit_if_it_was_active() {
+    let service = crate::resource::Service {
+        unit: FW_UNIT.into(),
+        enabled: true,
+        active: true,
+    };
+    let fw = |with_service: bool, unverified: Option<&'static str>| {
+        let mut resources = vec![file(NEW, "created\n", 0o644)];
+        if with_service {
+            resources.push(Resource::Service(service.clone()));
+        }
+        Demo {
+            reloads: vec![Reload::FirewallReload],
+            deadman: true,
+            unverified,
+            ..module("test.fw", resources)
+        }
+    };
+    // (a Service step, the unit before, stopped during the window, the
+    // verb, the unit after)
+    let cases = [
+        // Enabled and active before: no backup of it.
+        (false, (true, true), true, "reload-or-restart", (true, true)),
+        (
+            false,
+            (true, true),
+            false,
+            "reload-or-restart",
+            (true, true),
+        ),
+        // Stopped before: the restore stops it again.
+        (
+            true,
+            (true, false),
+            false,
+            "try-reload-or-restart",
+            (true, false),
+        ),
+        // Active but disabled before. (Stopped since, a manual rollback
+        // refuses the changed unit.)
+        (
+            true,
+            (false, true),
+            false,
+            "reload-or-restart",
+            (false, true),
+        ),
+    ];
+    for (with_service, before, stopped, verb, after) in cases {
+        for path in ["manual", "timer", "boot", "verify"] {
+            let case = format!("{with_service} {before:?} {stopped} {path}");
+            let fs = armable();
+            let facts = facts();
+            let module = fw(with_service, (path == "verify").then_some("broken"));
+            let selected = [Selected::new(&module as &dyn Module)];
+            let run = UnitRunner::new(before);
+            let sys = Sys {
+                fs: &fs,
+                runner: &run,
+            };
+            let plan = plan(&selected, &facts, sys).unwrap();
+            let st = state(&fs);
+            let out = Engine::lock(&st, sys)
+                .unwrap()
+                .apply(&plan, &deadman_cfg(), &mut |_| {})
+                .unwrap();
+            let engine = || Engine::lock(&st, sys).unwrap();
+            match (path, out) {
+                ("verify", ApplyOutcome::RolledBack { .. }) => {}
+                (_, ApplyOutcome::Pending { txn, .. }) => {
+                    if stopped {
+                        run.set((true, false));
+                    }
+                    match path {
+                        "manual" => drop(engine().rollback(Target::Last, &mut |_| {}).unwrap()),
+                        "timer" => {
+                            set_uptime(&fs, 5000);
+                            let out = engine()
+                                .deadman(&txn, Path::new(COPY), 0, &mut |_| {})
+                                .unwrap();
+                            assert!(
+                                matches!(out, DeadmanOutcome::RolledBack(_)),
+                                "{case}: {out:?}"
+                            );
+                        }
+                        _ => {
+                            fs.write(Path::new(BOOT_ID), b"b\n").unwrap();
+                            let done = engine().deadman_boot(Path::new(COPY), &mut |_| {});
+                            assert_eq!(done.unwrap().len(), 1, "{case}");
+                        }
+                    }
+                }
+                (_, out) => panic!("{case}: {out:?}"),
+            }
+            let reloads: Vec<String> = calls(&run.inner)
+                .into_iter()
+                .filter(|c| c.starts_with("systemctl") && c.contains("reload-or-restart"))
+                .collect();
+            let want = [
+                format!("systemctl try-reload-or-restart {FW_UNIT}"),
+                format!("systemctl {verb} {FW_UNIT}"),
+            ];
+            assert_eq!(reloads, want, "{case}");
+            assert_eq!(*run.unit.lock().unwrap(), after, "{case}");
+        }
+    }
+}
+
 mod confirm;
