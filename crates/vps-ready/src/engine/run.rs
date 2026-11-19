@@ -1414,7 +1414,6 @@ impl<'a> Engine<'a> {
     }
 }
 
-/// The accounts `records` created and no rollback removed yet.
 /// Whether rolling back `records` stops `tailscaled`, which apply started.
 fn stops_tailscaled(records: &[Record]) -> bool {
     records.iter().any(|r| match &r.event {
@@ -1435,6 +1434,7 @@ fn stops_tailscaled(records: &[Record]) -> bool {
     })
 }
 
+/// The accounts `records` created and no rollback removed yet.
 fn created_users(records: &[Record]) -> impl Iterator<Item = &str> {
     records.iter().filter_map(move |r| match &r.event {
         Event::Backup {
