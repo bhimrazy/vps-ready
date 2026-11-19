@@ -200,6 +200,15 @@ fn refuses_a_profile_without_admin_keys() {
 }
 
 #[test]
+fn refuses_an_explicit_ssh_via() {
+    let via = format!("{KEYED}\n[modules.\"firewall.inbound\"]\nssh_via = \"wg0\"\n");
+    let err = export(&fs(&via, &checksums()), PROFILE, None).unwrap_err();
+    assert!(err.contains("firewall.inbound has `ssh_via`"), "{err}");
+    let empty = format!("{KEYED}\n[modules.\"firewall.inbound\"]\nssh_via = \"\"\n");
+    assert!(export(&fs(&empty, &checksums()), PROFILE, None).is_ok());
+}
+
+#[test]
 fn refuses_checksums_without_a_tarball() {
     let v = VERSION_INFO.version;
     let only_x86: String = checksums()

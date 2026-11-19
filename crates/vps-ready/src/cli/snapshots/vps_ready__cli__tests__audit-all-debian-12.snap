@@ -2,7 +2,7 @@
 source: crates/vps-ready/src/cli/mod.rs
 expression: "String::from_utf8(text).unwrap()"
 ---
-Audit of Debian GNU/Linux 12 (bookworm): 32 controls
+Audit of Debian GNU/Linux 12 (bookworm): 33 controls
 
 STATUS   ID       SEVERITY  CONTROL
 FAIL     SSH-001  medium    Root login disabled
@@ -30,6 +30,7 @@ FAIL     SSH-008  low       Repeated failed logins are slowed down
          Bots try common passwords all day. Holding back an address that keeps
          failing cuts the log noise and slows down a guess at a weak password.
          fix: sudo vps-ready apply --module ssh.bruteforce
+SKIP     SSH-009  low       SSH reachable only through a private network
 SKIP     KRN-001  low       Kernel pointers hidden
 SKIP     KRN-002  low       Kernel log restricted to root
 SKIP     KRN-003  medium    Unprivileged BPF disabled
@@ -68,7 +69,8 @@ PASS     FW-003   low       Only expected ports are open to the internet
          open to the internet: tcp/22 (sshd)
 SKIP     MAC-001  medium    AppArmor enabled
 
-5 passed, 6 failed (1 high, 3 medium, 2 low), 0 unknown, 21 skipped
+5 passed, 6 failed (1 high, 3 medium, 2 low), 0 unknown, 22 skipped
+Skipped: there is no VPN interface (WireGuard or tailscale0).
 Skipped: kernel settings are not checked inside a container.
 Skipped: Docker is not installed.
 vps-ready can fix all 6 (SSH-001, SSH-002, SSH-005, SSH-008, UPD-001, FW-001):

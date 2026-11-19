@@ -341,6 +341,7 @@ impl Module for FirewallInbound {
         if !facts.firewall_tools.nft {
             notes.push("if this installs nftables, rollback leaves it installed".to_owned());
         }
+        notes.extend(crate::audit::tailscale_expiry(facts));
         notes
     }
 

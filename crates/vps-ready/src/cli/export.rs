@@ -105,9 +105,19 @@ write_files:
 }
 
 /// Why `export` refuses `profile`, if it does: at first boot there is no
-/// SSH session to copy keys from, and root's keys on cloud images carry a
-/// `command=` that `user.admin` skips.
+/// SSH session to copy keys from or to come through a VPN, and root's keys
+/// on cloud images carry a `command=` that `user.admin` skips.
 pub(super) fn refusal(profile: &Profile) -> Option<&'static str> {
+    let via = profile
+        .params("firewall.inbound")
+        .and_then(|p| p.get("ssh_via"))
+        .and_then(toml::Value::as_str);
+    if via.is_some_and(|v| !v.is_empty()) {
+        return Some(
+            "firewall.inbound has `ssh_via`: at first boot no SSH session can come through \
+             the VPN, so apply it later from one that does",
+        );
+    }
     let admin = profile.params("user.admin")?;
     let keys = admin.get("authorized_keys").and_then(toml::Value::as_array);
     match keys {

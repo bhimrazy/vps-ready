@@ -681,7 +681,10 @@ fn root_would_help(report: &Report, facts: &Facts) -> bool {
                 // `apt-config` and `systemctl show` work without root.
                 Check::AutoUpdates | Check::RebootRequired => false,
                 // Sudo helps only when nft was refused for lack of privileges.
-                Check::InboundDefaultDeny | Check::PublishedPorts | Check::ExposedListeners => {
+                Check::InboundDefaultDeny
+                | Check::PublishedPorts
+                | Check::ExposedListeners
+                | Check::SshPrivateOnly => {
                     facts.firewall.is_none()
                         && facts
                             .notices
@@ -931,9 +934,10 @@ fn print_report(
 /// tool it needs: the part before the first `;`, e.g. `nft not found`.
 fn unknown_cause<'a>(check: &Check, notices: &'a [String]) -> Option<&'a str> {
     let prefixes: [&str; 2] = match check {
-        Check::InboundDefaultDeny | Check::PublishedPorts | Check::ExposedListeners => {
-            ["nft ", "`nft "]
-        }
+        Check::InboundDefaultDeny
+        | Check::PublishedPorts
+        | Check::ExposedListeners
+        | Check::SshPrivateOnly => ["nft ", "`nft "],
         Check::SshdEffective { .. } => ["sshd ", "`sshd -T` "],
         _ => return None,
     };
@@ -983,6 +987,9 @@ fn print_facts(out: &mut impl Write, facts: &Facts, color: bool) -> io::Result<(
         } else {
             writeln!(out, "{key:<8} {value}")?;
         }
+    }
+    if let Some(warning) = crate::audit::tailscale_expiry(facts) {
+        writeln!(out, "{warning}")?;
     }
     Ok(())
 }
