@@ -233,7 +233,23 @@ jobs:
           toolchain: stable
       - uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
         id: auth
-      # Publishes vps-ready first, then the vpsready alias that depends on it.
-      - run: cargo publish --workspace --locked
+      # One crate at a time, in dependency order. A version already on
+      # crates.io is skipped, so a rerun or the next tag finishes a partial
+      # publish, and a failed publish is retried while the index catches up
+      # with the crate it depends on.
+      - run: |
+          published() {
+            curl -fs -o /dev/null -A "vps-ready release (github.com/bhimrazy/vps-ready)" \
+              "https://crates.io/api/v1/crates/$1/$2"
+          }
+          for c in sshd-config vps-ready vpsready; do
+            v=$(cargo pkgid -p "$c" | sed 's/.*[@#]//')
+            for _ in 1 2 3 4 5; do
+              published "$c" "$v" && continue 2
+              cargo publish -p "$c" --locked || sleep 60
+            done
+            echo "::error::$c $v was not published"
+            exit 1
+          done
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
