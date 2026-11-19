@@ -41,7 +41,9 @@ impl Interface {
     }
 
     /// Whether this is Tailscale's interface, which has a fixed name and a
-    /// generic `tun` link type.
+    /// generic `tun` link type. By name only: `firewall.inbound`'s
+    /// `is_tailscale` also knows an interface renamed with `--tun` by the
+    /// node's addresses.
     #[must_use]
     pub fn is_tailscale(&self) -> bool {
         self.name == TAILSCALE_IF
@@ -270,7 +272,7 @@ fn parse_listen_ports(text: &str) -> BTreeMap<String, u16> {
 }
 
 /// `None` without `tailscale`, or when its daemon does not answer.
-pub(super) fn tailscale(runner: &dyn Runner, notices: &mut Vec<String>) -> Option<Tailscale> {
+pub(crate) fn tailscale(runner: &dyn Runner, notices: &mut Vec<String>) -> Option<Tailscale> {
     let out = match probe(runner, &tailscale_status(), notices) {
         Probe::Ran(out) if out.ok() => out,
         Probe::Ran(out) => {

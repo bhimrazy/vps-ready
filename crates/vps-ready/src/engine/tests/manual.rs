@@ -341,3 +341,42 @@ fn state_of(fs: &dyn Fs, txn: &str) -> TxnState {
         .collect();
     journal::replay(&records).unwrap()
 }
+
+/// A resumed rollback that already restored `tailscaled`, or ran
+/// `tailscale down`, has nothing left to cut.
+#[test]
+fn a_restored_tailscaled_is_not_cut_again() {
+    let record = |event| Record { at: 0, event };
+    let backup = |resource: &str, backup| {
+        record(Event::Backup {
+            resource: resource.into(),
+            backup,
+            force_restore: false,
+        })
+    };
+    let restored = |resource: &str| {
+        record(Event::Restored {
+            resource: resource.into(),
+        })
+    };
+    let service = backup(
+        "service:tailscaled.service",
+        Backup::Service {
+            unit: "tailscaled.service".into(),
+            was_enabled: false,
+            was_active: false,
+            enabled: true,
+            active: true,
+        },
+    );
+    let up = backup("tailscale:up", Backup::TailscaleUp { was_running: false });
+    let cuts = super::run::cuts_tailscale;
+    assert!(cuts(std::slice::from_ref(&service)));
+    assert!(cuts(std::slice::from_ref(&up)));
+    assert!(!cuts(&[
+        service.clone(),
+        restored("service:tailscaled.service")
+    ]));
+    assert!(!cuts(&[up.clone(), restored("tailscale:up")]));
+    assert!(cuts(&[service, up, restored("tailscale:up")]));
+}

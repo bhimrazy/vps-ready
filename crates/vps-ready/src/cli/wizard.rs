@@ -91,10 +91,16 @@ pub(super) fn run<R: BufRead>(
     }
 }
 
-/// Whether `profile` runs a module that arms the safety timer here.
+/// Whether `profile` runs a module that arms the safety timer here. Under
+/// a loaded `ssh_via` on Tailscale, `net.tailscale` arms it too, if it
+/// changes anything.
 fn arms_timer(host: &Host, facts: &Facts, profile: &Profile) -> bool {
+    let via_tailscale = firewall_inbound::ssh_via(&[], host.sys)
+        .ok()
+        .flatten()
+        .is_some_and(|via| firewall_inbound::is_tailscale(facts, &via));
     host.modules.iter().any(|m| {
-        m.needs_deadman()
+        (m.needs_deadman() || (via_tailscale && m.id() == "net.tailscale"))
             && profile.params(m.id()).is_some()
             && m.applicable(facts) == Applicability::Applicable
     })

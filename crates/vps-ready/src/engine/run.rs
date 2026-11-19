@@ -81,6 +81,9 @@ pub struct Who<'a> {
     pub client: Option<IpAddr>,
     /// The host's interfaces now.
     pub interfaces: &'a [Interface],
+    /// This node's Tailscale addresses now, to know Tailscale's interface
+    /// under another name.
+    pub tailscale: &'a [IpAddr],
 }
 
 /// What [`Engine::apply`] or a rollback is about to do or has done, for the
@@ -659,13 +662,14 @@ impl<'a> Engine<'a> {
     /// has processes, and its by-hand step ends their session. It also
     /// refuses to restore a ruleset that limits SSH to an interface the
     /// current one does not, unless the session comes through it: no timer
-    /// covers a manual rollback. And it refuses to stop `tailscaled` from a
-    /// session through Tailscale's interface.
+    /// covers a manual rollback. And it refuses to stop `tailscaled` or
+    /// take the node down when SSH is limited to Tailscale afterwards, or
+    /// from a session through Tailscale's interface.
     ///
     /// # Errors
     ///
     /// [`EngineError::OwnAccount`], [`EngineError::ViaRollback`],
-    /// [`EngineError::StopsTailscale`], or those of [`Engine::rollback`].
+    /// [`EngineError::CutsTailscale`], or those of [`Engine::rollback`].
     pub fn rollback_by(
         &self,
         target: Target,
@@ -709,16 +713,34 @@ impl<'a> Engine<'a> {
                 later,
             });
         }
-        // `tailscale down` refuses to cut such a session itself; stopping
-        // the daemon does not ask.
-        let over_tailscale = who
-            .server
-            .and_then(|ip| interface_with(who.interfaces, ip.to_canonical()))
-            .is_some_and(Interface::is_tailscale);
-        if over_tailscale && stops_tailscaled(&records) {
-            return Err(EngineError::StopsTailscale {
-                txn: txn.id().to_owned(),
-            });
+        // Checked before anything is restored: `tailscale down` refuses to
+        // cut a session through Tailscale, but only once the rollback is
+        // under way, and `systemctl stop tailscaled` does not ask at all.
+        if cuts_tailscale(&records) {
+            let state = journal::replay(&records)?;
+            let pending = matches!(state, TxnState::PendingConfirm { .. });
+            let tailscale =
+                |name: &str| firewall_inbound::is_tailscale_in(who.interfaces, who.tailscale, name);
+            // Whatever the session: with SSH only on Tailscale afterwards,
+            // nobody could log in again.
+            if let Some(via) = self.via_after(&txn, &records)?.filter(|v| tailscale(v)) {
+                return Err(EngineError::CutsTailscale {
+                    txn: txn.id().to_owned(),
+                    via: Some(via),
+                    pending,
+                });
+            }
+            let over_tailscale = who
+                .server
+                .and_then(|ip| interface_with(who.interfaces, ip.to_canonical()))
+                .is_some_and(|i| tailscale(&i.name));
+            if over_tailscale {
+                return Err(EngineError::CutsTailscale {
+                    txn: txn.id().to_owned(),
+                    via: None,
+                    pending,
+                });
+            }
         }
         // A pending, expired or unfinished transaction only returns to what
         // the dead-man would restore, so `rollback --last` stays open for it.
@@ -1009,6 +1031,29 @@ impl<'a> Engine<'a> {
             Err(e) => return Err(e.into()),
         };
         Ok((now.as_deref() != Some(before.as_str())).then_some(before))
+    }
+
+    /// The interface SSH is limited to once `txn` is rolled back: by the
+    /// ruleset it restores, else by the one on disk.
+    fn via_after(&self, txn: &Txn, records: &[Record]) -> Result<Option<String>, EngineError> {
+        let ruleset = Path::new(firewall_inbound::RULESET);
+        let restored = records.iter().find_map(|r| match &r.event {
+            Event::Backup {
+                backup: Backup::File { path, n, original },
+                ..
+            } if path == ruleset => Some(original.as_ref().map(|_| *n)),
+            _ => None,
+        });
+        let bytes = match restored {
+            Some(Some(n)) => self.sys.fs.read(&before_path(txn.dir(), n))?,
+            Some(None) => return Ok(None),
+            None => match self.sys.fs.read(ruleset) {
+                Ok(bytes) => bytes,
+                Err(SysError::NotFound(_)) => return Ok(None),
+                Err(e) => return Err(e.into()),
+            },
+        };
+        Ok(firewall_inbound::via_of(&String::from_utf8_lossy(&bytes)))
     }
 
     fn later_in_place(&self, id: &str) -> Result<Option<String>, EngineError> {
@@ -1414,8 +1459,10 @@ impl<'a> Engine<'a> {
     }
 }
 
-/// Whether rolling back `records` stops `tailscaled`, which apply started.
-fn stops_tailscaled(records: &[Record]) -> bool {
+/// Whether rolling back `records` stops the `tailscaled` apply started, or
+/// runs `tailscale down` for a node apply brought up, either not restored
+/// yet.
+pub(super) fn cuts_tailscale(records: &[Record]) -> bool {
     records.iter().any(|r| match &r.event {
         Event::Backup {
             resource,
@@ -1427,11 +1474,20 @@ fn stops_tailscaled(records: &[Record]) -> bool {
                     ..
                 },
             ..
-        } if unit == net_tailscale::UNIT => !records
-            .iter()
-            .any(|r| matches!(&r.event, Event::Restored { resource: done } if done == resource)),
+        } if unit == net_tailscale::UNIT => not_restored(records, resource),
+        Event::Backup {
+            resource,
+            backup: Backup::TailscaleUp { was_running: false },
+            ..
+        } => not_restored(records, resource),
         _ => false,
     })
+}
+
+fn not_restored(records: &[Record], resource: &str) -> bool {
+    !records
+        .iter()
+        .any(|r| matches!(&r.event, Event::Restored { resource: done } if done == resource))
 }
 
 /// The accounts `records` created and no rollback removed yet.

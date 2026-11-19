@@ -6,7 +6,9 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use super::*;
-use crate::engine::{self, ApplyOutcome, Deadman, Engine, Plan, Selected, StateDir, Target};
+use crate::engine::{
+    self, ApplyOutcome, Deadman, Engine, EngineError, Plan, Selected, StateDir, Target, Who,
+};
 use crate::facts::fixtures::host;
 use crate::facts::{Address, Interface, Tailscale};
 use crate::modules::firewall_inbound::RULESET;
@@ -798,24 +800,8 @@ fn nothing_it_plans_stops_a_running_node() {
     }
 }
 
-/// A manual rollback that would stop the `tailscaled` it started is refused
-/// from a session through `tailscale0`, since nothing asks before cutting
-/// it, and runs from any other.
-#[test]
-fn rollback_that_stops_tailscaled_is_refused_over_tailscale() {
-    use crate::engine::{EngineError, Who};
-    let fs = fs();
-    let runner = Host::with_tailscale("Running");
-    *runner.unit.lock().unwrap() = (false, false);
-    let facts = facts(None);
-    let params = table("");
-    let first = plan(&fs, &runner, &facts, &params);
-    let (state, sys) = engine_on(&fs, &runner);
-    let engine = Engine::lock(&state, sys).unwrap();
-    engine
-        .apply(&first, &Deadman::default(), &mut |_| {})
-        .unwrap();
-    let iface = |name: &str, ip: &str| Interface {
+fn iface(name: &str, ip: &str) -> Interface {
+    Interface {
         name: name.into(),
         kind: None,
         addresses: vec![Address {
@@ -823,26 +809,124 @@ fn rollback_that_stops_tailscaled_is_refused_over_tailscale() {
             prefix: 32,
         }],
         up: true,
-    };
+    }
+}
+
+/// Without `ssh_via`, a manual rollback that stops the `tailscaled` it
+/// started is refused from a session through Tailscale's interface: by its
+/// name, with an IPv4-mapped address, or renamed (`--tun ts1`) and known by
+/// the node's address. It runs from a public session, or with none.
+#[test]
+fn rollback_that_stops_tailscaled_is_refused_over_tailscale() {
+    let fs = fs();
+    let runner = Host::with_tailscale("Running");
     let interfaces = [
         iface("eth0", "192.0.2.10"),
         iface("tailscale0", "100.64.0.7"),
+        iface("ts1", "100.64.0.8"),
     ];
+    let ips = ["100.64.0.8".parse().unwrap()];
     let who = |server: &str| Who {
         server: Some(server.parse().unwrap()),
         client: Some("198.51.100.7".parse().unwrap()),
         interfaces: &interfaces,
+        tailscale: &ips,
         ..Who::default()
     };
+    let empty = table("");
+    let (state, sys) = engine_on(&fs, &runner);
+    let engine = Engine::lock(&state, sys).unwrap();
+    for done in [who("192.0.2.10"), Who::default()] {
+        *runner.unit.lock().unwrap() = (false, false);
+        let fresh = facts(None);
+        let first = plan(&fs, &runner, &fresh, &empty);
+        engine
+            .apply(&first, &Deadman::default(), &mut |_| {})
+            .unwrap();
+        for server in ["100.64.0.7", "::ffff:100.64.0.7", "100.64.0.8"] {
+            let err = engine
+                .rollback_by(Target::Last, &who(server), &mut |_| {})
+                .unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    EngineError::CutsTailscale {
+                        via: None,
+                        pending: false,
+                        ..
+                    }
+                ),
+                "{server}: {err:?}"
+            );
+            assert!(err.to_string().contains("provider's console"), "{err}");
+        }
+        assert_eq!(*runner.unit.lock().unwrap(), (true, true));
+        engine
+            .rollback_by(Target::Last, &done, &mut |_| {})
+            .unwrap();
+        assert_eq!(*runner.unit.lock().unwrap(), (false, false));
+    }
+}
+
+/// Under a loaded `ssh_via` on Tailscale, a rollback that would stop
+/// `tailscaled` or take the node down (`tailscale down`) is refused with
+/// no session at all (tmux, the console), pending or not.
+#[test]
+fn under_ssh_via_on_tailscale_a_rollback_that_cuts_it_is_refused() {
+    let empty = table("");
+    // Pending: it started tailscaled and brought the node up.
+    let fs = armable();
+    let runner = Host::with_tailscale("Stopped");
+    *runner.unit.lock().unwrap() = (false, false);
+    let facts = facts(Some("Stopped"));
+    let first = plan(&fs, &runner, &facts, &empty);
+    let (state, sys) = engine_on(&fs, &runner);
+    let engine = Engine::lock(&state, sys).unwrap();
+    let outcome = engine.apply(&first, &armed(), &mut |_| {}).unwrap();
+    assert!(
+        matches!(outcome, ApplyOutcome::Pending { .. }),
+        "{outcome:?}"
+    );
     let err = engine
-        .rollback_by(Target::Last, &who("100.64.0.7"), &mut |_| {})
+        .rollback_by(Target::Last, &Who::default(), &mut |_| {})
         .unwrap_err();
-    assert!(matches!(err, EngineError::StopsTailscale { .. }), "{err:?}");
-    assert_eq!(*runner.unit.lock().unwrap(), (true, true));
-    engine
-        .rollback_by(Target::Last, &who("192.0.2.10"), &mut |_| {})
-        .unwrap();
-    assert_eq!(*runner.unit.lock().unwrap(), (false, false));
+    assert!(
+        matches!(&err, EngineError::CutsTailscale { via: Some(v), pending: true, .. } if v == "tailscale0"),
+        "{err:?}"
+    );
+    assert!(err.to_string().contains("safety timer"), "{err}");
+    drop(engine);
+
+    // Applied without the timer: only `tailscale down` would cut it.
+    let fs = fs_via("tailscale0");
+    let runner = Host::with_tailscale("Stopped");
+    let first = plan(&fs, &runner, &facts, &empty);
+    assert!(!change_ids(&first).contains(&"service:tailscaled.service".to_owned()));
+    let (state, sys) = engine_on(&fs, &runner);
+    let engine = Engine::lock(&state, sys).unwrap();
+    let off = Deadman {
+        off: true,
+        ..Deadman::default()
+    };
+    engine.apply(&first, &off, &mut |_| {}).unwrap();
+    let err = engine
+        .rollback_by(Target::Last, &Who::default(), &mut |_| {})
+        .unwrap_err();
+    assert!(
+        matches!(
+            &err,
+            EngineError::CutsTailscale {
+                via: Some(_),
+                pending: false,
+                ..
+            }
+        ),
+        "{err:?}"
+    );
+    let text = err.to_string();
+    assert!(text.contains("remove `ssh_via`"), "{text}");
+    assert!(!text.contains("console"), "{text}");
+    assert!(runner.tailscale().iter().all(|c| c != "down"));
 }
 
 /// `fs()` with a loaded ruleset that limits SSH to `via`.
@@ -890,29 +974,15 @@ fn under_ssh_via_on_tailscale_a_change_arms_the_timer() {
 /// `tailscale0` keeps the change, and each backup as force-restored.
 #[test]
 fn under_ssh_via_on_tailscale_the_journal_records_it() {
-    const BIN: &str = "/usr/local/bin/vps-ready";
-    let fs = fs_via("tailscale0")
-        .with_file(BOOT_ID, "a\n")
-        .with_file("/proc/uptime", "1000.25 900.00\n")
-        .with_dir("/usr", root(0o755))
-        .with_dir("/usr/local", root(0o755))
-        .with_dir("/usr/local/bin", root(0o755))
-        .with_dir("/etc/systemd", root(0o755))
-        .with_dir("/etc/systemd/system", root(0o755));
-    fs.write_atomic(Path::new(BIN), b"\x7fELF", root(0o755))
-        .unwrap();
+    let fs = armable();
     let runner = Host::with_tailscale("Running");
     let facts = facts(Some("Running"));
     let params = table("");
     let plan = plan(&fs, &runner, &facts, &params);
     let (state, sys) = engine_on(&fs, &runner);
-    let deadman = Deadman {
-        binary: BIN.into(),
-        ..Deadman::default()
-    };
     let outcome = Engine::lock(&state, sys)
         .unwrap()
-        .apply(&plan, &deadman, &mut |_| {})
+        .apply(&plan, &armed(), &mut |_| {})
         .unwrap();
     let ApplyOutcome::Pending { txn, .. } = outcome else {
         panic!("{outcome:?}");
@@ -933,4 +1003,28 @@ fn under_ssh_via_on_tailscale_the_journal_records_it() {
             .all(|l| l.contains(r#""force_restore":true"#)),
         "{journal}"
     );
+}
+
+const BIN: &str = "/usr/local/bin/vps-ready";
+
+/// `fs_via("tailscale0")` on a host that can arm the timer.
+fn armable() -> FakeFs {
+    let fs = fs_via("tailscale0")
+        .with_file(BOOT_ID, "a\n")
+        .with_file("/proc/uptime", "1000.25 900.00\n")
+        .with_dir("/usr", root(0o755))
+        .with_dir("/usr/local", root(0o755))
+        .with_dir("/usr/local/bin", root(0o755))
+        .with_dir("/etc/systemd", root(0o755))
+        .with_dir("/etc/systemd/system", root(0o755));
+    fs.write_atomic(Path::new(BIN), b"\x7fELF", root(0o755))
+        .unwrap();
+    fs
+}
+
+fn armed() -> Deadman {
+    Deadman {
+        binary: BIN.into(),
+        ..Deadman::default()
+    }
 }

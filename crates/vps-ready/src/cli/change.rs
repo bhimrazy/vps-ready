@@ -396,17 +396,21 @@ pub(super) fn rollback(
 ) -> anyhow::Result<u8> {
     require_root(host, "rollback")?;
     let state = StateDir::create(host.sys.fs, host.state_dir, host.state_uid)?;
-    // Who runs it: a rollback must not remove their account, nor limit SSH
-    // to a VPN this session does not come through.
+    // Who runs it: a rollback must not remove their account, limit SSH to
+    // a VPN this session does not come through, nor cut Tailscale under it.
     let session = (host.session)(host.sys).ok();
     let mut own: Vec<String> = host.sudo_user.iter().cloned().collect();
     own.extend(session.as_ref().and_then(|s| s.user.clone()));
     let interfaces = crate::facts::network::interfaces(host.sys.runner, &mut Vec::new());
+    let tailscale = crate::facts::network::tailscale(host.sys.runner, &mut Vec::new())
+        .map(|t| t.ips)
+        .unwrap_or_default();
     let who = Who {
         own: &own,
         server: session.as_ref().map(|s| s.server.ip()),
         client: session.map(|s| s.client.ip()),
         interfaces: &interfaces,
+        tailscale: &tailscale,
     };
     let done = Engine::lock(&state, host.sys)?.rollback_by(target, &who, &mut |p| {
         print_progress(err, &p);
