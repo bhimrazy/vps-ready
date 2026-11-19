@@ -1428,9 +1428,9 @@ fn stops_tailscaled(records: &[Record]) -> bool {
                     ..
                 },
             ..
-        } if unit == net_tailscale::UNIT => !records.iter().any(
-            |r| matches!(&r.event, Event::Restored { resource: done } if done == resource),
-        ),
+        } if unit == net_tailscale::UNIT => !records
+            .iter()
+            .any(|r| matches!(&r.event, Event::Restored { resource: done } if done == resource)),
         _ => false,
     })
 }

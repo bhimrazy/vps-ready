@@ -7,8 +7,10 @@ use std::sync::Mutex;
 
 use super::*;
 use crate::engine::{self, ApplyOutcome, Deadman, Engine, Plan, Selected, StateDir, Target};
-use crate::facts::Tailscale;
 use crate::facts::fixtures::host;
+use crate::facts::{Address, Interface, Tailscale};
+use crate::modules::firewall_inbound::RULESET;
+use crate::resource::sysctl::BOOT_ID;
 use crate::sys::fake::FakeFs;
 use crate::sys::{FileKind, Fs, Output, Runner, SysError};
 
@@ -99,6 +101,12 @@ impl Runner for Host {
                 "LoadState=not-found\nUnitFileState=\nActiveState=inactive\n".to_owned()
             }),
             ("systemctl", ["daemon-reload"]) => Output::success(""),
+            // The dead-man timer, its boot hook and the binary's copy.
+            ("systemd-run", _) => Output::success(""),
+            ("systemctl", [.., other]) if other.starts_with("vps-ready-") => Output::success(""),
+            (copy, ["version"]) if copy.ends_with("/vps-ready") => {
+                Output::success(format!("{}\n", crate::VERSION_INFO))
+            }
             ("systemctl", [verb, UNIT]) => {
                 match *verb {
                     "enable" => unit.0 = true,
@@ -768,4 +776,161 @@ fn a_node_key_needs_no_auth_key_file_param() {
     );
     *runner.backend.lock().unwrap() = "Running".into();
     assert_eq!(NetTailscale.verify(&cx, sys), Ok(()));
+}
+
+/// A session can come through `tailscale0` only while the node is
+/// `Running`, and then nothing this module plans stops `tailscaled` or
+/// brings the node down: the unit is only enabled or started, and the join
+/// is planned only for a node that is not `Running`.
+#[test]
+fn nothing_it_plans_stops_a_running_node() {
+    for unit in [(true, true), (false, true)] {
+        let fs = fs();
+        let runner = Host::with_tailscale("Running");
+        *runner.unit.lock().unwrap() = unit;
+        let facts = facts(Some("Running"));
+        let params = table(WITH_KEY);
+        let plan = plan(&fs, &runner, &facts, &params);
+        for step in plan.steps() {
+            assert_ne!(step.change.id, "tailscale:up");
+            assert!(!step.change.summary.contains("stop"), "{step:?}");
+        }
+    }
+}
+
+/// A manual rollback that would stop the `tailscaled` it started is refused
+/// from a session through `tailscale0`, since nothing asks before cutting
+/// it, and runs from any other.
+#[test]
+fn rollback_that_stops_tailscaled_is_refused_over_tailscale() {
+    use crate::engine::{EngineError, Who};
+    let fs = fs();
+    let runner = Host::with_tailscale("Running");
+    *runner.unit.lock().unwrap() = (false, false);
+    let facts = facts(None);
+    let params = table("");
+    let first = plan(&fs, &runner, &facts, &params);
+    let (state, sys) = engine_on(&fs, &runner);
+    let engine = Engine::lock(&state, sys).unwrap();
+    engine
+        .apply(&first, &Deadman::default(), &mut |_| {})
+        .unwrap();
+    let iface = |name: &str, ip: &str| Interface {
+        name: name.into(),
+        kind: None,
+        addresses: vec![Address {
+            ip: ip.parse().unwrap(),
+            prefix: 32,
+        }],
+        up: true,
+    };
+    let interfaces = [
+        iface("eth0", "192.0.2.10"),
+        iface("tailscale0", "100.64.0.7"),
+    ];
+    let who = |server: &str| Who {
+        server: Some(server.parse().unwrap()),
+        client: Some("198.51.100.7".parse().unwrap()),
+        interfaces: &interfaces,
+        ..Who::default()
+    };
+    let err = engine
+        .rollback_by(Target::Last, &who("100.64.0.7"), &mut |_| {})
+        .unwrap_err();
+    assert!(matches!(err, EngineError::StopsTailscale { .. }), "{err:?}");
+    assert_eq!(*runner.unit.lock().unwrap(), (true, true));
+    engine
+        .rollback_by(Target::Last, &who("192.0.2.10"), &mut |_| {})
+        .unwrap();
+    assert_eq!(*runner.unit.lock().unwrap(), (false, false));
+}
+
+/// `fs()` with a loaded ruleset that limits SSH to `via`.
+fn fs_via(via: &str) -> FakeFs {
+    let fs = fs().with_dir("/etc/vps-ready", root(0o755));
+    let rule = format!("    iifname \"{via}\" tcp dport {{ 22 }} accept\n");
+    fs.write_atomic(Path::new(RULESET), rule.as_bytes(), root(0o644))
+        .unwrap();
+    fs
+}
+
+/// Under a loaded ruleset that limits SSH to Tailscale's interface, by name
+/// or by its address (`--tun ts1`), a change arms the timer and is
+/// force-restored; under another interface, or without `ssh_via`, it is not.
+#[test]
+fn under_ssh_via_on_tailscale_a_change_arms_the_timer() {
+    let runner = Host::with_tailscale("Running");
+    let mut facts = facts(Some("Running"));
+    let ip = "100.64.0.7".parse().unwrap();
+    facts.tailscale.as_mut().unwrap().ips = vec![ip];
+    facts.interfaces.push(Interface {
+        name: "ts1".into(),
+        kind: Some("tun".into()),
+        addresses: vec![Address { ip, prefix: 32 }],
+        up: true,
+    });
+    let params = table("");
+    for (via, armed) in [
+        (Some("tailscale0"), true),
+        (Some("ts1"), true),
+        (Some("wg0"), false),
+        (None, false),
+    ] {
+        let fs = via.map_or_else(fs, fs_via);
+        let plan = plan(&fs, &runner, &facts, &params);
+        // The apt source and the origin file.
+        assert!(!change_ids(&plan).is_empty());
+        assert_eq!(plan.ssh_via.as_deref(), via);
+        assert_eq!(plan.needs_deadman(), armed, "{via:?}");
+        assert_eq!(plan.modules[0].force_restore(), armed, "{via:?}");
+    }
+}
+
+/// The armed apply records `ssh_via`, so only a confirm through
+/// `tailscale0` keeps the change, and each backup as force-restored.
+#[test]
+fn under_ssh_via_on_tailscale_the_journal_records_it() {
+    const BIN: &str = "/usr/local/bin/vps-ready";
+    let fs = fs_via("tailscale0")
+        .with_file(BOOT_ID, "a\n")
+        .with_file("/proc/uptime", "1000.25 900.00\n")
+        .with_dir("/usr", root(0o755))
+        .with_dir("/usr/local", root(0o755))
+        .with_dir("/usr/local/bin", root(0o755))
+        .with_dir("/etc/systemd", root(0o755))
+        .with_dir("/etc/systemd/system", root(0o755));
+    fs.write_atomic(Path::new(BIN), b"\x7fELF", root(0o755))
+        .unwrap();
+    let runner = Host::with_tailscale("Running");
+    let facts = facts(Some("Running"));
+    let params = table("");
+    let plan = plan(&fs, &runner, &facts, &params);
+    let (state, sys) = engine_on(&fs, &runner);
+    let deadman = Deadman {
+        binary: BIN.into(),
+        ..Deadman::default()
+    };
+    let outcome = Engine::lock(&state, sys)
+        .unwrap()
+        .apply(&plan, &deadman, &mut |_| {})
+        .unwrap();
+    let ApplyOutcome::Pending { txn, .. } = outcome else {
+        panic!("{outcome:?}");
+    };
+    let journal = fs
+        .read(Path::new(&format!("{STATE}/txn/{txn}/journal.jsonl")))
+        .unwrap();
+    let journal = String::from_utf8(journal).unwrap();
+    assert!(journal.contains(r#""ssh_via":"tailscale0""#), "{journal}");
+    let backups: Vec<&str> = journal
+        .lines()
+        .filter(|l| l.contains(r#""event":"backup""#))
+        .collect();
+    assert!(!backups.is_empty());
+    assert!(
+        backups
+            .iter()
+            .all(|l| l.contains(r#""force_restore":true"#)),
+        "{journal}"
+    );
 }
