@@ -160,6 +160,9 @@ impl Profile {
                     module: id.clone(),
                     source,
                 })?;
+            if id == "firewall.inbound" {
+                reserved_via(&table)?;
+            }
             if enabled {
                 modules.insert(id, table);
             }
@@ -172,6 +175,22 @@ impl Profile {
     #[must_use]
     pub fn params(&self, id: &str) -> Option<&toml::Table> {
         self.modules.get(id)
+    }
+}
+
+/// Refuses a written `ssh_via` in [`STAGED_VIA`]'s form, which only
+/// [`resolve_vpn`] may produce.
+fn reserved_via(firewall: &toml::Table) -> Result<(), ProfileError> {
+    let via = firewall.get("ssh_via").and_then(toml::Value::as_str);
+    match via {
+        Some(v) if v.starts_with(STAGED_VIA) => Err(ProfileError::Params {
+            module: "firewall.inbound".to_owned(),
+            source: ModuleError::Refused(format!(
+                "`ssh_via = {v:?}`: `{STAGED_VIA}` is reserved; write `ssh_via = \"{VPN}\"` for \
+                 the profile's VPN, or the interface's name"
+            )),
+        }),
+        _ => Ok(()),
     }
 }
 
@@ -201,15 +220,15 @@ fn resolve_vpn(
                 .map(|(id, _)| format!("`[modules.\"{id}\"]`"))
                 .collect();
             return Err(ProfileError::Vpn(format!(
-                "the private profile needs a VPN (`ssh_via = \"vpn\"`): add {}",
+                "`ssh_via = \"vpn\"` (the private profile) needs a VPN module: add {}",
                 add.join(" or ")
             )));
         }
         _ => {
             let ids: Vec<_> = vpns.iter().map(|(id, _)| *id).collect();
             return Err(ProfileError::Vpn(format!(
-                "the private profile takes one VPN (`ssh_via = \"vpn\"`), and this enables \
-                 {}: leave one out with `enabled = false`",
+                "`ssh_via = \"vpn\"` (the private profile) takes one VPN module, and this \
+                 enables {}: leave one out with `enabled = false`",
                 ids.join(" and ")
             )));
         }

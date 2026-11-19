@@ -112,7 +112,7 @@ authorized_keys = ["ssh-ed25519 AAAAC3Nza... me@laptop"]
 [modules."net.tailscale"]
 ```
 
-Apply the same file twice. The first apply, from a public SSH login (or at first boot from `export cloud-init`), sets up the VPN and keeps SSH public, with the note "step 1 of 2: SSH stays public until you apply this profile again from a login through tailscale0". Then log in through the VPN and run the same command: from that session, `ssh_via = "vpn"` closes public SSH exactly like an explicit `ssh_via`, with its checks, the safety timer and the confirm through the VPN. After that, applying the file again changes nothing. Add `"80/tcp", "443/tcp", "443/udp"` to `allow` for a web app.
+Apply the same file twice. The first apply, from a public SSH login (or at first boot from `export cloud-init`), sets up the VPN and keeps SSH public, with the note "step 1 of 2: SSH stays public until you apply this profile again from a login through tailscale0". Then log in through the VPN and run the same command: from that session, `ssh_via = "vpn"` closes public SSH exactly like an explicit `ssh_via`, with its checks, the safety timer and the confirm through the VPN. After that, applying the file again changes nothing. If SSH is already limited to another interface, the first step is refused rather than reopening SSH publicly. Add `"80/tcp", "443/tcp", "443/udp"` to `allow` for a web app.
 
 ### `ssh.bruteforce`: fail2ban (web profile)
 

@@ -359,7 +359,7 @@ fn the_private_profile_needs_one_vpn() {
     let alone = Profile::built_in("private", all()).unwrap_err().to_string();
     assert!(
         alone.starts_with(
-            "the private profile needs a VPN (`ssh_via = \"vpn\"`): add \
+            "`ssh_via = \"vpn\"` (the private profile) needs a VPN module: add \
              `[modules.\"net.tailscale\"]`"
         ),
         "{alone}"
@@ -367,7 +367,7 @@ fn the_private_profile_needs_one_vpn() {
     let none = parse("schema = 1\nextends = \"private\"\n").unwrap_err();
     assert_eq!(
         none.to_string(),
-        "the private profile needs a VPN (`ssh_via = \"vpn\"`): add \
+        "`ssh_via = \"vpn\"` (the private profile) needs a VPN module: add \
          `[modules.\"net.tailscale\"]` or `[modules.\"net.wireguard\"]`"
     );
     let off = format!("{PRIVATE}enabled = false\n");
@@ -376,7 +376,7 @@ fn the_private_profile_needs_one_vpn() {
     let both = format!("{PRIVATE}[modules.\"net.wireguard\"]\n");
     assert_eq!(
         parse(&both).unwrap_err().to_string(),
-        "the private profile takes one VPN (`ssh_via = \"vpn\"`), and this enables \
+        "`ssh_via = \"vpn\"` (the private profile) takes one VPN module, and this enables \
          net.tailscale and net.wireguard: leave one out with `enabled = false`"
     );
     let one = format!("{both}enabled = false\n");
@@ -385,4 +385,39 @@ fn the_private_profile_needs_one_vpn() {
     // An explicit interface stays as written.
     let wg0 = format!("{PRIVATE}[modules.\"firewall.inbound\"]\nssh_via = \"wg0\"\n");
     assert_eq!(ssh_via(&parse(&wg0).unwrap()), "wg0");
+}
+
+/// `"vpn"` works in any profile, not only through `extends = "private"`;
+/// without firewall.inbound there is nothing to resolve.
+#[test]
+fn ssh_via_vpn_in_any_profile() {
+    let web = "schema = 1\nextends = \"web\"\n[modules.\"net.tailscale\"]\n\
+               [modules.\"firewall.inbound\"]\nssh_via = \"vpn\"\n";
+    assert_eq!(ssh_via(&parse(web).unwrap()), "vpn:tailscale0");
+    let off = format!("{PRIVATE}[modules.\"firewall.inbound\"]\nenabled = false\n");
+    let profile = parse(&off).unwrap();
+    assert_eq!(profile.params("firewall.inbound"), None);
+    assert!(profile.params("net.tailscale").is_some());
+}
+
+/// Only the profile writes the resolved form, so a file cannot skip the
+/// VPN check or export's refusal with it.
+#[test]
+fn the_resolved_form_is_reserved() {
+    for via in ["vpn:", "vpn:wg0", "vpn:tailscale0"] {
+        let text = format!("{PRIVATE}[modules.\"firewall.inbound\"]\nssh_via = \"{via}\"\n");
+        let err = parse(&text).unwrap_err();
+        assert!(matches!(err, ProfileError::Params { .. }), "{via}: {err}");
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "module `firewall.inbound`: `ssh_via = \"{via}\"`: `vpn:` is reserved; write \
+                 `ssh_via = \"vpn\"` for the profile's VPN, or the interface's name"
+            )
+        );
+    }
+    // Also in a disabled section, as any param is checked.
+    let off =
+        "schema = 1\n[modules.\"firewall.inbound\"]\nenabled = false\nssh_via = \"vpn:wg0\"\n";
+    assert!(matches!(parse(off), Err(ProfileError::Params { .. })));
 }

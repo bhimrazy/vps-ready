@@ -601,7 +601,9 @@ fn the_private_profile_takes_two_applies_then_none() {
             _ => {}
         }
     }
-    for facts in [&through, &public] {
+    let mut console = through.clone();
+    console.session = None;
+    for facts in [&through, &public, &console] {
         let third = engine::plan(&selected, facts, sys).unwrap();
         assert_eq!(third.steps().count(), 0);
         assert_eq!(third.ssh_via.as_deref(), Some("tailscale0"));
@@ -636,4 +638,62 @@ fn verify_follows_the_step_of_a_staged_ssh_via() {
     assert_eq!(verify(&via_facts("192.0.2.10:22")), Ok(()));
     let err = verify(&via_facts("100.64.0.7:22")).unwrap_err();
     assert!(err.contains("other than tailscale0"), "{err}");
+}
+
+/// After step 2 the loaded table accepts SSH only on tailscale0, and verify
+/// passes from the VPN and from the console, as the step stays 2.
+#[test]
+fn verify_passes_after_step_two() {
+    let json = std::fs::read_to_string(testdata(LOADED_VIA))
+        .unwrap()
+        .replace("\"wg0\"", "\"tailscale0\"");
+    let runner = FakeRunner::new().on(
+        "nft",
+        ["-j", "list", "table", "inet", "vps_ready"],
+        Output::success(json),
+    );
+    let fs = FakeFs::new().with_file(
+        RULESET,
+        "    iifname \"tailscale0\" tcp dport { 22 } accept\n",
+    );
+    let table = params(&format!("ssh_via = \"{STAGED}\""));
+    let through = via_facts("100.64.0.7:22");
+    let mut console = through.clone();
+    console.session = None;
+    for facts in [&through, &console] {
+        let cx = PlanCx {
+            facts,
+            params: &table,
+            planned: &[],
+        };
+        let sys = Sys {
+            fs: &fs,
+            runner: &runner,
+        };
+        assert_eq!(FirewallInbound.verify(&cx, sys), Ok(()));
+    }
+}
+
+/// With SSH already limited to another interface, step 1 would reopen it
+/// publicly, so it is refused unless the session comes through the staged
+/// interface (then it is step 2, as an explicit `ssh_via`).
+#[test]
+fn a_staged_ssh_via_does_not_reopen_ssh_limited_elsewhere() {
+    let loaded = wg_fs(Some("    iifname \"tailscale0\" tcp dport { 22 } accept\n"));
+    let on = units("enabled");
+    let from_tailscale = via_facts("100.64.0.7:22");
+    let mut console = from_tailscale.clone();
+    console.session = None;
+    let public = via_facts("192.0.2.10:22");
+    for facts in [&from_tailscale, &console, &public] {
+        assert_eq!(
+            refused(via_steps(facts, "vpn:wg0", &loaded, &on)),
+            "SSH is already limited to tailscale0, and step 1 would reopen it publicly: keep \
+             `ssh_via = \"tailscale0\"` while wg0 comes up, then apply this from a login \
+             through wg0; or set `ssh_via = \"\"` to reopen it on purpose"
+        );
+    }
+    let from_wg = via_facts("10.77.0.1:22");
+    let steps = via_steps(&from_wg, "vpn:wg0", &loaded, &on).unwrap();
+    assert_eq!(via_of(&ruleset_of(&steps)).as_deref(), Some("wg0"));
 }

@@ -9,7 +9,8 @@ use askama::Template;
 use serde::Deserialize;
 
 use super::{
-    Applicability, DOCKER_PACKAGE, Module, ModuleError, ModuleSteps, ParamDoc, PlanCx, parse_params,
+    Applicability, DOCKER_PACKAGE, Module, ModuleError, ModuleSteps, ParamDoc, PlanCx,
+    parse_params, refuse,
 };
 use crate::config::STAGED_VIA;
 use crate::engine::Reload;
@@ -263,7 +264,7 @@ impl Module for FirewallInbound {
             ParamDoc {
                 name: "ssh_via",
                 default: "\"\"",
-                help: "Accept SSH only on this interface, e.g. \"tailscale0\" or \"wg0\", from a session through it; \"vpn\" for the profile's VPN module's interface, which keeps SSH public until applied from a session through it (the private profile); empty for any.",
+                help: "Accept SSH only on this interface, e.g. \"tailscale0\" or \"wg0\", from a session through it; \"vpn\" for the profile's VPN module's interface, which keeps SSH public until applied from a session through it (the private profile), so an interface named vpn cannot be used; empty for any.",
             },
         ]
     }
@@ -453,7 +454,8 @@ impl Module for FirewallInbound {
 /// this is not a session through the interface and the loaded ruleset does
 /// not limit SSH to it yet, drops it from `params`, so SSH stays public,
 /// and returns the note. Otherwise `params` stays, and the checks of an
-/// explicit `ssh_via` apply.
+/// explicit `ssh_via` apply. Refused while the loaded ruleset limits SSH to
+/// another interface: dropping it would reopen SSH publicly.
 fn stage(cx: &PlanCx, params: &mut Params, sys: Sys) -> Result<Option<String>, ModuleError> {
     let Via {
         name: Some(via),
@@ -462,8 +464,19 @@ fn stage(cx: &PlanCx, params: &mut Params, sys: Sys) -> Result<Option<String>, M
     else {
         return Ok(None);
     };
-    if via::through(cx.facts, via) || ssh_via(cx.planned, sys)?.as_ref() == Some(via) {
+    if via::through(cx.facts, via) {
         return Ok(None);
+    }
+    match ssh_via(cx.planned, sys)? {
+        Some(loaded) if loaded == *via => return Ok(None),
+        Some(loaded) => {
+            return refuse(&format!(
+                "SSH is already limited to {loaded}, and step 1 would reopen it publicly: keep \
+                 `ssh_via = \"{loaded}\"` while {via} comes up, then apply this from a login \
+                 through {via}; or set `ssh_via = \"\"` to reopen it on purpose"
+            ));
+        }
+        None => {}
     }
     let note = via::step_one(cx.facts, via);
     params.ssh_via = Via::default();

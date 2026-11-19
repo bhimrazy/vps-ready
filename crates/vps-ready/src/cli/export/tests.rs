@@ -227,7 +227,8 @@ hostname = \"web-1\"
     assert_eq!(doc["write_files"][0]["content"].as_str(), Some(private));
 
     let err = export(&fs("", &checksums()), "private", None).unwrap_err();
-    assert!(err.starts_with("the private profile needs a VPN"), "{err}");
+    let needs = "`ssh_via = \"vpn\"` (the private profile) needs a VPN module";
+    assert!(err.starts_with(needs), "{err}");
     let explicit = format!("{private}\n[modules.\"firewall.inbound\"]\nssh_via = \"tailscale0\"\n");
     let err = export(&fs(&explicit, &checksums()), PROFILE, None).unwrap_err();
     assert!(err.contains("firewall.inbound has `ssh_via`"), "{err}");
