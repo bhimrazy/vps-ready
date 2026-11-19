@@ -39,10 +39,46 @@ impl Module for Takes {
     }
 }
 
+/// Stands in for `net.wireguard` until it is registered.
+struct Wireguard;
+
+impl Module for Wireguard {
+    fn id(&self) -> &'static str {
+        "net.wireguard"
+    }
+    fn title(&self) -> &'static str {
+        "WireGuard"
+    }
+    fn why(&self) -> &'static str {
+        "test"
+    }
+    fn applicable(&self, _: &Facts) -> Applicability {
+        Applicability::Applicable
+    }
+    fn plan(&self, _: &PlanCx, _: Sys) -> Result<ModuleSteps, ModuleError> {
+        Ok(ModuleSteps::default())
+    }
+}
+
 fn registry() -> Vec<&'static dyn Module> {
     let mut registry = all().to_vec();
     registry.push(&Takes);
+    if !registry.iter().any(|m| m.id() == "net.wireguard") {
+        registry.push(&Wireguard);
+    }
     registry
+}
+
+/// The private profile with net.tailscale, as it is used.
+const PRIVATE: &str = "schema = 1\nextends = \"private\"\n[modules.\"net.tailscale\"]\n";
+
+/// A built-in profile as it is used: `private` needs a VPN.
+fn usable(name: &str) -> Profile {
+    if name == "private" {
+        parse(PRIVATE).unwrap()
+    } else {
+        Profile::built_in(name, all()).unwrap().unwrap()
+    }
 }
 
 fn parse(text: &str) -> Result<Profile, ProfileError> {
@@ -56,16 +92,14 @@ fn table(text: &str) -> toml::Table {
 #[test]
 fn built_in_profiles_are_valid() {
     for (name, _) in BUILT_IN {
-        let profile = Profile::built_in(name, all()).unwrap().unwrap();
+        let profile = usable(name);
         assert!(profile.params("kernel.sysctl").is_some(), "{name}");
         assert!(profile.params("updates.auto").is_some(), "{name}");
         assert!(profile.params("user.admin").is_some(), "{name}");
     }
-    let enables = |name: &str| {
-        let profile = Profile::built_in(name, all()).unwrap().unwrap();
-        profile.params("ssh.bruteforce").is_some()
-    };
+    let enables = |name: &str| usable(name).params("ssh.bruteforce").is_some();
     assert!(enables("web"));
+    assert!(enables("private"));
     assert!(!enables("minimal"));
     assert!(Profile::built_in("paranoid", all()).unwrap().is_none());
 }
@@ -146,7 +180,7 @@ fn unknown_modules_and_bases_are_errors() {
     let err = parse("schema = 1\nextends = \"paranoid\"\n").unwrap_err();
     assert_eq!(
         err.to_string(),
-        "cannot extend `paranoid`; the built-in profiles are minimal and web"
+        "cannot extend `paranoid`; the built-in profiles are minimal, web and private"
     );
 }
 
@@ -197,6 +231,12 @@ fn a_builder_without_changes_writes_the_built_in() {
         b.set_params("kernel.sysctl", toml::Table::new());
         assert!(b.is_unchanged());
         assert_eq!(b.to_toml(), format!("schema = 1\nextends = \"{name}\"\n"));
+        if name == "private" {
+            // No VPN yet.
+            assert!(matches!(parse(&b.to_toml()), Err(ProfileError::Vpn(_))));
+            assert!(matches!(b.build(&registry()), Err(ProfileError::Vpn(_))));
+            continue;
+        }
         let built_in = Profile::built_in(name, all()).unwrap().unwrap();
         assert_eq!(parse(&b.to_toml()).unwrap(), built_in);
         assert_eq!(b.build(&registry()).unwrap(), built_in);
@@ -295,4 +335,89 @@ fn a_builder_checks_what_it_builds() {
         b.build(&registry()).unwrap_err(),
         ProfileError::Params { .. }
     ));
+}
+
+fn ssh_via(profile: &Profile) -> &str {
+    profile.params("firewall.inbound").unwrap()["ssh_via"]
+        .as_str()
+        .unwrap()
+}
+
+/// `ssh_via = "vpn"` resolves to the interface of the one VPN module, and
+/// is refused without one or with two.
+#[test]
+fn the_private_profile_needs_one_vpn() {
+    let private = parse(PRIVATE).unwrap();
+    assert_eq!(ssh_via(&private), "vpn:tailscale0");
+    // Nothing public but what `allow` adds.
+    let allow = &private.params("firewall.inbound").unwrap()["allow"];
+    assert_eq!(allow.as_array().map(Vec::len), Some(0));
+    let wg = "schema = 1\nextends = \"private\"\n[modules.\"net.wireguard\"]\n";
+    assert_eq!(ssh_via(&parse(wg).unwrap()), "vpn:wg0");
+
+    // The real registry suggests only the VPN modules it has.
+    let alone = Profile::built_in("private", all()).unwrap_err().to_string();
+    assert!(
+        alone.starts_with(
+            "`ssh_via = \"vpn\"` (the private profile) needs a VPN module: add \
+             `[modules.\"net.tailscale\"]`"
+        ),
+        "{alone}"
+    );
+    let none = parse("schema = 1\nextends = \"private\"\n").unwrap_err();
+    assert_eq!(
+        none.to_string(),
+        "`ssh_via = \"vpn\"` (the private profile) needs a VPN module: add \
+         `[modules.\"net.tailscale\"]` or `[modules.\"net.wireguard\"]`"
+    );
+    let off = format!("{PRIVATE}enabled = false\n");
+    assert!(matches!(parse(&off), Err(ProfileError::Vpn(_))));
+
+    let both = format!("{PRIVATE}[modules.\"net.wireguard\"]\n");
+    assert_eq!(
+        parse(&both).unwrap_err().to_string(),
+        "`ssh_via = \"vpn\"` (the private profile) takes one VPN module, and this enables \
+         net.tailscale and net.wireguard: leave one out with `enabled = false`"
+    );
+    let one = format!("{both}enabled = false\n");
+    assert_eq!(ssh_via(&parse(&one).unwrap()), "vpn:tailscale0");
+
+    // An explicit interface stays as written.
+    let wg0 = format!("{PRIVATE}[modules.\"firewall.inbound\"]\nssh_via = \"wg0\"\n");
+    assert_eq!(ssh_via(&parse(&wg0).unwrap()), "wg0");
+}
+
+/// `"vpn"` works in any profile, not only through `extends = "private"`;
+/// without firewall.inbound there is nothing to resolve.
+#[test]
+fn ssh_via_vpn_in_any_profile() {
+    let web = "schema = 1\nextends = \"web\"\n[modules.\"net.tailscale\"]\n\
+               [modules.\"firewall.inbound\"]\nssh_via = \"vpn\"\n";
+    assert_eq!(ssh_via(&parse(web).unwrap()), "vpn:tailscale0");
+    let off = format!("{PRIVATE}[modules.\"firewall.inbound\"]\nenabled = false\n");
+    let profile = parse(&off).unwrap();
+    assert_eq!(profile.params("firewall.inbound"), None);
+    assert!(profile.params("net.tailscale").is_some());
+}
+
+/// Only the profile writes the resolved form, so a file cannot skip the
+/// VPN check or export's refusal with it.
+#[test]
+fn the_resolved_form_is_reserved() {
+    for via in ["vpn:", "vpn:wg0", "vpn:tailscale0"] {
+        let text = format!("{PRIVATE}[modules.\"firewall.inbound\"]\nssh_via = \"{via}\"\n");
+        let err = parse(&text).unwrap_err();
+        assert!(matches!(err, ProfileError::Params { .. }), "{via}: {err}");
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "module `firewall.inbound`: `ssh_via = \"{via}\"`: `vpn:` is reserved; write \
+                 `ssh_via = \"vpn\"` for the profile's VPN, or the interface's name"
+            )
+        );
+    }
+    // Also in a disabled section, as any param is checked.
+    let off =
+        "schema = 1\n[modules.\"firewall.inbound\"]\nenabled = false\nssh_via = \"vpn:wg0\"\n";
+    assert!(matches!(parse(off), Err(ProfileError::Params { .. })));
 }

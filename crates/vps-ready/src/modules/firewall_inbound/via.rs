@@ -43,27 +43,20 @@ pub(super) fn check(
              console, cloud-init)"
         )),
         Some(s) => {
-            let (server, client) = (s.server.ip().to_canonical(), s.client.ip().to_canonical());
-            let user = s.user.as_deref().unwrap_or("<user>");
-            let to = address(facts, via)
-                .map_or_else(|| format!("<address of {via}>"), |ip| ip.to_string());
+            let server = s.server.ip().to_canonical();
             let how = format!(
-                "connect through {via} first and apply from there (`ssh -t {user}@{to} sudo \
-                 vps-ready apply ...`)"
+                "connect through {via} first and apply from there (`{}`)",
+                apply_through(facts, via)
             );
-            // A login from this host to its own VPN address travels over lo.
-            let own = facts
-                .interfaces
-                .iter()
-                .any(|i| i.addresses.iter().any(|a| a.ip == client));
-            if !iface.is_some_and(|i| i.addresses.iter().any(|a| a.ip == server)) {
+            if !on(facts, via, server) {
                 problems.push(format!(
                     "this SSH session came in on {server}, not through {via}: {how}"
                 ));
-            } else if client.is_loopback() || own {
+            } else if local(facts) {
                 problems.push(format!(
-                    "this SSH session comes from {client}, on this server itself, so {via} did \
-                     not carry it: {how}"
+                    "this SSH session comes from {}, on this server itself, so {via} did \
+                     not carry it: {how}",
+                    s.client.ip().to_canonical()
                 ));
             }
         }
@@ -101,6 +94,57 @@ pub(super) fn check(
     }
     notes.push(console(facts, via));
     Ok(notes)
+}
+
+/// Whether this is an SSH session that came in through `via` from
+/// elsewhere: the opposite of refusals 2 and 3.
+pub(super) fn through(facts: &Facts, via: &str) -> bool {
+    facts
+        .session
+        .as_ref()
+        .is_some_and(|s| on(facts, via, s.server.ip().to_canonical()) && !local(facts))
+}
+
+/// The note of step 1 of a staged `ssh_via`, which keeps SSH public.
+pub(super) fn step_one(facts: &Facts, via: &str) -> String {
+    format!(
+        "step 1 of 2: SSH stays public until you apply this profile again from a login \
+         through {via} (`{}`)",
+        apply_through(facts, via)
+    )
+}
+
+/// Whether `ip` is an address of `via`.
+fn on(facts: &Facts, via: &str, ip: IpAddr) -> bool {
+    facts
+        .interfaces
+        .iter()
+        .filter(|i| i.name == via)
+        .any(|i| i.addresses.iter().any(|a| a.ip == ip))
+}
+
+/// Whether the session comes from this host: a login to its own VPN
+/// address travels over lo.
+fn local(facts: &Facts) -> bool {
+    facts.session.as_ref().is_some_and(|s| {
+        let client = s.client.ip().to_canonical();
+        client.is_loopback()
+            || facts
+                .interfaces
+                .iter()
+                .any(|i| i.addresses.iter().any(|a| a.ip == client))
+    })
+}
+
+/// The command that applies again through `via`.
+fn apply_through(facts: &Facts, via: &str) -> String {
+    let user = facts
+        .session
+        .as_ref()
+        .and_then(|s| s.user.as_deref())
+        .unwrap_or("<user>");
+    let to = address(facts, via).map_or_else(|| format!("<address of {via}>"), |ip| ip.to_string());
+    format!("ssh -t {user}@{to} sudo vps-ready apply ...")
 }
 
 /// Why `via` is never a private path, if it is not.
