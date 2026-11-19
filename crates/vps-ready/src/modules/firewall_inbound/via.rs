@@ -169,11 +169,20 @@ fn not_private(facts: &Facts, via: &str) -> Option<String> {
 }
 
 /// The interface the loaded `vps_ready` table limits SSH to, when it is
-/// one `ssh_via` takes as private. Audit counts it as a VPN's, since a
-/// NetBird or ZeroTier link has no type that says so.
+/// one `ssh_via` takes as private and has only addresses the internet does
+/// not route. Audit counts it as a VPN's, since a NetBird or ZeroTier link
+/// has no type that says so. `None` without the routes or the interface:
+/// then nothing shows it is not the way out.
 pub(crate) fn private_via(facts: &Facts) -> Option<String> {
+    let routed = facts
+        .routes
+        .iter()
+        .any(|r| r.dst == "default" && r.table.is_none());
+    if !routed {
+        return None;
+    }
     let ssh = super::ssh_ports(facts);
-    facts
+    let name = facts
         .firewall
         .as_ref()?
         .input_chains
@@ -183,9 +192,22 @@ pub(crate) fn private_via(facts: &Facts) -> Option<String> {
         .find_map(|p| match p.interfaces.as_slice() {
             [name] if ssh.iter().any(|&port| p.ports.contains("tcp", port)) => Some(name),
             _ => None,
-        })
-        .filter(|name| not_private(facts, name).is_none())
-        .cloned()
+        })?;
+    let iface = facts.interfaces.iter().find(|i| &i.name == name)?;
+    let local = !iface.addresses.is_empty() && iface.addresses.iter().all(|a| local_ip(a.ip));
+    (local && not_private(facts, name).is_none()).then(|| name.clone())
+}
+
+/// Whether the internet does not route `ip`: RFC 1918, shared
+/// (100.64.0.0/10, Tailscale's), link-local, or IPv6 unique local.
+fn local_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            let [a, b, ..] = v4.octets();
+            v4.is_private() || v4.is_link_local() || (a == 100 && b & 0xc0 == 64)
+        }
+        IpAddr::V6(v6) => v6.is_unique_local() || v6.is_unicast_link_local(),
+    }
 }
 
 /// Whether `via` is Tailscale's interface: by its name, or by holding one
