@@ -27,7 +27,7 @@ pub mod virt;
 
 pub use bridges::Bridge;
 pub use docker::{DaemonJson, DockerDaemon, DockerEngine, DockerService};
-pub use firewall::{Firewall, FirewallTools, InputChain, Ports, PublishedPort};
+pub use firewall::{Firewall, FirewallTools, InputChain, InterfacePorts, Ports, PublishedPort};
 pub use listeners::{Listener, Proto};
 pub use os_release::{OsFamily, OsRelease};
 pub use reboot::Reboot;

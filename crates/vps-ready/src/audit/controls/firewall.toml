@@ -15,3 +15,10 @@ severity = "medium"
 title = "Container ports do not bypass the firewall"
 why = "Traffic to a port Docker publishes is forwarded to the container and skips the input rules of ufw and firewalld: `-p 5432:5432` makes a database reachable from anywhere even when the firewall blocks port 5432. Publish on 127.0.0.1 (`-p 127.0.0.1:5432:5432`) or filter forwarded traffic yourself, e.g. in the DOCKER-USER chain."
 check = { kind = "published_ports" }
+
+[[control]]
+id = "FW-003"
+severity = "low"
+title = "Only expected ports are open to the internet"
+why = "Anyone can reach and attack a service the firewall lets in, such as a database or an admin panel listening on all addresses. SSH, a web server (80 and 443) and the DHCP client are expected; every port open to the internet is listed either way. A firewall at your provider also protects the server, but this check cannot see it."
+check = { kind = "exposed_listeners" }

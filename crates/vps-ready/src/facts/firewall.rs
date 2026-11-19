@@ -109,6 +109,18 @@ impl Ports {
     }
 }
 
+/// Ports an input chain accepts only on some input interfaces.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct InterfacePorts {
+    /// The interface names the rule and the jumps to it match with `==`
+    /// (`iifname`, `iif`), as written, so a wildcard stays `wg*`. A packet
+    /// must arrive on one of them, but not every one may be possible. Empty
+    /// when no such match has only plain names, e.g. `iifname != "eth0"`.
+    pub interfaces: Vec<String>,
+    /// The ports.
+    pub ports: Ports,
+}
+
 /// A base chain that filters incoming packets.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct InputChain {
@@ -130,7 +142,7 @@ pub struct InputChain {
     /// Ports it accepts that way only on some input interfaces (`ufw allow
     /// in on wg0 to any port 5432`). Whether that is the public interface
     /// is not known, so they may be open.
-    pub interface_ports: Vec<Ports>,
+    pub interface_ports: Vec<InterfacePorts>,
     /// Protocols with such a rule whose ports nft does not show (iptables
     /// `multiport`, as ufw writes `allow 80,443/tcp`): any of their ports
     /// may be open.
@@ -152,8 +164,39 @@ impl InputChain {
         if !self.drops_unmatched || self.open_ports.iter().any(|p| p.contains(proto, port)) {
             Some(false)
         } else if self.unread_ports.iter().any(|p| p == proto)
-            || self.interface_ports.iter().any(|p| p.contains(proto, port))
+            || self
+                .interface_ports
+                .iter()
+                .any(|p| p.ports.contains(proto, port))
         {
+            None
+        } else {
+            Some(true)
+        }
+    }
+
+    /// Whether the chain drops packets to `port` that arrive on an interface
+    /// `private` does not accept. Unlike [`Self::blocks`], a port opened only
+    /// on interfaces that are all `private` is blocked, and one opened on
+    /// any other interface is open. `None` when a rule whose ports nft does
+    /// not show may open it.
+    #[must_use]
+    pub fn blocks_public(
+        &self,
+        proto: &str,
+        port: u16,
+        private: impl Fn(&str) -> bool,
+    ) -> Option<bool> {
+        let public = |p: &InterfacePorts| {
+            p.ports.contains(proto, port)
+                && (p.interfaces.is_empty() || !p.interfaces.iter().all(|i| private(i)))
+        };
+        if !self.drops_unmatched
+            || self.open_ports.iter().any(|p| p.contains(proto, port))
+            || self.interface_ports.iter().any(public)
+        {
+            Some(false)
+        } else if self.unread_ports.iter().any(|p| p == proto) {
             None
         } else {
             Some(true)
@@ -419,7 +462,7 @@ fn parse(json: &[u8], multiport: &Multiport) -> Option<Firewall> {
             seen: HashSet::new(),
             memo: &mut memo,
         };
-        walk.open_ports(&k, false, &mut open);
+        walk.open_ports(&k, None, &mut open);
         let (family, table, name) = k;
         input_chains.push(InputChain {
             family,
@@ -579,7 +622,7 @@ fn dports(m: &Value) -> Option<Vec<Ports>> {
 #[derive(Default)]
 struct OpenPorts {
     any: Vec<Ports>,
-    by_interface: Vec<Ports>,
+    by_interface: Vec<InterfacePorts>,
     unread: Vec<String>,
 }
 
@@ -589,7 +632,7 @@ struct Walk<'a, 'r> {
     multiport: &'a Multiport,
     /// Chains visited, per scope: firewalld jumps to a zone with
     /// `iifname`, then without.
-    seen: HashSet<(ChainKey, bool)>,
+    seen: HashSet<(ChainKey, Option<Vec<String>>)>,
     memo: &'a mut HashMap<ChainKey, Option<Fate>>,
 }
 
@@ -619,10 +662,13 @@ impl Walk<'_, '_> {
     /// Adds what `chain` opens to any source. A `jump` or `goto` is
     /// followed only if its rule is narrow too; if that rule also matches
     /// ports, they are open when the target accepts everything (as `ufw
-    /// limit` does). `scoped` is set below a jump that matched an input
-    /// interface.
-    fn open_ports(&mut self, chain: &ChainKey, scoped: bool, out: &mut OpenPorts) {
-        if !self.seen.insert((chain.clone(), scoped)) {
+    /// limit` does). `scope` holds the interface names of the jumps that
+    /// led here, if one matched an input interface.
+    fn open_ports(&mut self, chain: &ChainKey, scope: Option<&[String]>, out: &mut OpenPorts) {
+        if !self
+            .seen
+            .insert((chain.clone(), scope.map(<[String]>::to_vec)))
+        {
             return;
         }
         let rules = self.rules;
@@ -637,13 +683,21 @@ impl Walk<'_, '_> {
                 rule.ports.extend(ports.iter().cloned());
                 rule.unread.clear();
             }
-            let scoped = scoped || rule.interface;
+            // Every name the path matches: a packet must pass each match,
+            // so this may name more interfaces than can reach the rule.
+            let scope = match rule.interfaces.take() {
+                Some(mut names) => {
+                    names.extend(scope.into_iter().flatten().cloned());
+                    Some(names)
+                }
+                None => scope.map(<[String]>::to_vec),
+            };
             let opens = match v {
                 Verdict::Accept => true,
                 Verdict::Jump(t) | Verdict::Goto(t) => {
                     let target = (chain.0.clone(), chain.1.clone(), t.to_owned());
                     if rule.ports.is_empty() && rule.unread.is_empty() {
-                        self.open_ports(&target, scoped, out);
+                        self.open_ports(&target, scope.as_deref(), out);
                         false
                     } else {
                         fate(rules, &target, self.memo) == Fate::ACCEPT
@@ -652,12 +706,17 @@ impl Walk<'_, '_> {
                 _ => false,
             };
             if opens {
-                if scoped {
-                    &mut out.by_interface
-                } else {
-                    &mut out.any
+                match scope {
+                    Some(interfaces) => {
+                        out.by_interface.extend(rule.ports.into_iter().map(|ports| {
+                            InterfacePorts {
+                                interfaces: interfaces.clone(),
+                                ports,
+                            }
+                        }));
+                    }
+                    None => out.any.extend(rule.ports),
                 }
-                .extend(rule.ports);
                 out.unread.extend(rule.unread);
             }
         }
@@ -671,8 +730,9 @@ struct Narrow {
     /// Protocols of an iptables `multiport` match (ufw's `allow
     /// 80,443/tcp`), whose ports nft does not show.
     unread: Vec<String>,
-    /// Whether it matches an input interface.
-    interface: bool,
+    /// The names its input interface matches accept, if it has one; see
+    /// [`InterfacePorts::interfaces`].
+    interfaces: Option<Vec<String>>,
 }
 
 /// The rule given the statements `before` its verdict, if each is a port,
@@ -682,7 +742,7 @@ fn narrow(before: &[Value]) -> Option<Narrow> {
     let mut ports = Vec::new();
     let mut proto = None;
     let mut multiport = false;
-    let mut interface = false;
+    let mut interfaces: Option<Vec<String>> = None;
     for s in before {
         if s.get("counter").is_some() || s.get("log").is_some() {
             continue;
@@ -714,7 +774,11 @@ fn narrow(before: &[Value]) -> Option<Narrow> {
             (Some("l4proto"), ..) | (_, _, Some("protocol" | "nexthdr")) => {
                 proto = m.get("right").and_then(Value::as_str);
             }
-            (Some("iifname" | "iif"), ..) => interface = true,
+            (Some("iifname" | "iif"), ..) => {
+                interfaces
+                    .get_or_insert_default()
+                    .extend(interface_names(m));
+            }
             (Some("nfproto"), ..) | (_, Some("state"), _) => {}
             _ => return None,
         }
@@ -727,8 +791,28 @@ fn narrow(before: &[Value]) -> Option<Narrow> {
     Some(Narrow {
         ports,
         unread,
-        interface,
+        interfaces,
     })
+}
+
+/// The names an `iifname` or `iif` match `m` accepts: `"wg0"` or a set of
+/// names with `==`, nothing for any other match.
+fn interface_names(m: &Value) -> Vec<String> {
+    if m.get("op").and_then(Value::as_str) != Some("==") {
+        return Vec::new();
+    }
+    let right = m.get("right");
+    if let Some(name) = right.and_then(Value::as_str) {
+        return vec![name.to_owned()];
+    }
+    let set = right.and_then(|r| r.get("set")).and_then(Value::as_array);
+    set.and_then(|names| {
+        names
+            .iter()
+            .map(|n| n.as_str().map(str::to_owned))
+            .collect::<Option<Vec<_>>>()
+    })
+    .unwrap_or_default()
 }
 
 /// What a chain can do to a packet that no conditional rule matches. More

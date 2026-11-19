@@ -5,13 +5,15 @@
 //! without reading Rust. The files are embedded at build time and a unit test
 //! parses every one, so a typo fails CI instead of a user's audit.
 
+use std::collections::BTreeMap;
 use std::fmt;
+use std::net::{IpAddr, Ipv4Addr};
 
 use serde::{Deserialize, Serialize};
 
 use crate::facts::ssh::MatchOverride;
 use crate::facts::sysctl::Ipv4Conf;
-use crate::facts::{AptUpdates, Facts, Firewall, OsFamily, SSHD_CONFIG};
+use crate::facts::{AptUpdates, Facts, Firewall, InputChain, OsFamily, Proto, SSHD_CONFIG};
 
 /// The embedded catalog, as `(file name, contents)`.
 const CATALOG: [(&str, &str); 6] = [
@@ -120,6 +122,13 @@ pub enum Check {
     /// one whose ports nft does not show may allow it; skipped without
     /// Docker.
     PublishedPorts,
+    /// No port is open to the internet but SSH's, TCP 80 and 443, UDP 443
+    /// and the DHCP client's (UDP 68): a listening socket on an address
+    /// beyond loopback and link-local, that the input chains let in on an
+    /// interface other than `lo` and `tailscale0`. Docker's published ports
+    /// are left to [`Check::PublishedPorts`]. The open ports are listed
+    /// either way; unknown when a rule nft does not show may open one.
+    ExposedListeners,
     /// The kernel has AppArmor enabled. Debian and Ubuntu only so far;
     /// skipped elsewhere and inside a container.
     Apparmor,
@@ -176,6 +185,10 @@ pub struct Finding {
     /// a `Match` block. Not in the JSON, where `found` names the same line.
     #[serde(skip)]
     pub manual_fix: Option<String>,
+    /// What a passing check found worth showing, e.g. the ports open to the
+    /// internet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 impl Finding {
@@ -184,7 +197,7 @@ impl Finding {
     #[must_use]
     pub fn detail(&self) -> Option<String> {
         match (&self.outcome, &self.control.check) {
-            (Outcome::Pass, _) => None,
+            (Outcome::Pass, _) => self.note.clone(),
             (Outcome::Fail { found }, Check::SshdEffective { key, equals }) => {
                 Some(format!("{key} is {found}, expected {equals}"))
             }
@@ -198,6 +211,7 @@ impl Finding {
                 | Check::RebootRequired
                 | Check::InboundDefaultDeny
                 | Check::PublishedPorts
+                | Check::ExposedListeners
                 | Check::Apparmor
                 | Check::ReversePathFilter
                 | Check::IcmpRedirectsIgnored
@@ -282,8 +296,18 @@ pub fn run(controls: Vec<Control>, facts: &Facts) -> Report {
     let findings = controls
         .into_iter()
         .map(|mut control| {
-            let outcome = evaluate(&control.check, facts);
+            let (outcome, note) = match control.check {
+                Check::ExposedListeners => exposed_listeners(facts),
+                _ => (evaluate(&control.check, facts), None),
+            };
             let mut manual_fix = None;
+            if matches!(outcome, Outcome::Fail { .. }) && control.check == Check::ExposedListeners {
+                manual_fix = Some(
+                    "make the service listen on 127.0.0.1, or remove its port from \
+                     firewall.inbound's `allow` or the rule that opens it"
+                        .to_owned(),
+                );
+            }
             if matches!(outcome, Outcome::Fail { .. })
                 && let Some(m) = unfixable_override(&control.check, facts)
             {
@@ -305,6 +329,7 @@ pub fn run(controls: Vec<Control>, facts: &Facts) -> Report {
                 control,
                 outcome,
                 manual_fix,
+                note,
             }
         })
         .collect();
@@ -405,6 +430,7 @@ pub(crate) fn evaluate(check: &Check, facts: &Facts) -> Outcome {
                 reason: "the firewall ruleset could not be read".to_owned(),
             },
         },
+        Check::ExposedListeners => exposed_listeners(facts).0,
         Check::Apparmor => {
             if facts.virtualization.in_container() {
                 Outcome::Skip {
@@ -717,6 +743,150 @@ fn port_list(ports: &[(&str, u16, Option<&str>)]) -> String {
         .join(", ")
 }
 
+/// Ports open to the internet that need no reason: TCP 80 and 443, UDP 443
+/// (HTTP/3) and the DHCP client.
+const EXPECTED_PORTS: [(Proto, u16); 4] = [
+    (Proto::Tcp, 80),
+    (Proto::Tcp, 443),
+    (Proto::Udp, 443),
+    (Proto::Udp, 68),
+];
+
+/// Interfaces that do not face the internet, known by name.
+fn private_interface(name: &str) -> bool {
+    matches!(name, "lo" | "tailscale0")
+}
+
+/// Whether a socket bound to `addr` receives IPv4 and IPv6 packets from
+/// beyond the host: not on loopback, link-local or a private interface
+/// (`127.0.0.53%lo`). `*` is both; an address that does not parse counts
+/// as both.
+fn public_families(addr: &str) -> (bool, bool) {
+    let (ip, device) = addr.split_once('%').unwrap_or((addr, ""));
+    if private_interface(device) {
+        return (false, false);
+    }
+    let v4 = |ip: Ipv4Addr| !ip.is_loopback() && !ip.is_link_local();
+    match ip.parse::<IpAddr>() {
+        Ok(IpAddr::V4(ip)) => (v4(ip), false),
+        Ok(IpAddr::V6(ip)) => match ip.to_ipv4_mapped() {
+            Some(mapped) => (v4(mapped), false),
+            None => (false, !ip.is_loopback() && !ip.is_unicast_link_local()),
+        },
+        Err(_) => (true, true),
+    }
+}
+
+/// Whether the input chains let packets to `port` in from the internet:
+/// `Some(true)` when none drops them, `None` when a rule or table that is
+/// not read may.
+fn admitted(firewall: &Firewall, proto: Proto, port: u16, v6: bool) -> Option<bool> {
+    let chains: Vec<&InputChain> = firewall
+        .input_chains
+        .iter()
+        .filter(|c| c.covers(v6))
+        .collect();
+    let verdicts: Vec<Option<bool>> = chains
+        .iter()
+        .map(|c| c.blocks_public(&proto.to_string(), port, private_interface))
+        .collect();
+    let legacy = if v6 {
+        firewall.legacy_filter_v6
+    } else {
+        firewall.legacy_filter_v4
+    };
+    if verdicts.contains(&Some(true)) {
+        Some(false)
+    } else if verdicts.contains(&None) || (legacy && !chains.iter().any(|c| c.drops_unmatched)) {
+        // As for FW-001: iptables-legacy may drop what nft lets in.
+        None
+    } else {
+        Some(true)
+    }
+}
+
+/// FW-003's outcome, and on a pass the open ports.
+fn exposed_listeners(facts: &Facts) -> (Outcome, Option<String>) {
+    let Some(firewall) = &facts.firewall else {
+        let reason = "the firewall ruleset could not be read".to_owned();
+        return (Outcome::Unknown { reason }, None);
+    };
+    // sshd listens on every host vps-ready hardens, so none means `ss`
+    // could not be read.
+    if facts.listeners.is_empty() {
+        let reason = "the listening sockets could not be read".to_owned();
+        return (Outcome::Unknown { reason }, None);
+    }
+    let ssh = crate::modules::firewall_inbound::ssh_ports(facts);
+    // (proto, port) -> processes, for the open and the maybe open.
+    let (mut open, mut maybe) = (BTreeMap::new(), BTreeMap::new());
+    for l in &facts.listeners {
+        if l.processes.iter().any(|p| p == "docker-proxy") {
+            continue;
+        }
+        let (v4, v6) = public_families(&l.addr);
+        let mut verdict = Some(false);
+        for (public, v6) in [(v4, false), (v6 && facts.ipv6, true)] {
+            if !public {
+                continue;
+            }
+            verdict = match (verdict, admitted(firewall, l.proto, l.port, v6)) {
+                (Some(true), _) | (_, Some(true)) => Some(true),
+                (None, _) | (_, None) => None,
+                _ => Some(false),
+            };
+        }
+        let into = match verdict {
+            Some(true) => &mut open,
+            None => &mut maybe,
+            Some(false) => continue,
+        };
+        let processes: &mut Vec<String> = into.entry((l.proto, l.port)).or_default();
+        for p in &l.processes {
+            if !processes.contains(p) {
+                processes.push(p.clone());
+            }
+        }
+    }
+    maybe.retain(|k, _| !open.contains_key(k));
+    let expected = |&(proto, port): &(Proto, u16)| {
+        EXPECTED_PORTS.contains(&(proto, port)) || (proto == Proto::Tcp && ssh.contains(&port))
+    };
+    let list = |ports: &BTreeMap<(Proto, u16), Vec<String>>, only_unexpected: bool| {
+        ports
+            .iter()
+            .filter(|(k, _)| !only_unexpected || !expected(k))
+            .map(|((proto, port), processes)| {
+                if processes.is_empty() {
+                    format!("{proto}/{port}")
+                } else {
+                    format!("{proto}/{port} ({})", processes.join(", "))
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let all = if open.is_empty() {
+        "no port is open to the internet".to_owned()
+    } else {
+        format!("open to the internet: {}", list(&open, false))
+    };
+    let (unexpected, unsure) = (list(&open, true), list(&maybe, true));
+    if !unexpected.is_empty() {
+        let found = format!("ports other than SSH, web and DHCP are open: {unexpected}; {all}");
+        (Outcome::Fail { found }, None)
+    } else if !unsure.is_empty() {
+        let reason = format!(
+            "a firewall rule whose ports nft does not show (iptables multiport), or the \
+             filter table of iptables-legacy, which vps-ready does not read, may open {unsure}; \
+             {all}"
+        );
+        (Outcome::Unknown { reason }, None)
+    } else {
+        (Outcome::Pass, Some(all))
+    }
+}
+
 /// Which incoming traffic no chain drops by default, e.g. `IPv6`.
 fn inbound_default_deny(firewall: &Firewall, ipv6: bool) -> Outcome {
     let drops = |v6: bool| {
@@ -947,6 +1117,13 @@ mod tests {
                 Check::AutoUpdates => assert!(facts.updates.is_some(), "{}", c.id),
                 Check::InboundDefaultDeny | Check::PublishedPorts => {
                     assert!(facts.firewall.is_some(), "{}", c.id);
+                }
+                Check::ExposedListeners => {
+                    assert!(
+                        facts.firewall.is_some() && !facts.listeners.is_empty(),
+                        "{}",
+                        c.id
+                    );
                 }
                 Check::Apparmor => assert!(facts.apparmor.is_some(), "{}", c.id),
                 // The captured hosts are containers, which have no `reboot` fact.
