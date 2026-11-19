@@ -9,7 +9,8 @@ use std::path::Path;
 use anyhow::bail;
 
 use super::change::{self, Applied, Host, Selection, plural};
-use super::{EXIT_INTERRUPTED, export, wrap};
+use super::export::{self, Refusal};
+use super::{EXIT_INTERRUPTED, wrap};
 use crate::VERSION_INFO;
 use crate::audit::{self, Outcome, Severity};
 use crate::config::{Profile, ProfileBuilder};
@@ -746,18 +747,27 @@ fn new_server(
     saved: Saved,
     out: &mut dyn Write,
 ) -> anyhow::Result<()> {
-    let refused = export::refusal(&builder.build(host.modules)?).is_some();
+    let refused = export::refusal(&builder.build(host.modules)?);
     let (name, first) = match (saved, refused) {
-        (Saved::To(path), false) => (path.display().to_string(), String::new()),
-        (Saved::To(path), true) => {
+        (Saved::To(path), None) => (path.display().to_string(), String::new()),
+        (Saved::To(path), Some(Refusal::NoAdminKeys)) => {
             let path = path.display().to_string();
             let first = format!(" (add the admin's `authorized_keys` to {path} first)");
             (path, first)
         }
-        (Saved::No, false) => ("<file>".to_owned(), String::new()),
-        (Saved::No, true) => (
+        (Saved::To(path), Some(Refusal::TailscaleAuthKey)) => {
+            let path = path.display().to_string();
+            let first = format!(" (remove net.tailscale's `auth_key_file` from {path} first)");
+            (path, first)
+        }
+        (Saved::No, None) => ("<file>".to_owned(), String::new()),
+        (Saved::No, Some(Refusal::NoAdminKeys)) => (
             "<file>".to_owned(),
             " (with the admin's `authorized_keys` in the file)".to_owned(),
+        ),
+        (Saved::No, Some(Refusal::TailscaleAuthKey)) => (
+            "<file>".to_owned(),
+            " (without net.tailscale's `auth_key_file`)".to_owned(),
         ),
         // A built-in profile has no keys.
         (Saved::Base, _) => (
