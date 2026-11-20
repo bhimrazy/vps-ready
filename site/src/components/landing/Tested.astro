@@ -5,8 +5,8 @@ import SectionHead from './ui/SectionHead.astro';
 
 const layers = [
   ['Unit', 'Every module planned and verified against a fake filesystem.', 'every change'],
-  ['Containers', 'Apply and rollback for updates.auto and ssh.bruteforce; apply, confirm and rollback for user.admin.', 'every change'],
-  ['Real VMs', 'x86_64 VMs on QEMU/KVM: a real SSH server, real reboots and real second SSH logins.', 'nightly'],
+  ['Containers', 'The real binary in systemd containers on Ubuntu 22.04 and 24.04 and Debian 12 and 13: audit, apply and rollback, and the checks of the admin, fail2ban, Docker, Caddy, Tailscale and WireGuard modules.', 'every change'],
+  ['Real VMs', 'x86_64 VMs on QEMU/KVM on the same four distros: a real SSH server, real reboots and real second SSH logins, a first boot from cloud-init, and SSH closed through a WireGuard tunnel. arm64 is built but not run in VMs.', 'nightly'],
 ];
 ---
 
