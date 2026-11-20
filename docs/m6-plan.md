@@ -1,6 +1,6 @@
 # M6 plan: private access (v0.6.0)
 
-> **Status: accepted (2026-11-18), in progress.** Built: waves 1 and 2 (`export cloud-init`, `apply --deadman=off`, `FW-003`, the facts, `ssh_via` with `SSH-009`, `net.tailscale`) and the `private` profile. In progress: `net.wireguard` and the wizard. The owner accepted every recommendation in [Decisions](#decisions-for-the-owner).
+> **Status: built for v0.6.0.** All four waves are built: `export cloud-init`, `apply --deadman=off`, `FW-003`, the facts, `ssh_via` with `SSH-009`, `net.tailscale`, `net.wireguard` with `NET-008`, the `private` profile and the wizard's question. The plan is kept as the design record. The owner accepted every recommendation in [Decisions](#decisions-for-the-owner) on 2026-11-18. The web tunnel waits for M7; the other items under [Not in M6](#not-in-m6) are listed there with when they would come.
 
 M6 lets an admin reach SSH through a private network and then close it to the internet. It has three parts: `net.tailscale`, which installs Tailscale and joins a tailnet; `net.wireguard`, a WireGuard server on the host for admin access to the host itself; and `ssh_via`, a `firewall.inbound` parameter that accepts SSH only on one named interface (`tailscale0`, `wg0`, or any interface the admin set up, such as NetBird's). It also brings `export cloud-init`, moved here by the [M5 plan](m5-plan.md#direction-for-v060-private-access): a server hardened at first boot, before anyone logs in, is the other half of "never exposed". With a VPN for SSH and, later, a tunnel for the web, a server can end with no public TCP port at all; this plan says what that looks like, adds a `private` profile for it, and says why the web tunnel waits.
 
@@ -8,7 +8,7 @@ M6 lets an admin reach SSH through a private network and then close it to the in
 
 The engine, the journal and the safety timer stay as they are, apart from two new resource kinds, one new reload, one new field in the `pending-confirm` record, one new confirm refusal, and modules that can ask for the timer depending on the host.
 
-Debian 12/13 and Ubuntu 22.04/24.04 with systemd, as in M5. Earlier docs use "M6" for RHEL, Alpine, `drift` and the paranoid profile; with this plan those become M7.
+Debian 12/13 and Ubuntu 22.04/24.04 with systemd, as in M5. Earlier docs use "M6" for RHEL, Alpine, `drift` and the paranoid profile; with this plan those become M7 (RHEL and Alpine may move later than M7).
 
 ## Decisions
 
@@ -340,7 +340,7 @@ Evaluated, and recommended for a later release. A tunnel would let 80 and 443 cl
 
 ### CVE-2026-98432 follow-ups
 
-A use-after-free in the kernel's handling of IPv4 TCP options when building a SYN-ACK (Debian security tracker). The fix is the kernel update: Debian has it in 6.1.192-2 (bookworm-security) and 6.12.117-1 (trixie-security), which `updates.auto` installs; the running kernel changes only at the next reboot, and `updates.auto` leaves `Automatic-Reboot` to the admin. A mitigation is being considered for `firewall.inbound`, separately from the private-access work: drop IPv4 TCP packets that carry IP options, `meta nfproto ipv4 meta l4proto tcp ip hdrlength > 5 drop`, in a `prerouting` base chain at `raw` priority inside `inet vps_ready`, so Docker's published ports are covered too. If it lands, `check_loaded` and `FW-001` must keep reading only the `input` chain, and the `SSH-009`/`FW-003` checks likewise.
+A use-after-free in the kernel's handling of IPv4 TCP options when building a SYN-ACK (Debian security tracker). The fix is the kernel update: Debian has it in 6.1.192-2 (bookworm-security) and 6.12.117-1 (trixie-security), which `updates.auto` installs; the running kernel changes only at the next reboot, and `updates.auto` leaves `Automatic-Reboot` to the admin. `firewall.inbound` mitigates it, separately from the private-access work: it drops IPv4 TCP packets that carry IP options, `ip protocol tcp ip hdrlength > 5 counter drop`, in a `prerouting` base chain at `raw` priority inside `inet vps_ready` (`templates/firewall.nft`), so Docker's published ports are covered too. `check_loaded`, `FW-001` and the `SSH-009`/`FW-003` checks read only `input` hook chains, so the `prerouting` chain does not change them.
 
 ### Facts
 

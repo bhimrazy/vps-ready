@@ -101,7 +101,7 @@ cargo install vps-ready --locked   # compiles from source; add --version <versio
   1. From a clean `main`, set the version to `0.3.0-alpha.1` locally (the `[workspace.package]` version and the `sshd-config` pin), run `cargo publish -p sshd-config --allow-dirty` with a short-lived API token, then discard the edit. This creates the crate; nothing depends on that pre-release.
   2. Configure trusted publishing for `sshd-config` as for the other two (owner `bhimrazy`, repo `vps-ready`, workflow `release.yml`, environment `crates-io`), turn on **trusted publishing only**, and revoke the token.
   3. Push the tag: the `crates` job then publishes `sshd-config` 0.3.0 before `vps-ready`.
-- If `vps-ready` uploads but `vpsready` fails, re-running the job fails on the already-published `vps-ready`. To recover, turn off trusted publishing only for `vpsready` in its crates.io settings, run `cargo publish -p vpsready --locked` with a short-lived token, then turn the setting back on and revoke the token.
+- The `crates` job publishes one crate at a time and skips a version that is already on crates.io, so if `vps-ready` uploads but `vpsready` fails, re-running the job (or the next tag) publishes only what is missing.
 
 ## Manual checks before a release
 

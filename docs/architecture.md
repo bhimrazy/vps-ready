@@ -280,8 +280,8 @@ sequenceDiagram
 **Without the timer:** `apply --deadman=off` applies the dead-man modules without arming anything, for a first boot from `export cloud-init`, where nobody is logged in to confirm. Every plan-time invariant still holds (a keyed sudo admin before root and password logins are turned off, the SSH port kept open). It needs positive evidence that nobody could confirm: no per-session sshd process (`sshd: <user>@...` or `sshd-session: ...`) in `/proc`, and no `loginctl list-sessions` session of class `user`; a tmux, screen or mosh session has no sshd ancestor, so the applying process's own session is not enough. The check is skipped when no module in the plan needs the timer, and with `off` a module that does not apply fails the run, as with `--module`. The journal's `state applied` record carries `without_timer`, and `history` shows it. A crash mid-apply with the timer off leaves an unfinished transaction, with nothing to roll it back until `rollback --last`. There is no `selftest` mode: a loopback probe proves only that sshd answers, which is why `confirm` refuses loopback logins. The reasons are in [the M6 plan](m6-plan.md#hardened-before-exposed-export-cloud-init).
 
 Planned:
-- **OpenRC:** a double-forked `setsid` watchdog plus a `local.d` boot hook (M7; today the dead-man modules need systemd).
-- **firewalld:** runtime-only rules as a second safety net (M7).
+- **OpenRC:** a double-forked `setsid` watchdog plus a `local.d` boot hook (with Alpine support; today the dead-man modules need systemd).
+- **firewalld:** runtime-only rules as a second safety net (with RHEL support).
 
 ## State layout
 
@@ -387,7 +387,7 @@ crates/
     src/audit/             controls catalog (controls/*.toml), evaluation, report
     src/modules/           <name>.rs + <name>/ (tests, snapshots)
     templates/             askama templates of the files modules write
-    src/config/            TOML profiles (profiles/minimal.toml, web.toml), strict deserialize; JSON Schema via schemars (planned)
+    src/config/            TOML profiles (profiles/minimal.toml, web.toml, private.toml), strict deserialize; JSON Schema via schemars (planned)
     src/report/            text | json | sarif | junit (planned)
     src/tui/               the `Prompt` trait (select, multi-select, input, confirm) with a `dialoguer` implementation and a scripted one for tests; no flow logic. `ratatui` is deferred
   vpsready/                alias crate: the same command under the name `vpsready`
