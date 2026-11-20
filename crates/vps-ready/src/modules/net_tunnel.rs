@@ -146,8 +146,10 @@ impl Params {
 
 /// Whether `text` has the shape of a remotely-managed tunnel's token:
 /// base64 of a JSON object with the account (`a`), the tunnel's ID (`t`)
-/// and its secret (`s`). For the wizard, which writes the token itself;
-/// the module never reads one.
+/// and its secret (`s`, base64 too), decoded as strictly as cloudflared
+/// does, so that a token the connector would refuse is asked again rather
+/// than rolling back the apply. For the wizard, which writes the token
+/// itself; the module never reads one.
 #[must_use]
 pub fn is_token(text: &str) -> bool {
     #[derive(Deserialize)]
@@ -159,21 +161,33 @@ pub fn is_token(text: &str) -> bool {
     let Some(json) = decode_base64(text.trim()) else {
         return false;
     };
-    serde_json::from_slice::<Token>(&json)
-        .is_ok_and(|t| !t.a.is_empty() && !t.s.is_empty() && is_uuid(t.t))
+    serde_json::from_slice::<Token>(&json).is_ok_and(|t| {
+        !t.a.is_empty()
+            && is_uuid(t.t)
+            && decode_base64(t.s).is_some_and(|secret| !secret.is_empty())
+    })
 }
 
-/// Standard or URL-safe base64, with or without padding.
+/// Standard base64 with its `=` padding, as Go's `base64.StdEncoding`
+/// decodes it (cloudflared trims spaces first), with the unused low bits
+/// zero, as every encoder writes them.
 fn decode_base64(text: &str) -> Option<Zeroizing<Vec<u8>>> {
+    if text.is_empty() || !text.len().is_multiple_of(4) {
+        return None;
+    }
+    let body = text
+        .strip_suffix("==")
+        .or_else(|| text.strip_suffix('='))
+        .unwrap_or(text);
     let mut out = Zeroizing::new(Vec::with_capacity(text.len() * 3 / 4));
     let (mut acc, mut bits) = (0u32, 0u32);
-    for c in text.trim_end_matches('=').bytes() {
+    for c in body.bytes() {
         let v = match c {
             b'A'..=b'Z' => c - b'A',
             b'a'..=b'z' => c - b'a' + 26,
             b'0'..=b'9' => c - b'0' + 52,
-            b'+' | b'-' => 62,
-            b'/' | b'_' => 63,
+            b'+' => 62,
+            b'/' => 63,
             _ => return None,
         };
         acc = (acc << 6) | u32::from(v);
@@ -184,7 +198,7 @@ fn decode_base64(text: &str) -> Option<Zeroizing<Vec<u8>>> {
             acc &= (1 << bits) - 1;
         }
     }
-    Some(out)
+    (acc == 0).then_some(out)
 }
 
 /// e.g. `c3a1f0e2-0000-4000-8000-000000000000`.
@@ -745,7 +759,8 @@ fn runs_installed_binary(sys: Sys, pid: &str) -> Result<bool, String> {
 }
 
 /// A token of the shape [`is_token`] accepts, from placeholder values
-/// around `secret`, so that no real-looking token is in the source.
+/// around `secret` (base64), so that no real-looking token is in the
+/// source.
 #[cfg(test)]
 pub(crate) fn placeholder_token(secret: &str) -> String {
     const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -760,6 +775,9 @@ pub(crate) fn placeholder_token(secret: &str) -> String {
             .fold(0u32, |v, (i, &b)| v | u32::from(b) << (16 - 8 * i));
         for i in 0..=chunk.len() {
             out.push(char::from(ALPHABET[(v >> (18 - 6 * i) & 63) as usize]));
+        }
+        for _ in chunk.len()..3 {
+            out.push('=');
         }
     }
     out

@@ -87,24 +87,28 @@ pub(super) fn run<R: BufRead>(
         }
         answers => answers?,
     };
-    // Before the plan, which checks the file's owner and mode.
-    let token = match tunnel {
-        Some(TunnelToken::New { token, replace }) => {
-            Some(TokenFile::write(host.sys.fs, &token, replace)?)
-        }
-        Some(TunnelToken::Keep) | None => None,
-    };
     // The key goes only into the profile applied now, never the saved one.
     let mut applied = builder.clone();
-    let mut key = match auth_key {
-        Some(key) => {
+    let token = match tunnel {
+        Some(TunnelToken::New { token, existing }) => Some((token, existing)),
+        Some(TunnelToken::Keep) | None => None,
+    };
+    let mut secrets = if auth_key.is_some() || token.is_some() {
+        let mut secrets = Secrets::new(host);
+        // Before the plan, which checks the files' owner and mode.
+        if let Some((token, existing)) = token {
+            secrets.with_token(token, existing)?;
+        }
+        if let Some(key) = auth_key {
             applied.set_params(
                 "net.tailscale",
                 toml::Table::from_iter([("auth_key_file".to_owned(), AUTH_KEY_FILE.into())]),
             );
-            Some(KeyFile::placeholder(host, key)?)
+            secrets.with_auth_key(key)?;
         }
-        None => None,
+        Some(secrets)
+    } else {
+        None
     };
     let profile = applied.build(host.modules)?;
     if arms_timer(host, &facts, &profile) {
@@ -126,17 +130,14 @@ pub(super) fn run<R: BufRead>(
         false,
         Some(engine::deadman::DEFAULT_WINDOW),
         Some(&mut input),
-        match &mut key {
-            Some(key) => key as &mut dyn change::Around,
+        match &mut secrets {
+            Some(secrets) => secrets as &mut dyn change::Around,
             None => &mut plain,
         },
         out,
         err,
     );
-    let signal = key.take().and_then(KeyFile::finish);
-    if let (Some(token), Ok(Applied::Declined)) = (token, &applied) {
-        token.discard(host.sys.fs, out)?;
-    }
+    let signal = secrets.take().and_then(Secrets::finish);
     if let Some(sig) = signal {
         // Now that the key is gone and the outcome is printed, an error
         // too.
@@ -182,14 +183,24 @@ fn timer_note(out: &mut dyn Write, via: Option<&str>) -> std::io::Result<()> {
     )
 }
 
-/// [`AUTH_KEY_FILE`] for one apply. It is created empty before the plan,
-/// which checks its owner and mode, and holds the key only from the yes
-/// until the engine is done, while [`Defer`] holds back the signals that
-/// would end the wizard. Dropping it removes the file; a crash or SIGKILL
-/// leaves it for [`remove_key_file`] at the next start.
-struct KeyFile<'a> {
+/// The secret files of one apply: a Tailscale auth key at
+/// [`AUTH_KEY_FILE`], and the tunnel's token at [`TOKEN_FILE`]. Before the
+/// plan, which checks their owner and mode, each is a file without the
+/// secret: an empty new one, or for a token, the file it replaces. The
+/// secrets are written only from the yes, while [`Defer`] holds back the
+/// signals that would end the wizard, so a decline, an error before the
+/// engine starts or a kill at the question leaves neither on disk.
+///
+/// The auth key is removed once the engine is done. The token stays, as
+/// the connector reads it at every start; a file this run created for it
+/// is removed when the engine never started. A crash or SIGKILL leaves an
+/// auth key for [`remove_key_file`] at the next start.
+struct Secrets<'a> {
     fs: &'a dyn Fs,
-    key: Zeroizing<String>,
+    key: Option<Zeroizing<String>>,
+    token: Option<TokenFile>,
+    /// Set once [`change::Around::before`] let the engine start.
+    started: bool,
     defer: Option<Defer>,
     /// Set when a held-back signal arrived, so a wait for a confirm ends.
     stop: Arc<AtomicBool>,
@@ -197,25 +208,48 @@ struct KeyFile<'a> {
     signal: Option<c_int>,
 }
 
-impl<'a> KeyFile<'a> {
-    /// Creates [`AUTH_KEY_FILE`] empty, root's with mode 0600, in a
-    /// directory only root can write to, as `net.tailscale` requires.
-    fn placeholder(host: &Host<'a>, key: Zeroizing<String>) -> anyhow::Result<Self> {
-        let file = Self {
+/// The token for [`TOKEN_FILE`], and what was there before.
+struct TokenFile {
+    token: Zeroizing<String>,
+    /// Created empty by this run, which removes it if the engine never
+    /// starts.
+    created: bool,
+    /// Its directory too.
+    created_dir: bool,
+}
+
+impl<'a> Secrets<'a> {
+    fn new(host: &Host<'a>) -> Self {
+        Self {
             fs: host.sys.fs,
-            key,
+            key: None,
+            token: None,
+            started: false,
             defer: host.defer.clone(),
             stop: Arc::clone(&host.stop),
             signal: None,
-        };
+        }
+    }
+
+    /// With only an auth key, as [`Secrets::with_auth_key`] adds it.
+    #[cfg(test)]
+    fn placeholder(host: &Host<'a>, key: Zeroizing<String>) -> anyhow::Result<Self> {
+        let mut secrets = Self::new(host);
+        secrets.with_auth_key(key)?;
+        Ok(secrets)
+    }
+
+    /// Creates [`AUTH_KEY_FILE`] empty, root's with mode 0600, in a
+    /// directory only root can write to, as `net.tailscale` requires.
+    fn with_auth_key(&mut self, key: Zeroizing<String>) -> anyhow::Result<()> {
         let path = Path::new(AUTH_KEY_FILE);
         let Some(dir) = path.parent() else {
             bail!("{AUTH_KEY_FILE} has no directory");
         };
-        if !file.fs.exists(dir) {
-            file.fs.create_dir(dir, root_only(0o700))?;
+        if !self.fs.exists(dir) {
+            self.fs.create_dir(dir, root_only(0o700))?;
         }
-        let meta = file.fs.metadata(dir)?;
+        let meta = self.fs.metadata(dir)?;
         if meta.kind != FileKind::Dir || meta.uid != 0 || meta.mode & 0o022 != 0 {
             bail!(
                 "{} is not a directory only root can write to, so the auth key is not \
@@ -223,30 +257,100 @@ impl<'a> KeyFile<'a> {
                 dir.display()
             );
         }
-        file.write(b"")?;
-        Ok(file)
+        self.key = Some(key);
+        self.write_key(b"")?;
+        Ok(())
+    }
+
+    /// Gets [`TOKEN_FILE`] ready for the plan without the token: a new
+    /// empty file (O_EXCL, root's, 0600) in a directory only root can write
+    /// to, or one others can read emptied. Any other file stays as it is
+    /// until the yes.
+    fn with_token(&mut self, token: Zeroizing<String>, existing: Existing) -> anyhow::Result<()> {
+        let fs = self.fs;
+        let path = Path::new(TOKEN_FILE);
+        let Some(dir) = path.parent() else {
+            bail!("{TOKEN_FILE} has no directory");
+        };
+        let mut file = TokenFile {
+            token,
+            created: false,
+            created_dir: false,
+        };
+        match existing {
+            Existing::Token => {}
+            Existing::Unusable => {
+                // Others could read it, so the plan would refuse it.
+                let meta = fs.metadata(path)?;
+                if meta.uid != 0 || meta.mode & 0o077 != 0 {
+                    fs.write_atomic(path, b"", root_only(0o600))?;
+                }
+            }
+            Existing::None => {
+                file.created_dir = !fs.exists(dir);
+                if file.created_dir {
+                    fs.create_dir(dir, root_only(0o755))?;
+                }
+                let created = only_root_writes(fs, dir)
+                    .and_then(|()| Ok(fs.create_new(path, b"", root_only(0o600))?));
+                if let Err(e) = created {
+                    if file.created_dir {
+                        let _ = fs.remove_dir(dir);
+                    }
+                    return Err(e);
+                }
+                file.created = true;
+            }
+        }
+        self.token = Some(file);
+        Ok(())
     }
 
     /// Through a temp file created with O_EXCL and mode 0600.
-    fn write(&self, bytes: &[u8]) -> Result<(), SysError> {
+    fn write_key(&self, bytes: &[u8]) -> Result<(), SysError> {
         self.fs
             .write_atomic(Path::new(AUTH_KEY_FILE), bytes, root_only(0o600))
     }
 
-    /// Removes the file and lets the signals end the process again.
-    /// Returns the last one held back, for the caller to end with.
+    /// Removes the auth key, and a token file the engine never used, and
+    /// lets the signals end the process again. Returns the last one held
+    /// back, for the caller to end with.
     fn finish(mut self) -> Option<c_int> {
         self.release();
         self.signal
     }
 
     fn release(&mut self) {
-        if let Err(e) = remove_key_file(self.fs) {
+        if self.key.is_some()
+            && let Err(e) = remove_key_file(self.fs)
+        {
             tracing::warn!("removing {AUTH_KEY_FILE}: {e}; delete it yourself");
+        }
+        if !self.started {
+            self.discard_token();
         }
         if let Some(sig) = self.defer.as_ref().and_then(Defer::release) {
             self.signal = Some(sig);
             self.stop.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// Removes a token file this run created; one it did not create
+    /// still holds what it held before (or is empty, if it was unusable).
+    fn discard_token(&mut self) {
+        let Some(file) = self.token.take() else {
+            return;
+        };
+        if !file.created {
+            return;
+        }
+        let path = Path::new(TOKEN_FILE);
+        if let Err(e) = self.fs.remove(path) {
+            tracing::warn!("removing {TOKEN_FILE}: {e}; delete it yourself");
+        } else if file.created_dir
+            && let Some(dir) = path.parent()
+        {
+            let _ = self.fs.remove_dir(dir);
         }
     }
 
@@ -256,30 +360,40 @@ impl<'a> KeyFile<'a> {
     }
 }
 
-impl change::Around for KeyFile<'_> {
-    /// Writes the key, unless a signal came first: that declines.
+impl change::Around for Secrets<'_> {
+    /// Writes the secrets, unless a signal came first: that declines.
     fn before(&mut self) -> anyhow::Result<bool> {
         if let Some(defer) = &self.defer {
             defer.hold();
         }
         if !self.signalled() {
-            self.write(self.key.as_bytes())?;
+            if let Some(key) = &self.key {
+                self.write_key(key.as_bytes())?;
+            }
+            if let Some(file) = &self.token {
+                self.fs.write_atomic(
+                    Path::new(TOKEN_FILE),
+                    file.token.as_bytes(),
+                    root_only(0o600),
+                )?;
+            }
         }
         if self.signalled() {
             self.release();
             return Ok(false);
         }
+        self.started = true;
         Ok(true)
     }
 
-    /// Removes the file before a wait for a confirm. A signal held back
-    /// meanwhile stops that wait, so the outcome is printed first.
+    /// Removes the auth key before a wait for a confirm. A signal held
+    /// back meanwhile stops that wait, so the outcome is printed first.
     fn after(&mut self) {
         self.release();
     }
 }
 
-impl Drop for KeyFile<'_> {
+impl Drop for Secrets<'_> {
     fn drop(&mut self) {
         self.release();
     }
@@ -310,72 +424,35 @@ fn remove_key_file(fs: &dyn Fs) -> Result<(), SysError> {
 enum TunnelToken {
     /// [`TOKEN_FILE`] holds one already.
     Keep,
-    /// Pasted; `replace` when [`TOKEN_FILE`] exists.
+    /// Pasted, for [`TOKEN_FILE`].
     New {
         token: Zeroizing<String>,
-        replace: bool,
+        existing: Existing,
     },
 }
 
-/// [`TOKEN_FILE`] as this run wrote it, outside the transaction: it is
-/// never a resource, so the journal never copies it, and rollback keeps it.
-struct TokenFile {
-    /// No file was there before.
-    created: bool,
-    /// Nor its directory.
-    created_dir: bool,
+/// What [`TOKEN_FILE`] is before the wizard writes a pasted token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Existing {
+    None,
+    /// Root's, private and a token: the plan can check it as it is.
+    Token,
+    /// A regular file that is not.
+    Unusable,
 }
 
-impl TokenFile {
-    /// Writes `token` to a new [`TOKEN_FILE`] (O_EXCL, root's, 0600) in a
-    /// directory only root can write to; `replace` removes the old one
-    /// first.
-    fn write(fs: &dyn Fs, token: &str, replace: bool) -> anyhow::Result<Self> {
-        let path = Path::new(TOKEN_FILE);
-        let Some(dir) = path.parent() else {
-            bail!("{TOKEN_FILE} has no directory");
-        };
-        let created_dir = !fs.exists(dir);
-        if created_dir {
-            fs.create_dir(dir, root_only(0o755))?;
-        }
-        let meta = fs.metadata(dir)?;
-        if meta.kind != FileKind::Dir || meta.uid != 0 || meta.mode & 0o022 != 0 {
-            bail!(
-                "{} is not a directory only root can write to, so the tunnel token is not \
-                 written there",
-                dir.display()
-            );
-        }
-        if replace {
-            match fs.remove(path) {
-                Ok(()) | Err(SysError::NotFound(_)) => {}
-                Err(e) => return Err(e.into()),
-            }
-        }
-        fs.create_new(path, token.as_bytes(), root_only(0o600))?;
-        Ok(Self {
-            created: !replace,
-            created_dir,
-        })
+/// Whether only root can write to `dir`, as the plan requires of the
+/// directories above a secret file.
+fn only_root_writes(fs: &dyn Fs, dir: &Path) -> anyhow::Result<()> {
+    let meta = fs.metadata(dir)?;
+    if meta.kind != FileKind::Dir || meta.uid != 0 || meta.mode & 0o022 != 0 {
+        bail!(
+            "{} is not a directory only root can write to, so the tunnel token is not written \
+             there",
+            dir.display()
+        );
     }
-
-    /// After a declined apply: removes a file this run created, so nothing
-    /// was changed; a replaced one cannot come back.
-    fn discard(self, fs: &dyn Fs, out: &mut dyn Write) -> anyhow::Result<()> {
-        if !self.created {
-            writeln!(out, "The new tunnel token stays in {TOKEN_FILE}.")?;
-            return Ok(());
-        }
-        let path = Path::new(TOKEN_FILE);
-        fs.remove(path)?;
-        if self.created_dir
-            && let Some(dir) = path.parent()
-        {
-            fs.remove_dir(dir)?;
-        }
-        Ok(())
-    }
+    Ok(())
 }
 
 /// The private profile's `ssh_via` before it takes effect: its interface.
@@ -1293,20 +1370,31 @@ fn ask_tunnel_token(
 ) -> anyhow::Result<Option<TunnelToken>> {
     let fs = host.sys.fs;
     let path = Path::new(TOKEN_FILE);
-    let replace = match fs.metadata(path) {
-        Ok(_) => true,
-        Err(SysError::NotFound(_)) => false,
+    let existing = match fs.metadata(path) {
+        Ok(meta) if meta.kind != FileKind::File => bail!(
+            "{TOKEN_FILE} is not a regular file ({:?}): move it away and run the wizard again",
+            meta.kind
+        ),
+        // Root's and private, as the plan requires, and a token.
+        Ok(_) => match fs.read_nofollow(path) {
+            Ok((bytes, meta)) => {
+                let bytes = Zeroizing::new(bytes);
+                let usable = meta.uid == 0
+                    && meta.mode & 0o077 == 0
+                    && std::str::from_utf8(&bytes).is_ok_and(net_tunnel::is_token);
+                if usable {
+                    Existing::Token
+                } else {
+                    Existing::Unusable
+                }
+            }
+            Err(_) => Existing::Unusable,
+        },
+        Err(SysError::NotFound(_)) => Existing::None,
         Err(e) => return Err(e.into()),
     };
-    if replace {
-        // Root's and private, as the plan requires, and a token.
-        let usable = fs.read_nofollow(path).is_ok_and(|(bytes, meta)| {
-            let bytes = Zeroizing::new(bytes);
-            meta.uid == 0
-                && meta.mode & 0o077 == 0
-                && std::str::from_utf8(&bytes).is_ok_and(net_tunnel::is_token)
-        });
-        if usable {
+    if existing != Existing::None {
+        if existing == Existing::Token {
             if prompt.confirm(
                 &format!("{TOKEN_FILE} holds a tunnel token. Keep it?"),
                 true,
@@ -1344,7 +1432,7 @@ fn ask_tunnel_token(
         if net_tunnel::is_token(token) {
             return Ok(Some(TunnelToken::New {
                 token: Zeroizing::new(token.to_owned()),
-                replace,
+                existing,
             }));
         }
         say(

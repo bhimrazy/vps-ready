@@ -1061,27 +1061,39 @@ fn the_unit_matches_the_reload() {
     );
 }
 
-/// The wizard's format check: base64, padded or not, of `a`, `t` (a
-/// UUID) and `s`.
+/// The wizard's format check, as strict as cloudflared's decoding:
+/// standard base64 with its padding, of `a`, `t` (a UUID) and `s` (base64).
 #[test]
 fn a_token_has_the_shape_of_one() {
     let token = placeholder_token("c2VjcmV0");
     assert!(token.starts_with("eyJ"), "{token}");
     assert!(is_token(&token));
-    assert!(is_token(&format!(" {token}==\n")));
-    let url_safe = placeholder_token("a?b>c")
-        .replace('+', "-")
-        .replace('/', "_");
-    assert!(is_token(&url_safe), "{url_safe}");
+    assert!(is_token(&format!(" {token}\n")));
+    // The JSON's length leaves one or two `=` here.
+    let padded = placeholder_token("c2VjcmV0MQ==");
+    assert!(padded.ends_with('='), "{padded}");
+    assert!(is_token(&padded));
     for bad in [
         String::new(),
         "my-password".to_owned(),
+        // Its padding cut off, as a paste can lose it.
+        padded.trim_end_matches('=').to_owned(),
+        format!("{padded}="),
+        // `s` URL-safe, empty or not base64.
+        placeholder_token("c2Vj-_8="),
         placeholder_token(""),
+        placeholder_token("not base64!"),
         placeholder_token("x").replace("eyJ", "eyK"),
         format!("{token}!"),
     ] {
         assert!(!is_token(&bad), "{bad}");
     }
+    // Only the standard alphabet, which cloudflared decodes.
+    assert!(decode_base64("c2Vj+/8=").is_some());
+    assert!(decode_base64("c2Vj-_8=").is_none());
+    // Unused low bits must be zero: `QR==` decodes as `QQ==` would.
+    assert!(decode_base64("QQ==").is_some());
+    assert!(decode_base64("QR==").is_none());
     assert!(!is_uuid("00000000-0000-0000-0000-00000000000g"));
     assert!(!is_uuid("000000000-000-0000-0000-000000000000"));
 }

@@ -102,7 +102,7 @@ fn the_key_file_holds_the_key_only_around_the_apply() {
     };
     let key = auth_key();
     let read = || fs.read_nofollow(Path::new(AUTH_KEY_FILE)).unwrap();
-    let mut file = KeyFile::placeholder(&host, Zeroizing::new(key.clone())).unwrap();
+    let mut file = Secrets::placeholder(&host, Zeroizing::new(key.clone())).unwrap();
     let (bytes, meta) = read();
     assert!(bytes.is_empty());
     assert_eq!((meta.mode, meta.uid, meta.gid), (0o600, 0, 0));
@@ -123,7 +123,7 @@ fn the_key_file_holds_the_key_only_around_the_apply() {
     };
     let fs = fs_with_run().with_dir("/run/vps-ready", open);
     let host = on(&fs, &runner);
-    let err = KeyFile::placeholder(&host, Zeroizing::new(key))
+    let err = Secrets::placeholder(&host, Zeroizing::new(key))
         .err()
         .unwrap();
     assert!(err.to_string().contains("only root can write to"), "{err}");
@@ -142,7 +142,7 @@ fn a_signal_at_the_yes_declines_and_writes_no_key() {
         ..on(&fs, &runner)
     };
     let key = auth_key();
-    let mut file = KeyFile::placeholder(&host, Zeroizing::new(key.clone())).unwrap();
+    let mut file = Secrets::placeholder(&host, Zeroizing::new(key.clone())).unwrap();
     defer.note(15);
     assert!(!change::Around::before(&mut file).unwrap());
     assert!(!fs.exists(Path::new(AUTH_KEY_FILE)));
