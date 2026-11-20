@@ -27,7 +27,7 @@ const quickLine = (l: string, copy: boolean) =>
         Harden a fresh server <em class="block text-brand not-italic">without locking yourself out.</em>
       </h1>
       <p class="max-w-[44ch] text-lg text-muted">
-        SSH keys, a firewall and automatic updates in one run. If an SSH or firewall change locks you out, it rolls back on its own.
+        SSH keys, a firewall, fail2ban and automatic updates in one run, with the plan shown first. SSH and firewall changes wait for a confirm from a new SSH login, or roll back in 5 minutes. Optional: SSH only over Tailscale or WireGuard.
       </p>
       <div class="grid w-full gap-2">
       <div class="flex w-full max-w-full items-stretch overflow-hidden rounded-[10px] border border-line bg-bg">

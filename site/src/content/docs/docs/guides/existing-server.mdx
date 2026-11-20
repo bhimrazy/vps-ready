@@ -6,21 +6,19 @@ sidebar:
   order: 4
 ---
 
-import { Aside, Steps } from '@astrojs/starlight/components';
+import { Steps } from '@astrojs/starlight/components';
 
-vps-ready is built for fresh servers, but it is careful on busy ones too: it reads the live state, changes only what fails, writes its own files instead of editing yours, and tells you in the plan what it will leave alone. The rule is simple: **read the plan before you apply.**
+vps-ready is built for fresh servers, but it is careful on busy ones too. It reads the live state, changes only what fails, writes its own files instead of editing yours, and tells you in the plan what it will leave alone. The rule is simple: **read the plan before you apply**, because the firewall blocks any port your services need that the profile does not allow.
 
 <Steps>
 
-1. **See what is running.**
+1. **See what is running.** To list the listening ports and check whether Docker is present, run:
 
    ```sh
    sudo vps-ready detect
    ```
 
-   Note the listening ports and whether Docker is present.
-
-2. **Read the plan, with root.** `plan` works without root but then skips what only root can read, such as the firewall rules.
+2. **Read the plan, with root.** `plan` works without root but then skips what only root can read, such as the firewall rules:
 
    ```sh
    sudo vps-ready plan --profile minimal
@@ -36,7 +34,7 @@ vps-ready is built for fresh servers, but it is careful on busy ones too: it rea
 
 ## Keep your app reachable
 
-A web app on port 8080, a mail server, a game server: anything the firewall does not allow stops being reachable from outside once the firewall is on. Write a profile that extends a built-in one and lists every port:
+A web app on port 8080, a mail server, a game server: anything the firewall does not allow stops being reachable from outside once the firewall is on. To keep them reachable, write a profile that extends a built-in one and lists every port:
 
 ```toml title="busy-server.toml"
 schema  = 1
@@ -50,7 +48,7 @@ allow = ["22/tcp", "80/tcp", "443/tcp", "443/udp", "8080/tcp"]
 sudo vps-ready plan --profile ./busy-server.toml
 ```
 
-Your current SSH ports are always allowed, whatever `allow` says.
+Your current SSH ports are always allowed, whatever `allow` says. The profile format is in [Write your own profile](/docs/guides/profiles-and-modules/#write-your-own-profile).
 
 ## Firewalls
 
@@ -73,9 +71,7 @@ Docker and the firewall get along, with one thing you must know.
 - **Published ports skip the firewall.** Traffic to a port Docker publishes (`-p 5432:5432`) is forwarded to the container and never passes the input rules of any host firewall, ufw and firewalld included. Only the rule that drops IPv4 TCP with IP options (CVE-2026-98432) runs before forwarding and covers them too. The plan lists those ports, and the `FW-002` control fails while they are open to the world.
 - **Forwarding stays on.** `kernel.sysctl` never turns off IP forwarding, which Docker needs.
 
-<Aside type="caution" title="Published ports are public">
-`-p 5432:5432` makes a database reachable from anywhere even with the firewall on. Publish on loopback instead (`-p 127.0.0.1:5432:5432`) and put a reverse proxy in front, or filter forwarded traffic yourself in the `DOCKER-USER` chain.
-</Aside>
+Published ports are public: `-p 5432:5432` makes a database reachable from anywhere even with the firewall on. Publish on loopback instead (`-p 127.0.0.1:5432:5432`) and put a reverse proxy in front, or filter forwarded traffic yourself in the `DOCKER-USER` chain. `deploy.docker` makes loopback the default; see [Deploy an app](/docs/guides/deployment-modules/).
 
 ## Your SSH server config
 
@@ -91,6 +87,11 @@ Docker and the firewall get along, with one thing you must know.
 - **fail2ban already installed:** `ssh.bruteforce` adds `/etc/fail2ban/jail.d/90-vps-ready.local`, read after the package's defaults, and never bans the address you are applying from.
 - **unattended-upgrades already set up:** `updates.auto` adds a drop-in that turns the daily jobs on; your other apt settings stay.
 
-<Aside type="tip">
-Not sure about one part? Apply it alone, for example `--module kernel.sysctl`, check your services, then continue. Each apply is its own transaction that `rollback` can undo.
-</Aside>
+## Go one module at a time
+
+If you are unsure about one part, apply it alone, for example `--module kernel.sysctl`, check your services, then continue. Each apply is its own transaction that `rollback` can undo.
+
+## Next
+
+- What each module writes and checks first: [Profiles and modules](/docs/guides/profiles-and-modules/).
+- Undo a part that broke something: [Undo changes and recover](/docs/guides/undo-and-recover/).

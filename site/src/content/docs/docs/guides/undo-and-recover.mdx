@@ -6,11 +6,13 @@ sidebar:
   order: 3
 ---
 
-import { Aside, Steps } from '@astrojs/starlight/components';
+import { Steps } from '@astrojs/starlight/components';
 
-Every `apply` is one **transaction**, journaled in `/var/lib/vps-ready`. You can undo it at any time, whether or not the safety timer is still running.
+Every `apply` is one **transaction**, journaled in `/var/lib/vps-ready`. You can undo it at any time, whether or not the safety timer is still running. This page shows how, and how to get back into a server you can no longer log in to.
 
 ## Undo the last apply
+
+To undo the most recent apply, run:
 
 ```sh
 sudo vps-ready rollback --last
@@ -34,7 +36,7 @@ Rolling back a transaction that waits for a confirm also stops its safety timer.
 
 ## Undo an older apply
 
-List the transactions, newest first, then pick one by ID:
+To pick a transaction by ID, list them first, newest first:
 
 ```sh
 sudo vps-ready history
@@ -45,11 +47,21 @@ sudo vps-ready history
 20261023T190556Z      rolled-back (manual)           kernel.sysctl,updates.auto  8 changes
 ```
 
+Then roll back the one you want:
+
 ```sh
 sudo vps-ready rollback --txn 20261024T081500Z
 ```
 
 `history --json` prints the same list for scripts.
+
+## What a rollback leaves
+
+Some things stay on purpose. Installed packages (`nftables`, `fail2ban`, `unattended-upgrades`, and Docker's and Caddy's) stay installed, and a created admin user's home directory stays, in case it holds your files. The plan labels these changes `partial`.
+
+Rolling back `deploy.docker` restores `daemon.json` (it removes the file only if the apply created it), removes Docker's apt source and key if the apply added them, then restarts Docker if it is running; a stopped Docker stays stopped. If `live-restore` was off before, that restart stops the running containers a second time (the apply stopped them once), and only those with a restart policy start again. `apply` listed them in its plan.
+
+Rolling back `deploy.proxy` restores the `Caddyfile` that was there before and reloads Caddy. Only when there was none does it remove the file, then stop and disable Caddy, since it cannot run without one. Both modules leave their packages. Details: [Deploy an app](/docs/guides/deployment-modules/#what-a-rollback-leaves-behind).
 
 ## When rollback refuses
 
@@ -62,25 +74,17 @@ A manual rollback is all or nothing, so it refuses (exit code 2) rather than und
 
 If a rollback starts but cannot finish, it exits 3 and says what is left to do by hand, for example when `userdel` fails because the admin user still has processes running.
 
-<Aside type="note">
-Some things a rollback leaves on purpose: installed packages (`nftables`, `fail2ban`, `unattended-upgrades`, and Docker's and Caddy's) stay installed, and a created admin user's home directory stays, in case it holds your files. The plan labels these changes `partial`.
-</Aside>
+## Get back in after a lockout
 
-### Docker and Caddy
+**Before your first profile apply, check that your provider's web console works and that you can log in there, and take a provider snapshot.** Neither is needed if all goes well; both turn a bad day into a short one.
 
-Rolling back `deploy.docker` restores `daemon.json` (it removes the file only if the apply created it), removes Docker's apt source and key if the apply added them, then restarts Docker if it is running; a stopped Docker stays stopped. If `live-restore` was off before, that restart stops the running containers a second time (the apply stopped them once), and only those with a restart policy start again. `apply` listed them in its plan.
-
-Rolling back `deploy.proxy` restores the `Caddyfile` that was there before and reloads Caddy. Only when there was none does it remove the file, then stop and disable Caddy, since it cannot run without one. Both modules leave their packages. Details: [Deploy an app](/docs/guides/deployment-modules/#what-a-rollback-leaves-behind).
-
-## Locked out?
-
-First, breathe: if you just ran `apply` with a profile and have not confirmed yet, the safety net is still armed. Work down this list.
+If you just ran `apply` with a profile and have not confirmed yet, the safety net is still armed. Work down this list:
 
 <Steps>
 
 1. **Wait for the timer.** If the change is still waiting for a confirm, it rolls back on its own at the deadline (5 minutes by default). Then log in the way you did before.
 
-2. **Use a session that is still open.** The terminal you ran `apply` in keeps working after the change. From there:
+2. **Use a session that is still open.** The terminal you ran `apply` in keeps working after the change. From there, run:
 
    ```sh
    sudo vps-ready rollback --last
@@ -88,9 +92,9 @@ First, breathe: if you just ran `apply` with a profile and have not confirmed ye
 
 3. **Reboot from your provider's control panel.** If the change has not been confirmed, a reboot rolls it back before the SSH server starts. After a confirm, a reboot changes nothing: the changes are kept.
 
-4. **Use your provider's web console** (or serial console). It logs in locally, without SSH or the firewall. Run `sudo vps-ready rollback --last` there. The console cannot confirm a change, but it can roll one back. The console needs a password: set one for a sudo user (`sudo passwd admin`) before you close public SSH.
+4. **Use your provider's web console** (or serial console). It logs in locally, without SSH or the firewall. Run `sudo vps-ready rollback --last` there. The console cannot confirm a change, but it can roll one back. The console needs a password, so set one for a sudo user (`sudo passwd admin`) before you close public SSH.
 
-   **If SSH goes only through a VPN** (`ssh_via`) and the VPN is down, roll back the `ssh_via` change by its ID. This reopens public SSH and keeps the firewall loaded:
+   If SSH goes only through a VPN (`ssh_via`) and the VPN is down, roll back the `ssh_via` change by its ID. This reopens public SSH and keeps the firewall loaded:
 
    ```sh
    sudo vps-ready history
@@ -102,9 +106,5 @@ First, breathe: if you just ran `apply` with a profile and have not confirmed ye
 5. **Last resort: the provider's rescue system.** Each transaction keeps what it wrote and the original files in `/var/lib/vps-ready/txn/<id>/`: `journal.jsonl` lists every change, and `files/<n>.before` holds the original bytes, so you can put files back by hand from a mounted disk.
 
 </Steps>
-
-<Aside type="tip" title="Before your first profile apply">
-Check that your provider's web console works and that you can log in there, and take a provider snapshot. Neither is needed if all goes well; both turn a bad day into a short one.
-</Aside>
 
 If vps-ready ever leaves you locked out, that is a security bug. Please [report the lockout](https://github.com/bhimrazy/vps-ready/issues/new?template=lockout_report.yml), or for anything sensitive use [private vulnerability reporting](https://github.com/bhimrazy/vps-ready/security/advisories/new).
