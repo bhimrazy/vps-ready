@@ -585,17 +585,19 @@ fn a_leftover_key_file_goes_even_when_a_transaction_is_unfinished() {
     assert!(!fs.exists(Path::new(AUTH_KEY_FILE)));
 }
 
-/// Runs `inner`, and notes a signal when the dead-man timer is armed, as if
-/// it arrived during the apply.
-struct SignalOnArm {
+/// Runs `inner`, and when the dead-man timer is armed notes a signal, as if
+/// it arrived during the apply, and fails every journal append from then on.
+struct SignalOnArm<'a> {
     inner: FakeRunner,
     defer: Defer,
+    fs: &'a FakeFs,
 }
 
-impl Runner for SignalOnArm {
+impl Runner for SignalOnArm<'_> {
     fn run(&self, cmd: &Cmd) -> Result<Output, SysError> {
         if cmd.program == "systemd-run" {
             self.defer.note(15);
+            self.fs.fail_from(crate::sys::fake::Op::Append, 1);
         }
         self.inner.run(cmd)
     }
@@ -612,7 +614,8 @@ fn a_signal_during_a_failed_apply_ends_the_wizard_with_it() {
     fs.create_dir_all(Path::new("/etc/systemd/system"), 0o755)
         .unwrap();
     let defer = Defer::unregistered();
-    // `useradd` is missing, so the apply fails after the timer is armed.
+    // Journal lines fail after the timer is armed, so the apply and its
+    // rollback end in an error, not in a clean "rolled back" outcome.
     let signalling = SignalOnArm {
         inner: runner(|r| {
             r.on("systemd-run", Vec::<String>::new(), Output::success(""))
@@ -624,6 +627,7 @@ fn a_signal_during_a_failed_apply_ends_the_wizard_with_it() {
                 .on("systemctl", Vec::<String>::new(), Output::success(""))
         }),
         defer: defer.clone(),
+        fs: &fs,
     };
     let host = Host {
         sys: Sys {
@@ -636,8 +640,9 @@ fn a_signal_during_a_failed_apply_ends_the_wizard_with_it() {
     let questions = vec![Enter, Enter, Pick(1), Type(auth_key()), Enter, Enter];
     let (code, text) = wizard(&host, questions, "y\n");
     assert_eq!(code, 128 + 15, "{text}");
-    assert!(text.contains("error: apply failed: "), "{text}");
-    assert!(text.ends_with("Stopped by signal 15.\n"), "{text}");
+    let (before, after) = text.rsplit_once("error: ").expect(&text);
+    assert!(!before.contains("apply failed"), "{text}");
+    assert!(after.ends_with("Stopped by signal 15.\n"), "{text}");
     assert!(!fs.exists(Path::new(AUTH_KEY_FILE)));
     assert!(!fs.exists(Path::new(AUTH_KEY_TEMP)));
 }

@@ -1474,9 +1474,6 @@ impl<'a> Engine<'a> {
         }
         progress(Progress::Reload(reload));
         let (check, command) = reload.rollback_steps(self.sys, &open.records);
-        if reload == Reload::FirewallReload && command != reload.command() {
-            progress(Progress::FirewallStart);
-        }
         if let Some(check) = check
             && let Err(reason) = reload::run(self.sys, &check)
         {
@@ -1486,6 +1483,9 @@ impl<'a> Engine<'a> {
                 reason: &reason,
             });
             return note(open, Event::ReloadSkipped { reload, reason }, best_effort);
+        }
+        if reload == Reload::FirewallReload && command != reload.command() {
+            progress(Progress::FirewallStart);
         }
         if let Err(reason) = reload::run(self.sys, &command) {
             failed.push((reload, reason));
