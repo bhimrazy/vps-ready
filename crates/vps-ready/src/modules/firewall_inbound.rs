@@ -891,4 +891,6 @@ fn check_loaded(json: &[u8], want: &Ruleset) -> Result<(), String> {
 mod tests;
 mod via;
 
-pub(crate) use via::{is_tailscale, is_tailscale_in, private_via, uncounted_via};
+pub(crate) use via::{
+    address, console, is_tailscale, is_tailscale_in, private_via, through, uncounted_via,
+};

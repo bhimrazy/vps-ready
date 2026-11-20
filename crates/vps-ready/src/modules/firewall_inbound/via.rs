@@ -98,7 +98,7 @@ pub(super) fn check(
 
 /// Whether this is an SSH session that came in through `via` from
 /// elsewhere: the opposite of refusals 2 and 3.
-pub(super) fn through(facts: &Facts, via: &str) -> bool {
+pub(crate) fn through(facts: &Facts, via: &str) -> bool {
     facts
         .session
         .as_ref()
@@ -255,7 +255,7 @@ pub(crate) fn is_tailscale_in(interfaces: &[Interface], ips: &[IpAddr], via: &st
 }
 
 /// An address of `via`, IPv4 first, for the `ssh` command.
-fn address(facts: &Facts, via: &str) -> Option<IpAddr> {
+pub(crate) fn address(facts: &Facts, via: &str) -> Option<IpAddr> {
     let mut ips: Vec<IpAddr> = facts
         .interfaces
         .iter()
@@ -316,7 +316,7 @@ fn key_expiry(facts: &Facts, via: &str) -> Option<String> {
 }
 
 /// How to get back in from the provider's console.
-fn console(facts: &Facts, via: &str) -> String {
+pub(crate) fn console(facts: &Facts, via: &str) -> String {
     let user = facts
         .session
         .as_ref()

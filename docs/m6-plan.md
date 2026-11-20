@@ -367,7 +367,7 @@ A use-after-free in the kernel's handling of IPv4 TCP options when building a SY
 
 ### The wizard
 
-The wizard adds one question after the ports, asked only when `firewall.inbound` applies:
+The wizard adds one question after the admin question and before the ports (a VPN changes what the ports start from), asked only when `firewall.inbound` applies:
 
 ```
 ? Private access for SSH
@@ -377,8 +377,9 @@ The wizard adds one question after the ports, asked only when `firewall.inbound`
 ```
 
 - Choosing a VPN builds on the `private` profile: the ports question then starts with nothing checked, and adding a domain (which adds `deploy.proxy`) checks 80 and 443.
-- **Tailscale:** "Auth key (hidden; Enter to log in yourself after)". A pasted key is written to `/run/vps-ready/tailscale-auth-key` (tmpfs, 0600), used as `auth_key_file`, and removed after the apply, whether it succeeded or not. It is never in `vps-ready.toml`. Hidden input needs `dialoguer`'s `password` feature, which adds `zeroize`, a small RustCrypto crate, as the one new dependency.
-- **WireGuard:** a peer name (default `laptop`) and its public key, checked with the same parser as the profile, asked again on a bad value, saved with `host = 2`. The line under the question shows how to make one (`wg genkey | tee laptop.key | wg pubkey`, or "Add tunnel" in the WireGuard app). After the confirm, the wizard prints the client config.
+- **Tailscale:** "Auth key (hidden; Enter to log in yourself after)", asked again unless it starts with Tailscale's key prefix. The file `/run/vps-ready/tailscale-auth-key` (tmpfs on systemd hosts, 0600) is created empty for the plan, which checks it as `auth_key_file`; the key goes into it only after the yes, and it is removed as soon as the engine finishes, before the wait for a confirm, whether the apply succeeded or not. From the yes until then, SIGHUP, SIGINT and SIGTERM are held back: one that arrives before the engine starts declines, and one during the apply ends the wizard (exit 128 + the signal) once the outcome is printed. A crash or SIGKILL leaves the file for the next `sudo vps-ready`, which removes it at the start. It is never in `vps-ready.toml`. Hidden input needs `dialoguer`'s `password` feature, which adds `zeroize`, a small RustCrypto crate, as the one new dependency.
+- **Already through the VPN:** when Tailscale is up and the login comes through it, `firewall.inbound` limits SSH in this one apply, so the wizard says so, shows the console note, and asks for the confirm through the VPN.
+- **WireGuard:** a peer name (default `laptop`) and its public key, checked with the same parser as the profile, asked again on a bad value, saved with `host = 2`. The line under the question shows how to make one (`wg genkey | tee laptop.key | wg pubkey`, or "Add tunnel" in the WireGuard app). Offered only where `net.wireguard` applies. The apply prints the client config; the wizard's step 2 line points to it and to `sudo vps-ready wireguard-config`, which prints it again.
 - **Step 2:** after step 1 the wizard prints the command to run through the VPN (the same `--profile` file). Run as `sudo vps-ready` from a session through the VPN with that file present, the wizard offers "Apply step 2: accept SSH only through tailscale0? (y/N)", with the console note under it.
 - The saved `vps-ready.toml` holds `extends = "private"`, the VPN module (WireGuard peers are public keys; Tailscale has no key) and the ports.
 

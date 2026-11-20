@@ -39,6 +39,7 @@ expect {
   }
   -re {Admin user for logging in \[[^]]*\]: } { fail "the admin question does not offer $admin" }
   "Public key" { fail "the wizard found no key to copy" }
+  "Private access for SSH" { enter private; exp_continue }
   "Open ports besides SSH" { enter ports; exp_continue }
   "More ports to open" { enter more; exp_continue }
   "Pick which modules to run yourself?" { enter pick; exp_continue }

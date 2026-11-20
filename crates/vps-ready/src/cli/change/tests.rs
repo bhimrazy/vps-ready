@@ -121,6 +121,7 @@ pub(in crate::cli) fn host(fs: &FakeFs) -> Host<'_> {
         stop: Arc::new(AtomicBool::new(false)),
         catch_sigint: false,
         sigint_ends: None,
+        defer: None,
         tty: false,
         poll: std::time::Duration::ZERO,
     }

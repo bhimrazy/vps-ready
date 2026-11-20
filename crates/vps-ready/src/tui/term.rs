@@ -6,9 +6,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use dialoguer::console::{Term, style};
 use dialoguer::theme::{ColorfulTheme, SimpleTheme, Theme};
-use dialoguer::{Confirm, Input, MultiSelect, Select};
+use dialoguer::{Confirm, Input, MultiSelect, Password, Select};
 
-use super::{Item, MULTI_HINT, Prompt, PromptError};
+use super::{Defer, Item, MULTI_HINT, Prompt, PromptError};
 
 /// Asks on stdout and reads keys from the terminal.
 ///
@@ -21,6 +21,7 @@ pub struct Terminal {
     theme: Box<dyn Theme>,
     color: bool,
     ends: Arc<AtomicBool>,
+    defer: Defer,
 }
 
 impl Terminal {
@@ -35,6 +36,7 @@ impl Terminal {
             signal_hook::consts::SIGINT,
             Arc::clone(&ends),
         )?;
+        let defer = Defer::register(Arc::clone(&ends))?;
         let theme: Box<dyn Theme> = if color {
             Box::new(ColorfulTheme::default())
         } else {
@@ -45,6 +47,7 @@ impl Terminal {
             theme,
             color,
             ends,
+            defer,
         })
     }
 
@@ -53,6 +56,12 @@ impl Terminal {
     #[must_use]
     pub fn sigint_ends(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.ends)
+    }
+
+    /// Holds back the signals that end the process, see [`Defer`].
+    #[must_use]
+    pub fn defer(&self) -> Defer {
+        self.defer.clone()
     }
 
     fn ask<T>(&self, f: impl FnOnce(&Term) -> dialoguer::Result<T>) -> Result<T, PromptError> {
@@ -115,6 +124,24 @@ impl Prompt for Terminal {
                 input.default(default.to_owned()).interact_text_on(term)
             }
         })
+    }
+
+    fn password(&mut self, question: &str) -> Result<String, PromptError> {
+        // This reads a line with echo off, not keys in raw mode: Ctrl-C is a
+        // SIGINT that the read survives, so it is noted and counts at Enter.
+        let caught = Arc::new(AtomicBool::new(false));
+        let id = signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&caught))?;
+        let answer = self.ask(|term| {
+            Password::with_theme(&*self.theme)
+                .with_prompt(question)
+                .allow_empty_password(true)
+                .interact_on(term)
+        });
+        signal_hook::low_level::unregister(id);
+        if caught.load(Ordering::SeqCst) {
+            return Err(PromptError::Interrupted);
+        }
+        answer
     }
 
     fn confirm(&mut self, question: &str, default: bool) -> Result<bool, PromptError> {
