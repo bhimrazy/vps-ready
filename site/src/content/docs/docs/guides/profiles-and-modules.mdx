@@ -11,16 +11,16 @@ vps-ready groups its changes into **modules**, and a **profile** picks which mod
 
 ## Pick a profile
 
-| | Plain `apply` | `--profile minimal` | `--profile web` |
-|---|---|---|---|
-| Admin user (`user.admin`) | | yes | yes |
-| SSH server config (`ssh.server`) | | yes | yes |
-| Firewall (`firewall.inbound`) | | SSH only | SSH, 80/tcp, 443/tcp, 443/udp |
-| fail2ban (`ssh.bruteforce`) | | | yes |
-| Docker (`deploy.docker`) | | | yes |
-| Kernel settings (`kernel.sysctl`) | yes | yes | yes |
-| Automatic updates (`updates.auto`) | yes | yes | yes |
-| Asks for a confirm | no | yes | yes |
+| | Plain `apply` | `--profile minimal` | `--profile web` | `--profile private` + a VPN module |
+|---|---|---|---|---|
+| Admin user (`user.admin`) | | yes | yes | yes |
+| SSH server config (`ssh.server`) | | yes | yes | yes |
+| Firewall (`firewall.inbound`) | | SSH only | SSH, 80/tcp, 443/tcp, 443/udp | SSH through a VPN only |
+| fail2ban (`ssh.bruteforce`) | | | yes | yes |
+| Docker (`deploy.docker`) | | | yes | |
+| Kernel settings (`kernel.sysctl`) | yes | yes | yes | yes |
+| Automatic updates (`updates.auto`) | yes | yes | yes | yes |
+| Asks for a confirm | no | yes | yes | yes |
 
 - **Plain `apply`**, with no `--profile` or `--module`, only changes kernel settings and automatic updates. Nothing in it can lock you out, so a future version can never make a plain `apply` start changing SSH or the firewall.
 - **minimal** is for any server you log into over SSH.
@@ -29,7 +29,7 @@ vps-ready groups its changes into **modules**, and a **profile** picks which mod
 - **private** is for a server with no public SSH: SSH only through a VPN, and no public port unless you add one. It names no VPN, so you extend it; see [The private profile](#the-private-profile) below.
 - **`deploy.proxy` (Caddy) and `deploy.user` are in no built-in profile.** They need values only you have (domains, deploy keys), so you add them in your own profile, or the guided setup adds Caddy when you give it a domain. See [Deploy an app](/docs/guides/deployment-modules/).
 
-`sudo vps-ready` with no arguments picks between these two for you and builds the profile from your answers: see the [quick start](/docs/quick-start/). To read what a module does before choosing, run `vps-ready modules` (or `vps-ready modules ssh.server` for one).
+`sudo vps-ready` with no arguments recommends `minimal` or `web` for you, offers `private` through its private access question, and builds the profile from your answers: see the [quick start](/docs/quick-start/). To read what a module does before choosing, run `vps-ready modules` (or `vps-ready modules ssh.server` for one).
 
 Run `plan` with the same flags first to see exactly what would change on your server:
 
@@ -101,7 +101,7 @@ ssh_via = "wg0"
 
 #### The private profile
 
-`private` has the `web` hardening without Docker, an empty `allow`, and `ssh_via = "vpn"`: the interface of the one VPN module in your profile (`tailscale0` for `net.tailscale`). On its own, or with two VPN modules, it is refused, so extend it with one:
+`private` has the `web` hardening without Docker, an empty `allow`, and `ssh_via = "vpn"`: the interface of the one VPN module in your profile (`tailscale0` for `net.tailscale`, `wg0` for `net.wireguard`). On its own, or with two VPN modules, it is refused, so extend it with one:
 
 ```toml title="private.toml"
 schema  = 1
