@@ -994,6 +994,11 @@ fn print_progress(err: &mut dyn Write, progress: &Progress) {
             copy.display()
         ),
         Progress::Skip(step) => format!("leave {step} (it changed since apply)"),
+        Progress::FirewallStart => {
+            "start or reload vps-ready-firewall.service: it was active before this \
+             change, so the rollback leaves it running, even if you stopped it"
+                .to_owned()
+        }
         Progress::ReloadSkipped { reload, reason } => {
             format!("skip {reload}, so the daemon keeps its config: {reason}")
         }

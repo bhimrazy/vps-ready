@@ -522,7 +522,7 @@ impl Module for FirewallInbound {
     fn plan(&self, cx: &PlanCx, sys: Sys) -> Result<ModuleSteps, ModuleError> {
         let mut params: Params = cx.params()?;
         let wg_via = params.ssh_via.name.clone();
-        let mut notes: Vec<String> = stage(cx, &mut params, sys)?.into_iter().collect();
+        let mut notes: Vec<String> = stage(cx, &mut params, sys, false)?.into_iter().collect();
         let model = Ruleset::planned(cx, &params, wg_via.as_deref(), sys)?;
         let ruleset = model.render()?;
         notes.extend(wireguard_note(cx.facts, &model));
@@ -586,7 +586,7 @@ impl Module for FirewallInbound {
     fn verify(&self, cx: &PlanCx, sys: Sys) -> Result<(), String> {
         let mut params: Params = cx.params().map_err(|e| e.to_string())?;
         let wg_via = params.ssh_via.name.clone();
-        stage(cx, &mut params, sys).map_err(|e| e.to_string())?;
+        stage(cx, &mut params, sys, true).map_err(|e| e.to_string())?;
         let want =
             Ruleset::planned(cx, &params, wg_via.as_deref(), sys).map_err(|e| e.to_string())?;
         let cmd = Cmd::new("nft")
@@ -616,8 +616,14 @@ impl Module for FirewallInbound {
 /// not limit SSH to it yet, drops it from `params`, so SSH stays public,
 /// and returns the note. Otherwise `params` stays, and the checks of an
 /// explicit `ssh_via` apply. Refused while the loaded ruleset limits SSH to
-/// another interface: dropping it would reopen SSH publicly.
-fn stage(cx: &PlanCx, params: &mut Params, sys: Sys) -> Result<Option<String>, ModuleError> {
+/// another interface: dropping it would reopen SSH publicly (`verifying`
+/// words that for `verify`, which changes nothing).
+fn stage(
+    cx: &PlanCx,
+    params: &mut Params,
+    sys: Sys,
+    verifying: bool,
+) -> Result<Option<String>, ModuleError> {
     let Via {
         name: Some(via),
         staged: true,
@@ -630,6 +636,13 @@ fn stage(cx: &PlanCx, params: &mut Params, sys: Sys) -> Result<Option<String>, M
     }
     match ssh_via(cx.planned, sys)? {
         Some(loaded) if loaded == *via => return Ok(None),
+        Some(loaded) if verifying => {
+            return refuse(&format!(
+                "SSH is limited to {loaded}, but the profile's `ssh_via` is {via}, which this \
+                 session does not come through, so the ruleset to check cannot be known: verify \
+                 from a login through {via}, or set `ssh_via = \"{loaded}\"`"
+            ));
+        }
         Some(loaded) => {
             return refuse(&format!(
                 "SSH is already limited to {loaded}, and step 1 would reopen it publicly: keep \
@@ -878,4 +891,6 @@ fn check_loaded(json: &[u8], want: &Ruleset) -> Result<(), String> {
 mod tests;
 mod via;
 
-pub(crate) use via::{address, console, is_tailscale, is_tailscale_in, private_via, through};
+pub(crate) use via::{
+    address, console, is_tailscale, is_tailscale_in, private_via, through, uncounted_via,
+};

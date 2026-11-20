@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::facts::{Address, Interface, Tailscale, WireguardDir};
+use crate::sys::{Cmd, Runner};
 
 /// A fake auth key, built here so that no key-shaped text is in the source.
 fn auth_key() -> String {
@@ -552,4 +553,96 @@ fn step_one_ends_with_the_login_through_the_vpn() {
         "{}",
         done(&host)
     );
+}
+
+/// An unfinished transaction stops the start, but not before a key left by
+/// a crashed run is removed.
+#[test]
+fn a_leftover_key_file_goes_even_when_a_transaction_is_unfinished() {
+    let root = FileOwner {
+        mode: 0o700,
+        uid: 0,
+        gid: 0,
+    };
+    let fs = fs_with_run().with_dir("/run/vps-ready", root);
+    fs.write_atomic(Path::new(AUTH_KEY_FILE), auth_key().as_bytes(), root)
+        .unwrap();
+    let state = StateDir::create(&fs, STATE, 0).unwrap();
+    let txn = state.create_txn(&fs, 1_792_755_766).unwrap();
+    let begin = Event::Begin {
+        version: "0.3.0".into(),
+        modules: vec!["kernel.sysctl".into()],
+    };
+    let record = Record {
+        at: 0,
+        event: begin,
+    };
+    txn.append(&fs, &record).unwrap();
+    let runner = runner(|r| r);
+    let (code, text) = wizard(&on(&fs, &runner), vec![], "");
+    assert_eq!(code, 2, "{text}");
+    assert!(text.contains("did not finish"), "{text}");
+    assert!(!fs.exists(Path::new(AUTH_KEY_FILE)));
+}
+
+/// Runs `inner`, and when the dead-man timer is armed notes a signal, as if
+/// it arrived during the apply, and fails every journal append from then on.
+struct SignalOnArm<'a> {
+    inner: FakeRunner,
+    defer: Defer,
+    fs: &'a FakeFs,
+}
+
+impl Runner for SignalOnArm<'_> {
+    fn run(&self, cmd: &Cmd) -> Result<Output, SysError> {
+        if cmd.program == "systemd-run" {
+            self.defer.note(15);
+            self.fs.fail_from(crate::sys::fake::Op::Append, 1);
+        }
+        self.inner.run(cmd)
+    }
+}
+
+/// A signal held back during an apply that then fails is not lost: the
+/// error is printed, the key file is gone, and the wizard ends with the
+/// signal.
+#[test]
+fn a_signal_during_a_failed_apply_ends_the_wizard_with_it() {
+    let fs = fs_with_run()
+        .with_file("/proc/sys/kernel/random/boot_id", "a\n")
+        .with_file("/proc/uptime", "1000.00 1.00\n");
+    fs.create_dir_all(Path::new("/etc/systemd/system"), 0o755)
+        .unwrap();
+    let defer = Defer::unregistered();
+    // Journal lines fail after the timer is armed, so the apply and its
+    // rollback end in an error, not in a clean "rolled back" outcome.
+    let signalling = SignalOnArm {
+        inner: runner(|r| {
+            r.on("systemd-run", Vec::<String>::new(), Output::success(""))
+                .on(
+                    "/var/lib/vps-ready/bin/vps-ready",
+                    ["version"],
+                    Output::success(format!("{}\n", crate::VERSION_INFO)),
+                )
+                .on("systemctl", Vec::<String>::new(), Output::success(""))
+        }),
+        defer: defer.clone(),
+        fs: &fs,
+    };
+    let host = Host {
+        sys: Sys {
+            fs: &fs,
+            runner: &signalling,
+        },
+        defer: Some(defer),
+        ..host(&fs)
+    };
+    let questions = vec![Enter, Enter, Pick(1), Type(auth_key()), Enter, Enter];
+    let (code, text) = wizard(&host, questions, "y\n");
+    assert_eq!(code, 128 + 15, "{text}");
+    let (before, after) = text.rsplit_once("error: ").expect(&text);
+    assert!(!before.contains("apply failed"), "{text}");
+    assert!(after.ends_with("Stopped by signal 15.\n"), "{text}");
+    assert!(!fs.exists(Path::new(AUTH_KEY_FILE)));
+    assert!(!fs.exists(Path::new(AUTH_KEY_TEMP)));
 }

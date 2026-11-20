@@ -123,12 +123,16 @@ pub(super) fn run<R: BufRead>(
         err,
     );
     let signal = key.take().and_then(KeyFile::finish);
-    let applied = applied?;
     if let Some(sig) = signal {
-        // Now that the key is gone and the outcome is printed.
+        // Now that the key is gone and the outcome is printed, an error
+        // too.
+        if let Err(e) = &applied {
+            writeln!(err, "error: {e:#}")?;
+        }
         writeln!(out, "Stopped by signal {sig}.")?;
         return Ok(u8::try_from(128 + sig).unwrap_or(EXIT_INTERRUPTED));
     }
+    let applied = applied?;
     match applied {
         // "Nothing was changed." ends it.
         Applied::Declined => return Ok(0),
@@ -490,9 +494,11 @@ fn start_checks(host: &Host) -> anyhow::Result<()> {
         }
     })?;
     let state = StateDir::create(host.sys.fs, host.state_dir, host.state_uid)?;
-    Engine::lock(&state, host.sys)?.ensure_finished()?;
-    // An auth key from a run that ended without its cleanup.
+    let engine = Engine::lock(&state, host.sys)?;
+    // An auth key from a run that ended without its cleanup, removed
+    // before an unfinished transaction can stop the start.
     remove_key_file(host.sys.fs)?;
+    engine.ensure_finished()?;
     Ok(())
 }
 

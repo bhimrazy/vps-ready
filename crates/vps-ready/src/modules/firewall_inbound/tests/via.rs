@@ -493,15 +493,113 @@ fn ssh_009_and_fw_003_pass_through_any_vpn_interface() {
     unknown.routes.clear();
     assert_eq!(finding(&unknown, "SSH-009").outcome, fail("nb0"));
     unknown.interfaces.retain(|i| !i.is_vpn());
-    assert!(matches!(
-        finding(&unknown, "SSH-009").outcome,
-        Outcome::Skip { .. }
-    ));
+    let skipped = |facts: &Facts| match finding(facts, "SSH-009").outcome {
+        Outcome::Skip { reason } => reason,
+        other => panic!("{other:?}"),
+    };
+    // The skip says why the `ssh_via` interface is not counted.
+    let reason = skipped(&unknown);
+    assert!(
+        reason
+            .contains("`ssh_via` interface nb0 is not counted as private: the routes are unknown"),
+        "{reason}"
+    );
+    let mut public = via_on("eth1", "203.0.113.7");
+    public.interfaces.retain(|i| !i.is_vpn());
+    assert!(skipped(&public).contains("eth1 is not counted as private: it has an address"));
+    let mut none = via_on("nb0", "10.78.0.1");
+    none.interfaces.retain(|i| !i.is_vpn());
+    none.firewall = crate::facts::firewall::parse_json(&std::fs::read(testdata(LOADED)).unwrap());
+    assert!(skipped(&none).ends_with("and no `ssh_via` rule"));
     // Nor a wildcard, which names no interface that exists.
     let json = std::fs::read_to_string(testdata(LOADED_VIA)).unwrap();
     let mut wildcard = via_on("nb0", "10.78.0.1");
     wildcard.firewall = crate::facts::firewall::parse_json(json.replace("wg0", "nb*").as_bytes());
     assert_eq!(finding(&wildcard, "SSH-009").outcome, fail("nb*"));
+}
+
+/// What `private_via` makes of `nb0` limited by the table, with `addrs`
+/// and the main-table default routes `routes` (device, gateway).
+fn private_with(addrs: &[&str], routes: &[(&str, &str)]) -> Option<String> {
+    let mut facts = via_on("nb0", "10.78.0.1");
+    facts
+        .interfaces
+        .iter_mut()
+        .find(|i| i.name == "nb0")
+        .unwrap()
+        .addresses = addrs
+        .iter()
+        .map(|a| crate::facts::Address {
+            ip: a.parse().unwrap(),
+            prefix: 24,
+        })
+        .collect();
+    facts.routes = routes
+        .iter()
+        .map(|(dev, gw)| Route {
+            dst: "default".into(),
+            dev: Some((*dev).into()),
+            gateway: Some(gw.parse().unwrap()),
+            table: None,
+        })
+        .collect();
+    super::super::private_via(&facts)
+}
+
+/// Addresses the internet does not route make a private path; public and
+/// documentation IPv6 (2001:db8::/32 is not unique local) do not.
+#[test]
+fn private_via_counts_only_unrouted_addresses() {
+    let eth0 = [("eth0", "192.0.2.1")];
+    let private = |addrs: &[&str]| private_with(addrs, &eth0).is_some();
+    for ip in [
+        "10.78.0.1",
+        "172.16.0.1",
+        "192.168.1.1",
+        "169.254.1.1",
+        "100.64.0.1",
+        "100.127.255.254",
+        "fd00::1",
+        "fc00::1",
+        "fe80::1",
+    ] {
+        assert!(private(&[ip]), "{ip}");
+    }
+    for ip in [
+        "100.63.255.254",
+        "100.128.0.1",
+        "192.0.2.10",
+        "2001:db8::1",
+        "fec0::1",
+    ] {
+        assert!(!private(&[ip]), "{ip}");
+    }
+    // One public address among private ones is enough to reject it.
+    assert!(!private(&["10.78.0.1", "198.51.100.7"]));
+    assert!(!private(&["fd00::1", "2001:db8::1"]));
+    assert!(private(&["10.78.0.1", "fd00::1"]));
+    assert!(!private(&[]));
+}
+
+/// The main-table default route, of either family, makes the interface
+/// the way out even when all its addresses are private; without any
+/// default route nothing shows it is not.
+#[test]
+fn private_via_is_not_an_interface_with_the_default_route() {
+    let nb0 = Some("nb0".to_owned());
+    assert_eq!(private_with(&["10.78.0.1"], &[("eth0", "192.0.2.1")]), nb0);
+    assert_eq!(
+        private_with(&["10.78.0.1"], &[("nb0", "10.78.0.254")]),
+        None
+    );
+    // An IPv6-only default route on it.
+    assert_eq!(private_with(&["fd00::1"], &[("nb0", "fd00::ff")]), None);
+    // An IPv6-only default route elsewhere still shows the routes are known.
+    assert_eq!(
+        private_with(&["10.78.0.1"], &[("eth0", "2001:db8::1")]),
+        nb0
+    );
+    assert_eq!(private_with(&["10.78.0.1"], &[]), None);
 }
 
 /// An expiring node key under a `tailscale0` rule is warned about in
@@ -756,6 +854,30 @@ fn a_staged_ssh_via_does_not_reopen_ssh_limited_elsewhere() {
     let from_wg = via_facts("10.77.0.1:22");
     let steps = via_steps(&from_wg, "vpn:wg0", &loaded, &on).unwrap();
     assert_eq!(via_of(&ruleset_of(&steps)).as_deref(), Some("wg0"));
+}
+
+/// The same state under `verify` is worded for verify, not as the plan's
+/// step 1.
+#[test]
+fn verify_words_a_staged_ssh_via_limited_elsewhere() {
+    let fs = wg_fs(Some("    iifname \"tailscale0\" tcp dport { 22 } accept\n"));
+    let runner = FakeRunner::new();
+    let table = params("ssh_via = \"vpn:wg0\"");
+    let err = FirewallInbound
+        .verify(
+            &PlanCx {
+                facts: &via_facts("192.0.2.10:22"),
+                params: &table,
+                planned: &[],
+            },
+            Sys {
+                fs: &fs,
+                runner: &runner,
+            },
+        )
+        .unwrap_err();
+    assert!(err.contains("SSH is limited to tailscale0, but the profile's `ssh_via` is wg0"));
+    assert!(!err.contains("step 1"), "{err}");
 }
 
 /// `ssh_via` on a WireGuard interface whose listen port is unknown (`wg
