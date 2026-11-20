@@ -1,0 +1,354 @@
+---
+source: crates/vps-ready/src/cli/wizard/tests.rs
+expression: text
+---
+vps-ready <version> on Debian GNU/Linux 13 (trixie) (vm-other)
+Audit: 14 passed, 13 failed (1 high, 5 medium, 7 low), 5 unknown. vps-ready can fix 11 of them.
+
+? What will this server run?
+  > Web apps or Docker: opens ports 80 and 443 (recommended: Docker is installed)
+    Something else: only SSH is open
+? Admin user for logging in: admin
+  new account: logs in with 1 key copied from /root/.ssh/authorized_keys; sudo
+  without a password.
+  Root and password logins will be turned off, so this key is how you log in.
+? Private access for SSH
+    None: SSH stays reachable from the internet, with keys only
+  > Tailscale (the private profile)
+  Two steps: this apply sets it up and keeps SSH public; applying again from a
+  login through tailscale0 closes SSH to the internet.
+  An auth key from the Tailscale admin console logs this server in during the
+  apply. It is used once and never saved.
+? Auth key (hidden; Enter to log in yourself after): 
+All other incoming ports are blocked.
+Unchecked ports will be blocked.
+? Open ports besides SSH (only through tailscale0 after step 2) (Space toggles, Enter continues)
+  [ ] 8080/tcp (app)
+? More ports to open, e.g. 8080/tcp or 53/udp (Enter for none): 
+? Pick which modules to run yourself? (y/N) no
+Caddy can serve your apps over HTTPS, through a Cloudflare Tunnel or directly
+(asked after the domains).
+? Domain to serve, e.g. app.example.com (Enter for none): app.example.com
+? Address of the app behind app.example.com, e.g. 127.0.0.1:8080: 127.0.0.1:8080
+? Another domain (Enter for no more): 
+? How do visitors reach this site
+  > Through a Cloudflare Tunnel (no public ports; DNS on Cloudflare)
+    Directly, on ports 80 and 443 (Caddy gets the certificate)
+  Create a tunnel in the Cloudflare dashboard and copy its token, the long
+  string in the install command it shows. It is saved to
+  /etc/vps-ready/cloudflared-token, readable only by root, for the connector to
+  read at each start.
+? Tunnel token (hidden; Enter to add it later): [hidden]
+  That is not a tunnel token: copy it from the install command in the Cloudflare
+  dashboard.
+? Tunnel token (hidden; Enter to add it later): [hidden]
+  No port is opened: cloudflared connects out to Cloudflare, and Caddy listens
+  on loopback only.
+
+After you apply, you have 5 minutes to log in from a new terminal and confirm.
+If you don't, every change is undone.
+
+user.admin: Set up an admin account that logs in with an SSH key and uses sudo
+  note: no `authorized_keys` given: copies 1 key from /root/.ssh/authorized_keys
+  + create user admin                                                     partial
+  + ~admin/.ssh/authorized_keys (mode 0600, admin:admin)                  reversible
+      @@ -0,0 +1 @@
+      +ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGroot root@laptop
+  + /etc/sudoers.d/90-vps-ready-admin (mode 0440, root:root)              reversible
+      @@ -0,0 +1,3 @@
+      +# Written by vps-ready (user.admin). `vps-ready rollback --last`
+      +# restores the previous state; edits here are replaced by the next apply.
+      +admin ALL=(ALL:ALL) NOPASSWD: ALL
+ssh.server: Turn off root and password logins over SSH (fixes SSH-001, SSH-002, SSH-005)
+  note: SSH sessions that are open now stay open; the new settings apply to new logins
+  note: Port, ListenAddress, AllowGroups, AuthenticationMethods and the crypto settings stay as they are
+  + /etc/ssh/sshd_config.d/00-vps-ready.conf (mode 0644, root:root)       reversible
+      @@ -0,0 +1,7 @@
+      +# Written by vps-ready (ssh.server). `vps-ready rollback --last`
+      +# restores the previous state; edits here are replaced by the next apply.
+      +# sshd uses the first value it reads for each keyword, and reads this file
+      +# before 50-cloud-init.conf and the rest of sshd_config.
+      +PermitRootLogin no
+      +PasswordAuthentication no
+      +X11Forwarding no
+net.tailscale: Join a tailnet with Tailscale, for a private path to SSH
+  note: no port is opened: Tailscale needs none, and firewall.inbound's established,related rule covers its replies; tailscaled's own nftables chains (ts-input) coexist with vps-ready's table
+  note: no auth_key_file: unless this node is logged in already, log in with `sudo tailscale up --accept-dns=false` after this apply
+  + directory /etc/apt/keyrings (mode 0755, root:root)                    reversible
+  + /etc/apt/keyrings/tailscale.asc (mode 0644, root:root): PGP public key, fingerprint 2596 A99E AAB3 3821 893C 0A79 458C A832 957F 5868 (52 lines)  reversible
+  + /etc/apt/sources.list.d/tailscale.sources (mode 0644, root:root)      reversible
+      @@ -0,0 +1,7 @@
+      +# Written by vps-ready. `vps-ready rollback --last` removes it.
+      +Types: deb
+      +URIs: https://pkgs.tailscale.com/stable/debian
+      +Suites: trixie
+      +Components: main
+      +Architectures: amd64
+      +Signed-By: /etc/apt/keyrings/tailscale.asc
+  + /etc/apt/apt.conf.d/52vps-ready-tailscale (mode 0644, root:root)      reversible
+      @@ -0,0 +1,2 @@
+      +// Written by vps-ready (net.tailscale). `vps-ready rollback --last` removes it.
+      +Unattended-Upgrade::Origins-Pattern { "origin=Tailscale,codename=${distro_codename}"; };
+  ~ enable and start tailscaled.service                                   reversible
+net.tunnel: Run a Cloudflare Tunnel connector, for a website with no public port
+  note: no port is opened: the connector connects out to Cloudflare's edge on port 7844 (TCP and UDP), and firewall.inbound's established,related rule covers the replies
+  note: the connector's address filter (`IPAddressDeny=`) is not in effect on this host without the unified cgroup hierarchy
+  note: the connector's start waits for its first connection to Cloudflare; if the start fails, the tunnel did not connect: check the token in /etc/vps-ready/cloudflared-token and that outbound port 7844 is open, then apply again
+  note: any local user can read the connector's metrics on 127.0.0.1:20241 (connection counts, the tunnel's ID, the cloudflared version), but not the token
+  note: in the Cloudflare dashboard, give this tunnel a published route for each site, e.g. app.example.com -> http://127.0.0.1:80. With deploy.proxy, Caddy answers on 127.0.0.1:80. Without it, point the route at your app's loopback address instead. Only loopback targets work: the connector cannot reach Docker bridges or private networks, so such a route answers 502
+  note: anyone who controls this Cloudflare account can route the internet to any address this host reaches on loopback, including SSH. Turn on two-factor login for the account, and add no routes to ssh:// or other local services
+  note: rollback stops and removes the connector and its units, and keeps the cloudflared package and /etc/vps-ready/cloudflared-token; the tunnel then shows as down in the dashboard, where deleting it is up to you
+  + directory /etc/apt/keyrings (mode 0755, root:root)                    reversible
+  + /etc/apt/keyrings/cloudflared.asc (mode 0644, root:root): PGP public key, fingerprint CC94 B39C 77AE 7342 A68B 8962 8A68 2D30 8D4E 5E73 (52 lines)  reversible
+  + /etc/apt/sources.list.d/cloudflared.sources (mode 0644, root:root)    reversible
+      @@ -0,0 +1,7 @@
+      +# Written by vps-ready. `vps-ready rollback --last` removes it.
+      +Types: deb
+      +URIs: https://pkg.cloudflare.com/cloudflared
+      +Suites: any
+      +Components: main
+      +Architectures: amd64
+      +Signed-By: /etc/apt/keyrings/cloudflared.asc
+  + /etc/apt/apt.conf.d/52vps-ready-cloudflared (mode 0644, root:root)    reversible
+      @@ -0,0 +1,2 @@
+      +// Written by vps-ready (net.tunnel). `vps-ready rollback --last` removes it.
+      +Unattended-Upgrade::Origins-Pattern { "origin=cloudflared,codename=any"; };
+  + /etc/vps-ready/cloudflared.yml (mode 0644, root:root)                 reversible
+      @@ -0,0 +1,4 @@
+      +# Written by vps-ready (net.tunnel). `vps-ready rollback --last` restores
+      +# the previous state; edits here are replaced by the next apply.
+      +# vps-ready-cloudflared.service reads it, and no other config file.
+      +no-autoupdate: true
+  + /etc/vps-ready/cloudflared-restart.sh (mode 0644, root:root)          reversible
+      @@ -0,0 +1,34 @@
+      +# Written by vps-ready (net.tunnel). `vps-ready rollback --last` removes it.
+      +# vps-ready-cloudflared-restart.service runs it when /usr/bin/cloudflared
+      +# changes: it restarts the connector until it runs the new binary.
+      +set -u
+      +bin=/usr/bin/cloudflared
+      +unit=vps-ready-cloudflared.service
+      +retries=0
+      +while :; do
+      +  # dpkg links the old binary to .dpkg-tmp, which can trigger the path unit,
+      +  # before it renames .dpkg-new into place.
+      +  waited=0
+      +  while [ -e "$bin.dpkg-new" ] || [ -e "$bin.dpkg-tmp" ]; do
+      +    [ "$waited" -lt 60 ] || break
+      +    sleep 1
+      +    waited=$((waited + 1))
+      +  done
+      +  # Under Type=notify this returns once the connector is connected; a
+      +  # failure (no edge for a moment) is tried again like a stale binary.
+      +  if systemctl try-restart "$unit"; then
+      +    pid=$(systemctl show --property=MainPID --value "$unit")
+      +    [ "${pid:-0}" != 0 ] || exit 0
+      +    running=$(stat -L -c %d:%i "/proc/$pid/exe" 2>/dev/null) || exit 0
+      +    [ "$running" != "$(stat -L -c %d:%i "$bin")" ] || exit 0
+      +    why="cloudflared runs an old binary"
+      +  else
+      +    why="the connector did not start again"
+      +  fi
+      +  if [ "$retries" -ge 5 ]; then
+      +    echo "$why" >&2
+      +    exit 1
+      +  fi
+      +  retries=$((retries + 1))
+      +  sleep 5
+      +done
+  + /etc/systemd/system/vps-ready-cloudflared.service (mode 0644, root:root)  reversible
+      @@ -0,0 +1,26 @@
+      +# Written by vps-ready (net.tunnel). `vps-ready rollback --last` restores
+      +# the previous state; edits here are replaced by the next apply.
+      +[Unit]
+      +Description=Cloudflare Tunnel connector (vps-ready net.tunnel)
+      +After=network-online.target
+      +Wants=network-online.target
+      +
+      +[Service]
+      +Type=notify
+      +TimeoutStartSec=30
+      +LoadCredential=token:/etc/vps-ready/cloudflared-token
+      +ExecStart=/usr/bin/cloudflared tunnel --config /etc/vps-ready/cloudflared.yml --metrics 127.0.0.1:20241 run --token-file ${CREDENTIALS_DIRECTORY}/token
+      +DynamicUser=yes
+      +NoNewPrivileges=yes
+      +ProtectSystem=strict
+      +ProtectHome=yes
+      +PrivateTmp=yes
+      +CapabilityBoundingSet=
+      +RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+      +IPAddressDeny=link-local multicast 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 168.63.129.16 fc00::/7
+      +IPAddressAllow=localhost
+      +Restart=on-failure
+      +RestartSec=5s
+      +
+      +[Install]
+      +WantedBy=multi-user.target
+  + /etc/systemd/system/vps-ready-cloudflared-restart.service (mode 0644, root:root)  reversible
+      @@ -0,0 +1,9 @@
+      +# Written by vps-ready (net.tunnel). `vps-ready rollback --last` restores
+      +# the previous state; edits here are replaced by the next apply.
+      +[Unit]
+      +Description=Restart the Cloudflare Tunnel connector on a new cloudflared (vps-ready net.tunnel)
+      +
+      +[Service]
+      +Type=oneshot
+      +TimeoutStartSec=10min
+      +ExecStart=/bin/sh /etc/vps-ready/cloudflared-restart.sh
+  + /etc/systemd/system/vps-ready-cloudflared-restart.path (mode 0644, root:root)  reversible
+      @@ -0,0 +1,11 @@
+      +# Written by vps-ready (net.tunnel). `vps-ready rollback --last` restores
+      +# the previous state; edits here are replaced by the next apply.
+      +[Unit]
+      +Description=Watch cloudflared for upgrades (vps-ready net.tunnel)
+      +
+      +[Path]
+      +PathChanged=/usr/bin/cloudflared
+      +Unit=vps-ready-cloudflared-restart.service
+      +
+      +[Install]
+      +WantedBy=multi-user.target
+  ~ enable and start vps-ready-cloudflared.service                        reversible
+  ~ enable and start vps-ready-cloudflared-restart.path                   reversible
+deploy.docker: not applicable (Docker is installed, but neither from Docker's package nor with a docker.service unit (a snap?), so vps-ready leaves it alone)
+firewall.inbound: Drop incoming traffic that no rule allows (fixes FW-001)
+  note: always accepts TCP 22, the current SSH ports (this session's, root's sshd listeners and `Port`), whatever `allow` says
+  note: drops incoming IPv4 TCP that carries IP options, also to containers, to blunt CVE-2026-98432 until the kernel is updated and rebooted; TCP labeled with CIPSO (NetLabel) stops working
+  note: Docker is installed: input from docker0 and br-* is accepted, so containers can reach services on the host; a compromised container can reach all of them, as with no firewall
+  note: step 1 of 2: SSH stays public until you apply this profile again from a login through tailscale0 (`ssh -t <user>@<address of tailscale0> sudo vps-ready apply ...`)
+  + /etc/vps-ready/firewall.nft (mode 0644, root:root)                    reversible
+      @@ -0,0 +1,34 @@
+      +# Written by vps-ready (firewall.inbound). `vps-ready rollback --last`
+      +# restores the previous state; edits here are replaced by the next apply.
+      +# vps-ready-firewall.service loads it. It replaces only the table
+      +# inet vps_ready: other tables, such as Docker's or fail2ban's, stay.
+      +table inet vps_ready {}
+      +delete table inet vps_ready
+      +table inet vps_ready {
+      +  # Mitigates CVE-2026-98432, a kernel use-after-free of the IP options of
+      +  # a TCP handshake; the fix is a kernel update. Runs before conntrack and
+      +  # also sees traffic forwarded to containers. TCP only: IGMP and RSVP use
+      +  # the Router Alert option.
+      +  chain prerouting {
+      +    type filter hook prerouting priority raw; policy accept;
+      +    ip protocol tcp ip hdrlength > 5 counter drop
+      +  }
+      +  chain input {
+      +    type filter hook input priority filter; policy drop;
+      +    ct state established,related accept
+      +    ct state invalid drop
+      +    iif lo accept
+      +    meta l4proto icmp accept
+      +    # Neighbor discovery and path MTU: never block ICMPv6.
+      +    meta l4proto icmpv6 accept
+      +    # DHCPv4 replies that conntrack does not match (broadcast).
+      +    udp sport 67 udp dport 68 accept
+      +    # DHCPv6 client.
+      +    ip6 saddr fe80::/10 udp dport 546 accept
+      +    # Containers reaching services on the host.
+      +    iifname "docker0" accept
+      +    iifname "br-*" accept
+      +    # The profile's `allow`, plus every current SSH port.
+      +    tcp dport { 22 } accept
+      +  }
+      +}
+  + /etc/systemd/system/vps-ready-firewall.service (mode 0644, root:root)  reversible
+      @@ -0,0 +1,19 @@
+      +# Written by vps-ready (firewall.inbound). `vps-ready rollback --last`
+      +# restores the previous state; edits here are replaced by the next apply.
+      +[Unit]
+      +Description=vps-ready: inbound firewall (nftables table inet vps_ready)
+      +DefaultDependencies=no
+      +Wants=network-pre.target
+      +After=nftables.service
+      +Before=network-pre.target shutdown.target
+      +Conflicts=shutdown.target
+      +
+      +[Service]
+      +Type=oneshot
+      +RemainAfterExit=yes
+      +ExecStart=/usr/sbin/nft -f /etc/vps-ready/firewall.nft
+      +ExecReload=/usr/sbin/nft -f /etc/vps-ready/firewall.nft
+      +ExecStop=-/usr/sbin/nft delete table inet vps_ready
+      +
+      +[Install]
+      +WantedBy=sysinit.target
+  ~ enable and start vps-ready-firewall.service                           reversible
+ssh.bruteforce: Ban addresses that keep failing to log in over SSH
+  note: no SSH session found, so only localhost is exempt from bans
+  note: the jail's ignoreip replaces any that jail.local sets
+  note: if this installs fail2ban, rollback leaves it installed and enabled, as the package sets it up, so it runs the distro's own jails after a reboot; `systemctl disable --now fail2ban` turns it off
+  + /etc/fail2ban/jail.d/90-vps-ready.local (mode 0644, root:root)        reversible
+      @@ -0,0 +1,8 @@
+      +# Written by vps-ready (ssh.bruteforce). `vps-ready rollback --last`
+      +# restores the previous state; edits here are replaced by the next apply.
+      +[sshd]
+      +enabled = true
+      +banaction = nftables
+      +backend = systemd
+      +port = 22
+      +ignoreip = 127.0.0.1/8 ::1
+  ~ enable and start fail2ban.service                                     reversible
+kernel.sysctl: Harden kernel settings (fixes KRN-001, KRN-002, KRN-003, KRN-007, KRN-008, NET-002)
+  + /etc/sysctl.d/90-vps-ready.conf (mode 0644, root:root)                reversible
+      @@ -0,0 +1,8 @@
+      +# Written by vps-ready (kernel.sysctl). `vps-ready rollback --last`
+      +# restores the previous state; edits here are replaced by the next apply.
+      +kernel.kptr_restrict = 1
+      +kernel.dmesg_restrict = 1
+      +kernel.unprivileged_bpf_disabled = 2
+      +fs.protected_fifos = 1
+      +fs.protected_regular = 1
+      +net.ipv4.conf.all.accept_source_route = 0
+  ~ kernel.kptr_restrict 0 -> 1                                           reversible
+  ~ kernel.dmesg_restrict 0 -> 1                                          reversible
+  ~ kernel.unprivileged_bpf_disabled 0 -> 2                               reversible
+  ~ fs.protected_fifos 0 -> 1                                             reversible
+  ~ fs.protected_regular 0 -> 1                                           reversible
+  ~ net.ipv4.conf.all.accept_source_route 1 -> 0                          reversible
+updates.auto: Install security updates automatically (fixes UPD-001)
+  + /etc/apt/apt.conf.d/52vps-ready (mode 0644, root:root)                reversible
+      @@ -0,0 +1,3 @@
+      +APT::Periodic::Enable "1";
+      +APT::Periodic::Update-Package-Lists "1";
+      +APT::Periodic::Unattended-Upgrade "1";
+deploy.proxy: Serve sites over HTTPS with Caddy, proxied to their upstreams
+  note: caddy is installed without Caddy's repository; this adds it, so apt updates Caddy from there, and the next `apt upgrade` replaces a distro's Caddy with Caddy's own build
+  note: rollback removes the Caddyfile, and stops and disables Caddy; the package stays
+  + directory /etc/apt/keyrings (mode 0755, root:root)                    reversible
+  + /etc/apt/keyrings/caddy.asc (mode 0644, root:root): PGP public key, fingerprint 6576 0C51 EDEA 2017 CEA2 CA15 155B 6D79 CA56 EA34 (109 lines)  reversible
+  + /etc/apt/sources.list.d/caddy.sources (mode 0644, root:root)          reversible
+      @@ -0,0 +1,7 @@
+      +# Written by vps-ready. `vps-ready rollback --last` removes it.
+      +Types: deb
+      +URIs: https://dl.cloudsmith.io/public/caddy/stable/deb/debian
+      +Suites: any-version
+      +Components: main
+      +Architectures: amd64
+      +Signed-By: /etc/apt/keyrings/caddy.asc
+  + directory /etc/caddy (mode 0755, root:root)                           reversible
+  + /etc/caddy/Caddyfile (mode 0644, root:root)                           reversible
+      @@ -0,0 +1,19 @@
+      +# Written by vps-ready (deploy.proxy). `vps-ready rollback --last`
+      +# restores the previous state; edits here are replaced by the next apply.
+      +
+      +{
+      +	default_bind 127.0.0.1
+      +	servers {
+      +		trusted_proxies static 127.0.0.1/32
+      +		client_ip_headers Cf-Connecting-Ip
+      +	}
+      +}
+      +
+      +http://app.example.com {
+      +	@plain header X-Forwarded-Proto http
+      +	redir @plain https://{host}{uri} 308
+      +	reverse_proxy 127.0.0.1:8080 {
+      +		header_up X-Forwarded-For {client_ip}
+      +		header_up X-Forwarded-Host {host}
+      +	}
+      +}
+
+38 changes in 9 modules: 22 files, 4 directories, 6 kernel settings, 5 services, 1 user.
+partial: rollback removes a user it created but keeps its home directory.
+Apply 38 changes? [y/N] n
+Nothing was changed.

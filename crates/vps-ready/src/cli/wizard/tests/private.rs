@@ -187,8 +187,8 @@ fn a_leftover_key_file_is_removed_at_the_start() {
     assert!(!fs.exists(Path::new(AUTH_KEY_TEMP)));
 }
 
-/// On the private profile the ports start unchecked, and a domain opens
-/// 80 and 443 for Caddy; "Web apps or Docker" keeps Docker.
+/// On the private profile the ports start unchecked, and a domain served
+/// directly opens 80 and 443 for Caddy; "Web apps or Docker" keeps Docker.
 #[test]
 fn a_domain_on_the_private_profile_opens_80_and_443() {
     let fs = fs();
@@ -215,6 +215,8 @@ fn a_domain_on_the_private_profile_opens_80_and_443() {
         Type("app.example.com".into()),
         Type("127.0.0.1:8080".into()),
         Enter,
+        // Directly, not through a tunnel.
+        Pick(1),
     ];
     let (text, profile) = scenario("private-domain", &host, questions);
     assert!(

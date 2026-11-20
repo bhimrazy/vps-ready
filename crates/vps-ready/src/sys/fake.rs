@@ -486,6 +486,18 @@ impl Fs for FakeFs {
         Ok(())
     }
 
+    fn create_new(&self, path: &Path, bytes: &[u8], owner: FileOwner) -> Result<(), SysError> {
+        let mut state = self.lock();
+        if state.entries.contains_key(path) || state.is_dir(path) {
+            return Err(io_error(path, io::ErrorKind::AlreadyExists));
+        }
+        state.require_parent(path)?;
+        state.tick(Op::Write, path)?;
+        let entry = Entry::owned(Node::File(bytes.to_vec()), owner);
+        state.entries.insert(path.to_path_buf(), entry);
+        Ok(())
+    }
+
     fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), SysError> {
         let mut state = self.lock();
         let target = state.resolve(path);

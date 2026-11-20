@@ -778,6 +778,9 @@ impl Fs for Guarded<'_> {
     fn write_atomic(&self, path: &Path, bytes: &[u8], owner: FileOwner) -> Result<(), SysError> {
         self.0.write_atomic(path, bytes, owner)
     }
+    fn create_new(&self, path: &Path, bytes: &[u8], owner: FileOwner) -> Result<(), SysError> {
+        self.0.create_new(path, bytes, owner)
+    }
     fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), SysError> {
         self.0.write(path, bytes)
     }

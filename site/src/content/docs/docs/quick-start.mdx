@@ -43,6 +43,7 @@ needs a DNS record for this server.
 - The recommended answer comes first and says why.
 - The admin line says whether the name is a new or an existing account, and which SSH keys it gets.
 - Tailscale or WireGuard moves the answers onto the `private` profile, which closes SSH to the internet in a second apply, from a login through the VPN. [Private access](/docs/guides/private-access/) walks through it.
+- On the `private` profile, a domain adds the question "How do visitors reach this site": through a Cloudflare Tunnel, with no public port and a hidden token prompt, or directly on 80 and 443. New in v0.7.0; see [A website with no public port](/docs/guides/private-access/#a-website-with-no-public-port).
 - Ports that something listens on are offered unchecked; unchecked ports are blocked.
 - `y` to the module question lets you pick modules one by one.
 - The Caddy questions appear when Docker is part of the setup, or when you tick `deploy.proxy` in the module list. Press Enter at the first one to skip Caddy. A domain with an upstream adds the `deploy.proxy` module, and a bad domain, a duplicate, or an upstream written as `localhost:8080` is asked again with the reason. See [Deploy an app](/docs/guides/deployment-modules/#caddy-with-domains-and-upstreams).

@@ -986,6 +986,9 @@ mod tests {
         ) -> Result<(), SysError> {
             self.inner.write_atomic(path, bytes, owner)
         }
+        fn create_new(&self, path: &Path, bytes: &[u8], owner: FileOwner) -> Result<(), SysError> {
+            self.inner.create_new(path, bytes, owner)
+        }
         fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), SysError> {
             self.inner.write(path, bytes)
         }

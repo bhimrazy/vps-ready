@@ -25,7 +25,7 @@ use crate::modules::deploy_proxy::{self, Caddyfile, Domain, Upstream};
 use crate::modules::firewall_inbound::{self, Allow};
 use crate::modules::user_admin::{self, SessionKeys};
 use crate::modules::{Applicability, Module, ModuleError};
-use crate::modules::{net_tailscale, net_wireguard};
+use crate::modules::{net_tailscale, net_tunnel, net_wireguard};
 use crate::resource::ResourceError;
 use crate::resource::authorized_keys::is_plain_key;
 use crate::sys::{FileKind, FileOwner, Fs, SysError};
@@ -44,6 +44,9 @@ const AUTH_KEY_TEMP: &str = "/run/vps-ready/.tailscale-auth-key.vps-ready-tmp";
 /// What every Tailscale auth key starts with. Split, so that no text in
 /// the source looks like a key.
 const AUTH_KEY_PREFIX: &str = concat!("tskey", "-");
+
+/// A pasted tunnel token, kept for every start of the connector.
+const TOKEN_FILE: &str = net_tunnel::WIZARD_TOKEN_FILE;
 
 /// What the private profile opens when `deploy.proxy` serves a site.
 const WEB_PORTS: [&str; 3] = ["80/tcp", "443/tcp", "443/udp"];
@@ -76,12 +79,20 @@ pub(super) fn run<R: BufRead>(
         builder,
         picked,
         auth_key,
+        tunnel,
     } = match ask(host, &facts, prompt, out) {
         Err(e) if interrupted(&e) => {
             writeln!(out, "Nothing was changed.")?;
             return Ok(EXIT_INTERRUPTED);
         }
         answers => answers?,
+    };
+    // Before the plan, which checks the file's owner and mode.
+    let token = match tunnel {
+        Some(TunnelToken::New { token, replace }) => {
+            Some(TokenFile::write(host.sys.fs, &token, replace)?)
+        }
+        Some(TunnelToken::Keep) | None => None,
     };
     // The key goes only into the profile applied now, never the saved one.
     let mut applied = builder.clone();
@@ -123,6 +134,9 @@ pub(super) fn run<R: BufRead>(
         err,
     );
     let signal = key.take().and_then(KeyFile::finish);
+    if let (Some(token), Ok(Applied::Declined)) = (token, &applied) {
+        token.discard(host.sys.fs, out)?;
+    }
     if let Some(sig) = signal {
         // Now that the key is gone and the outcome is printed, an error
         // too.
@@ -290,6 +304,78 @@ fn remove_key_file(fs: &dyn Fs) -> Result<(), SysError> {
         }
     }
     Ok(())
+}
+
+/// The tunnel's token, from [`ask_tunnel_token`].
+enum TunnelToken {
+    /// [`TOKEN_FILE`] holds one already.
+    Keep,
+    /// Pasted; `replace` when [`TOKEN_FILE`] exists.
+    New {
+        token: Zeroizing<String>,
+        replace: bool,
+    },
+}
+
+/// [`TOKEN_FILE`] as this run wrote it, outside the transaction: it is
+/// never a resource, so the journal never copies it, and rollback keeps it.
+struct TokenFile {
+    /// No file was there before.
+    created: bool,
+    /// Nor its directory.
+    created_dir: bool,
+}
+
+impl TokenFile {
+    /// Writes `token` to a new [`TOKEN_FILE`] (O_EXCL, root's, 0600) in a
+    /// directory only root can write to; `replace` removes the old one
+    /// first.
+    fn write(fs: &dyn Fs, token: &str, replace: bool) -> anyhow::Result<Self> {
+        let path = Path::new(TOKEN_FILE);
+        let Some(dir) = path.parent() else {
+            bail!("{TOKEN_FILE} has no directory");
+        };
+        let created_dir = !fs.exists(dir);
+        if created_dir {
+            fs.create_dir(dir, root_only(0o755))?;
+        }
+        let meta = fs.metadata(dir)?;
+        if meta.kind != FileKind::Dir || meta.uid != 0 || meta.mode & 0o022 != 0 {
+            bail!(
+                "{} is not a directory only root can write to, so the tunnel token is not \
+                 written there",
+                dir.display()
+            );
+        }
+        if replace {
+            match fs.remove(path) {
+                Ok(()) | Err(SysError::NotFound(_)) => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+        fs.create_new(path, token.as_bytes(), root_only(0o600))?;
+        Ok(Self {
+            created: !replace,
+            created_dir,
+        })
+    }
+
+    /// After a declined apply: removes a file this run created, so nothing
+    /// was changed; a replaced one cannot come back.
+    fn discard(self, fs: &dyn Fs, out: &mut dyn Write) -> anyhow::Result<()> {
+        if !self.created {
+            writeln!(out, "The new tunnel token stays in {TOKEN_FILE}.")?;
+            return Ok(());
+        }
+        let path = Path::new(TOKEN_FILE);
+        fs.remove(path)?;
+        if self.created_dir
+            && let Some(dir) = path.parent()
+        {
+            fs.remove_dir(dir)?;
+        }
+        Ok(())
+    }
 }
 
 /// The private profile's `ssh_via` before it takes effect: its interface.
@@ -559,6 +645,8 @@ struct Answers {
     picked: bool,
     /// A pasted Tailscale auth key, for this apply only.
     auth_key: Option<Zeroizing<String>>,
+    /// The tunnel's token, when the sites go through one.
+    tunnel: Option<TunnelToken>,
 }
 
 /// The questions, in order.
@@ -575,11 +663,12 @@ fn ask(
     ask_ports(host, facts, prompt, out, &mut builder)?;
     let picked = prompt.confirm("Pick which modules to run yourself?", false)?
         && ask_modules(host, facts, prompt, out, &mut builder)?;
-    ask_sites(host, facts, prompt, out, &mut builder)?;
+    let tunnel = ask_sites(host, facts, prompt, out, &mut builder)?;
     Ok(Answers {
         builder,
         picked,
         auth_key,
+        tunnel,
     })
 }
 
@@ -705,8 +794,8 @@ fn ask_wireguard_peer(
     say(
         out,
         "  ",
-        "Make a key pair on the device you will connect from: `wg genkey | tee laptop.key | \
-         wg pubkey`, or \"Add tunnel\" in the WireGuard app.",
+        "Make a key pair on the device you will connect from: `(umask 077; wg genkey | tee \
+         laptop.key | wg pubkey)`, or \"Add tunnel\" in the WireGuard app.",
     )?;
     loop {
         let name = prompt.input("Name of the device", "laptop")?;
@@ -1058,31 +1147,42 @@ fn proxy_without_sites(profile: &Profile) -> bool {
 
 /// With `deploy.docker` still in the profile after the module list, or
 /// `deploy.proxy` picked there, the sites `deploy.proxy` serves: none is
-/// fine, and at least one adds the module.
+/// fine, and at least one adds the module. On the private profile, they go
+/// through a Cloudflare Tunnel or open 80 and 443; returns the tunnel's
+/// token.
 fn ask_sites(
     host: &Host,
     facts: &Facts,
     prompt: &mut dyn Prompt,
     out: &mut dyn Write,
     builder: &mut ProfileBuilder,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Option<TunnelToken>> {
     let profile = builder.build(host.modules)?;
     let picked = proxy_without_sites(&profile);
     if profile.params("deploy.docker").is_none() && !picked {
-        return Ok(());
+        return Ok(None);
     }
     let Some(module) = find(host, "deploy.proxy") else {
-        return Ok(());
+        return Ok(None);
     };
     if let Applicability::NotApplicable { reason } = module.applicable(facts) {
         writeln!(out, "HTTPS sites: skipped, {reason}.")?;
-        return Ok(());
+        return Ok(None);
     }
+    let private = builder.base() == "private";
+    let tunnel = private
+        && find(host, "net.tunnel")
+            .is_some_and(|m| m.applicable(facts) == Applicability::Applicable);
     say(
         out,
         "",
-        "Caddy can serve your apps over HTTPS and get their certificates. Each domain \
-         needs a DNS record for this server.",
+        if tunnel {
+            "Caddy can serve your apps over HTTPS, through a Cloudflare Tunnel or directly \
+             (asked after the domains)."
+        } else {
+            "Caddy can serve your apps over HTTPS and get their certificates. Each domain \
+             needs a DNS record for this server."
+        },
     )?;
     if deploy_proxy::caddyfile_state(host.sys)? == Caddyfile::Other {
         say(
@@ -1131,8 +1231,9 @@ fn ask_sites(
             builder.remove("deploy.proxy");
             writeln!(out, "  deploy.proxy is left out: it needs a domain.")?;
         }
-        return Ok(());
+        return Ok(None);
     }
+    let count = sites.len();
     let sites = sites
         .into_iter()
         .map(|(domain, upstream)| {
@@ -1142,14 +1243,117 @@ fn ask_sites(
             ]))
         })
         .collect();
-    builder.set_params(
-        "deploy.proxy",
-        toml::Table::from_iter([("sites".to_owned(), toml::Value::Array(sites))]),
-    );
-    if builder.base() == "private" {
+    let mut proxy = toml::Table::from_iter([("sites".to_owned(), toml::Value::Array(sites))]);
+    if tunnel && ask_through_tunnel(prompt, count)? {
+        let token = ask_tunnel_token(host, prompt, out)?;
+        let mut params = toml::Table::new();
+        if token.is_some() {
+            params.insert("token_file".to_owned(), TOKEN_FILE.into());
+        }
+        builder.set_params("net.tunnel", params);
+        proxy.insert("behind_tunnel".to_owned(), true.into());
+        builder.set_params("deploy.proxy", proxy);
+        say(
+            out,
+            "  ",
+            "No port is opened: cloudflared connects out to Cloudflare, and Caddy listens on \
+             loopback only.",
+        )?;
+        return Ok(token);
+    }
+    builder.set_params("deploy.proxy", proxy);
+    if private {
         open_web_ports(host, out, builder)?;
     }
-    Ok(())
+    Ok(None)
+}
+
+/// Whether visitors reach the `count` sites through a Cloudflare Tunnel
+/// rather than on 80 and 443.
+fn ask_through_tunnel(prompt: &mut dyn Prompt, count: usize) -> anyhow::Result<bool> {
+    let items = [
+        "Through a Cloudflare Tunnel (no public ports; DNS on Cloudflare)".to_owned(),
+        "Directly, on ports 80 and 443 (Caddy gets the certificate)".to_owned(),
+    ];
+    let question = if count == 1 {
+        "How do visitors reach this site"
+    } else {
+        "How do visitors reach these sites"
+    };
+    Ok(prompt.select(question, &items, 0)? == 0)
+}
+
+/// The tunnel's token, hidden as it is typed and asked again unless it has
+/// the shape of one; [`TOKEN_FILE`] kept if it holds one and the answer is
+/// yes. `None` to add it later.
+fn ask_tunnel_token(
+    host: &Host,
+    prompt: &mut dyn Prompt,
+    out: &mut dyn Write,
+) -> anyhow::Result<Option<TunnelToken>> {
+    let fs = host.sys.fs;
+    let path = Path::new(TOKEN_FILE);
+    let replace = match fs.metadata(path) {
+        Ok(_) => true,
+        Err(SysError::NotFound(_)) => false,
+        Err(e) => return Err(e.into()),
+    };
+    if replace {
+        // Root's and private, as the plan requires, and a token.
+        let usable = fs.read_nofollow(path).is_ok_and(|(bytes, meta)| {
+            let bytes = Zeroizing::new(bytes);
+            meta.uid == 0
+                && meta.mode & 0o077 == 0
+                && std::str::from_utf8(&bytes).is_ok_and(net_tunnel::is_token)
+        });
+        if usable {
+            if prompt.confirm(
+                &format!("{TOKEN_FILE} holds a tunnel token. Keep it?"),
+                true,
+            )? {
+                return Ok(Some(TunnelToken::Keep));
+            }
+        } else {
+            say(
+                out,
+                "  ",
+                &format!(
+                    "{TOKEN_FILE} holds no tunnel token that only root can read, so the token \
+                     you paste replaces it."
+                ),
+            )?;
+        }
+    }
+    say(
+        out,
+        "  ",
+        &format!(
+            "Create a tunnel in the Cloudflare dashboard and copy its token, the long string \
+             in the install command it shows. It is saved to {TOKEN_FILE}, readable only by \
+             root, for the connector to read at each start."
+        ),
+    )?;
+    loop {
+        let typed =
+            Zeroizing::new(prompt.password("Tunnel token (hidden; Enter to add it later)")?);
+        // The whole install command works too: the token is its last word.
+        let token = typed.split_whitespace().last().unwrap_or_default();
+        if token.is_empty() {
+            return Ok(None);
+        }
+        if net_tunnel::is_token(token) {
+            return Ok(Some(TunnelToken::New {
+                token: Zeroizing::new(token.to_owned()),
+                replace,
+            }));
+        }
+        say(
+            out,
+            "  ",
+            "That is not a tunnel token: copy it from the install command in the Cloudflare \
+             dashboard.",
+        )?;
+    }
 }
 
 /// Adds [`WEB_PORTS`] to `firewall.inbound`'s `allow`, which the private

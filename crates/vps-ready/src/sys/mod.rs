@@ -374,6 +374,19 @@ pub trait Fs {
     /// directory does not exist; [`SysError::Permission`] or [`SysError::Io`].
     fn write_atomic(&self, path: &Path, bytes: &[u8], owner: FileOwner) -> Result<(), SysError>;
 
+    /// Creates `path` with `bytes` and `owner`, opened with `O_CREAT |
+    /// O_EXCL` and mode 0600 until the owner is set, so it never writes into
+    /// an existing file or through a symlink. Returns once the file and its
+    /// directory entry are on disk; a failed write removes the file.
+    ///
+    /// # Errors
+    ///
+    /// [`SysError::Io`] if `path` exists (also as a symlink), or on
+    /// [`RealFs`] if a parent below its root is a symlink;
+    /// [`SysError::NotFound`] if the parent directory does not exist;
+    /// [`SysError::Permission`].
+    fn create_new(&self, path: &Path, bytes: &[u8], owner: FileOwner) -> Result<(), SysError>;
+
     /// Truncates the existing file at `path` and writes `bytes` in place,
     /// without creating it, syncing it or changing its metadata. Only for
     /// `/proc/sys`, where a file cannot be replaced by a rename.
@@ -851,6 +864,26 @@ impl Fs for RealFs {
         rfs::fsync(&dir).map_err(|e| errno(subject(), e))
     }
 
+    fn create_new(&self, path: &Path, bytes: &[u8], owner: FileOwner) -> Result<(), SysError> {
+        let subject = || path.display().to_string();
+        let (dir, name) = self.open_parent(path)?;
+        let flags =
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        let fd = rfs::openat(&dir, name, flags, perm(0o600)).map_err(|e| errno(subject(), e))?;
+        let mut file = File::from(fd);
+        let written = file
+            .write_all(bytes)
+            .map_err(|e| rustix::io::Errno::from_io_error(&e).unwrap_or(rustix::io::Errno::IO))
+            .and_then(|()| set_owner(&file, owner))
+            .and_then(|()| rfs::fsync(&file));
+        if let Err(e) = written {
+            // Best effort: no partial file is left behind.
+            let _ = rfs::unlinkat(&dir, name, AtFlags::empty());
+            return Err(errno(subject(), e));
+        }
+        rfs::fsync(&dir).map_err(|e| errno(subject(), e))
+    }
+
     fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), SysError> {
         OpenOptions::new()
             .write(true)
@@ -1111,6 +1144,31 @@ mod tests {
             .write_atomic(Path::new("/nope/x"), b"x\n", owner)
             .unwrap_err();
         assert!(matches!(err, SysError::NotFound(_)), "{err:?}");
+
+        // O_EXCL: never into an existing file or through a symlink.
+        let secret = Path::new("/etc/secret");
+        fs.create_new(
+            secret,
+            b"s",
+            FileOwner {
+                mode: 0o600,
+                ..owner
+            },
+        )
+        .unwrap();
+        assert_eq!(fs.read(secret).unwrap(), b"s");
+        assert_eq!(mode("/etc/secret"), 0o600);
+        for existing in ["/etc/secret", "/etc/link", "/etc/only"] {
+            let err = fs.create_new(Path::new(existing), b"x", owner).unwrap_err();
+            assert!(matches!(err, SysError::Io { .. }), "{existing}: {err:?}");
+        }
+        assert_eq!(fs.read(secret).unwrap(), b"s");
+        assert_eq!(fs.read(Path::new("/etc/real")).unwrap(), b"real\n");
+        let err = fs
+            .create_new(Path::new("/nope/x"), b"x", owner)
+            .unwrap_err();
+        assert!(matches!(err, SysError::NotFound(_)), "{err:?}");
+        fs.remove(secret).unwrap();
 
         fs.write(path, b"c").unwrap();
         assert_eq!(fs.read(path).unwrap(), b"c");

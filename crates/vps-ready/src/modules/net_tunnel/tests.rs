@@ -524,6 +524,9 @@ impl Fs for Watched {
     fn write_atomic(&self, path: &Path, bytes: &[u8], owner: FileOwner) -> Result<(), SysError> {
         self.fs.write_atomic(path, bytes, owner)
     }
+    fn create_new(&self, path: &Path, bytes: &[u8], owner: FileOwner) -> Result<(), SysError> {
+        self.fs.create_new(path, bytes, owner)
+    }
     fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), SysError> {
         self.fs.write(path, bytes)
     }
@@ -1056,4 +1059,29 @@ fn the_unit_matches_the_reload() {
         Reload::CloudflaredRestart.command().args,
         ["try-restart", UNIT]
     );
+}
+
+/// The wizard's format check: base64, padded or not, of `a`, `t` (a
+/// UUID) and `s`.
+#[test]
+fn a_token_has_the_shape_of_one() {
+    let token = placeholder_token("c2VjcmV0");
+    assert!(token.starts_with("eyJ"), "{token}");
+    assert!(is_token(&token));
+    assert!(is_token(&format!(" {token}==\n")));
+    let url_safe = placeholder_token("a?b>c")
+        .replace('+', "-")
+        .replace('/', "_");
+    assert!(is_token(&url_safe), "{url_safe}");
+    for bad in [
+        String::new(),
+        "my-password".to_owned(),
+        placeholder_token(""),
+        placeholder_token("x").replace("eyJ", "eyK"),
+        format!("{token}!"),
+    ] {
+        assert!(!is_token(&bad), "{bad}");
+    }
+    assert!(!is_uuid("00000000-0000-0000-0000-00000000000g"));
+    assert!(!is_uuid("000000000-000-0000-0000-000000000000"));
 }
