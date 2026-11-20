@@ -21,6 +21,8 @@ On their own, the three do not touch the SSH server, the firewall's SSH rule or 
 
 ## Docker, with ports on loopback
 
+`deploy.docker` is in the `web` profile, so to see what it would do on your server, run:
+
 ```sh
 sudo vps-ready plan --profile web
 ```
@@ -48,14 +50,14 @@ sudo vps-ready plan --profile web
 
 Logs stop growing without limit, containers keep running while the Docker daemon restarts, and a published port with no address (`-p 8080:80`) listens on `127.0.0.1` only. Put a reverse proxy in front of it, which is what `deploy.proxy` is for.
 
-<Aside type="note" title="What FW-002 still reports">
+### What FW-002 still reports
+
 Docker publishes ports through its own forwarding rules, which the input-only [firewall](/docs/guides/profiles-and-modules/#firewallinbound-the-firewall) never sees. That is control `FW-002`. The loopback default fixes it for new ports, but `audit` keeps reporting every port published on a public address, with a hint that the default is now loopback:
 
 - **A port you publish with an address.** `-p 0.0.0.0:8080:80` gets what you asked for.
 - **A network that existed before.** The default applies to the default bridge and to networks created after Docker restarts. A running compose project keeps its old binding until you recreate it with `docker compose down`, then `up`. The plan lists such networks.
 
 vps-ready does not filter Docker's forwarding itself: that would have to stay correct across Docker's own rule changes.
-</Aside>
 
 ### When it does not apply
 
@@ -173,9 +175,7 @@ sudo chown root:root /usr/local/bin/deploy-app
 sudo chmod 755 /usr/local/bin/deploy-app
 ```
 
-<Aside type="caution" title="Arguments do not get through">
-By default sudo resets the environment (`env_reset`), which drops `SSH_ORIGINAL_COMMAND`, where sshd puts what the client asked to run. The sudoers rule also allows no arguments. So the script cannot read what CI sent, and it has to do the same thing every time. For two different jobs, use two keys and two users.
-</Aside>
+Arguments do not get through. By default sudo resets the environment (`env_reset`), which drops `SSH_ORIGINAL_COMMAND`, where sshd puts what the client asked to run, and the sudoers rule allows no arguments. So the script cannot read what CI sent, and it has to do the same thing every time. For two different jobs, use two keys and two users.
 
 ## What a rollback leaves behind
 
@@ -190,3 +190,8 @@ By default sudo resets the environment (`env_reset`), which drops `SSH_ORIGINAL_
 **Docker restarts.** Applying the new `daemon.json` restarts Docker, because the settings cannot be reloaded. With `live-restore` already on, running containers are not touched. With it off, the plan lists the running containers, says they will stop, and says a rollback restarts Docker again. Only containers with a restart policy come back by themselves. The note is the warning: `--yes` still means yes.
 
 **Caddy stops** only in the case above, because without its `Caddyfile` it can neither validate, reload nor start; stopping it keeps it from serving a removed config from memory.
+
+## Next
+
+- Undo a deployment module, or any other: [Undo changes and recover](/docs/guides/undo-and-recover/).
+- Every module and what it checks first: [Profiles and modules](/docs/guides/profiles-and-modules/).

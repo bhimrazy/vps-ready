@@ -9,49 +9,79 @@ const mods = [
   {
     id: 'user.admin',
     text: 'Creates a non-root admin user with sudo and installs your SSH keys. Refuses system accounts.',
-    profiles: ['minimal', 'web'],
+    profiles: ['minimal', 'web', 'private'],
     icon: '<circle cx="12" cy="8" r="4"/><path d="M4 21c.7-4.5 4-7 8-7s7.3 2.5 8 7"/>',
   },
   {
     id: 'ssh.server',
     text: "Turns off root and password login, after checking the live SSH server config won't lock you out.",
-    profiles: ['minimal', 'web'],
+    profiles: ['minimal', 'web', 'private'],
     timer: true,
     icon: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/>',
   },
   {
     id: 'firewall.inbound',
     text: 'Blocks inbound traffic by default, in its own nftables table, and always allows SSH. Stays out of the way of ufw and firewalld.',
-    profiles: ['minimal', 'web'],
+    profiles: ['minimal', 'web', 'private'],
     timer: true,
     icon: '<path d="M12 3l8 3v6c0 5-3.4 8-8 9-4.6-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/>',
   },
   {
     id: 'ssh.bruteforce',
     text: 'Installs fail2ban to ban addresses that keep failing to log in over SSH.',
-    profiles: ['web'],
+    profiles: ['web', 'private'],
     icon: '<circle cx="12" cy="12" r="9"/><path d="M5.6 18.4L18.4 5.6"/>',
   },
   {
     id: 'kernel.sysctl',
     text: 'Hides kernel pointers, restricts ptrace and BPF, and tightens network defaults.',
-    profiles: ['minimal', 'web'],
+    profiles: ['minimal', 'web', 'private'],
     icon: '<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>',
   },
   {
     id: 'updates.auto',
     text: 'Turns on unattended security updates so patches land without you.',
-    profiles: ['minimal', 'web'],
+    profiles: ['minimal', 'web', 'private'],
     icon: '<path d="M20 11a8 8 0 00-14.9-3M4 4v4h4M4 13a8 8 0 0014.9 3M20 20v-4h-4"/>',
+  },
+  {
+    id: 'net.tailscale',
+    text: 'Joins the server to your tailnet from Tailscale\'s own repository, for a private path to SSH. Never turns on Tailscale SSH.',
+    profiles: [],
+    icon: '<circle cx="6" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/>',
+  },
+  {
+    id: 'net.wireguard',
+    text: 'Runs a WireGuard interface for admin access to this server only. The private key is made on the server and never leaves it.',
+    profiles: [],
+    icon: '<path d="M4 12h16M14 6l6 6-6 6"/>',
+  },
+  {
+    id: 'deploy.docker',
+    text: 'Installs Docker Engine from Docker\'s repository with safer defaults: ports bind to 127.0.0.1, logs rotate.',
+    profiles: ['web'],
+    icon: '<rect x="4" y="10" width="16" height="9" rx="1"/><path d="M8 10V6h4v4M12 10V6h4v4"/>',
+  },
+  {
+    id: 'deploy.proxy',
+    text: 'Installs Caddy as a reverse proxy with automatic HTTPS for the sites you list.',
+    profiles: [],
+    icon: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/>',
+  },
+  {
+    id: 'deploy.user',
+    text: 'Creates a login for CI that can run one command, with your keys.',
+    profiles: [],
+    icon: '<circle cx="12" cy="8" r="4"/><path d="M4 21c.7-4.5 4-7 8-7s7.3 2.5 8 7M17 3l2 2-2 2"/>',
   },
 ];
 ---
 
 <Section id="modules" alt>
   <SectionHead label="Under the hood">
-    <Fragment slot="title">Six modules, always run in a safe order.</Fragment>
-    The admin user exists before SSH is locked down, and SSH ports are open before the firewall closes everything else. Together the
-    modules cover 33 audited controls.
+    <Fragment slot="title">Eleven modules, always run in a safe order.</Fragment>
+    The admin user exists before SSH is locked down, and SSH ports are open before the firewall closes everything else. The audit
+    checks 34 controls, and the modules fix 26 of them.
   </SectionHead>
   <div class="grid grid-cols-3 gap-4 max-[920px]:grid-cols-2 max-[600px]:grid-cols-1">
     {
@@ -73,8 +103,8 @@ const mods = [
   <div class="mt-9 grid max-w-[70ch] gap-2.5 text-sm text-muted *:[&>b]:font-semibold *:[&>b]:text-ink">
     <p>
       <b>Profiles.</b> <span class="font-mono">minimal</span> sets up the admin user, SSH, the firewall, kernel settings and automatic
-      updates. <span class="font-mono">web</span> adds ssh.bruteforce (fail2ban). You can also switch modules on one by one.
+      updates. <span class="font-mono">web</span> adds the web ports, ssh.bruteforce (fail2ban) and Docker. <span class="font-mono">private</span> takes SSH off the internet: it is accepted only through a VPN you add with net.tailscale or net.wireguard. The rest you add in your own profile or switch on one by one.
     </p>
-    <p><b>Systems.</b> Runs on Linux x86_64 and arm64. Tested nightly in x86_64 VMs on Ubuntu 22.04 and 24.04 and Debian 12 and 13.</p>
+    <p><b>Systems.</b> Runs on Debian 12 and 13 and Ubuntu 22.04 and 24.04, on x86_64 and arm64. Tested nightly in x86_64 VMs on all four.</p>
   </div>
 </Section>

@@ -5,22 +5,22 @@ sidebar:
   order: 2
 ---
 
-import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-vps-ready groups its changes into **modules**, and a **profile** picks which modules run. You choose one with `--profile`, or pick modules one by one with `--module`.
+vps-ready groups its changes into **modules**, and a **profile** picks which modules run. You choose one with `--profile`, or pick modules one by one with `--module`. This page compares the built-in profiles, shows how to write your own, and lists what each module writes, checks first and undoes.
 
 ## Pick a profile
 
-| | Plain `apply` | `--profile minimal` | `--profile web` |
-|---|---|---|---|
-| Admin user (`user.admin`) | | yes | yes |
-| SSH server config (`ssh.server`) | | yes | yes |
-| Firewall (`firewall.inbound`) | | SSH only | SSH, 80/tcp, 443/tcp, 443/udp |
-| fail2ban (`ssh.bruteforce`) | | | yes |
-| Docker (`deploy.docker`) | | | yes |
-| Kernel settings (`kernel.sysctl`) | yes | yes | yes |
-| Automatic updates (`updates.auto`) | yes | yes | yes |
-| Asks for a confirm | no | yes | yes |
+| | Plain `apply` | `--profile minimal` | `--profile web` | `--profile private` + a VPN module |
+|---|---|---|---|---|
+| Admin user (`user.admin`) | | yes | yes | yes |
+| SSH server config (`ssh.server`) | | yes | yes | yes |
+| Firewall (`firewall.inbound`) | | SSH only | SSH, 80/tcp, 443/tcp, 443/udp | SSH through a VPN only |
+| fail2ban (`ssh.bruteforce`) | | | yes | yes |
+| Docker (`deploy.docker`) | | | yes | |
+| Kernel settings (`kernel.sysctl`) | yes | yes | yes | yes |
+| Automatic updates (`updates.auto`) | yes | yes | yes | yes |
+| Asks for a confirm | no | yes | yes | yes |
 
 - **Plain `apply`**, with no `--profile` or `--module`, only changes kernel settings and automatic updates. Nothing in it can lock you out, so a future version can never make a plain `apply` start changing SSH or the firewall.
 - **minimal** is for any server you log into over SSH.
@@ -29,13 +29,76 @@ vps-ready groups its changes into **modules**, and a **profile** picks which mod
 - **private** is for a server with no public SSH: SSH only through a VPN, and no public port unless you add one. It names no VPN, so you extend it; see [The private profile](#the-private-profile) below.
 - **`deploy.proxy` (Caddy) and `deploy.user` are in no built-in profile.** They need values only you have (domains, deploy keys), so you add them in your own profile, or the guided setup adds Caddy when you give it a domain. See [Deploy an app](/docs/guides/deployment-modules/).
 
-`sudo vps-ready` with no arguments picks between these two for you and builds the profile from your answers: see the [quick start](/docs/quick-start/). To read what a module does before choosing, run `vps-ready modules` (or `vps-ready modules ssh.server` for one).
+`sudo vps-ready` with no arguments recommends `minimal` or `web` for you, offers `private` through its private access question, and builds the profile from your answers: see the [quick start](/docs/quick-start/). To read what a module does before choosing, run `vps-ready modules` (or `vps-ready modules ssh.server` for one).
 
-Run `plan` with the same flags first to see exactly what would change on your server:
+To see exactly what would change on your server, run `plan` with the same flags first:
 
 ```sh
 sudo vps-ready plan --profile web
 ```
+
+## Write your own profile
+
+A profile is a TOML file that can extend `minimal`, `web` or `private`, change a module's settings, or leave a module out:
+
+```toml title="my-server.toml"
+schema  = 1
+extends = "web"
+
+[modules."user.admin"]
+name            = "deploy"
+authorized_keys = ["ssh-ed25519 AAAAC3Nza... me@laptop"]
+sudo            = "nopasswd"     # or "password"
+
+[modules."firewall.inbound"]
+allow = ["22/tcp", "443/tcp"]
+
+[modules."ssh.bruteforce"]
+enabled = false
+
+[modules."deploy.proxy"]
+sites = [{ domain = "app.example.com", upstream = "127.0.0.1:8080" }]
+```
+
+Check it with `plan` first:
+
+```sh
+sudo vps-ready plan --profile ./my-server.toml
+```
+
+A typo in a key is an error that names the module, not a silently ignored line. `sudo = "password"` only works for an account that already has a password; vps-ready never asks for or sets one.
+
+### Run only some modules
+
+To run only some modules, name them with `--module`:
+
+<Tabs>
+  <TabItem label="One module">
+
+```sh
+sudo vps-ready apply --module kernel.sysctl
+```
+
+  </TabItem>
+  <TabItem label="Several modules">
+
+```sh
+sudo vps-ready apply --module user.admin --module ssh.server
+```
+
+  </TabItem>
+  <TabItem label="From a profile">
+
+```sh
+sudo vps-ready apply --profile web --module firewall.inbound
+```
+
+With `--profile`, `--module` picks from that profile's modules and uses its settings.
+
+  </TabItem>
+</Tabs>
+
+Each failed control in `audit` names the module that fixes it; the full list is in [Security controls](/docs/reference/security-controls/).
 
 ## The order modules run in
 
@@ -91,7 +154,11 @@ It also drops incoming IPv4 TCP packets that carry IP options, in a `prerouting`
 
 **Undo:** rollback deletes only the `inet vps_ready` table and its unit, so Docker's and fail2ban's rules stay. If it installed `nftables`, the package stays installed.
 
-**SSH only through a VPN (`ssh_via`):** with `ssh_via = "wg0"` (or `"tailscale0"`, or any interface you set up), the SSH rule accepts only packets that arrive on that interface, over IPv4 and IPv6; everything else stays as above, and SSH ports listed in `allow` are left out with a note. The SSH server itself is not changed. It is a second apply: set up the VPN first, log in through it, and apply `ssh_via` from that session. It is refused when the interface is missing, down or has no address, when the session does not come through it, when the VPN would not come back after a reboot (`wg-quick@wg0` or `tailscaled` not enabled), when a Tailscale node key expires, for `lo`, Docker's and other local bridges or the default route's interface, and with `--deadman=off`. The confirm must then come from a new login through the same interface, from another machine. Apply `firewall.inbound` without `ssh_via` first: a public session opened while no firewall was loaded is not tracked as established, so the `ssh_via` apply can drop it. While SSH depends on the VPN, a change that arms the safety timer needs a confirm through it, so one applied from the console while the VPN is down rolls back. Set a password for a sudo user first if you want your provider's web console as a way back in (see [Undo changes and recover](/docs/guides/undo-and-recover/)).
+**SSH only through a VPN (`ssh_via`):** with `ssh_via = "wg0"` (or `"tailscale0"`, or any interface you set up), the SSH rule accepts only packets that arrive on that interface, over IPv4 and IPv6; everything else stays as above, and SSH ports listed in `allow` are left out with a note. The SSH server itself is not changed.
+
+It is a second apply, walked through in [Close public SSH](/docs/guides/private-access/#close-public-ssh): set up the VPN first, log in through it, and apply `ssh_via` from that session. It is refused when the interface is missing, down or has no address, when the session does not come through it, when the VPN would not come back after a reboot (`wg-quick@wg0` or `tailscaled` not enabled), when a Tailscale node key expires, for `lo`, Docker's and other local bridges or the default route's interface, and with `--deadman=off`. The confirm must then come from a new login through the same interface, from another machine.
+
+Apply `firewall.inbound` without `ssh_via` first: a public session opened while no firewall was loaded is not tracked as established, so the `ssh_via` apply can drop it. While SSH depends on the VPN, a change that arms the safety timer needs a confirm through it, so one applied from the console while the VPN is down rolls back. Set a password for a sudo user first if you want your provider's web console as a way back in (see [Undo changes and recover](/docs/guides/undo-and-recover/)).
 
 ```toml
 [modules."firewall.inbound"]
@@ -101,7 +168,7 @@ ssh_via = "wg0"
 
 #### The private profile
 
-`private` has the `web` hardening without Docker, an empty `allow`, and `ssh_via = "vpn"`: the interface of the one VPN module in your profile (`tailscale0` for `net.tailscale`). On its own, or with two VPN modules, it is refused, so extend it with one:
+`private` has the `web` hardening without Docker, an empty `allow`, and `ssh_via = "vpn"`: the interface of the one VPN module in your profile (`tailscale0` for `net.tailscale`, `wg0` for `net.wireguard`). On its own, or with two VPN modules, it is refused, so extend it with one:
 
 ```toml title="private.toml"
 schema  = 1
@@ -123,9 +190,7 @@ Apply the same file twice. The first apply, from a public SSH login (or at first
 
 **Undo:** the jail file is restored, but packages are never removed, so fail2ban stays installed and enabled and runs the distro's own jails. `systemctl disable --now fail2ban` turns it off.
 
-<Aside type="note">
-Once SSH takes keys only, brute-force attempts are mostly log noise, and OpenSSH 9.8 and later already slows them down with `PerSourcePenalties`. That is why fail2ban is only in the web profile.
-</Aside>
+fail2ban is only in the web profile because, once SSH takes keys only, brute-force attempts are mostly log noise, and OpenSSH 9.8 and later already slows them down with `PerSourcePenalties`.
 
 ### `kernel.sysctl`: kernel settings
 
@@ -190,7 +255,6 @@ The private key never passes through vps-ready: `wg0.conf` holds no `PrivateKey`
 
 `export cloud-init` warns about an explicit `address`, which every server made from it would share.
 
-
 ### `deploy.docker`, `deploy.proxy` and `deploy.user`: deployment
 
 **Changes:** `deploy.docker` installs Docker Engine from Docker's repository and writes `/etc/docker/daemon.json`; `deploy.proxy` installs Caddy and writes a `Caddyfile` with one block per site; `deploy.user` creates a login account for CI whose keys are restricted. `deploy.docker` is in the `web` profile; the other two need your domains or keys.
@@ -201,59 +265,7 @@ The private key never passes through vps-ready: `wg0.conf` holds no `PrivateKey`
 
 The details, with the commands and what to expect, are in [Deploy an app](/docs/guides/deployment-modules/).
 
-## Write your own profile
+## Next
 
-A profile is a TOML file. It can extend `minimal`, `web` or `private`, change a module's settings, or leave a module out:
-
-```toml title="my-server.toml"
-schema  = 1
-extends = "web"
-
-[modules."user.admin"]
-name            = "deploy"
-authorized_keys = ["ssh-ed25519 AAAAC3Nza... me@laptop"]
-sudo            = "nopasswd"     # or "password"
-
-[modules."firewall.inbound"]
-allow = ["22/tcp", "443/tcp"]
-
-[modules."ssh.bruteforce"]
-enabled = false
-
-[modules."deploy.proxy"]
-sites = [{ domain = "app.example.com", upstream = "127.0.0.1:8080" }]
-```
-
-```sh
-sudo vps-ready plan --profile ./my-server.toml
-```
-
-A typo in a key is an error that names the module, not a silently ignored line. `sudo = "password"` only works for an account that already has a password; vps-ready never asks for or sets one.
-
-<Tabs>
-  <TabItem label="One module">
-
-```sh
-sudo vps-ready apply --module kernel.sysctl
-```
-
-  </TabItem>
-  <TabItem label="Several modules">
-
-```sh
-sudo vps-ready apply --module user.admin --module ssh.server
-```
-
-  </TabItem>
-  <TabItem label="From a profile">
-
-```sh
-sudo vps-ready apply --profile web --module firewall.inbound
-```
-
-With `--profile`, `--module` picks from that profile's modules and uses its settings.
-
-  </TabItem>
-</Tabs>
-
-Each failed control in `audit` names the module that fixes it; the full list is in [Security controls](/docs/reference/security-controls/).
+- Apply a profile safely: [How the safety net works](/docs/guides/safety-net/).
+- Close public SSH with the `private` profile: [Private access](/docs/guides/private-access/).
