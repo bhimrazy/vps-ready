@@ -26,7 +26,7 @@
 </div>
 
 > [!NOTE]
-> vps-ready is at **v0.5**. `detect` and `audit` (34 controls), and `plan`, `apply`, `confirm` and `rollback` for eleven modules work today on Debian 12/13 and Ubuntu 22.04/24.04 with systemd: an admin user, SSH hardening and an inbound firewall behind a dead-man switch, Tailscale or WireGuard for a private path to SSH, plus fail2ban, kernel settings and automatic updates, and Docker, a Caddy reverse proxy and a deploy user for CI. There may be breaking changes before 1.0.
+> vps-ready is at **v0.6**. `detect` and `audit` (34 controls), and `plan`, `apply`, `confirm` and `rollback` for eleven modules work today on Debian 12/13 and Ubuntu 22.04/24.04 with systemd: an admin user, SSH hardening and an inbound firewall behind a dead-man switch, Tailscale or WireGuard for a private path to SSH (then public SSH closed with `ssh_via`), plus fail2ban, kernel settings and automatic updates, and Docker, a Caddy reverse proxy and a deploy user for CI. There may be breaking changes before 1.0.
 
 ## Why
 
@@ -39,12 +39,12 @@ Auditors like Lynis tell you what is wrong but fix nothing. Ansible roles fix th
 On the server, as root. Installation is three steps on purpose: download, read, run.
 
 ```console
-# curl -fsSLO https://github.com/bhimrazy/vps-ready/releases/download/v0.5.0/install.sh
+# curl -fsSLO https://github.com/bhimrazy/vps-ready/releases/download/v0.6.0/install.sh
 # less install.sh
 # sh install.sh        # checks the SHA-256, verifies the signature if cosign, or a logged-in gh, is installed (stops on failure; see --skip-verify)
 ```
 
-Then run `sudo vps-ready` with no arguments. This is the guided setup: it looks at the server, recommends a profile, asks three or four plain questions (what the server runs, the admin user, which ports to open), shows the plan, and applies it behind the safety timer. At the end it prints the command that repeats the same setup without questions. It needs a terminal; in a script or a pipe the bare command prints help.
+Then run `sudo vps-ready` with no arguments. This is the guided setup: it looks at the server, recommends a profile, asks a few plain questions (what the server runs, the admin user, private access for SSH through Tailscale or WireGuard, which ports to open), shows the plan, and applies it behind the safety timer. At the end it prints the command that repeats the same setup without questions. It needs a terminal; in a script or a pipe the bare command prints help.
 
 The same steps without the questions, each of which you can run on its own:
 
@@ -92,7 +92,8 @@ The command is also installed as `vpsready`, without the hyphen. With Rust insta
 | `vps-ready confirm` | Run from a **new** SSH login, as the admin, to prove the new configuration works (no code to type). Without it, the change reverts automatically. `--extend` adds time | available |
 | `vps-ready rollback` | Restores the previous state from the transaction journal (`--last` or `--txn ID`); `vps-ready history` lists transactions | available |
 | `vps-ready modules [ID]` | Lists the modules and whether each applies to this server; with an ID, why it matters, its params and the audit controls it fixes. No root needed. `--json` too | available |
-| `vps-ready export cloud-init` | Turns a profile into `user-data` that hardens a new server at first boot, before anyone logs in (`--checksums` from the release; no network call) | v0.6 |
+| `vps-ready export cloud-init` | Turns a profile into `user-data` that hardens a new server at first boot, before anyone logs in, with `apply --deadman=off` (`--checksums` from the release; no network call) | available |
+| `vps-ready wireguard-config [PEER]` | Prints the client config of each `net.wireguard` peer, to paste into the device's WireGuard app with its own private key | available |
 
 Hardening is grouped into modules:
 
@@ -110,8 +111,7 @@ Hardening is grouped into modules:
 | `deploy.proxy` | Caddy from its official apt repository as a reverse proxy with automatic HTTPS for the sites you list | none | no |
 | `deploy.user` | A login for CI that can run one command, with your keys | none | no |
 
-Profiles pick the modules: **minimal** is `user.admin`, `ssh.server`, `firewall.inbound` (SSH only), `kernel.sysctl` and `updates.auto`; **web** adds ports 80 and 443 (TCP, and UDP for HTTP/3) and `ssh.bruteforce` and `deploy.docker`. A profile file can extend either and set your own admin name and keys. A plain `apply`, without `--profile` or `--module`, leaves the modules that can lock you out (and `ssh.bruteforce`, which installs packages) out, so it changes only kernel settings and automatic updates. `net.tailscale`, `net.wireguard`, `deploy.proxy` and `deploy.user` are in no profile: you add them in a profile file. Logging, a **paranoid** profile and backups come later.
-
+Profiles pick the modules: **minimal** is `user.admin`, `ssh.server`, `firewall.inbound` (SSH only), `kernel.sysctl` and `updates.auto`; **web** adds ports 80 and 443 (TCP, and UDP for HTTP/3) and `ssh.bruteforce` and `deploy.docker`; **private** is the `web` hardening without Docker and with no open port, and `ssh_via = "vpn"`: you extend it with `net.tailscale` or `net.wireguard`, apply it once to set up the VPN, then again from a login through the VPN to close public SSH. A profile file can extend any of them and set your own admin name and keys. A plain `apply`, without `--profile` or `--module`, leaves the modules that can lock you out (and `ssh.bruteforce`, which installs packages) out, so it changes only kernel settings and automatic updates. `net.tailscale`, `net.wireguard`, `deploy.proxy` and `deploy.user` are in no built-in profile: you add them in a profile file. `firewall.inbound`'s `ssh_via` accepts SSH only on one interface (`tailscale0`, `wg0` or one you set up), and the confirm must then come through it. Logging, a **paranoid** profile and backups come later.
 
 ## How a run works
 
@@ -141,8 +141,8 @@ The engine is built around these rules, so they hold for every module rather tha
 | Family | Distros | Firewall | Init | Status |
 |---|---|---|---|---|
 | Debian | Ubuntu 22.04, 24.04; Debian 12, 13 (26.04 next) | nftables (its own table; not applied while ufw or firewalld is active) | systemd | since v0.2 |
-| RHEL | Rocky and Alma 9, 10; Fedora | firewalld | systemd | v0.7 |
-| Alpine | 3.2x | nftables | OpenRC | v0.7 |
+| RHEL | Rocky and Alma 9, 10; Fedora | firewalld | systemd | later |
+| Alpine | 3.2x | nftables | OpenRC | later |
 
 Architectures: x86_64 and aarch64, as static musl binaries. Windows, BSD, Kubernetes nodes and fleet management are out of scope.
 
@@ -157,7 +157,7 @@ Architectures: x86_64 and aarch64, as static musl binaries. Windows, BSD, Kubern
 | [Testing strategy](docs/testing.md) | Unit tests with fakes, systemd containers, real VMs, nightly cloud runs |
 | [Decisions](docs/decisions.md) | What is decided and why, and what is still open |
 
-The roadmap lives in the [GitHub milestones](https://github.com/bhimrazy/vps-ready/milestones): M0 skeleton, M1 read-only `detect` and `audit` (v0.1.0), M2 engine and safe modules (v0.2.0), M3 SSH, firewall and dead-man switch (v0.3.0), M4 interactive wizard (v0.4.0), M5 deployment readiness (v0.5.0), M6 private access, M7 more distros and depth.
+The roadmap lives in the [GitHub milestones](https://github.com/bhimrazy/vps-ready/milestones): M0 skeleton, M1 read-only `detect` and `audit` (v0.1.0), M2 engine and safe modules (v0.2.0), M3 SSH, firewall and dead-man switch (v0.3.0), M4 interactive wizard (v0.4.0), M5 deployment readiness (v0.5.0), M6 private access (v0.6.0), M7 web through a Cloudflare Tunnel, drift and SARIF output, security-key logins, then v1.0.
 
 ## Development
 
