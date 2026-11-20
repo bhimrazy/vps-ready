@@ -3,17 +3,21 @@ title: Quick start
 description: Run the guided setup, or audit, plan, apply, confirm and undo step by step, behind the safety net.
 ---
 
-import { Aside, Steps } from '@astrojs/starlight/components';
+import { Steps } from '@astrojs/starlight/components';
+
+This page takes a fresh server from its first audit to hardening you have confirmed. The guided setup asks a few questions and does the rest; the step-by-step way runs each stage yourself. Either way, changes that could lock you out roll back on their own unless a new login confirms them.
 
 Run these on the server, as root or with `sudo`.
 
 ## The guided way
 
+To start the guided setup, run vps-ready with no arguments on a terminal:
+
 ```sh
 sudo vps-ready
 ```
 
-With no arguments on a terminal, vps-ready starts a short setup. It checks that you are root and that the binary can run from the safety timer, then looks at the server and asks:
+It checks that you are root and that the binary can run from the [safety timer](/docs/guides/safety-net/), then looks at the server and asks:
 
 ```text
 ? What will this server run?
@@ -38,28 +42,28 @@ needs a DNS record for this server.
 
 - The recommended answer comes first and says why.
 - The admin line says whether the name is a new or an existing account, and which SSH keys it gets.
-- Tailscale or WireGuard moves the answers onto the `private` profile: SSH is closed to the internet in a second apply, from a login through the VPN. [Private access](/docs/guides/private-access/) walks through it.
+- Tailscale or WireGuard moves the answers onto the `private` profile, which closes SSH to the internet in a second apply, from a login through the VPN. [Private access](/docs/guides/private-access/) walks through it.
 - Ports that something listens on are offered unchecked; unchecked ports are blocked.
 - `y` to the module question lets you pick modules one by one.
 - The Caddy questions appear when Docker is part of the setup, or when you tick `deploy.proxy` in the module list. Press Enter at the first one to skip Caddy. A domain with an upstream adds the `deploy.proxy` module, and a bad domain, a duplicate, or an upstream written as `localhost:8080` is asked again with the reason. See [Deploy an app](/docs/guides/deployment-modules/#caddy-with-domains-and-upstreams).
 
-Then it shows the same plan as `apply`, asks `Apply N changes? [y/N]` and applies behind the safety timer; confirm from a new login as described below. It ends with the `sudo vps-ready apply --profile ...` command that repeats the setup without questions, and offers to save your answers to `vps-ready.toml` when they differ from a built-in profile.
+Then it shows the same plan as `apply`, asks `Apply N changes? [y/N]` and applies behind the safety timer. Confirm from a new login, as in [step 4](#step-by-step) below. It ends with the `sudo vps-ready apply --profile ...` command that repeats the setup without questions, and offers to save your answers to `vps-ready.toml` when they differ from a built-in profile.
 
 Ctrl-C at a question stops with `Nothing was changed.` To read what a module does first, run `vps-ready modules ssh.server` ([reference](/docs/reference/commands/#modules)).
 
 ## Step by step
 
-Prefer to run each stage yourself? This is the same flow without the questions. The first two steps change nothing, so you can stop after either one.
+This is the same flow without the questions. The first two steps change nothing, so you can stop after either one.
 
 <Steps>
 
-1. **Audit: see what fails.**
+1. **Audit: see what fails.** To list the controls that fail or could not be checked, run:
 
    ```sh
    sudo vps-ready audit
    ```
 
-   It lists the controls that fail or could not be checked, each with the reason it matters and, when a module can fix it, the command that does. `--all` also lists the passing ones, and `--json` prints everything for CI. The end of a real run:
+   Each one comes with the reason it matters and, when a module can fix it, the command that does. `--all` also lists the passing ones, and `--json` prints everything for CI. The end of a real run:
 
    ```text
    5 passed, 5 failed (1 high, 3 medium, 1 low), 0 unknown, 19 skipped
@@ -70,15 +74,15 @@ Prefer to run each stage yourself? This is the same flow without the questions. 
    updates.auto`.
    ```
 
-2. **Plan: read what would change.**
+2. **Plan: read what would change.** To see a diff of every file and setting, grouped by module, run:
 
    ```sh
    sudo vps-ready plan --profile minimal
    ```
 
-   A diff of every file and setting, grouped by module, with the controls each module fixes and a reversibility label per change. Nothing is written. Without `--profile`, `plan` and `apply` cover only kernel settings and automatic updates, which cannot lock you out.
+   Each module lists the controls it fixes and labels each change with its reversibility. Nothing is written. Without `--profile`, `plan` and `apply` cover only kernel settings and automatic updates, which cannot lock you out.
 
-3. **Apply: make the changes.**
+3. **Apply: make the changes.** To apply, run:
 
    ```sh
    sudo vps-ready apply --profile minimal
@@ -98,24 +102,16 @@ Prefer to run each stage yourself? This is the same flow without the questions. 
    Ctrl-C stops waiting here, not the timer.
    ```
 
-4. **Confirm: prove a new login works.**
+4. **Confirm: prove a new login works.** Copy that `ssh` line into a **new** terminal on your own computer. If the login works, `confirm` succeeds, the first terminal prints `Confirmed: the changes of transaction ... stay` and `apply` exits 0.
 
-   Copy that `ssh` line into a **new** terminal on your own computer. If the login works, `confirm` succeeds, the first terminal prints `Confirmed: the changes of transaction ... stay` and `apply` exits 0.
+   **Your open terminal proves nothing**, because SSH server reloads and connection tracking keep existing sessions alive. Only a new login counts; see [How the safety net works](/docs/guides/safety-net/). If the new login fails, do nothing: when the timer runs out (or at the next boot) every change is rolled back and your old login works again.
 
-   If the new login fails, do nothing: when the timer runs out (or at the next boot) every change is rolled back and your old login works again.
-
-   <Aside type="tip">
-   Your open terminal proves nothing: SSH server reloads and connection tracking keep existing sessions alive. That is why only a new login counts. See [How the safety net works](/docs/guides/safety-net/).
-   </Aside>
-
-5. **Undo: whenever you want.**
+5. **Undo: whenever you want.** Every change is journaled, so you can undo a transaction at any time, not only while the safety timer runs:
 
    ```sh
    sudo vps-ready history          # list transactions, newest first
    sudo vps-ready rollback --last  # undo the last one
    ```
-
-   Every change is journaled, so you can undo a transaction at any time, not only while the safety timer runs.
 
 </Steps>
 

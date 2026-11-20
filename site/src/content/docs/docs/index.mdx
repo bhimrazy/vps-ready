@@ -9,14 +9,14 @@ import RunFlow from '../../../components/docs/diagrams/RunFlow.astro';
 vps-ready is one static binary that audits a fresh Linux server and hardens it, with a plan you review first and a one-command undo after. Its headline feature is the **safety net**: before it keeps a change to the admin user, the SSH server config or the firewall, it proves you can still log in.
 
 <Aside type="note">
-vps-ready is pre-1.0. `detect` and `audit` (34 controls), and `plan`, `apply`, `confirm` and `rollback` for eleven modules work today on Debian 12/13 and Ubuntu 22.04/24.04 with systemd. There may be breaking changes before 1.0.
+vps-ready is pre-1.0 and works on Debian 12/13 and Ubuntu 22.04/24.04 with systemd: `detect` and `audit` (34 controls), and `plan`, `apply`, `confirm` and `rollback` for eleven modules. Expect breaking changes before 1.0.
 </Aside>
 
 ## Why
 
 You rent a VPS, get `root@ip`, and want to deploy something. Before that there are about fifteen setup steps: an admin user with an SSH key, SSH hardening, a firewall that also covers Docker, automatic security updates, sane kernel settings. In practice people follow an old blog post, run a random script as root, lock themselves out of SSH, or end up with a firewall that silently ignores their containers.
 
-Auditors like Lynis tell you what is wrong but fix nothing. Ansible roles fix things but need a control machine and offer no undo. vps-ready does both, on the server itself, and checks that you can still get in.
+Auditors report problems and leave the fixes to you. Configuration management fixes them but assumes a control machine and has no lockout timer or undo. vps-ready is for the single server in between: it does both, on the server itself, and checks that you can still get in.
 
 ## How a run works
 

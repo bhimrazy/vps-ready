@@ -7,16 +7,17 @@
 
 <div align="center">
 
-**One static binary to audit a fresh Linux server and harden it, with a plan you review first and rollback after.**
+**Harden a fresh Debian or Ubuntu server without locking yourself out.**<br>
+One static binary: audit, a plan you read first, and a rollback timer that undoes SSH and firewall changes unless a new login confirms.
 
 <pre>
-✅ Detects distro, VM, container     ✅ Audits with stable control IDs    ✅ x86_64 and arm64
-✅ Reads the effective SSH config    ✅ JSON output, CI exit codes        ✅ Signed releases 
-✅ Maps open ports to processes      ✅ Plan, apply and rollback          ✅ No telemetry    
+✅ Rolls back unless a new SSH login confirms   ✅ Plan first, journaled rollback after
+✅ 34 audit controls, JSON and CI exit codes    ✅ SSH only over Tailscale or WireGuard
+✅ Reads effective state (sshd -T, nft, ss)     ✅ Signed releases, no telemetry
 </pre>
 
 <p>
-<a href="https://github.com/bhimrazy/vps-ready/actions/workflows/ci.yml"><img src="https://github.com/bhimrazy/vps-ready/actions/workflows/ci.yml/badge.svg" alt="CI"></a> <a href="https://crates.io/crates/vps-ready"><img src="https://img.shields.io/crates/v/vps-ready.svg" alt="crates.io"></a> <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="License: MIT OR Apache-2.0"></a> <img src="https://img.shields.io/badge/rust-stable%20(MSRV%201.98)-orange.svg" alt="Rust stable, MSRV 1.98">
+<a href="https://github.com/bhimrazy/vps-ready/actions/workflows/ci.yml"><img src="https://github.com/bhimrazy/vps-ready/actions/workflows/ci.yml/badge.svg" alt="CI"></a> <a href="https://crates.io/crates/vps-ready"><img src="https://img.shields.io/crates/v/vps-ready.svg" alt="crates.io"></a> <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="License: MIT OR Apache-2.0"></a> <img src="https://img.shields.io/badge/rust-stable%20(MSRV%201.98)-orange.svg" alt="Rust stable, MSRV 1.98"> <a href="#supported-platforms"><img src="https://img.shields.io/badge/Debian%2012%2F13%20%7C%20Ubuntu%2022.04%2F24.04-supported-green.svg" alt="Debian 12/13, Ubuntu 22.04/24.04"></a>
 </p>
 
 <p>
@@ -26,13 +27,7 @@
 </div>
 
 > [!NOTE]
-> vps-ready is at **v0.6**. `detect` and `audit` (34 controls), and `plan`, `apply`, `confirm` and `rollback` for eleven modules work today on Debian 12/13 and Ubuntu 22.04/24.04 with systemd: an admin user, SSH hardening and an inbound firewall behind a dead-man switch, Tailscale or WireGuard for a private path to SSH (then public SSH closed with `ssh_via`), plus fail2ban, kernel settings and automatic updates, and Docker, a Caddy reverse proxy and a deploy user for CI. There may be breaking changes before 1.0.
-
-## Why
-
-You buy a VPS, get `root@ip`, and want to deploy something. Before that you should do about fifteen setup steps: a sudo user with a key, SSH hardening, a firewall that also covers Docker, automatic security updates, sane kernel settings, logging. In practice people follow an old blog post, run a random script as root, lock themselves out of SSH, or end up with a firewall that silently ignores their containers.
-
-Auditors like Lynis tell you what is wrong but fix nothing. Ansible roles fix things but need a control node and offer no rollback. Bash "first hour" scripts have the right idea but are hard to verify and usually cover only Debian and Ubuntu. vps-ready combines the useful parts into one tool whose headline feature is that it proves you can still log in before it commits.
+> vps-ready is at **v0.6** and works on Debian 12/13 and Ubuntu 22.04/24.04 with systemd: `detect` and `audit` (34 controls), and `plan`, `apply`, `confirm` and `rollback` for [eleven modules](#what-it-does). Expect breaking changes before 1.0.
 
 ## Quick start
 
@@ -41,8 +36,10 @@ On the server, as root. Installation is three steps on purpose: download, read, 
 ```console
 # curl -fsSLO https://github.com/bhimrazy/vps-ready/releases/download/v0.6.0/install.sh
 # less install.sh
-# sh install.sh        # checks the SHA-256, verifies the signature if cosign, or a logged-in gh, is installed (stops on failure; see --skip-verify)
+# sh install.sh
 ```
+
+The script checks the SHA-256, and verifies the signature if `cosign`, or a logged-in `gh`, is installed. It stops on failure; see `--skip-verify`.
 
 Then run `sudo vps-ready` with no arguments. This is the guided setup: it looks at the server, recommends a profile, asks a few plain questions (what the server runs, the admin user, private access for SSH through Tailscale or WireGuard, which ports to open), shows the plan, and applies it behind the safety timer. At the end it prints the command that repeats the same setup without questions. It needs a terminal; in a script or a pipe the bare command prints help.
 
@@ -79,6 +76,12 @@ Run that command from a new terminal. If the new login works, `confirm` succeeds
 </p>
 
 The command is also installed as `vpsready`, without the hyphen. With Rust installed you can build from source instead: `cargo install vps-ready --locked`. Each release also has `.deb` packages for Debian and Ubuntu (checked against `checksums.txt`) and an SBOM; a signed apt repository, and dnf and apk packages, wait until they are needed. The trust model of each install channel is in [the release doc](docs/release.md).
+
+## Why
+
+You buy a VPS, get `root@ip`, and want to deploy something. Before that you should do about fifteen setup steps: a sudo user with a key, SSH hardening, a firewall that also covers Docker, automatic security updates, sane kernel settings, logging. In practice people follow an old blog post, run a random script as root, lock themselves out of SSH, or end up with a firewall that silently ignores their containers.
+
+Auditors report problems and leave the fixes to you. Configuration management fixes them but assumes a control node and has no lockout timer or undo. vps-ready is for the single server in between, and its headline feature is that it proves you can still log in before it commits.
 
 ## What it does
 
