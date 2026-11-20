@@ -13,14 +13,15 @@ use super::{
     Applicability, Module, ModuleError, ModuleSteps, ParamDoc, PlanCx, parse_params, refuse,
 };
 use crate::engine::Reload;
-/// The connector's unit, which `Reload::CloudflaredRestart` restarts.
-pub const UNIT: &str = "vps-ready-cloudflared.service";
 use crate::facts::{Facts, Init, OsFamily, Proto, parse_units, prop};
 use crate::resource::{
     AptSource, Directory, File, Package, Resource, Service, Validate, apt_source, architecture,
     check_key_file,
 };
-use crate::sys::{Cmd, FileOwner, Output, Sys, SysError};
+use crate::sys::{Cmd, FileKind, FileOwner, Output, Sys, SysError};
+
+/// The connector's unit, which `Reload::CloudflaredRestart` restarts.
+pub const UNIT: &str = "vps-ready-cloudflared.service";
 
 /// cloudflared's package, from Cloudflare's repository.
 pub const PACKAGE: &str = "cloudflared";
@@ -233,8 +234,9 @@ impl Module for NetTunnel {
                 Some(v) if v < MIN_VERSION => {
                     return refuse(&format!(
                         "cloudflared {version} is installed, and the connector needs 2025.4.0 or \
-                         later for `--token-file`: upgrade it (`sudo apt-get install cloudflared`) \
-                         or remove the pinned or hand-installed binary, then apply again"
+                         later for `--token-file`: install a newer one (from Cloudflare's \
+                         repository, `sudo apt-get install cloudflared`, after removing a pin or a \
+                         binary installed by hand), then apply again"
                     ));
                 }
                 Some(_) => {}
@@ -271,11 +273,31 @@ impl Module for NetTunnel {
         }));
 
         if params.token_file.is_empty() {
-            notes.push(
-                "no token_file, so no connector runs: create a tunnel in the Cloudflare \
-                 dashboard, save its token to a root-only file, set `token_file` and apply again"
-                    .to_owned(),
-            );
+            if facts.cloudflared.units.iter().any(|u| u == UNIT) {
+                // Turned off, not removed: rolling back the transaction that
+                // added the connector removes its files.
+                for unit in [UNIT, PATH_UNIT] {
+                    resources.push(Resource::Service(Service {
+                        unit: unit.to_owned(),
+                        enabled: false,
+                        active: false,
+                    }));
+                }
+                notes.push(
+                    "no token_file, so the connector vps-ready set up is stopped and disabled; its \
+                     files stay until you roll back the apply that added them, or set \
+                     `token_file` again to start it (the token file stays: delete it if it is \
+                     no longer needed)"
+                        .to_owned(),
+                );
+            } else {
+                notes.push(
+                    "no token_file, so no connector runs: create a tunnel in the Cloudflare \
+                     dashboard, save its token to a root-only file, set `token_file` and apply \
+                     again"
+                        .to_owned(),
+                );
+            }
             return Ok(ModuleSteps {
                 resources,
                 reloads,
@@ -290,6 +312,15 @@ impl Module for NetTunnel {
                 "token_file {}: {why}; it must be a regular file owned by root with mode 0600, \
                  in directories only root can write to",
                 path.display()
+            ));
+        }
+        if let Some(dir) = sticky_shared_parent(sys, path)? {
+            return refuse(&format!(
+                "token_file {}: {} is writable by every user (sticky, like /tmp), and the token \
+                 is read again at every start of the connector: keep it in a directory only root \
+                 can write to, e.g. /etc/vps-ready or /root",
+                path.display(),
+                dir.display()
             ));
         }
         let ours_active = facts.cloudflared.active.iter().any(|u| u == UNIT);
@@ -331,10 +362,15 @@ impl Module for NetTunnel {
             file(RESTART_UNIT_FILE, RESTART_UNIT_TEXT.into(), None),
             file(PATH_UNIT_FILE, PATH_UNIT_TEXT.into(), None),
         ];
-        // A running connector reads its unit and config only at start.
+        // A running connector reads its unit and config only at start; the
+        // restart script is read only when the path unit fires.
         let mut changed = false;
-        for r in &connector[1..4] {
-            changed |= r.diff(sys)?.is_some();
+        for r in &connector {
+            if let Resource::File(f) = r
+                && (f.path == Path::new(CONFIG) || f.path == Path::new(UNIT_FILE))
+            {
+                changed |= r.diff(sys)?.is_some();
+            }
         }
         resources.extend(connector);
         resources.push(Resource::Service(Service {
@@ -431,8 +467,8 @@ impl Module for NetTunnel {
         if prop(&props, "ActiveState") != "active" || pid.is_empty() || pid == "0" {
             return Err(format!("{UNIT} is not active"));
         }
-        let ready = Cmd::new("cloudflared")
-            .args(["tunnel", "--metrics", METRICS, "ready"])
+        let ready = Cmd::new(BINARY)
+            .args(["tunnel", "--config", CONFIG, "--metrics", METRICS, "ready"])
             .timeout(VERIFY_TIMEOUT);
         let out = run(sys, &ready)?;
         if !out.ok() {
@@ -572,14 +608,17 @@ fn resolver_notes(resolvers: &[IpAddr]) -> Option<String> {
         .filter(|ip| denied(**ip))
         .map(ToString::to_string)
         .collect();
-    (!inside.is_empty()).then(|| {
-        format!(
-            "the resolver {} in /etc/resolv.conf is in a range the connector may not reach \
-             otherwise, so it stays reachable through it (on Google Cloud the resolver is the \
-             metadata address, on Azure 168.63.129.16). When the resolvers change, apply again",
-            inside.join(", ")
-        )
-    })
+    let (what, verb, them) = match inside.len() {
+        0 => return None,
+        1 => ("the resolver", "is", "it stays"),
+        _ => ("the resolvers", "are", "they stay"),
+    };
+    Some(format!(
+        "{what} {} in /etc/resolv.conf {verb} in a range the connector may not reach otherwise, \
+         so {them} reachable for it (on Google Cloud the resolver is the metadata address, on \
+         Azure 168.63.129.16). When the resolvers change, apply again",
+        inside.join(", ")
+    ))
 }
 
 /// systemd enforces the unit's address filter with cgroup BPF, and without
@@ -612,6 +651,19 @@ fn filter_note(facts: &Facts, sys: Sys, ours_active: bool) -> Option<String> {
     } else {
         None
     }
+}
+
+/// The first directory above `path` that is world-writable with the sticky
+/// bit, as `/tmp` is: `check_key_file` accepts one, but its other users
+/// could swap the file between two starts of the connector.
+fn sticky_shared_parent(sys: Sys, path: &Path) -> Result<Option<std::path::PathBuf>, ModuleError> {
+    for dir in path.ancestors().skip(1) {
+        let meta = sys.fs.metadata(dir)?;
+        if meta.kind == FileKind::Dir && meta.mode & 0o1002 == 0o1002 {
+            return Ok(Some(dir.to_path_buf()));
+        }
+    }
+    Ok(None)
 }
 
 /// Whether `/proc/<pid>/exe` is the file at [`BINARY`], by device and inode.

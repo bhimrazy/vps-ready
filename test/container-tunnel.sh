@@ -9,7 +9,8 @@
 # Cycle:
 # 1. apply --yes with updates.auto and net.tunnel without a token -> plan has
 #    no changes -> cloudflared is at least 2025.4.0 -> unattended-upgrade
-#    --dry-run lists origin=cloudflared,codename=any.
+#    --dry-run reads origin=cloudflared,codename=any from its config (a config
+#    check: the installed version has nothing to upgrade to).
 # 2. a placeholder token: apply fails within the start timeout, names the
 #    connector and rolls back; cloudflared logged no config error.
 # 3. the restart script: `sh -n`, then with a connector held on another
@@ -97,12 +98,12 @@ echo "cloudflared $version"
 oldest=$(printf '%s\n2025.4.0\n' "$version" | sort -t. -k1,1n -k2,2n -k3,3n | head -1)
 [ "$oldest" = 2025.4.0 ] || die "cloudflared $version is older than 2025.4.0"
 
-echo "== $distro: unattended-upgrade --dry-run"
+echo "== $distro: unattended-upgrade reads the origin (a config check)"
 ct unattended-upgrade --dry-run --debug >"$tmp/uu.log" 2>&1 || {
   cat "$tmp/uu.log"; die "unattended-upgrade --dry-run failed"
 }
-grep -q "origin=cloudflared,codename=any" "$tmp/uu.log" || {
-  cat "$tmp/uu.log"; die "unattended-upgrade does not list the cloudflared origin"
+grep -q "Allowed origins are:.*origin=cloudflared,codename=any" "$tmp/uu.log" || {
+  cat "$tmp/uu.log"; die "unattended-upgrade does not allow the cloudflared origin"
 }
 
 echo "== $distro: a placeholder token does not connect"
@@ -116,8 +117,12 @@ cat "$tmp/apply.log"
 grep -q vps-ready-cloudflared.service "$tmp/apply.log" || die "apply does not name the connector"
 [ "$took" -lt 120 ] || die "the failed start took ${took}s"
 for f in $connector; do ct test ! -e "$f" || die "$f is left after the rollback"; done
-[ "$(ct systemctl is-active vps-ready-cloudflared.service || true)" != active ] ||
-  die "the connector still runs"
+# Restart=on-failure may have queued another start; the rollback stops it
+# and clears the failure.
+state=$(ct systemctl show --property=ActiveState --value vps-ready-cloudflared.service)
+[ "$state" = inactive ] || die "the connector is $state after the rollback, not inactive"
+! ct systemctl --failed --plain --no-legend | grep -q vps-ready-cloudflared ||
+  die "the connector is left in systemctl --failed"
 ct journalctl -b -u vps-ready-cloudflared.service --no-pager -o cat >"$tmp/connector.log" || true
 cat "$tmp/connector.log"
 ! grep -Eiq 'ERR.*(config|yaml)' "$tmp/connector.log" || die "cloudflared logged a config error"
@@ -136,8 +141,9 @@ ct timeout 30 cloudflared tunnel --config /etc/vps-ready/cloudflared.yml \
 cat "$tmp/direct.log"
 ! grep -Eiq 'ERR.*(config|yaml)' "$tmp/direct.log" || die "cloudflared rejects the config"
 grep -q 'token is not valid' "$tmp/direct.log" || die "cloudflared did not read the token file"
-! grep -q placeholder-not-a-tunnel-token "$tmp/apply.log" "$tmp/token-plan.json" ||
-  die "the token is in vps-ready's output"
+! grep -q placeholder-not-a-tunnel-token "$tmp/apply.log" "$tmp/token-plan.json" \
+  "$tmp/connector.log" "$tmp/direct.log" ||
+  die "the token is in vps-ready's output or cloudflared's log"
 ! ct grep -rq placeholder-not-a-tunnel-token /var/lib/vps-ready || die "the token is in the journal"
 
 # The planned file at `path`, from the plan's diff of a new file.
@@ -156,9 +162,6 @@ done
 
 echo "== $distro: the restart script with a connector on another binary"
 ct sh -n /etc/vps-ready/cloudflared-restart.sh || die "the restart script fails sh -n"
-# The failed start leaves the unit loaded as failed, without its file.
-ct systemctl daemon-reload
-ct systemctl reset-failed vps-ready-cloudflared.service 2>/dev/null || true
 ct systemd-run --unit=vps-ready-cloudflared.service /bin/sleep infinity >/dev/null
 rc=0; ct sh /etc/vps-ready/cloudflared-restart.sh 2>"$tmp/stale.log" || rc=$?
 cat "$tmp/stale.log"

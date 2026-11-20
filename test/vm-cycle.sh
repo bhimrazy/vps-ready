@@ -726,10 +726,15 @@ EOF
            /etc/apt/apt.conf.d/52vps-ready-cloudflared; do
     vm test ! -e "$f" || die "$f is left after the rollback"
   done
+  # Restart=on-failure may have queued another start; the rollback stops it
+  # and clears the failure.
   for u in vps-ready-cloudflared.service vps-ready-cloudflared-restart.path; do
-    [ "$(vm systemctl is-active "$u" || true)" != active ] || die "$u is still active"
+    state=$(vm systemctl show --property=ActiveState --value "$u")
+    [ "$state" = inactive ] || die "$u is $state after the rollback, not inactive"
     [ "$(vm systemctl is-enabled "$u" 2>/dev/null || true)" != enabled ] || die "$u is still enabled"
   done
+  ! vm systemctl --failed --plain --no-legend | grep -q vps-ready-cloudflared ||
+    die "the connector is left in systemctl --failed"
   vm sudo test -f /root/cloudflared-token || die "the rollback removed the token file"
   # Quoted for the VM's shell, which gets the command as one string.
   vm "dpkg-query -W -f '\${Status}\n' cloudflared" | grep -q 'install ok installed' ||

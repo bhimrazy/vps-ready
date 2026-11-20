@@ -1,7 +1,7 @@
 //! `net.tunnel` on [`FakeFs`], with dpkg, apt, systemctl and cloudflared
 //! simulated by [`Host`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -10,7 +10,7 @@ use crate::engine::{self, ApplyOutcome, Deadman, Engine, Plan, Selected, StateDi
 use crate::facts::fixtures::host;
 use crate::facts::{Listener, Route};
 use crate::sys::fake::FakeFs;
-use crate::sys::{FileKind, Fs, Runner};
+use crate::sys::{FileKind, FileMeta, Fs, FsLock, Runner};
 
 const STATE: &str = "/var/lib/vps-ready";
 const TOKEN: &str = "/root/cloudflared-token";
@@ -24,6 +24,9 @@ struct Host {
     installed: Mutex<bool>,
     /// Unit name to (enabled, active).
     units: Mutex<BTreeMap<String, (bool, bool)>>,
+    /// Units whose start failed and that `Restart=on-failure` is about to
+    /// start again: `ActiveState=activating` until stopped.
+    restarting: Mutex<BTreeSet<String>>,
     connects: bool,
     /// What `stat -L -c %d:%i` prints for the running binary.
     running_inode: &'static str,
@@ -35,6 +38,7 @@ impl Host {
         Self {
             installed: Mutex::new(false),
             units: Mutex::new(BTreeMap::new()),
+            restarting: Mutex::new(BTreeSet::new()),
             connects: true,
             running_inode: "2049:100",
             calls: Mutex::new(Vec::new()),
@@ -68,6 +72,7 @@ impl Runner for Host {
         let args: Vec<&str> = cmd.args.iter().map(String::as_str).collect();
         let mut installed = self.installed.lock().unwrap();
         let mut units = self.units.lock().unwrap();
+        let mut restarting = self.restarting.lock().unwrap();
         let out = match (cmd.program.as_str(), &args[..]) {
             ("dpkg-query", [.., "cloudflared"]) => Output::success(if *installed {
                 "installed"
@@ -84,17 +89,22 @@ impl Runner for Host {
             }
             ("systemctl", ["show", props, unit]) => {
                 let (enabled, active) = units.get(*unit).copied().unwrap_or_default();
+                let state = if active {
+                    "active"
+                } else if restarting.contains(*unit) {
+                    "activating"
+                } else {
+                    "inactive"
+                };
                 if props.contains("MainPID") {
                     Output::success(format!(
-                        "ActiveState={}\nMainPID={}\n",
-                        if active { "active" } else { "inactive" },
+                        "ActiveState={state}\nMainPID={}\n",
                         if active { "4242" } else { "0" }
                     ))
                 } else {
                     Output::success(format!(
-                        "LoadState=loaded\nUnitFileState={}\nActiveState={}\n",
+                        "LoadState=loaded\nUnitFileState={}\nActiveState={state}\n",
                         if enabled { "enabled" } else { "disabled" },
-                        if active { "active" } else { "inactive" }
                     ))
                 }
             }
@@ -105,6 +115,7 @@ impl Runner for Host {
                     "enable" => state.0 = true,
                     "disable" => state.0 = false,
                     "start" if *unit == UNIT && !self.connects => {
+                        restarting.insert(UNIT.to_owned());
                         return Ok(Output {
                             status: 1,
                             stdout: Vec::new(),
@@ -115,13 +126,16 @@ impl Runner for Host {
                         });
                     }
                     "start" => state.1 = true,
-                    "stop" => state.1 = false,
-                    "try-restart" => {}
+                    "stop" => {
+                        state.1 = false;
+                        restarting.remove(*unit);
+                    }
+                    "try-restart" | "reset-failed" => {}
                     other => panic!("systemctl {other}"),
                 }
                 Output::success("")
             }
-            ("cloudflared", ["tunnel", "--metrics", METRICS, "ready"]) => {
+            (BINARY, ["tunnel", "--config", CONFIG, "--metrics", METRICS, "ready"]) => {
                 if self.connects {
                     Output::success("")
                 } else {
@@ -445,7 +459,7 @@ fn resolvers_are_allowed_without_zone_ids() {
     );
     assert!(
         steps.notes.iter().any(|n| n.starts_with(
-            "the resolver fe80::1, 100.100.100.100, 168.63.129.16 in /etc/resolv.conf"
+            "the resolvers fe80::1, 100.100.100.100, 168.63.129.16 in /etc/resolv.conf are"
         )),
         "{:?}",
         steps.notes
@@ -469,46 +483,134 @@ fn the_token_path_is_only_in_load_credential() {
     }
 }
 
-/// The token's bytes are never read: they are nowhere in the plan, the
-/// journal, the files written or the commands run.
+/// A [`FakeFs`] that records every path read through it, so a test can
+/// show vps-ready never opened the token file.
+struct Watched {
+    fs: FakeFs,
+    reads: Mutex<Vec<PathBuf>>,
+}
+
+impl Watched {
+    fn read_token(&self) -> bool {
+        self.reads
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|p| p == Path::new(TOKEN))
+    }
+}
+
+impl Fs for Watched {
+    fn read(&self, path: &Path) -> Result<Vec<u8>, SysError> {
+        self.reads.lock().unwrap().push(path.to_path_buf());
+        self.fs.read(path)
+    }
+    fn read_nofollow(&self, path: &Path) -> Result<(Vec<u8>, FileMeta), SysError> {
+        self.reads.lock().unwrap().push(path.to_path_buf());
+        self.fs.read_nofollow(path)
+    }
+    fn exists(&self, path: &Path) -> bool {
+        self.fs.exists(path)
+    }
+    fn read_dir(&self, path: &Path) -> Result<Vec<PathBuf>, SysError> {
+        self.fs.read_dir(path)
+    }
+    fn metadata(&self, path: &Path) -> Result<FileMeta, SysError> {
+        self.fs.metadata(path)
+    }
+    fn read_link(&self, path: &Path) -> Result<PathBuf, SysError> {
+        self.fs.read_link(path)
+    }
+    fn write_atomic(&self, path: &Path, bytes: &[u8], owner: FileOwner) -> Result<(), SysError> {
+        self.fs.write_atomic(path, bytes, owner)
+    }
+    fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), SysError> {
+        self.fs.write(path, bytes)
+    }
+    fn append_sync(&self, path: &Path, bytes: &[u8]) -> Result<(), SysError> {
+        self.fs.append_sync(path, bytes)
+    }
+    fn remove(&self, path: &Path) -> Result<(), SysError> {
+        self.fs.remove(path)
+    }
+    fn create_dir_all(&self, path: &Path, mode: u32) -> Result<(), SysError> {
+        self.fs.create_dir_all(path, mode)
+    }
+    fn create_dir(&self, path: &Path, owner: FileOwner) -> Result<(), SysError> {
+        self.fs.create_dir(path, owner)
+    }
+    fn remove_dir(&self, path: &Path) -> Result<(), SysError> {
+        self.fs.remove_dir(path)
+    }
+    fn sync_dir(&self, path: &Path) -> Result<(), SysError> {
+        self.fs.sync_dir(path)
+    }
+    fn try_lock(&self, path: &Path) -> Result<FsLock, SysError> {
+        self.fs.try_lock(path)
+    }
+}
+
+/// The token's bytes are never read: vps-ready never opens the file, and
+/// they are nowhere in the plan, the journal, the files written or the
+/// commands run, after an apply and its rollback, and after a failed start.
 #[test]
 fn the_token_never_passes_through_vps_ready() {
-    let (fs, runner) = (fs(), Host::new());
-    let facts = facts();
-    let params = table(WITH_TOKEN);
-    let plan = plan(&fs, &runner, &facts, &params);
-    assert!(!serde_json::to_string(&plan).unwrap().contains(MARKER));
-    let state = StateDir::create(&fs, STATE, 0).unwrap();
-    let engine = Engine::lock(
-        &state,
-        Sys {
+    for connects in [true, false] {
+        let fs = Watched {
+            fs: fs(),
+            reads: Mutex::new(Vec::new()),
+        };
+        let runner = Host {
+            connects,
+            ..Host::new()
+        };
+        let facts = facts();
+        let params = table(WITH_TOKEN);
+        let selected = Selected {
+            module: &NetTunnel,
+            params: &params,
+        };
+        let sys = Sys {
             fs: &fs,
             runner: &runner,
-        },
-    )
-    .unwrap();
-    engine
-        .apply(&plan, &Deadman::default(), &mut |_| {})
-        .unwrap();
-    engine.rollback(Target::Last, &mut |_| {}).unwrap();
-    for cmd in runner.calls.lock().unwrap().iter() {
-        assert!(!format!("{cmd:?}").contains(MARKER), "{cmd:?}");
+        };
+        let plan = engine::plan(&[selected], &facts, sys).unwrap();
+        assert!(!serde_json::to_string(&plan).unwrap().contains(MARKER));
+        let state = StateDir::create(&fs, STATE, 0).unwrap();
+        let engine = Engine::lock(&state, sys).unwrap();
+        let outcome = engine
+            .apply(&plan, &Deadman::default(), &mut |_| {})
+            .unwrap();
+        if connects {
+            engine.rollback(Target::Last, &mut |_| {}).unwrap();
+        } else {
+            assert!(
+                matches!(outcome, ApplyOutcome::RolledBack { .. }),
+                "{outcome:?}"
+            );
+        }
+        assert!(!fs.read_token(), "connects: {connects}");
+        for cmd in runner.calls.lock().unwrap().iter() {
+            assert!(!format!("{cmd:?}").contains(MARKER), "{cmd:?}");
+        }
+        walk_for_marker(&fs.fs, Path::new("/"));
     }
-    fn walk(fs: &FakeFs, dir: &Path) {
-        for path in fs.read_dir(dir).unwrap() {
-            if fs.metadata(&path).unwrap().kind == FileKind::Dir {
-                walk(fs, &path);
-            } else if path != Path::new(TOKEN) {
-                let bytes = fs.read(&path).unwrap();
-                assert!(
-                    !String::from_utf8_lossy(&bytes).contains(MARKER),
-                    "{}",
-                    path.display()
-                );
-            }
+}
+
+/// Fails if a file other than the token's holds [`MARKER`].
+fn walk_for_marker(fs: &FakeFs, dir: &Path) {
+    for path in fs.read_dir(dir).unwrap() {
+        if fs.metadata(&path).unwrap().kind == FileKind::Dir {
+            walk_for_marker(fs, &path);
+        } else if path != Path::new(TOKEN) {
+            let bytes = fs.read(&path).unwrap();
+            assert!(
+                !String::from_utf8_lossy(&bytes).contains(MARKER),
+                "{}",
+                path.display()
+            );
         }
     }
-    walk(&fs, Path::new("/"));
 }
 
 #[test]
@@ -690,7 +792,9 @@ fn apply_then_plan_is_empty_and_rollback_keeps_the_package() {
 }
 
 /// A connector that does not connect fails its start, and the apply rolls
-/// back.
+/// back. `Restart=on-failure` has another start queued by then
+/// (`activating`), so the rollback stops the unit and clears its failure
+/// before removing its file.
 #[test]
 fn a_failed_start_rolls_back() {
     let fs = fs();
@@ -711,20 +815,77 @@ fn a_failed_start_rolls_back() {
         },
     )
     .unwrap();
-    let result = engine.apply(&first, &Deadman::default(), &mut |_| {});
-    let text = match result {
-        Ok(outcome) => {
-            assert!(
-                matches!(outcome, ApplyOutcome::RolledBack { .. }),
-                "{outcome:?}"
-            );
-            format!("{outcome:?}")
-        }
-        Err(e) => format!("{e:#}"),
+    let outcome = engine
+        .apply(&first, &Deadman::default(), &mut |_| {})
+        .unwrap();
+    let ApplyOutcome::RolledBack { cause, .. } = outcome else {
+        panic!("{outcome:?}");
     };
-    assert!(text.contains(UNIT), "{text}");
+    assert!(cause.to_string().contains(UNIT), "{cause}");
     assert_eq!(etc(&fs), before);
     assert_eq!(runner.unit(UNIT), (false, false));
+    assert!(runner.restarting.lock().unwrap().is_empty());
+    let calls = runner.systemctl();
+    let stop = calls.iter().position(|c| *c == format!("stop {UNIT}"));
+    let reset = calls
+        .iter()
+        .position(|c| *c == format!("reset-failed {UNIT}"));
+    assert!(stop.is_some() && stop < reset, "{calls:?}");
+}
+
+/// Without `token_file`, a connector vps-ready set up is stopped and
+/// disabled, and the note says so.
+#[test]
+fn no_token_file_stops_a_connector_it_set_up() {
+    let (fs, runner) = (fs(), Host::new());
+    let steps = steps(&applied(), &fs, &runner, "");
+    let services: Vec<&Service> = steps
+        .resources
+        .iter()
+        .filter_map(|r| match r {
+            Resource::Service(s) => Some(s),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        services,
+        [
+            &Service {
+                unit: UNIT.into(),
+                enabled: false,
+                active: false
+            },
+            &Service {
+                unit: PATH_UNIT.into(),
+                enabled: false,
+                active: false
+            },
+        ]
+    );
+    assert!(
+        steps
+            .notes
+            .iter()
+            .any(|n| n.starts_with("no token_file, so the connector vps-ready set up is stopped")),
+        "{:?}",
+        steps.notes
+    );
+    assert!(!steps.notes.iter().any(|n| n.contains("no connector runs")));
+}
+
+/// A token file in a world-writable sticky directory such as /tmp is
+/// refused: it is read again at every start.
+#[test]
+fn refuses_a_token_file_in_a_shared_sticky_directory() {
+    let fs = fs().with_dir("/tmp", root(0o1777));
+    fs.write_atomic(Path::new("/tmp/token"), b"t", root(0o600))
+        .unwrap();
+    let err = try_steps(&facts(), &fs, &Host::new(), "token_file = \"/tmp/token\"").unwrap_err();
+    assert!(
+        err.to_string()
+            .starts_with("token_file /tmp/token: /tmp is writable by every user (sticky"),
+        "{err}"
+    );
 }
 
 /// A changed unit on a running connector restarts it; another change, such
@@ -756,6 +917,13 @@ fn restarts_a_running_connector_only_for_its_own_files() {
         &format!("{WITH_TOKEN}\nauto_update = false"),
     );
     assert_eq!(off.reloads, [Reload::DaemonReload]);
+
+    // The restart script is read only when the path unit fires.
+    fs.write_atomic(Path::new(RESTART_SCRIPT), b"# edited\n", root(0o644))
+        .unwrap();
+    let script = steps(&after, &fs, &runner, WITH_TOKEN);
+    assert!(ids(&script).contains(&format!("file:{RESTART_SCRIPT}")));
+    assert_eq!(script.reloads, [Reload::DaemonReload]);
 
     // New resolvers change the unit's `IPAddressAllow=`.
     fs.write_atomic(

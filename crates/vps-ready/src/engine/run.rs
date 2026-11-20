@@ -1462,18 +1462,9 @@ impl<'a> Engine<'a> {
         progress: &mut dyn FnMut(Progress),
     ) -> Result<(), EngineError> {
         let best_effort = mode.best_effort();
-        // The hook runs before sshd, Docker, Caddy and the tunnel connector
-        // start, which then read the restored config; `sshd -t` fails there
-        // on Ubuntu (no /run/sshd yet).
-        if mode == Mode::Boot
-            && matches!(
-                reload,
-                Reload::SshdReload
-                    | Reload::DockerRestart
-                    | Reload::CaddyReload
-                    | Reload::CloudflaredRestart
-            )
-        {
+        // The hook runs before these daemons start, which then read the
+        // restored config; `sshd -t` fails there on Ubuntu (no /run/sshd yet).
+        if mode == Mode::Boot && reload.after_boot_hook().is_some() {
             return Ok(());
         }
         progress(Progress::Reload(reload));

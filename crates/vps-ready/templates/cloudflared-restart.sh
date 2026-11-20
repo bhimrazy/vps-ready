@@ -14,14 +14,19 @@ while :; do
     sleep 1
     waited=$((waited + 1))
   done
-  # Under Type=notify this returns once the connector is connected.
-  systemctl try-restart "$unit" || exit 1
-  pid=$(systemctl show --property=MainPID --value "$unit")
-  [ "${pid:-0}" != 0 ] || exit 0
-  running=$(stat -L -c %d:%i "/proc/$pid/exe" 2>/dev/null) || exit 0
-  [ "$running" != "$(stat -L -c %d:%i "$bin")" ] || exit 0
+  # Under Type=notify this returns once the connector is connected; a
+  # failure (no edge for a moment) is tried again like a stale binary.
+  if systemctl try-restart "$unit"; then
+    pid=$(systemctl show --property=MainPID --value "$unit")
+    [ "${pid:-0}" != 0 ] || exit 0
+    running=$(stat -L -c %d:%i "/proc/$pid/exe" 2>/dev/null) || exit 0
+    [ "$running" != "$(stat -L -c %d:%i "$bin")" ] || exit 0
+    why="cloudflared runs an old binary"
+  else
+    why="the connector did not start again"
+  fi
   if [ "$retries" -ge 5 ]; then
-    echo "cloudflared runs an old binary" >&2
+    echo "$why" >&2
     exit 1
   fi
   retries=$((retries + 1))

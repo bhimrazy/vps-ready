@@ -74,6 +74,20 @@ impl Reload {
         }
     }
 
+    /// The unit whose daemon this reload restarts or reloads, when the
+    /// dead-man boot hook runs before that unit starts. The hook skips the
+    /// reload then, since the daemon reads the restored config as it starts.
+    #[must_use]
+    pub fn after_boot_hook(self) -> Option<&'static str> {
+        match self {
+            Self::SshdReload => Some("ssh.service"),
+            Self::DockerRestart => Some("docker.service"),
+            Self::CaddyReload => Some("caddy.service"),
+            Self::CloudflaredRestart => Some(CLOUDFLARED_UNIT),
+            Self::FirewallReload | Self::Fail2banRestart | Self::DaemonReload => None,
+        }
+    }
+
     /// What must pass before the reload runs, if anything.
     #[must_use]
     pub fn check(self) -> Option<Cmd> {
@@ -240,6 +254,22 @@ mod tests {
         Reload::CaddyReload,
         Reload::CloudflaredRestart,
     ];
+
+    /// A reload the boot hook skips is safe only if its daemon starts after
+    /// the hook.
+    #[test]
+    fn reloads_skipped_at_boot_start_after_the_hook() {
+        let hook = crate::engine::deadman::hook_unit(Path::new("/usr/local/bin/vps-ready"));
+        let before = hook
+            .lines()
+            .find_map(|l| l.strip_prefix("Before="))
+            .unwrap();
+        for reload in ALL {
+            if let Some(unit) = reload.after_boot_hook() {
+                assert!(before.split(' ').any(|u| u == unit), "{reload}: {before}");
+            }
+        }
+    }
 
     #[test]
     fn serializes_by_name() {
