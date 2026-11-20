@@ -51,7 +51,7 @@ const PAGES = {
     slug: 'project/m7-plan',
     label: 'Design notes: M7',
     order: 11,
-    note: 'This is the proposed plan for v0.7.0 to v1.0.0. Nothing in it is built yet.',
+    note: 'This is the accepted plan for v0.7.0 to v1.0.0. Nothing in it is built yet.',
   },
 };
 const DOCS_OUT = join(site, 'src/content/docs/docs');
