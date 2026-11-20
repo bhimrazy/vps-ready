@@ -3,13 +3,13 @@ title: Install
 description: Install vps-ready on a Linux server with the install script, a .deb package or crates.io, check the install, and upgrade later.
 ---
 
-import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+import { Tabs, TabItem } from '@astrojs/starlight/components';
 import Command from '../../../components/docs/Command.astro';
 import { VERSION } from '../../../lib/site';
 
 export const script = 'https://github.com/bhimrazy/vps-ready/releases/latest/download/install.sh';
 
-Run these on the server. vps-ready is one static binary for Linux on x86_64 and arm64, with nothing else to install.
+vps-ready is one static binary for Linux on x86_64 and arm64, with nothing else to install. The install script is the common way; a `.deb` package and `cargo` work too. Run these on the server.
 
 <Tabs syncKey="install">
   <TabItem label="curl">
@@ -25,7 +25,7 @@ Run these on the server. vps-ready is one static binary for Linux on x86_64 and 
 
 The install script downloads the release tarball for the machine, checks it against the SHA-256 embedded in the script, verifies the release signature when `gh` or `cosign` is installed, and copies the binary to `/usr/local/bin`. [View the install script](https://github.com/bhimrazy/vps-ready/releases/latest/download/install.sh).
 
-If `cosign`, or `gh` while logged in (`gh auth status`), is installed and the signature check fails, the install stops (use `--skip-verify` to override). A `gh` that is not logged in is skipped. With no usable tool, the script says so and continues: the binary is then checked only against the checksums embedded in the script, so verify the script itself (below) if that matters to you.
+If `cosign`, or `gh` while logged in (`gh auth status`), is installed and the signature check fails, the install stops (use `--skip-verify` to override). A `gh` that is not logged in is skipped. With no usable tool, the script says so and continues: the binary is then checked only against the checksums embedded in the script, so [verify the script itself](#verify-the-install-script) if that matters to you.
 
 | Option | What it does |
 |---|---|
@@ -36,48 +36,32 @@ If `cosign`, or `gh` while logged in (`gh auth status`), is installed and the si
 
 The command is also installed as `vpsready`, without the hyphen.
 
-<Aside type="caution" title="Where the binary lives matters">
-The safety timer runs the binary as root later, so `apply` refuses the admin user, SSH server config and firewall modules when the binary is under `/home`, `/tmp`, `/var/tmp` or `/dev/shm`, or when it or a parent directory is writable by anyone but root. The install script's `/usr/local/bin` and the `.deb`'s `/usr/bin` are fine. A `cargo install` as a normal user lands in `~/.cargo/bin`, so copy the binary to `/usr/local/bin` before you use a profile.
-</Aside>
-
-Building with `cargo` needs a Rust toolchain on the server.
+Where the binary lives matters, because the safety timer runs it as root later. `apply` refuses the admin user, SSH server config and firewall modules when the binary is under `/home`, `/tmp`, `/var/tmp` or `/dev/shm`, or when it or a parent directory is writable by anyone but root. The install script's `/usr/local/bin` and the `.deb`'s `/usr/bin` are fine. Building with `cargo` needs a Rust toolchain on the server, and a `cargo install` as a normal user lands in `~/.cargo/bin`, so copy the binary to `/usr/local/bin` before you use a profile.
 
 ## Check the install
+
+To check the version and what vps-ready sees on this server, run:
 
 ```sh
 vps-ready --version
 sudo vps-ready detect
 ```
 
-`detect` only reads: it prints the distro, init system, virtualization, effective SSH server config and listening ports. Next, run the [Quick start](/docs/quick-start/), which starts with `sudo vps-ready`, the guided setup.
+`detect` only reads: it prints the distro, init system, virtualization, effective SSH server config and listening ports.
 
 ## Upgrade
 
-vps-ready never updates itself: it makes no network calls except package installs. To upgrade, run the same installer again. It writes the new binary next to the old one and renames it into place, so the swap is atomic.
+vps-ready never updates itself, since it makes no network calls except package installs. To upgrade, run the same installer again:
 
 <Command lines={[`curl -fsSL ${script} | sudo sh`]} />
 
-Check with `vps-ready --version`, and see the [releases](https://github.com/bhimrazy/vps-ready/releases) for what changed. The installer only replaces the binary; your journal in `/var/lib/vps-ready` stays, so `history` and `rollback --last` keep working.
+It writes the new binary next to the old one and renames it into place, so the swap is atomic. Check with `vps-ready --version`, and see the [releases](https://github.com/bhimrazy/vps-ready/releases) for what changed. The installer only replaces the binary; your journal in `/var/lib/vps-ready` stays, so `history` and `rollback --last` keep working.
 
 To pin a version or read the script first, download the versioned installer from its release instead of `latest`, for example <code>{`https://github.com/bhimrazy/vps-ready/releases/download/v${VERSION}/install.sh`}</code>.
 
-## Verify the install script
+## Install the .deb package
 
-`install.sh` is listed in `checksums.txt`, which is signed, so you can check the script before running it. Download the script, `checksums.txt` and its bundle from the same release (pin the version rather than using `latest`).
-
-<Command lines={[
-  `V=${VERSION}`,
-  'B=https://github.com/bhimrazy/vps-ready/releases/download/v$V',
-  'curl -fsSLO $B/install.sh -O $B/checksums.txt -O $B/checksums.txt.sigstore.json',
-  `cosign verify-blob --bundle checksums.txt.sigstore.json --certificate-identity-regexp '^https://github.com/bhimrazy/vps-ready/\\.github/workflows/release\\.yml@refs/tags/v' --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt`,
-  'sha256sum --check --ignore-missing checksums.txt',
-]} />
-
-With `gh` instead of `cosign`: `gh attestation verify install.sh --repo bhimrazy/vps-ready`.
-
-## The .deb package
-
-From v0.5.0, each release has `vps-ready_<version>_amd64.deb` and `vps-ready_<version>_arm64.deb`, for Debian and Ubuntu. They hold the same binary as the tarball, installed to `/usr/bin/vps-ready` with the `vpsready` link. The package has no install scripts: installing it changes nothing else on the system.
+From v0.5.0, each release has `vps-ready_<version>_amd64.deb` and `vps-ready_<version>_arm64.deb`, for Debian and Ubuntu. They hold the same binary as the tarball, installed to `/usr/bin/vps-ready` with the `vpsready` link. The package has no install scripts, so installing it changes nothing else on the system.
 
 The `.deb` is not signed on its own, and apt does not check a signature on a file you install by path. It is covered by the release's `checksums.txt`, so run the checksum step from [Verify a release by hand](#verify-a-release-by-hand) first, then:
 
@@ -98,11 +82,25 @@ sudo apt install ./vps-ready_<version>_amd64.deb
 hash -r
 ```
 
-`vps-ready version` warns when it finds another `vps-ready` on `PATH` (`warning: another vps-ready is installed at <path>`), and the first one on `PATH` is the one that runs. A pending safety timer is not affected by the move: it runs a private copy of the binary that applied, kept in `/var/lib/vps-ready/bin`.
+`vps-ready version` warns when it finds another `vps-ready` on `PATH` (`warning: another vps-ready is installed at <path>`), and the first one on `PATH` is the one that runs. A pending safety timer is not affected by the move, because it runs a private copy of the binary that applied, kept in `/var/lib/vps-ready/bin`.
+
+## Verify the install script
+
+`install.sh` is listed in `checksums.txt`, which is signed, so you can check the script before running it. Download the script, `checksums.txt` and its bundle from the same release, pinning the version rather than using `latest`:
+
+<Command lines={[
+  `V=${VERSION}`,
+  'B=https://github.com/bhimrazy/vps-ready/releases/download/v$V',
+  'curl -fsSLO $B/install.sh -O $B/checksums.txt -O $B/checksums.txt.sigstore.json',
+  `cosign verify-blob --bundle checksums.txt.sigstore.json --certificate-identity-regexp '^https://github.com/bhimrazy/vps-ready/\\.github/workflows/release\\.yml@refs/tags/v' --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt`,
+  'sha256sum --check --ignore-missing checksums.txt',
+]} />
+
+With `gh` instead of `cosign`: `gh attestation verify install.sh --repo bhimrazy/vps-ready`.
 
 ## Verify a release by hand
 
-Every release ships `checksums.txt` (which lists the tarballs, the `.deb` files and the SBOM), a Sigstore bundle for it, and a GitHub build-provenance attestation for each tarball, each `.deb` file, the SBOM and `install.sh`.
+Every release ships `checksums.txt` (which lists the tarballs, the `.deb` files and the SBOM), a Sigstore bundle for it, and a GitHub build-provenance attestation for each tarball, each `.deb` file, the SBOM and `install.sh`. To check all three, run:
 
 ```sh
 # 1. Checksums
@@ -120,7 +118,7 @@ gh attestation verify vps-ready-<version>-<target>.tar.gz --repo bhimrazy/vps-re
 gh attestation verify vps-ready_<version>_amd64.deb --repo bhimrazy/vps-ready
 ```
 
-### The SBOM
+### Check the SBOM
 
 Each release also has `vps-ready-<version>.cdx.json`, a CycloneDX 1.5 list of the crates the binary is built from. It is listed in `checksums.txt`, and attested as a second attestation on the tarballs and `.deb` files, with the SBOM as its predicate. `gh` checks the SLSA provenance by default, so name the CycloneDX predicate type to check the SBOM's attestation:
 
@@ -130,6 +128,9 @@ gh attestation verify vps-ready_<version>_amd64.deb \
   --predicate-type https://cyclonedx.org/bom
 ```
 
-Add `--format json` to print what the attestation carries and compare it with the SBOM you downloaded.
+Add `--format json` to print what the attestation carries and compare it with the SBOM you downloaded. The trust model of each install channel is in [Supply chain and release](/docs/project/release/).
 
-The trust model of each install channel is in [Supply chain and release](/docs/project/release/).
+## Next
+
+- Harden the server: [Quick start](/docs/quick-start/), which starts with `sudo vps-ready`, the guided setup.
+- What the safety timer does: [How the safety net works](/docs/guides/safety-net/).

@@ -12,13 +12,11 @@ import { Aside, Steps } from '@astrojs/starlight/components';
 `export cloud-init`, `apply --deadman=off`, the `net.tailscale` and `net.wireguard` modules, `ssh_via` in `firewall.inbound`, the `private` profile, the wizard's private access question, and the audit controls `FW-003`, `SSH-009` and `NET-008`.
 </Aside>
 
-This guide takes a server from "never exposed" to "SSH only through a private network":
+A new server answers SSH to the whole internet. This guide narrows that to your own devices in three steps, and shows how to get back in if the private network fails.
 
-1. **Harden it at first boot**, before anyone logs in, with `export cloud-init`.
-2. **Join a private network**, such as Tailscale or WireGuard, so you can reach the same SSH server over it.
-3. **Close public SSH** with `ssh_via`, applied from a login that already comes through the VPN.
+First, [harden the server at first boot](#harden-at-first-boot), before anyone logs in. Next, [join a private network](#join-a-private-network) such as Tailscale or WireGuard, so you can reach the same SSH server through it. Last, [close public SSH](#close-public-ssh) from a login that already comes through that network.
 
-Each step works on its own. You can skip the first one on a server that is already running.
+Each step works on its own. If the server is already running, skip the first.
 
 ## Harden at first boot
 
@@ -40,7 +38,7 @@ Each step works on its own. You can skip the first one on a server that is alrea
    authorized_keys = ["ssh-ed25519 AAAAC3Nza... me@laptop"]
    ```
 
-3. **Export it.**
+3. **Export it** to a user-data file:
 
    ```sh
    vps-ready export cloud-init --profile vps-ready.toml --checksums checksums.txt > user-data.yaml
@@ -50,9 +48,9 @@ Each step works on its own. You can skip the first one on a server that is alrea
 
 4. **Keep the provider's firewall closed, and do not log in, until first boot finishes.** The image's own SSH settings apply for the first minute or so, until cloud-init's last stage runs. Any login during that time, including a provisioning tool that waits for SSH, makes the apply refuse `--deadman=off`.
 
-5. **Wait for first boot to finish without logging in.** Watch the server's console log in the provider's panel (often called the serial or boot log) for cloud-init's final message, `Cloud-init v. ... finished at ...`. The output of the apply comes just before it.
+   Watch the server's console log in the provider's panel (often called the serial or boot log) for cloud-init's final message, `Cloud-init v. ... finished at ...`. The output of the apply comes just before it.
 
-6. **Open the provider's firewall for SSH, then check that it worked.**
+5. **Open the provider's firewall for SSH, then check that it worked:**
 
    ```sh
    ssh admin@203.0.113.10
@@ -66,13 +64,13 @@ Each step works on its own. You can skip the first one on a server that is alrea
 
 The exported script runs `vps-ready apply --profile /etc/vps-ready/profile.toml --yes --deadman=off`. Nobody is logged in to confirm at first boot, so it applies without the [safety timer](/docs/guides/safety-net/). The checks that run before any change still apply: a sudo admin with a key exists before root and password logins are turned off, and the SSH port stays open.
 
-**If something fails** (a download, the hash, a login during first boot, the apply), the server keeps the image's defaults and is not hardened. `cloud-init status` then shows `error`, and `/var/log/cloud-init-output.log` says why. Fix the cause and create the server again.
+If something fails (a download, the hash, a login during first boot, the apply), the server keeps the image's defaults and is not hardened. `cloud-init status` then shows `error`, and `/var/log/cloud-init-output.log` says why. Fix the cause and create the server again.
 
 `export` refuses three kinds of profile:
 
-- **`user.admin` without `authorized_keys`.** Add your public keys to the profile.
-- **`net.tailscale` with `auth_key_file`.** Any process on the server can read user-data through the provider's metadata service, so it must not lead to a key. Leave the key out, and log in with `sudo tailscale up --accept-dns=false` after the first boot.
-- **`firewall.inbound` with an explicit `ssh_via`**, such as `"tailscale0"`. No SSH session can come through the VPN at first boot. Apply it later, from a session through the VPN.
+- `user.admin` without `authorized_keys`. Add your public keys to the profile.
+- `net.tailscale` with `auth_key_file`. Any process on the server can read user-data through the provider's metadata service, so it must not lead to a key. Leave the key out, and log in with `sudo tailscale up --accept-dns=false` after the first boot.
+- `firewall.inbound` with an explicit `ssh_via`, such as `"tailscale0"`. No SSH session can come through the VPN at first boot, so apply it later, from a session through the VPN.
 
 The [`private` profile](#the-private-profile) does export: its `ssh_via = "vpn"` stays in step 1 at first boot, with public SSH open.
 
@@ -84,37 +82,35 @@ Flags and exit codes: [`export cloud-init`](/docs/reference/commands/#export-clo
 
 ### Tailscale
 
-Add `net.tailscale` to your profile. It installs Tailscale from Tailscale's own repository, keeps `tailscaled` running, and adds Tailscale to automatic updates. It opens no port: Tailscale needs none.
+Add `net.tailscale` to your profile. It installs Tailscale from Tailscale's own repository, keeps `tailscaled` running, and adds Tailscale to automatic updates. It opens no port, because Tailscale needs none.
 
 ```toml
 [modules."net.tailscale"]
 auth_key_file = "/root/tailscale-auth-key"   # optional
 ```
 
-You can join the tailnet in one of two ways:
+To join the tailnet without a login prompt, put an auth key in a file only root can read, then apply:
 
-- **With an auth key file.** Put the key in a file that only root can read, then apply:
+```sh
+sudo sh -c 'umask 077; cat > /root/tailscale-auth-key'   # paste <auth key>, then Ctrl-D
+sudo vps-ready apply --profile vps-ready.toml
+```
 
-  ```sh
-  sudo sh -c 'umask 077; cat > /root/tailscale-auth-key'   # paste <auth key>, then Ctrl-D
-  sudo vps-ready apply --profile vps-ready.toml
-  ```
+`tailscale up` reads the file itself, so the key never shows up in the plan, the journal or the process list. The file must be a regular file owned by root with mode `0600`, not a symlink, in directories only root can write to; otherwise the plan refuses it. Delete the file after the login; later applies use the node's own login.
 
-  The file must be a regular file owned by root with mode `0600`, not a symlink, in directories only root can write to; otherwise the plan refuses it. `tailscale up` reads the file itself, so the key never shows up in the plan, the journal or the process list. Delete the file after the login: later applies use the node's own login.
+If you would rather log in yourself, leave `auth_key_file` out. The apply installs and starts Tailscale, and the plan tells you to run:
 
-- **By hand.** Leave `auth_key_file` out. The apply installs and starts Tailscale, and the plan says to log in with:
+```sh
+sudo tailscale up --accept-dns=false
+```
 
-  ```sh
-  sudo tailscale up --accept-dns=false
-  ```
-
-Use a **tagged** key that is **not ephemeral**. A tagged node has key expiry off, and an ephemeral node is removed from the tailnet when it goes idle, for example during an outage. If your node's key does expire, `ssh_via` refuses to close public SSH until you turn off key expiry for this machine in the Tailscale admin console.
+Use a tagged key that is not ephemeral. A tagged node has key expiry off, and an ephemeral node is removed from the tailnet when it goes idle, for example during an outage. If your node's key does expire, `ssh_via` refuses to close public SSH until you turn off key expiry for this machine in the Tailscale admin console.
 
 vps-ready never turns on Tailscale SSH and never accepts the tailnet's DNS settings. A node you already logged in by hand is left as it is. More detail: [`net.tailscale`](/docs/guides/profiles-and-modules/#nettailscale-tailscale).
 
 ### WireGuard
 
-Add `net.wireguard` to run a WireGuard interface, `wg0`, on the server. It installs `wireguard-tools`, makes the server's private key on the server (it never passes through vps-ready), and keeps `wg-quick@wg0` running. `firewall.inbound` opens its UDP port, 51820 by default. It is for admin access to this server only: your devices reach the server's tunnel address and nothing else.
+Add `net.wireguard` to run a WireGuard interface, `wg0`, on the server. It installs `wireguard-tools`, makes the server's private key on the server (it never passes through vps-ready), and keeps `wg-quick@wg0` running. `firewall.inbound` opens its UDP port, 51820 by default. It is for admin access to this server only, so your devices reach the server's tunnel address and nothing else.
 
 <Steps>
 
@@ -126,7 +122,7 @@ Add `net.wireguard` to run a WireGuard interface, `wg0`, on the server. It insta
 
    The WireGuard app's "Add tunnel" does the same. Only the public key, which `wg pubkey` prints, goes into the profile.
 
-2. **List the device as a peer.** `host` is the last part of its tunnel address, from 2 to 254. The server is `.1`.
+2. **List the device as a peer.** `host` is the last part of its tunnel address, from 2 to 254, and the server is `.1`:
 
    ```toml
    [modules."net.wireguard"]
@@ -144,7 +140,7 @@ Add `net.wireguard` to run a WireGuard interface, `wg0`, on the server. It insta
    sudo vps-ready apply --profile vps-ready.toml
    ```
 
-   With `firewall.inbound` in the change, the apply arms the safety timer: confirm from a new SSH login as usual, which works through the public address. The client configs print before the confirm. Print them again, for all peers or one, at any time:
+   With `firewall.inbound` in the change, the apply arms the safety timer, so confirm from a new SSH login as usual, which still works through the public address. The client configs print before the confirm. To print them again, for all peers or one, run:
 
    ```sh
    sudo vps-ready wireguard-config laptop
@@ -191,7 +187,7 @@ Any interface works: a `wg0` you set up with `wg-quick`, or the interface of ano
 
 ## Close public SSH
 
-`ssh_via` limits the firewall's SSH rule to one interface. Everything else in `firewall.inbound` stays the same, and the SSH server itself is not changed.
+`ssh_via` limits the firewall's SSH rule to one interface. Everything else in `firewall.inbound` stays the same, and the SSH server itself is not changed. It takes two applies, so that the private path carries a real login before public SSH closes.
 
 <Steps>
 
@@ -203,7 +199,7 @@ Any interface works: a `wg0` you set up with `wg-quick`, or the interface of ano
    ssh admin@100.64.0.7
    ```
 
-3. **Add `ssh_via` and apply from that session.**
+3. **Add `ssh_via` and apply from that session:**
 
    ```toml
    [modules."firewall.inbound"]
@@ -225,7 +221,7 @@ Any interface works: a `wg0` you set up with `wg-quick`, or the interface of ano
 
    If nobody confirms in time, the safety timer rolls back and public SSH opens again.
 
-5. **Check the result.**
+5. **Check the result:**
 
    ```sh
    sudo vps-ready audit --all
@@ -259,7 +255,7 @@ The guided setup (`sudo vps-ready`) asks the same thing as "Private access for S
 
 ### Why the second apply must come through the VPN
 
-After `ssh_via`, a broken VPN means no SSH at all. So vps-ready closes public SSH only when the private path has already carried a real login: yours. The confirm then proves that a **new** login through the VPN works under the new rules. It does not prove that public SSH is closed; the check after apply does that, by reading the firewall back.
+After `ssh_via`, a broken VPN means no SSH at all. So vps-ready closes public SSH only when the private path has already carried a real login: yours. The confirm then proves that a new login through the VPN works under the new rules. It does not prove that public SSH is closed; the check after apply does that, by reading the firewall back.
 
 ### What it refuses
 
@@ -306,17 +302,19 @@ Full list: [Security controls](/docs/reference/security-controls/).
 
 ## If the VPN stops working
 
-With `ssh_via`, a broken VPN closes SSH. Plan your way back in before you need it.
+With `ssh_via`, a broken VPN closes SSH, so plan your way back in before you need it.
+
+**Set a password for a sudo user before you close public SSH.** The provider's web console logs in with a password, and without one, recovery needs the provider's rescue mode.
 
 <Steps>
 
-1. **Set a password for a sudo user** before you close public SSH:
+1. **Set the password** from your current login:
 
    ```sh
    sudo passwd admin
    ```
 
-   The provider's web console logs in with a password. The SSH server still refuses passwords. Without one, recovery needs the provider's rescue mode.
+   The SSH server still refuses passwords; only the console uses it.
 
 2. **Log in from the provider's web console and roll back the `ssh_via` change**, by its ID. This reopens public SSH, and the firewall stays loaded:
 
@@ -344,8 +342,11 @@ With `ssh_via`, a broken VPN closes SSH. Plan your way back in before you need i
 
 A manual rollback can refuse while SSH depends on the VPN:
 
-- **It would limit SSH to the VPN again**, with no timer to undo it. Run it from an SSH login through the VPN, from another machine.
-- **It would stop `tailscaled` or `wg-quick@wg0`, or take the node off the tailnet,** while SSH depends on that VPN. Remove `ssh_via` first, or roll back the transaction that set it.
-- **It would cut your own session**, which comes through the VPN (for WireGuard, by stopping `wg-quick@wg0` or removing your peer). Run it from the console or a public SSH login.
+- When it would limit SSH to the VPN again, with no timer to undo it. Run it from an SSH login through the VPN, from another machine.
+- When it would stop `tailscaled` or `wg-quick@wg0`, or take the node off the tailnet, while SSH depends on that VPN. Remove `ssh_via` first, or roll back the transaction that set it.
+- When it would cut your own session, which comes through the VPN (for WireGuard, by stopping `wg-quick@wg0` or removing your peer). Run it from the console or a public SSH login.
 
-More ways back in: [Undo changes and recover](/docs/guides/undo-and-recover/#locked-out).
+## Next
+
+- More ways back in: [Undo changes and recover](/docs/guides/undo-and-recover/#get-back-in-after-a-lockout).
+- What each VPN module writes and undoes: [`net.tailscale`](/docs/guides/profiles-and-modules/#nettailscale-tailscale) and [`net.wireguard`](/docs/guides/profiles-and-modules/#netwireguard-wireguard).

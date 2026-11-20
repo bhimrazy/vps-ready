@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Deserializer};
 
-use super::firewall_inbound::accepted_tcp;
+use super::firewall_inbound::{accepted_tcp, accepted_udp};
 use super::{
     Applicability, Module, ModuleError, ModuleSteps, ParamDoc, PlanCx, parse_params, refuse,
 };
@@ -51,6 +51,9 @@ struct Params {
     /// default parses.
     #[serde(default, deserialize_with = "distinct")]
     sites: Vec<Site>,
+    /// Serve plain HTTP on loopback for a tunnel connector.
+    #[serde(default)]
+    behind_tunnel: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -163,15 +166,23 @@ impl Module for DeployProxy {
     fn why(&self) -> &'static str {
         "An app published on 127.0.0.1 is safe from the internet but also out of \
          its reach. Caddy in front of it serves it over HTTPS, gets and renews the \
-         certificates by itself, and redirects HTTP to HTTPS."
+         certificates by itself, and redirects HTTP to HTTPS. Behind a tunnel it \
+         serves plain HTTP on loopback instead, and the tunnel's edge does the TLS."
     }
 
     fn params_doc(&self) -> &'static [ParamDoc] {
-        &[ParamDoc {
-            name: "sites",
-            default: "[]",
-            help: "Required: the sites Caddy serves, e.g. [{ domain = \"app.example.com\", upstream = \"127.0.0.1:8080\" }]. Each domain needs a DNS record for this host and ports 80 and 443 open.",
-        }]
+        &[
+            ParamDoc {
+                name: "sites",
+                default: "[]",
+                help: "Required: the sites Caddy serves, e.g. [{ domain = \"app.example.com\", upstream = \"127.0.0.1:8080\" }]. Each domain needs a DNS record for this host and ports 80 and 443 open, unless behind_tunnel is set.",
+            },
+            ParamDoc {
+                name: "behind_tunnel",
+                default: "false",
+                help: "Serve every site as plain HTTP on loopback only, for a Cloudflare Tunnel connector (net.tunnel) to forward to: TLS ends at Cloudflare, Caddy gets no certificate, and no public port is needed. The visitor's address comes from Cf-Connecting-Ip.",
+            },
+        ]
     }
 
     fn applicable(&self, facts: &Facts) -> Applicability {
@@ -239,7 +250,8 @@ impl Module for DeployProxy {
                 }),
                 Resource::File(File {
                     path: CADDYFILE.into(),
-                    content: caddyfile(&params.sites).into_bytes(),
+                    content: caddyfile(&params.sites, params.behind_tunnel, loopback_v6(sys))
+                        .into_bytes(),
                     owner: root(0o644),
                     validate: None,
                     describe: None,
@@ -248,7 +260,12 @@ impl Module for DeployProxy {
         } else {
             notes.push(format!(
                 "{CADDYFILE} was not written by vps-ready, so it is left alone and `sites` is \
-                 not used; move it away and plan again to have vps-ready write it"
+                 not used{}; move it away and plan again to have vps-ready write it",
+                if params.behind_tunnel {
+                    " (nor is behind_tunnel applied)"
+                } else {
+                    ""
+                }
             ));
         }
         resources.push(package);
@@ -274,9 +291,26 @@ impl Module for DeployProxy {
                  stays{dist}"
             ));
         }
-        notes.extend(listener_note(cx.facts));
-        notes.extend(firewall_note(cx, sys)?);
-        notes.extend(dns_notes(sys, &params.sites));
+        // Behind a tunnel Caddy binds port 80 on loopback only.
+        let ports: &[u16] = if params.behind_tunnel {
+            &PORTS[..1]
+        } else {
+            &PORTS
+        };
+        notes.extend(listener_note(cx.facts, ports));
+        if params.behind_tunnel {
+            notes.extend(tunnel_firewall_note(cx, sys)?);
+            if !tunnel_present(cx.planned, sys) {
+                notes.push(
+                    "nothing forwards to Caddy yet: add net.tunnel, or point a tunnel \
+                     connector's routes at http://127.0.0.1"
+                        .to_owned(),
+                );
+            }
+        } else {
+            notes.extend(firewall_note(cx, sys)?);
+            notes.extend(dns_notes(sys, &params.sites));
+        }
         Ok(ModuleSteps {
             resources,
             reloads: vec![Reload::CaddyReload],
@@ -288,7 +322,7 @@ impl Module for DeployProxy {
     /// With a Caddyfile of its own, Caddy runs: a reload of a stopped Caddy
     /// that fails to start, e.g. on a port in use, is not an error to
     /// systemd's reload, so this catches it, and the apply rolls back.
-    fn verify(&self, _cx: &PlanCx, sys: Sys) -> Result<(), String> {
+    fn verify(&self, cx: &PlanCx, sys: Sys) -> Result<(), String> {
         match sys.fs.read(Path::new(CADDYFILE)) {
             Ok(text) if text.starts_with(MARKER.as_bytes()) => {}
             _ => return Ok(()),
@@ -304,9 +338,14 @@ impl Module for DeployProxy {
             return Ok(());
         }
         let state = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+        let ports = if cx.params::<Params>().is_ok_and(|p| p.behind_tunnel) {
+            "port 80"
+        } else {
+            "port 80 or 443"
+        };
         Err(format!(
             "caddy.service is {state}, not active; `journalctl -u caddy.service` says why \
-             (another program on port 80 or 443?)"
+             (another program on {ports}?)"
         ))
     }
 
@@ -380,11 +419,11 @@ pub(crate) fn caddyfile_state(sys: Sys) -> Result<Caddyfile, ModuleError> {
 }
 
 /// Another program on port 80 or 443, which Caddy then cannot bind.
-fn listener_note(facts: &Facts) -> Option<String> {
+fn listener_note(facts: &Facts, ports: &[u16]) -> Option<String> {
     let mut taken: Vec<String> = facts
         .listeners
         .iter()
-        .filter(|l| l.proto == Proto::Tcp && PORTS.contains(&l.port))
+        .filter(|l| l.proto == Proto::Tcp && ports.contains(&l.port))
         .filter(|l| !l.processes.iter().any(|p| p == PACKAGE))
         .map(|l| {
             if l.processes.is_empty() {
@@ -404,17 +443,96 @@ fn listener_note(facts: &Facts) -> Option<String> {
     })
 }
 
-/// One block per site, after the header.
-fn caddyfile(sites: &[Site]) -> String {
+/// One block per site, after the header. Behind a tunnel, Caddy binds
+/// loopback only and serves `http://` sites: no certificate, and the
+/// visitor's address is the edge's `Cf-Connecting-Ip`, trusted from
+/// loopback only. `X-Forwarded-For` and `X-Forwarded-Host` are replaced,
+/// since Caddy keeps the incoming values of a trusted peer, and they hold
+/// what the visitor sent. `[::1]` is used only where the host has it.
+fn caddyfile(sites: &[Site], behind_tunnel: bool, v6: bool) -> String {
     let mut text = HEADER.to_owned();
-    for site in sites {
+    if behind_tunnel {
+        let (bind, trusted) = if v6 {
+            ("127.0.0.1 [::1]", "127.0.0.1/32 ::1/128")
+        } else {
+            ("127.0.0.1", "127.0.0.1/32")
+        };
         let _ = write!(
             text,
-            "\n{} {{\n\treverse_proxy {}\n}}\n",
-            site.domain.0, site.upstream.0
+            "\n{{\n\tdefault_bind {bind}\n\tservers {{\n\
+             \t\ttrusted_proxies static {trusted}\n\
+             \t\tclient_ip_headers Cf-Connecting-Ip\n\t}}\n}}\n"
         );
     }
+    for site in sites {
+        let (domain, upstream) = (&site.domain.0, &site.upstream.0);
+        let _ = if behind_tunnel {
+            write!(
+                text,
+                "\nhttp://{domain} {{\n\t@plain header X-Forwarded-Proto http\n\
+                 \tredir @plain https://{{host}}{{uri}} 308\n\
+                 \treverse_proxy {upstream} {{\n\
+                 \t\theader_up X-Forwarded-For {{client_ip}}\n\
+                 \t\theader_up X-Forwarded-Host {{host}}\n\t}}\n}}\n"
+            )
+        } else {
+            write!(text, "\n{domain} {{\n\treverse_proxy {upstream}\n}}\n")
+        };
+    }
     text
+}
+
+/// Whether loopback has `::1`, which a host with IPv6 disabled lacks and
+/// where Caddy could not bind it.
+fn loopback_v6(sys: Sys) -> bool {
+    sys.fs
+        .read(Path::new("/proc/net/if_inet6"))
+        .is_ok_and(|text| {
+            String::from_utf8_lossy(&text).lines().any(|l| {
+                let mut f = l.split_whitespace();
+                f.next() == Some("00000000000000000000000000000001") && f.last() == Some("lo")
+            })
+        })
+}
+
+/// The connector unit net.tunnel writes, and Cloudflare's own.
+const TUNNEL_UNITS: [&str; 2] = ["vps-ready-cloudflared.service", "cloudflared.service"];
+
+/// A tunnel connector is planned earlier in this plan (`net.tunnel` must
+/// come before this module in the registry) or its unit is on the host.
+fn tunnel_present(planned: &[Resource], sys: Sys) -> bool {
+    planned.iter().any(|r| match r {
+        Resource::Service(s) => TUNNEL_UNITS.contains(&s.unit.as_str()),
+        _ => false,
+    }) || TUNNEL_UNITS
+        .iter()
+        .any(|u| sys.fs.exists(&Path::new("/etc/systemd/system").join(u)))
+}
+
+/// Ports 80/tcp and 443/tcp and udp (HTTP/3) that `firewall.inbound` still
+/// accepts, though Caddy listens on loopback only.
+fn tunnel_firewall_note(cx: &PlanCx, sys: Sys) -> Result<Option<String>, ModuleError> {
+    let Some(accepted) = accepted_tcp(cx, sys)? else {
+        return Ok(None);
+    };
+    let udp = accepted_udp(cx, sys)?.unwrap_or_default();
+    let mut open: Vec<String> = PORTS
+        .iter()
+        .filter(|p| accepted.contains(p))
+        .map(|p| format!("{p}/tcp"))
+        .collect();
+    if udp.contains(&443) {
+        open.push("443/udp".to_owned());
+    }
+    Ok((!open.is_empty()).then(|| {
+        format!(
+            "{} {} open but Caddy listens on loopback only: drop {} from firewall.inbound's \
+             `allow`",
+            open.join(" and "),
+            if open.len() == 1 { "is" } else { "are" },
+            if open.len() == 1 { "it" } else { "them" },
+        )
+    }))
 }
 
 /// The ports Caddy needs that `firewall.inbound`, in this plan or applied
