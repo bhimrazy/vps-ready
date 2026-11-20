@@ -1,0 +1,32 @@
+---
+source: crates/vps-ready/src/modules/deploy_proxy/tests.rs
+expression: "caddyfile_of(&steps(&params(TUNNELED_SEVERAL), &fs, &runner))"
+---
+# Written by vps-ready (deploy.proxy). `vps-ready rollback --last`
+# restores the previous state; edits here are replaced by the next apply.
+
+{
+	default_bind 127.0.0.1 [::1]
+	servers {
+		trusted_proxies static 127.0.0.1/32 ::1/128
+		client_ip_headers Cf-Connecting-Ip
+	}
+}
+
+http://app.example.com {
+	@plain header X-Forwarded-Proto http
+	redir @plain https://{host}{uri} 308
+	reverse_proxy 127.0.0.1:8080 {
+		header_up X-Forwarded-For {client_ip}
+		header_up X-Forwarded-Host {host}
+	}
+}
+
+http://api.example.com {
+	@plain header X-Forwarded-Proto http
+	redir @plain https://{host}{uri} 308
+	reverse_proxy [::1]:9000 {
+		header_up X-Forwarded-For {client_ip}
+		header_up X-Forwarded-Host {host}
+	}
+}
