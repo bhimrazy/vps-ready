@@ -731,8 +731,8 @@ EOF
     [ "$(vm systemctl is-enabled "$u" 2>/dev/null || true)" != enabled ] || die "$u is still enabled"
   done
   vm sudo test -f /root/cloudflared-token || die "the rollback removed the token file"
-  # shellcheck disable=SC2016 # dpkg-query's format, not the shell's
-  vm dpkg-query -W -f '${Status}\n' cloudflared | grep -q 'install ok installed' ||
+  # Quoted for the VM's shell, which gets the command as one string.
+  vm "dpkg-query -W -f '\${Status}\n' cloudflared" | grep -q 'install ok installed' ||
     die "cloudflared should stay installed"
 
   echo "== $distro: the token is nowhere else"
