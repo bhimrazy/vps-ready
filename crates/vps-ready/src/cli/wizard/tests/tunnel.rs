@@ -310,29 +310,111 @@ fn a_token_file_is_replaced_only_after_the_yes() {
     assert_eq!((bytes, meta.mode), (new.into_bytes(), 0o600));
 }
 
-/// A file others can read is emptied for the plan, and its token is never
-/// trusted: the pasted one is written after the yes.
+/// A file others can read, or not root's, is refused at the question and
+/// left as it is: nothing is written before the yes.
 #[test]
-fn an_unusable_token_file_is_replaced() {
+fn a_token_file_others_can_read_is_refused() {
+    for (mode, uid) in [(0o644, 0), (0o600, 1000)] {
+        let fs = fs();
+        fs.create_dir(Path::new("/etc/vps-ready"), root(0o755))
+            .unwrap();
+        let owner = FileOwner { mode, uid, gid: 0 };
+        fs.create_new(Path::new(TOKEN_FILE), token().as_bytes(), owner)
+            .unwrap();
+        let runner = runner(|r| r);
+        let host = tunnel_host(&fs, &runner);
+        let (code, text) = wizard(&host, questions(0, []), "");
+        assert_eq!(code, 2, "{text}");
+        assert!(
+            text.contains(&format!(
+                "error: {TOKEN_FILE} is readable by others or not root's: `sudo chown"
+            )),
+            "{text}"
+        );
+        let (bytes, meta) = fs.read_nofollow(Path::new(TOKEN_FILE)).unwrap();
+        assert_eq!((bytes, meta.mode), (token().into_bytes(), mode));
+    }
+}
+
+/// A private file that holds no token is replaced only after the yes; a
+/// declined apply leaves it.
+#[test]
+fn a_file_without_a_token_is_replaced_after_the_yes() {
     let fs = fs();
     fs.create_dir(Path::new("/etc/vps-ready"), root(0o755))
         .unwrap();
-    fs.create_new(Path::new(TOKEN_FILE), token().as_bytes(), root(0o644))
+    fs.create_new(Path::new(TOKEN_FILE), b"old notes\n", root(0o600))
         .unwrap();
     let runner = runner(|r| r);
     let host = tunnel_host(&fs, &runner);
-    let new = placeholder_token("bmV3LXBsYWNlaG9sZGVy");
-    let (code, text) = wizard(&host, questions(0, [Type(new)]), "n\n");
+    let (code, text) = wizard(&host, questions(0, [Type(token())]), "n\n");
     assert_eq!(code, 0, "{text}");
     assert!(
         text.contains(&format!(
-            "  {TOKEN_FILE} holds no tunnel token that only root can"
+            "  {TOKEN_FILE} holds no tunnel token, so the token"
         )),
         "{text}"
     );
-    let (bytes, meta) = fs.read_nofollow(Path::new(TOKEN_FILE)).unwrap();
-    assert!(bytes.is_empty());
-    assert_eq!(meta.mode, 0o600);
+    assert_eq!(fs.read(Path::new(TOKEN_FILE)).unwrap(), b"old notes\n");
+}
+
+/// An empty private file, left by a run stopped at the apply's question,
+/// is reused as this run's own: no note, and removed on a decline.
+#[test]
+fn an_empty_leftover_is_reused() {
+    let fs = fs();
+    fs.create_dir(Path::new("/etc/vps-ready"), root(0o755))
+        .unwrap();
+    fs.create_new(Path::new(TOKEN_FILE), b"", root(0o600))
+        .unwrap();
+    let runner = runner(|r| r);
+    let host = tunnel_host(&fs, &runner);
+    let (code, text) = wizard(&host, questions(0, [Type(token())]), "n\n");
+    assert_eq!(code, 0, "{text}");
+    assert!(!text.contains("holds"), "{text}");
+    assert!(!fs.exists(Path::new(TOKEN_FILE)));
+}
+
+/// Replacing the token of a running connector says to restart it, since
+/// an unchanged unit is not restarted by the apply.
+#[test]
+fn a_new_token_for_a_running_connector_needs_a_restart() {
+    let fs = fs();
+    fs.create_dir(Path::new("/etc/vps-ready"), root(0o755))
+        .unwrap();
+    fs.create_new(Path::new(TOKEN_FILE), token().as_bytes(), root(0o600))
+        .unwrap();
+    let runner = runner(|r| r);
+    let host = Host {
+        facts: |sys| {
+            let mut facts = with_docker(sys)?;
+            let unit = crate::modules::net_tunnel::UNIT.to_owned();
+            facts.cloudflared.units = vec![unit.clone()];
+            facts.cloudflared.active = vec![unit];
+            Ok(facts)
+        },
+        ..on(&fs, &runner)
+    };
+    let new = placeholder_token("bmV3LXBsYWNlaG9sZGVy");
+    let (_, text) = wizard(&host, questions(0, [Say(false), Type(new)]), "n\n");
+    assert!(
+        text.contains("  The connector runs now: after the apply, run `sudo systemctl restart"),
+        "{text}"
+    );
+}
+
+/// A token's temp file left by a crash goes at the start.
+#[test]
+fn a_leftover_token_temp_file_is_removed_at_the_start() {
+    let fs = fs();
+    fs.create_dir(Path::new("/etc/vps-ready"), root(0o755))
+        .unwrap();
+    fs.create_new(Path::new(TOKEN_TEMP), token().as_bytes(), root(0o600))
+        .unwrap();
+    let runner = runner(|r| r);
+    let (code, _) = wizard(&on(&fs, &runner), vec![CtrlC], "");
+    assert_eq!(code, EXIT_INTERRUPTED);
+    assert!(!fs.exists(Path::new(TOKEN_TEMP)));
 }
 
 /// A directory where the token goes is refused at the question.

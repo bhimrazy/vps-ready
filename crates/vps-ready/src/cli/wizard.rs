@@ -41,6 +41,10 @@ const AUTH_KEY_FILE: &str = net_tailscale::WIZARD_KEY_FILE;
 /// between its create and rename.
 const AUTH_KEY_TEMP: &str = "/run/vps-ready/.tailscale-auth-key.vps-ready-tmp";
 
+/// [`Fs::write_atomic`]'s temp file for [`TOKEN_FILE`], left by a crash
+/// between its create and rename.
+const TOKEN_TEMP: &str = "/etc/vps-ready/.cloudflared-token.vps-ready-tmp";
+
 /// What every Tailscale auth key starts with. Split, so that no text in
 /// the source looks like a key.
 const AUTH_KEY_PREFIX: &str = concat!("tskey", "-");
@@ -264,8 +268,8 @@ impl<'a> Secrets<'a> {
 
     /// Gets [`TOKEN_FILE`] ready for the plan without the token: a new
     /// empty file (O_EXCL, root's, 0600) in a directory only root can write
-    /// to, or one others can read emptied. Any other file stays as it is
-    /// until the yes.
+    /// to. An existing one, root's and private, stays as it is until the
+    /// yes.
     fn with_token(&mut self, token: Zeroizing<String>, existing: Existing) -> anyhow::Result<()> {
         let fs = self.fs;
         let path = Path::new(TOKEN_FILE);
@@ -278,14 +282,9 @@ impl<'a> Secrets<'a> {
             created_dir: false,
         };
         match existing {
-            Existing::Token => {}
-            Existing::Unusable => {
-                // Others could read it, so the plan would refuse it.
-                let meta = fs.metadata(path)?;
-                if meta.uid != 0 || meta.mode & 0o077 != 0 {
-                    fs.write_atomic(path, b"", root_only(0o600))?;
-                }
-            }
+            Existing::Token | Existing::NotToken => {}
+            // Empty, as an earlier run left it before its yes.
+            Existing::Leftover => file.created = true,
             Existing::None => {
                 file.created_dir = !fs.exists(dir);
                 if file.created_dir {
@@ -335,8 +334,9 @@ impl<'a> Secrets<'a> {
         }
     }
 
-    /// Removes a token file this run created; one it did not create
-    /// still holds what it held before (or is empty, if it was unusable).
+    /// Removes a token file this run created (or reused empty). One it did
+    /// not create holds what it held before, unless a signal came while
+    /// [`change::Around::before`] wrote the token: then it holds the new one.
     fn discard_token(&mut self) {
         let Some(file) = self.token.take() else {
             return;
@@ -431,14 +431,18 @@ enum TunnelToken {
     },
 }
 
-/// What [`TOKEN_FILE`] is before the wizard writes a pasted token.
+/// What [`TOKEN_FILE`] is before the wizard writes a pasted token. Each
+/// is root's and private, as the plan requires; any other file is refused
+/// at the question.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Existing {
     None,
-    /// Root's, private and a token: the plan can check it as it is.
+    /// Holds a token.
     Token,
-    /// A regular file that is not.
-    Unusable,
+    /// Empty: left by a run stopped before its yes, and reused as new.
+    Leftover,
+    /// Holds something else.
+    NotToken,
 }
 
 /// Whether only root can write to `dir`, as the plan requires of the
@@ -659,8 +663,13 @@ fn start_checks(host: &Host) -> anyhow::Result<()> {
     let state = StateDir::create(host.sys.fs, host.state_dir, host.state_uid)?;
     let engine = Engine::lock(&state, host.sys)?;
     // An auth key from a run that ended without its cleanup, removed
-    // before an unfinished transaction can stop the start.
+    // before an unfinished transaction can stop the start, and a token's
+    // temp file.
     remove_key_file(host.sys.fs)?;
+    match host.sys.fs.remove(Path::new(TOKEN_TEMP)) {
+        Ok(()) | Err(SysError::NotFound(_)) => {}
+        Err(e) => return Err(e.into()),
+    }
     engine.ensure_finished()?;
     Ok(())
 }
@@ -1322,7 +1331,7 @@ fn ask_sites(
         .collect();
     let mut proxy = toml::Table::from_iter([("sites".to_owned(), toml::Value::Array(sites))]);
     if tunnel && ask_through_tunnel(prompt, count)? {
-        let token = ask_tunnel_token(host, prompt, out)?;
+        let token = ask_tunnel_token(host, facts, prompt, out)?;
         let mut params = toml::Table::new();
         if token.is_some() {
             params.insert("token_file".to_owned(), TOKEN_FILE.into());
@@ -1365,6 +1374,7 @@ fn ask_through_tunnel(prompt: &mut dyn Prompt, count: usize) -> anyhow::Result<b
 /// yes. `None` to add it later.
 fn ask_tunnel_token(
     host: &Host,
+    facts: &Facts,
     prompt: &mut dyn Prompt,
     out: &mut dyn Write,
 ) -> anyhow::Result<Option<TunnelToken>> {
@@ -1375,25 +1385,26 @@ fn ask_tunnel_token(
             "{TOKEN_FILE} is not a regular file ({:?}): move it away and run the wizard again",
             meta.kind
         ),
-        // Root's and private, as the plan requires, and a token.
-        Ok(_) => match fs.read_nofollow(path) {
-            Ok((bytes, meta)) => {
-                let bytes = Zeroizing::new(bytes);
-                let usable = meta.uid == 0
-                    && meta.mode & 0o077 == 0
-                    && std::str::from_utf8(&bytes).is_ok_and(net_tunnel::is_token);
-                if usable {
-                    Existing::Token
-                } else {
-                    Existing::Unusable
-                }
+        // Nothing is written before the yes, so the plan must accept it.
+        Ok(meta) if meta.uid != 0 || meta.mode & 0o077 != 0 => bail!(
+            "{TOKEN_FILE} is readable by others or not root's: `sudo chown root:root` and \
+             `sudo chmod 600` it, or move it away, then run the wizard again"
+        ),
+        Ok(_) => {
+            let (bytes, _) = fs.read_nofollow(path)?;
+            let bytes = Zeroizing::new(bytes);
+            if bytes.is_empty() {
+                Existing::Leftover
+            } else if std::str::from_utf8(&bytes).is_ok_and(net_tunnel::is_token) {
+                Existing::Token
+            } else {
+                Existing::NotToken
             }
-            Err(_) => Existing::Unusable,
-        },
+        }
         Err(SysError::NotFound(_)) => Existing::None,
         Err(e) => return Err(e.into()),
     };
-    if existing != Existing::None {
+    if matches!(existing, Existing::Token | Existing::NotToken) {
         if existing == Existing::Token {
             if prompt.confirm(
                 &format!("{TOKEN_FILE} holds a tunnel token. Keep it?"),
@@ -1406,8 +1417,8 @@ fn ask_tunnel_token(
                 out,
                 "  ",
                 &format!(
-                    "{TOKEN_FILE} holds no tunnel token that only root can read, so the token \
-                     you paste replaces it."
+                    "{TOKEN_FILE} holds no tunnel token, so the token you paste replaces it \
+                     after you apply."
                 ),
             )?;
         }
@@ -1430,6 +1441,23 @@ fn ask_tunnel_token(
             return Ok(None);
         }
         if net_tunnel::is_token(token) {
+            let running = facts
+                .cloudflared
+                .active
+                .iter()
+                .any(|u| u == net_tunnel::UNIT);
+            if existing != Existing::None && running {
+                // The apply restarts nothing when the unit is unchanged.
+                say(
+                    out,
+                    "  ",
+                    &format!(
+                        "The connector runs now: after the apply, run `sudo systemctl restart \
+                         {}` to use the new token.",
+                        net_tunnel::UNIT.trim_end_matches(".service")
+                    ),
+                )?;
+            }
             return Ok(Some(TunnelToken::New {
                 token: Zeroizing::new(token.to_owned()),
                 existing,
