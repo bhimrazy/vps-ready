@@ -35,7 +35,7 @@ flowchart TB
   cli["CLI / TUI<br/>src/cli (clap, wizard) · src/tui (dialoguer prompts) · src/report"]
   engine["Engine · src/engine<br/>order modules → collect resources → diff →<br/>snapshot → validate → apply → verify<br/>journal · deadman · rollback · lock"]
   modules["Modules (policy) · src/modules/*<br/>ssh, firewall, user, docker, ...<br/>+ templates/"]
-  resources["Resources (idempotent primitives) · src/resource<br/>File, Directory, Sysctl, Package, Service, User, AuthorizedKeys, TailscaleUp"]
+  resources["Resources (idempotent primitives) · src/resource<br/>File, Directory, Sysctl, Package, Service, User, AuthorizedKeys, TailscaleUp, WireguardKey, WireguardSync"]
   platform["Platform · src/platform<br/>PkgManager · ServiceManager · Firewall · Sshd<br/>apt/dnf/apk, systemd/openrc, ufw/firewalld/nft"]
   facts["Facts (read-only) · src/facts<br/>os-release, init, virt, cloud, sshd -T, ss,<br/>SSH session, docker present"]
   sys["sys · src/sys<br/>Runner (exec) + Fs (rooted): real or fake"]
@@ -50,7 +50,7 @@ Two traits, and nothing else in the codebase is allowed to run a process or touc
 
 ```rust
 pub trait Runner {
-    fn run(&self, cmd: &Cmd) -> Result<Output, SysError>;   // Cmd = program, args, env, timeout
+    fn run(&self, cmd: &Cmd) -> Result<Output, SysError>;   // Cmd = program, args, env, timeout, stdin file, stdout to a new file (O_EXCL, mode)
 }
 
 pub trait Fs {                                              // every path is resolved under a base dir
@@ -95,7 +95,7 @@ Small traits chosen from facts: `PkgManager`, `ServiceManager`, `Firewall`, `Ssh
 ### Resources (`src/resource`)
 Idempotent primitives. The set of kinds is closed, so `Resource` is an enum rather than a trait object: every `match` handles every kind, and it serializes with `serde` for the journal and `plan --json`.
 ```rust
-pub enum Resource { File(File), Directory(Directory), Sysctl(Sysctl), Package(Package), Service(Service), User(User), AuthorizedKeys(AuthorizedKeys), TailscaleUp(TailscaleUp) }
+pub enum Resource { File(File), Directory(Directory), Sysctl(Sysctl), Package(Package), Service(Service), User(User), AuthorizedKeys(AuthorizedKeys), TailscaleUp(TailscaleUp), WireguardKey(WireguardKey), WireguardSync(WireguardSync) }
 
 impl Resource {
     pub fn id(&self) -> String;                                         // e.g. "file:/etc/sysctl.d/90-vps-ready.conf"
@@ -131,7 +131,9 @@ pub enum Reload { SshdReload, FirewallReload, Fail2banRestart, DaemonReload, Doc
 ```
 **Modules don't have apply/rollback.** The engine does both generically from resource snapshots, so every module is small, readable and reversible in the same way.
 
-`plan` returns resources plus reloads; one module can mix kinds (a `File`, a `Service`, a `User`). Each module parses its own params into a `deny_unknown_fields` struct. A file is validated before it is written (`sshd -t -f`, `nft -c -f`, `visudo -cf` on `files/<n>.after`). A `Reload` is a closed enum with a fixed check and command (`sshd -t`, then `systemctl try-reload-or-restart ssh.service`), so a rollback in a later process replays it from its journaled name, check first. The one exception: once a rollback removed the Caddyfile, `CaddyReload` runs `systemctl disable --now caddy.service` instead, since Caddy can neither validate, reload nor start without it. Its usual command is `systemctl reload-or-restart caddy.service`, which also starts a stopped Caddy, and `deploy.proxy`'s `verify` then checks that `caddy.service` is active. There is no `requires` or topological sort yet: the registry order (`user.admin`, `ssh.server`, `net.tailscale`, `deploy.docker`, `firewall.inbound`, `ssh.bruteforce`, `kernel.sysctl`, `updates.auto`, `deploy.proxy`, `deploy.user`) is fixed, `ssh.server`'s need for an admin is a plan-time check, a module that sees `deploy.docker`'s `docker-ce` package planned before it plans as if Docker were present, and `deploy.proxy` reads the ruleset `firewall.inbound` plans before it for ports 80 and 443.
+`plan` returns resources plus reloads; one module can mix kinds (a `File`, a `Service`, a `User`). Each module parses its own params into a `deny_unknown_fields` struct. A file is validated before it is written (`sshd -t -f`, `nft -c -f`, `visudo -cf` on `files/<n>.after`). A `Reload` is a closed enum with a fixed check and command (`sshd -t`, then `systemctl try-reload-or-restart ssh.service`), so a rollback in a later process replays it from its journaled name, check first. Two exceptions in a rollback: `FirewallReload` runs `systemctl reload-or-restart vps-ready-firewall.service` when the unit was active before the transaction (the journal has no backup of it, or one with `was_active`), so a unit stopped by hand during the window (which deletes the table) comes back with the restored ruleset, while one stopped before stays stopped; and once a rollback removed the Caddyfile, `CaddyReload` runs `systemctl disable --now caddy.service` instead, since Caddy can neither validate, reload nor start without it. Its usual command is `systemctl reload-or-restart caddy.service`, which also starts a stopped Caddy, and `deploy.proxy`'s `verify` then checks that `caddy.service` is active. There is no `requires` or topological sort yet: the registry order (`user.admin`, `ssh.server`, `net.tailscale`, `net.wireguard`, `deploy.docker`, `firewall.inbound`, `ssh.bruteforce`, `kernel.sysctl`, `updates.auto`, `deploy.proxy`, `deploy.user`) is fixed, `ssh.server`'s need for an admin is a plan-time check, a module that sees `deploy.docker`'s `docker-ce` package planned before it plans as if Docker were present, and `deploy.proxy` reads the ruleset `firewall.inbound` plans before it for ports 80 and 443.
+
+`net.wireguard` keeps the server's private key out of vps-ready. `WireguardKey` runs `wg genkey` with its stdout opened by vps-ready as a new file (`O_CREAT | O_EXCL`, mode 0600) and checks it with `wg pubkey` reading that file; its backup holds only `created` and a public key, and rollback keeps the key. `wg0.conf` has no `PrivateKey` (its `PostUp` loads the key file), so it is an ordinary `File`. The running `wg0` is a resource of its own, `WireguardSync`, rather than a reload: it diffs `wg show wg0 listen-port` and `allowed-ips` against the file's port and peers, so a hand-made `wg set` shows up as a change in the plan even when no file changes (a module with no change runs no reload), applies only `wg set` commands, and journals the peers before and after (public keys only), so rollback puts them back. It never runs `wg syncconf`, which clears a key loaded by `PostUp`; a drop-in empties the unit's `ExecReload=` for the same reason.
 
 ### Controls catalog (declarative, auditable without reading Rust)
 Controls live in `src/audit/controls/<area>.toml`, one file per area (`ssh.toml`, `kernel.toml`, `network.toml`, later `firewall.toml`, ...), using a **closed** check vocabulary. They are separate from modules because some controls have no module that fixes them. The vocabulary must not grow into a DSL:
@@ -143,7 +145,7 @@ title    = "Password authentication disabled"
 why      = "Passwords can be brute-forced; keys cannot."
 check    = { kind = "sshd_effective", key = "passwordauthentication", equals = "no" }
 ```
-Check kinds: `sshd_effective`, `ssh_rate_limited`, `sysctl`, `auto_updates`, `inbound_default_deny`, `published_ports`, `exposed_listeners`, `apparmor`, `reverse_path_filter`, `icmp_redirects_ignored` and `icmp_redirects_not_sent` are implemented; planned are `file_mode`, `file_contains`, `pkg_installed`, `service_state`, `port_listening`, `user_property`, `fw_allows`. Each is added with the first control that needs it. The optional `fix` names the module that resolves a failure (`fix = "kernel.sysctl"`); `audit` then prints `fix: sudo vps-ready apply --module <id>` under the failed control, and `--json` has it as `"fix": "<id>"`. A finding may also carry a `note`, what the check saw beyond its outcome (`FW-003` lists every port open to the internet); `audit` prints it under the control, and `--json` has it as `"note"`. A later field: `refs` (CIS and Lynis IDs).
+Check kinds: `sshd_effective`, `ssh_rate_limited`, `sysctl`, `auto_updates`, `inbound_default_deny`, `published_ports`, `exposed_listeners`, `ssh_private_only`, `wireguard_key_files`, `apparmor`, `reverse_path_filter`, `icmp_redirects_ignored` and `icmp_redirects_not_sent` are implemented; planned are `file_mode`, `file_contains`, `pkg_installed`, `service_state`, `port_listening`, `user_property`, `fw_allows`. Each is added with the first control that needs it. The optional `fix` names the module that resolves a failure (`fix = "kernel.sysctl"`); `audit` then prints `fix: sudo vps-ready apply --module <id>` under the failed control, and `--json` has it as `"fix": "<id>"`. A finding may also carry a `note`, what the check saw beyond its outcome (`FW-003` lists every port open to the internet); `audit` prints it under the control, and `--json` has it as `"note"`. A later field: `refs` (CIS and Lynis IDs).
 
 An outcome is `pass`, `fail` (with the value found), `unknown` (the fact could not be read, usually for lack of root) or `skip` (the control is not checked here, e.g. kernel settings inside a container). Unknown never counts as a pass. `audit` exits 0 when no control fails or is unknown, 1 otherwise, and 2 on error.
 
@@ -217,7 +219,7 @@ The journal events, one JSON object per line: `begin`, `armed` (unit, boot ID, f
 
 ## Dead-man switch (the headline feature)
 
-For modules with `needs_deadman` (`user.admin`, `ssh.server`, `firewall.inbound`), and for a module whose plan sets `ModuleSteps.deadman` on this host (a VPN that SSH depends on through `ssh_via`, e.g. `net.tailscale` with a loaded `ssh_via` on Tailscale's interface; its resources are then restored as with `force_restore`). Several of them in one apply share one transaction and one confirm. The full design and its reasons are in [the M3 plan](m3-plan.md#dead-man-switch).
+For modules with `needs_deadman` (`user.admin`, `ssh.server`, `firewall.inbound`), and for a module whose plan sets `ModuleSteps.deadman` on this host (a VPN that SSH depends on through `ssh_via`: `net.tailscale` with a loaded `ssh_via` on Tailscale's interface, `net.wireguard` with a loaded `ssh_via = "wg0"`; its resources are then restored as with `force_restore`). Several of them in one apply share one transaction and one confirm. The full design and its reasons are in [the M3 plan](m3-plan.md#dead-man-switch).
 
 ```
 arm:     (before the first change; a failure ends the transaction before any backup)
@@ -245,7 +247,8 @@ reboot:  the boot hook rolls back before sshd starts (reason deadman-reboot)
 - **New session, from the process tree.** sudo drops `SSH_CONNECTION`, so `confirm` walks `/proc` up to the nearest `sshd`/`sshd-session` process and compares its PID and start time with the session recorded at apply. tmux, screen, mosh, the console and `ControlMaster` connections all count as old. A client on loopback is refused too: the firewall accepts that traffic whatever its rules.
 - **Deadlines** are `CLOCK_BOOTTIME` seconds plus the boot ID, so an NTP step during the window changes nothing.
 - **The boot hook** `/etc/systemd/system/vps-ready-deadman.service` (`DefaultDependencies=no`, `After=vps-ready-firewall.service`, `Before=ssh.service ssh.socket docker.service`, `TimeoutStartSec=120`) is written outside any transaction and enabled only while one is armed. It rolls back a transaction armed in an earlier boot, so sshd and Docker start with the restored config; every command it runs has 20 s at most. The timer and the hook run a private copy of the binary that applied, made at arm time, so moving, removing or upgrading the installed binary (`install.sh`, the `.deb`) cannot break them, and the unattended rollback is the version that applied. The copy is one file, overwritten by the next arm and left in place after a confirm or rollback. `confirm --extend` re-arms with the same copy. A transaction armed by v0.4.0, whose hook names the installed binary, is left as it was.
-- **A manual rollback under `ssh_via`** that would limit SSH to an interface again (the ruleset it restores has `ssh_via`, the current one does not) runs only from an SSH login through that interface from another machine: no timer covers it. A pending, expired or unfinished transaction is exempt, since its rollback only does what the dead-man would. A manual rollback that would stop a `tailscaled` its transaction started, or run `tailscale down`, is refused before anything is restored: whatever the session when the ruleset in force afterwards limits SSH to Tailscale's interface, else from a session through it (by name, or holding one of the node's Tailscale addresses). `tailscale down`'s own check would refuse only mid-rollback, and `systemctl stop` does not ask.
+- **A manual rollback under `ssh_via`** that would limit SSH to an interface again (the ruleset it restores has `ssh_via`, the current one does not) runs only from an SSH login through that interface from another machine: no timer covers it. A pending, expired or unfinished transaction is exempt, since its rollback only does what the dead-man would. A manual rollback that would stop a `tailscaled` its transaction started, or run `tailscale down`, is refused before anything is restored: whatever the session when the ruleset in force afterwards limits SSH to Tailscale's interface, else from a session through it (by name, or holding one of the node's Tailscale addresses). `tailscale down`'s own check would refuse only mid-rollback, and `systemctl stop` does not ask. The same holds for a rollback that stops a `wg-quick@wg0` its transaction started (refused whatever the session when the ruleset afterwards limits SSH to `wg0`, else from a session through `wg0`), and for one that, from a session through `wg0`, would take that session's peer off the running interface.
+
 - **The dead-man rollback is per resource.** Resources of a module with `force_restore` (`ssh.server`, `firewall.inbound`) are restored even if edited during the window; the edit is kept as `files/<n>.during`. Any other resource that changed is skipped and journaled with its by-hand step. Restores go first and the journal is best effort, so a full disk does not stop them. If a forced restore fails, the unforced ones after it (such as the admin `user.admin` set up) wait for a rerun, so the way in stays while the lock-down does. A manual `rollback` keeps the all-or-nothing check.
 - **Waiting.** `apply` counts down until the transaction leaves pending-confirm: exit 0 when confirmed, 1 when rolled back, 4 when Ctrl-C stopped the wait (the timer keeps running).
 
@@ -277,8 +280,8 @@ sequenceDiagram
 **Without the timer:** `apply --deadman=off` applies the dead-man modules without arming anything, for a first boot from `export cloud-init`, where nobody is logged in to confirm. Every plan-time invariant still holds (a keyed sudo admin before root and password logins are turned off, the SSH port kept open). It needs positive evidence that nobody could confirm: no per-session sshd process (`sshd: <user>@...` or `sshd-session: ...`) in `/proc`, and no `loginctl list-sessions` session of class `user`; a tmux, screen or mosh session has no sshd ancestor, so the applying process's own session is not enough. The check is skipped when no module in the plan needs the timer, and with `off` a module that does not apply fails the run, as with `--module`. The journal's `state applied` record carries `without_timer`, and `history` shows it. A crash mid-apply with the timer off leaves an unfinished transaction, with nothing to roll it back until `rollback --last`. There is no `selftest` mode: a loopback probe proves only that sshd answers, which is why `confirm` refuses loopback logins. The reasons are in [the M6 plan](m6-plan.md#hardened-before-exposed-export-cloud-init).
 
 Planned:
-- **OpenRC:** a double-forked `setsid` watchdog plus a `local.d` boot hook (M7; today the dead-man modules need systemd).
-- **firewalld:** runtime-only rules as a second safety net (M7).
+- **OpenRC:** a double-forked `setsid` watchdog plus a `local.d` boot hook (with Alpine support; today the dead-man modules need systemd).
+- **firewalld:** runtime-only rules as a second safety net (with RHEL support).
 
 ## State layout
 
@@ -344,7 +347,7 @@ TOML avoids YAML's foot-guns in a security config (`no` → `false`, the Norway 
 - Every module's params struct has `#[serde(deny_unknown_fields)]`, and every section is checked when the profile is parsed, so a typo is an error that names the module, not a silently ignored line.
 - Planned: the same structs derive `schemars::JsonSchema`, so the published schema can't drift from the code.
 
-The built-in profiles are `minimal` (`user.admin`, `ssh.server`, `firewall.inbound` allowing `22/tcp`, `kernel.sysctl`, `updates.auto`) and `web` (the same, plus `80/tcp`, `443/tcp`, `443/udp` and `ssh.bruteforce`). A file can extend one of them (one level), override a module's fields, or drop a module with `enabled = false`; tables merge one level deep and lists replace:
+The built-in profiles are `minimal` (`user.admin`, `ssh.server`, `firewall.inbound` allowing `22/tcp`, `kernel.sysctl`, `updates.auto`) `web` (the same, plus `80/tcp`, `443/tcp`, `443/udp` and `ssh.bruteforce`) and `private` (`web`'s hardening without Docker, nothing in `allow`, and `ssh_via = "vpn"`). A file can extend one of them (one level), override a module's fields, or drop a module with `enabled = false`; tables merge one level deep and lists replace:
 
 ```toml
 schema  = 1
@@ -384,7 +387,7 @@ crates/
     src/audit/             controls catalog (controls/*.toml), evaluation, report
     src/modules/           <name>.rs + <name>/ (tests, snapshots)
     templates/             askama templates of the files modules write
-    src/config/            TOML profiles (profiles/minimal.toml, web.toml), strict deserialize; JSON Schema via schemars (planned)
+    src/config/            TOML profiles (profiles/minimal.toml, web.toml, private.toml), strict deserialize; JSON Schema via schemars (planned)
     src/report/            text | json | sarif | junit (planned)
     src/tui/               the `Prompt` trait (select, multi-select, input, confirm) with a `dialoguer` implementation and a scripted one for tests; no flow logic. `ratatui` is deferred
   vpsready/                alias crate: the same command under the name `vpsready`

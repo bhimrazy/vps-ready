@@ -185,6 +185,7 @@ mod tests {
             "firewall.inbound",
             "kernel.sysctl",
             "net.tailscale",
+            "net.wireguard",
             "deploy.proxy",
             "deploy.user",
         ] {

@@ -6,7 +6,11 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use super::journal::{Event, Record};
+use crate::resource::Backup;
 use crate::sys::{Cmd, Sys};
+
+const FIREWALL_UNIT: &str = "vps-ready-firewall.service";
 
 /// A reload a module needs after its resources are applied. A closed set,
 /// so the journal records it by name and a rollback in a later process
@@ -17,7 +21,9 @@ pub enum Reload {
     /// `sshd -t`, then `systemctl try-reload-or-restart ssh.service`.
     SshdReload,
     /// `nft -c -f /etc/vps-ready/firewall.nft`, then
-    /// `systemctl try-reload-or-restart vps-ready-firewall.service`.
+    /// `systemctl try-reload-or-restart vps-ready-firewall.service`; a
+    /// rollback starts it if it was active before (see
+    /// [`Reload::rollback_steps`]).
     FirewallReload,
     /// `fail2ban-client -t`, then `systemctl try-restart fail2ban.service`:
     /// only a running fail2ban, so a rollback that stopped it leaves it off.
@@ -85,7 +91,7 @@ impl Reload {
     pub fn command(self) -> Cmd {
         let args: &[&str] = match self {
             Self::SshdReload => &["try-reload-or-restart", "ssh.service"],
-            Self::FirewallReload => &["try-reload-or-restart", "vps-ready-firewall.service"],
+            Self::FirewallReload => &["try-reload-or-restart", FIREWALL_UNIT],
             Self::Fail2banRestart => &["try-restart", "fail2ban.service"],
             Self::DaemonReload => &["daemon-reload"],
             Self::DockerRestart => &["try-restart", "docker.service"],
@@ -100,15 +106,26 @@ impl Reload {
     /// reload without its Caddyfile, and the check would fail and leave it
     /// serving the removed one, so once a rollback removed the file,
     /// `systemctl disable --now caddy.service` runs instead, with no check,
-    /// and the next boot does not try to start it either. Others are
-    /// [`Reload::check`] and [`Reload::command`].
+    /// and the next boot does not try to start it either. The firewall's
+    /// unit gets `reload-or-restart` when it was active before the
+    /// transaction (`records`): stopped since, its table is deleted, and
+    /// `try-reload-or-restart` would leave no firewall until the next boot.
+    /// One that was stopped before stays stopped, as an admin may have
+    /// stopped it to get in. Others are [`Reload::check`] and
+    /// [`Reload::command`].
     #[must_use]
-    pub fn rollback_steps(self, sys: Sys) -> (Option<Cmd>, Cmd) {
+    pub fn rollback_steps(self, sys: Sys, records: &[Record]) -> (Option<Cmd>, Cmd) {
         if self == Self::CaddyReload && !sys.fs.exists(Path::new(CADDYFILE)) {
             let stop = Cmd::new("systemctl")
                 .args(["disable", "--now", "caddy.service"])
                 .timeout(SYSTEMCTL_TIMEOUT);
             return (None, stop);
+        }
+        if self == Self::FirewallReload && firewall_was_active(records) {
+            let start = Cmd::new("systemctl")
+                .args(["reload-or-restart", FIREWALL_UNIT])
+                .timeout(SYSTEMCTL_TIMEOUT);
+            return (self.check(), start);
         }
         (self.check(), self.command())
     }
@@ -124,6 +141,24 @@ impl fmt::Display for Reload {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.name())
     }
+}
+
+/// Whether the firewall's unit was active before the transaction of
+/// `records`. firewall.inbound, the only module with this reload, plans it
+/// enabled and active, so without a backup of it apply found it so.
+fn firewall_was_active(records: &[Record]) -> bool {
+    records
+        .iter()
+        .find_map(|r| match &r.event {
+            Event::Backup {
+                backup: Backup::Service {
+                    unit, was_active, ..
+                },
+                ..
+            } if unit == FIREWALL_UNIT => Some(*was_active),
+            _ => None,
+        })
+        .unwrap_or(true)
 }
 
 /// Runs `cmd`; `Err` holds its exit status and output (stderr, else
@@ -245,10 +280,11 @@ mod tests {
     fn caddy_rollback_stops_caddy_without_its_caddyfile() {
         let runner = FakeRunner::new();
         let steps = |fs: &FakeFs| {
-            let (check, command) = Reload::CaddyReload.rollback_steps(Sys {
+            let sys = Sys {
                 fs,
                 runner: &runner,
-            });
+            };
+            let (check, command) = Reload::CaddyReload.rollback_steps(sys, &[]);
             (check.as_ref().map(line), line(&command))
         };
         assert_eq!(
@@ -263,11 +299,16 @@ mod tests {
                 line(&Reload::CaddyReload.command())
             )
         );
-        for reload in ALL.into_iter().filter(|r| *r != Reload::CaddyReload) {
-            let (check, command) = reload.rollback_steps(Sys {
+        // The firewall's: `a_rollback_restarts_the_firewall_unit_if_it_was_active`.
+        let others = ALL
+            .into_iter()
+            .filter(|r| !matches!(r, Reload::CaddyReload | Reload::FirewallReload));
+        for reload in others {
+            let sys = Sys {
                 fs: &FakeFs::new(),
                 runner: &runner,
-            });
+            };
+            let (check, command) = reload.rollback_steps(sys, &[]);
             assert_eq!(check, reload.check());
             assert_eq!(command, reload.command());
         }

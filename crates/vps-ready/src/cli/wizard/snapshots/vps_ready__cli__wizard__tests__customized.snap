@@ -12,6 +12,9 @@ Audit: 14 passed, 12 failed (1 high, 5 medium, 6 low), 5 unknown. vps-ready can 
   new account: logs in with 1 key copied from /root/.ssh/authorized_keys; sudo
   without a password.
   Root and password logins will be turned off, so this key is how you log in.
+? Private access for SSH
+  > None: SSH stays reachable from the internet, with keys only
+    Tailscale (the private profile)
 All other incoming ports are blocked.
 ? More ports to open, e.g. 8080/tcp or 53/udp (Enter for none): 
 ? Pick which modules to run yourself? (y/N) yes
@@ -19,6 +22,7 @@ All other incoming ports are blocked.
   [ ] user.admin: Set up an admin account that logs in with an SSH key and uses sudo (can lock you out; undone unless you confirm)
   [x] ssh.server: Turn off root and password logins over SSH (can lock you out; undone unless you confirm)
   [ ] net.tailscale: Join a tailnet with Tailscale, for a private path to SSH
+  [ ] net.wireguard: Run a WireGuard interface, for a private path to SSH (does not apply: whether the kernel has WireGuard is unknown: /sys/module/wireguard is missing and modprobe could not tell)
   [ ] deploy.docker: Install Docker with logs capped and ports on loopback by default
   [x] firewall.inbound: Drop incoming traffic that no rule allows (can lock you out; undone unless you confirm)
   [ ] ssh.bruteforce: Ban addresses that keep failing to log in over SSH
@@ -35,6 +39,7 @@ All other incoming ports are blocked.
   [x] user.admin: Set up an admin account that logs in with an SSH key and uses sudo (can lock you out; undone unless you confirm)
   [x] ssh.server: Turn off root and password logins over SSH (can lock you out; undone unless you confirm)
   [ ] net.tailscale: Join a tailnet with Tailscale, for a private path to SSH
+  [ ] net.wireguard: Run a WireGuard interface, for a private path to SSH (does not apply: whether the kernel has WireGuard is unknown: /sys/module/wireguard is missing and modprobe could not tell)
   [ ] deploy.docker: Install Docker with logs capped and ports on loopback by default
   [x] firewall.inbound: Drop incoming traffic that no rule allows (can lock you out; undone unless you confirm)
   [x] ssh.bruteforce: Ban addresses that keep failing to log in over SSH

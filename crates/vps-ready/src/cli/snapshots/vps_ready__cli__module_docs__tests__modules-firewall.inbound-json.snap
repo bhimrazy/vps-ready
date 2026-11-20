@@ -17,7 +17,7 @@ expression: out
     {
       "name": "ssh_via",
       "default": "\"\"",
-      "help": "Accept SSH only on this interface, e.g. \"tailscale0\" or \"wg0\", from a session through it; empty for any."
+      "help": "Accept SSH only on this interface, e.g. \"tailscale0\" or \"wg0\", from a session through it; \"vpn\" for the profile's VPN module's interface, which keeps SSH public until applied from a session through it (the private profile), so an interface named vpn cannot be used; empty for any."
     }
   ],
   "controls": [

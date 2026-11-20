@@ -85,22 +85,34 @@
 #   tarball: `sha256sum -c` fails, nothing is installed or applied, and
 #   `cloud-init status` is error.
 #   private-access (only with the `private-access` argument; needs a Linux
-#   runner with sudo, the wireguard kernel module and wireguard-tools): a
-#   hand-made wg0 in the VM (wireguard-tools installed there, the key loaded
-#   by PostUp) whose peer is the runner, reached through QEMU's UDP forward of
-#   127.0.0.1:$VM_WG_PORT (default 51820). Then, with `--deadman`:
+#   runner with sudo, the wireguard kernel module and wireguard-tools):
+#   net.wireguard in the VM, whose peer is the runner, reached through
+#   QEMU's UDP forward of 127.0.0.1:$VM_WG_PORT (default 51820). Then, with
+#   `--deadman`:
+#     net.wireguard and firewall.inbound from the public session, confirmed
+#       from a new public login: the client config is printed, wg0 has the
+#       key of wg0.key, the firewall accepts its port, wg0.conf and the state
+#       directory hold no private key, `systemctl reload` fails (the
+#       drop-in), and the plan is empty; NET-008 passes;
+#     whether `wg syncconf` with a key-less file keeps the key, on a
+#       separate interface, printed;
 #     ssh_via from the public session is refused, with the command to run
 #       through wg0;
 #     not confirmed: during the window a new public login fails, and at the
 #       deadline public SSH works again;
-#     confirmed: firewall.inbound without ssh_via applied first, from the
-#       public session; then ssh_via through wg0: a new public login fails, a public
-#       session opened before stays up, a confirm from a login from the VM
-#       to its own address or to wg0's is refused as local, and one through
-#       wg0 confirms; SSH-009 and FW-003 pass;
-#     after a reboot public SSH stays closed and SSH through wg0 works, and
-#       `systemd-analyze verify` finds no ordering cycle; rollback through
-#       wg0 reopens public SSH.
+#     confirmed through wg0: a new public login fails, a public session
+#       opened before stays up, a confirm from a login from the VM to its
+#       own address or to wg0's is refused as local, and one through wg0
+#       confirms; SSH-009, FW-003 and NET-008 pass;
+#     under ssh_via a second peer plans only net.wireguard and arms the
+#       timer; not confirmed, the dead-man takes the peer off wg0 again;
+#       confirmed through wg0, a wg0 session opened before stays up with the
+#       key intact; moving this session's own peer is refused;
+#     after a reboot public SSH stays closed and SSH through wg0 works with
+#       the same key, and `systemd-analyze verify` finds no ordering cycle;
+#     rollback --last until the start: public SSH reopens, stopping wg0 is
+#       refused through wg0 and done from public SSH, the key stays, and a
+#       new apply brings back the same public key.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -407,17 +419,74 @@ private_access_cycle() {
   pvm 'cat >/tmp/vps-ready' <"$bin"
   pvm sudo install -m 755 /tmp/vps-ready /usr/local/bin/vps-ready
 
-  echo "== $distro: a hand-made wg0, with the runner as its peer"
-  pvm "sudo apt-get $apt_retry update -q >/dev/null && sudo DEBIAN_FRONTEND=noninteractive apt-get $apt_retry install -y -q --no-install-recommends wireguard-tools >/dev/null" ||
-    die "cannot install wireguard-tools in the VM"
-  pvm sudo modprobe wireguard || die "the VM's kernel has no WireGuard module"
+  # The runner is the peer laptop (host 2). Its key is made here and never
+  # leaves the runner; the VM's is made by `wg genkey` in the VM.
   (umask 077 && wg genkey >"$tmp/wg.key")
-  vm_pub=$(pvm "sudo sh -c 'umask 077; wg genkey >/etc/wireguard/wg0.key; wg pubkey </etc/wireguard/wg0.key'")
-  printf '%s\n' '[Interface]' 'Address = 10.77.0.1/24' 'ListenPort = 51820' \
-    'PostUp = wg set %i private-key /etc/wireguard/%i.key' '' '[Peer]' \
-    "PublicKey = $(wg pubkey <"$tmp/wg.key")" 'AllowedIPs = 10.77.0.2/32' |
-    pvm 'sudo sh -c "umask 077; cat >/etc/wireguard/wg0.conf"'
-  pvm sudo systemctl enable --now wg-quick@wg0 || die "wg-quick@wg0 did not start"
+  runner_pub=$(wg pubkey <"$tmp/wg.key")
+  phone_pub=$(wg genkey | wg pubkey)
+  peers() { printf 'peers = [%s]\n' "$1"; }
+  laptop="{ name = \"laptop\", public_key = \"$runner_pub\", host = 2 }"
+  phone="{ name = \"phone\", public_key = \"$phone_pub\", host = 3 }"
+  # The QEMU network is 10.0.2.0/24, and some runners use 10.1.0.0/16, so
+  # the subnet is fixed here; the derived one is covered by unit tests.
+  wg_module() { printf '%s\n' '[modules."net.wireguard"]' 'address = "10.77.0.1/24"'; peers "$1"; }
+
+  echo "== $distro: net.wireguard and firewall.inbound from the public session"
+  { echo 'schema = 1'; wg_module "$laptop"; echo '[modules."firewall.inbound"]'; } |
+    pvm 'cat >/tmp/wg.toml'
+  pvm sudo vps-ready apply --yes --profile /tmp/wg.toml --deadman 2m </dev/null >"$tmp/apply.out" 2>&1 &
+  apply_pid=$!
+  expect_pending
+  # A login in the same second as go-live does not count as new.
+  sleep 2
+  rc=0; pvm sudo vps-ready confirm || rc=$?
+  [ "$rc" -eq 0 ] || die "confirm from a new public login exited $rc, expected 0"
+  rc=0; wait "$apply_pid" || rc=$?
+  cat "$tmp/apply.out"
+  [ "$rc" -eq 0 ] || die "the WireGuard apply exited $rc, expected 0"
+  grep -q 'WireGuard client configs' "$tmp/apply.out" || die "apply did not print the client config"
+  pvm sudo vps-ready wireguard-config laptop >"$tmp/client.conf" || die "wireguard-config failed"
+  cat "$tmp/client.conf"
+  vm_pub=$(sed -n 's/^PublicKey = //p' "$tmp/client.conf")
+  grep -qx 'Address = 10.77.0.2/32' "$tmp/client.conf" || die "the client config has the wrong Address"
+  grep -qx 'AllowedIPs = 10.77.0.1/32' "$tmp/client.conf" || die "the client config has the wrong AllowedIPs"
+  [ "$(pvm sudo wg show wg0 public-key)" = "$vm_pub" ] || die "wg0 does not have the key of wg0.key"
+  # nft lists a one-port set without braces.
+  pvm sudo nft list table inet vps_ready >"$tmp/table.nft"
+  grep -Eq 'udp dport (\{ )?51820( \})? accept' "$tmp/table.nft" ||
+    { cat "$tmp/table.nft"; die "the firewall does not accept WireGuard's port"; }
+  pvm sudo grep -q PrivateKey /etc/wireguard/wg0.conf && die "wg0.conf holds a PrivateKey"
+  pvm "sudo sh -c '! grep -rqF -e \"\$(cat /etc/wireguard/wg0.key)\" /var/lib/vps-ready'" ||
+    die "the private key is in vps-ready's state directory"
+  # The drop-in: a reload fails instead of clearing the key.
+  ! pvm sudo systemctl reload wg-quick@wg0 2>/dev/null || die "systemctl reload wg-quick@wg0 worked"
+  [ "$(pvm sudo wg show wg0 public-key)" = "$vm_pub" ] || die "the reload attempt changed the key"
+  expect_empty_wg() {
+    rc=0; pvm sudo vps-ready plan --json --profile "$1" >"$tmp/plan.json" || rc=$?
+    [ "$rc" -eq 0 ] || die "plan exited $rc, expected 0"
+    jq -e '[.modules[] | .changes // [] | length] | add == 0' "$tmp/plan.json" >/dev/null ||
+      { jq . "$tmp/plan.json"; die "plan of $1 has changes after apply"; }
+  }
+  expect_empty_wg /tmp/wg.toml
+
+  # Precondition of the drop-in, on a separate interface: does `wg
+  # syncconf` with a file that has no PrivateKey keep the key PostUp
+  # loaded? The result is printed; the drop-in stays either way.
+  echo "== $distro: wg syncconf with a key-less config"
+  pvm "sudo sh -c 'umask 077; wg genkey >/tmp/wgpre.key; printf \"%s\n\" \"[Interface]\" \"Address = 10.78.0.1/24\" \"ListenPort = 51830\" \"PostUp = wg set %i private-key /tmp/wgpre.key\" >/tmp/wgpre.conf'"
+  pvm sudo wg-quick up /tmp/wgpre.conf >/dev/null 2>&1 || die "wg-quick up wgpre failed"
+  pre=$(pvm sudo wg show wgpre public-key)
+  pvm "sudo bash -c 'wg syncconf wgpre <(wg-quick strip /tmp/wgpre.conf)'" || die "wg syncconf failed"
+  post=$(pvm sudo wg show wgpre public-key)
+  if [ "$post" = "$pre" ]; then
+    echo "syncconf precondition [$distro]: the key is KEPT"
+  else
+    echo "syncconf precondition [$distro]: the key is CLEARED ($post)"
+  fi
+  pvm sudo wg-quick down /tmp/wgpre.conf >/dev/null 2>&1 || true
+  pvm sudo rm -f /tmp/wgpre.conf /tmp/wgpre.key
+
+  echo "== $distro: the runner's side of the tunnel"
   wg_link=vrwg
   sudo ip link add "$wg_link" type wireguard
   sudo wg set "$wg_link" private-key "$tmp/wg.key" peer "$vm_pub" \
@@ -433,8 +502,12 @@ private_access_cycle() {
       -o ServerAliveInterval=5 -o ServerAliveCountMax=3 vmwg "$@"
   }
   wait_ssh 60
-  printf '%s\n' 'schema = 1' '[modules."firewall.inbound"]' 'allow = ["51820/udp"]' \
-    'ssh_via = "wg0"' | pvm 'cat >/tmp/via.toml'
+  rc=0; vr audit --json >"$tmp/audit.json" || rc=$?
+  [ "$rc" -le 1 ] || die "audit exited $rc, expected 0 or 1"
+  jq -e '.findings[] | select(.id == "NET-008" and .status == "pass")' "$tmp/audit.json" >/dev/null ||
+    die "NET-008 does not pass"
+  printf '%s\n' 'schema = 1' '[modules."firewall.inbound"]' 'ssh_via = "wg0"' |
+    pvm 'cat >/tmp/via.toml'
 
   echo "== $distro: ssh_via from the public session is refused"
   rc=0; pvm sudo vps-ready apply --yes --profile /tmp/via.toml >"$tmp/public.out" 2>&1 || rc=$?
@@ -444,23 +517,8 @@ private_access_cycle() {
     die "apply from the public session was not refused as not through wg0"
   grep -q 'ssh -t ci@10.77.0.1 sudo vps-ready apply' "$tmp/public.out" ||
     die "the refusal does not give the command through wg0"
-  [ -z "$(vm sudo ls /var/lib/vps-ready/txn 2>/dev/null)" ] || die "the refused apply left a transaction"
-
-  # As in the two-apply flow, the firewall is loaded before ssh_via. Then
-  # conntrack tracks the public sessions opened since, so they stay up when
-  # ssh_via closes new ones.
-  echo "== $distro: the firewall with wg0's port, from the public session"
-  printf '%s\n' 'schema = 1' '[modules."firewall.inbound"]' 'allow = ["51820/udp"]' |
-    pvm 'cat >/tmp/fw.toml'
-  pvm sudo vps-ready apply --yes --profile /tmp/fw.toml --deadman 2m </dev/null >"$tmp/apply.out" 2>&1 &
-  apply_pid=$!
-  expect_pending
-  # A login in the same second as go-live does not count as new.
-  sleep 2
-  rc=0; pvm sudo vps-ready confirm || rc=$?
-  [ "$rc" -eq 0 ] || die "confirm from a new public login exited $rc, expected 0"
-  rc=0; wait "$apply_pid" || rc=$?
-  [ "$rc" -eq 0 ] || { cat "$tmp/apply.out"; die "the firewall apply exited $rc, expected 0"; }
+  vr history --json >"$tmp/history.json"
+  [ "$(jq length "$tmp/history.json")" -eq 1 ] || die "the refused apply left a transaction"
 
   echo "== $distro: ssh_via through wg0, not confirmed"
   vm sudo vps-ready apply --yes --profile /tmp/via.toml --deadman 1m </dev/null >"$tmp/apply.out" 2>&1 &
@@ -509,10 +567,59 @@ private_access_cycle() {
   grep -q 'still here' "$tmp/old-public.out" || die "the public session opened before apply did not stay up"
   rc=0; vr audit --json >"$tmp/audit.json" || rc=$?
   [ "$rc" -le 1 ] || die "audit exited $rc, expected 0 or 1"
-  ids='.id == "SSH-009" or .id == "FW-003"'
+  ids='.id == "SSH-009" or .id == "FW-003" or .id == "NET-008"'
   jq -r ".findings[] | select($ids) | \"\(.id) \(.status) \(.note // \"\")\"" "$tmp/audit.json"
-  jq -e "[.findings[] | select(($ids) and .status == \"pass\")] | length == 2" "$tmp/audit.json" >/dev/null ||
-    die "SSH-009 or FW-003 does not pass under ssh_via"
+  jq -e "[.findings[] | select(($ids) and .status == \"pass\")] | length == 3" "$tmp/audit.json" >/dev/null ||
+    die "SSH-009, FW-003 or NET-008 does not pass under ssh_via"
+
+  echo "== $distro: under ssh_via, a second peer through wg0"
+  { echo 'schema = 1'; wg_module "$laptop, $phone"; printf '%s\n' '[modules."firewall.inbound"]' 'ssh_via = "wg0"'; } |
+    vm 'cat >/tmp/wg2.toml'
+  rc=0; vr plan --json --profile /tmp/wg2.toml >"$tmp/plan.json" || rc=$?
+  [ "$rc" -eq 0 ] || die "plan of the second peer exited $rc, expected 0"
+  jq -e '[.modules[] | select((.changes // []) | length > 0) | .id] == ["net.wireguard"]' \
+    "$tmp/plan.json" >/dev/null || { jq . "$tmp/plan.json"; die "the peer change plans more than net.wireguard"; }
+
+  # Not confirmed: the dead-man takes the peer off the running wg0 again.
+  vm sudo vps-ready apply --yes --profile /tmp/wg2.toml --deadman 1m </dev/null >"$tmp/apply.out" 2>&1 &
+  apply_pid=$!
+  expect_pending
+  vm sudo wg show wg0 peers | grep -qx "$phone_pub" || die "the second peer is not on wg0"
+  rc=0; wait "$apply_pid" || rc=$?
+  [ "$rc" -eq 1 ] || { cat "$tmp/apply.out"; die "the unconfirmed peer apply exited $rc, expected 1"; }
+  expect_newest rolled-back
+  ! vm sudo wg show wg0 peers | grep -qx "$phone_pub" || die "the dead-man left the second peer on wg0"
+  [ "$(vm sudo wg show wg0 public-key)" = "$vm_pub" ] || die "the dead-man rollback changed wg0's key"
+
+  # Confirmed: a session through wg0 opened before the apply stays up and
+  # keeps carrying data (a line a second).
+  vm 'while sleep 1; do echo tick; done' >"$tmp/ticks" 2>&1 &
+  old_pid=$!
+  vm sudo vps-ready apply --yes --profile /tmp/wg2.toml --deadman 2m </dev/null >"$tmp/apply.out" 2>&1 &
+  apply_pid=$!
+  expect_pending
+  vm sudo wg show wg0 peers | grep -qx "$phone_pub" || die "the second peer is not on wg0"
+  [ "$(vm sudo wg show wg0 public-key)" = "$vm_pub" ] || die "adding a peer changed wg0's key"
+  sleep 2
+  rc=0; vm sudo vps-ready confirm || rc=$?
+  [ "$rc" -eq 0 ] || die "confirm through wg0 exited $rc, expected 0"
+  rc=0; wait "$apply_pid" || rc=$?
+  [ "$rc" -eq 0 ] || { cat "$tmp/apply.out"; die "the peer apply exited $rc, expected 0"; }
+  kill -0 "$old_pid" 2>/dev/null || die "the wg0 session did not survive the peer change"
+  before=$(wc -l <"$tmp/ticks")
+  sleep 25
+  after=$(wc -l <"$tmp/ticks")
+  [ "$after" -gt "$before" ] || die "the wg0 session stopped carrying data after the peer change"
+  kill "$old_pid" 2>/dev/null || true
+  # Moving this session's own peer is refused.
+  laptop4="{ name = \"laptop\", public_key = \"$runner_pub\", host = 4 }"
+  { echo 'schema = 1'; wg_module "$laptop4, $phone"; printf '%s\n' '[modules."firewall.inbound"]' 'ssh_via = "wg0"'; } |
+    vm 'cat >/tmp/wg3.toml'
+  rc=0; vr apply --yes --profile /tmp/wg3.toml >"$tmp/own.out" 2>&1 || rc=$?
+  cat "$tmp/own.out"
+  [ "$rc" -eq 2 ] || die "changing this session's own peer exited $rc, expected 2"
+  grep -q 'this session comes through wg0 from 10.77.0.2' "$tmp/own.out" ||
+    die "changing this session's own peer was not refused"
 
   echo "== $distro: ssh_via across a reboot"
   vm sudo systemd-analyze verify /etc/systemd/system/vps-ready-firewall.service \
@@ -522,12 +629,33 @@ private_access_cycle() {
   reboot_vm
   no_public_login "after the reboot"
   [ "$(vm systemctl is-active wg-quick@wg0)" = active ] || die "wg-quick@wg0 is not active after the reboot"
+  [ "$(vm sudo wg show wg0 public-key)" = "$vm_pub" ] || die "wg0 came back with another key"
   expect_newest confirmed
 
-  echo "== $distro: rollback through wg0 reopens public SSH"
-  rc=0; vr rollback --last || rc=$?
-  [ "$rc" -eq 0 ] || die "rollback exited $rc, expected 0"
-  pvm true || die "no public login after the rollback"
+  echo "== $distro: rollback --last until the start"
+  # The peer change, then ssh_via, through wg0; public SSH then reopens.
+  for _ in 1 2; do
+    rc=0; vr rollback --last || rc=$?
+    [ "$rc" -eq 0 ] || die "rollback through wg0 exited $rc, expected 0"
+  done
+  pvm true || die "no public login after rolling back ssh_via"
+  # Stopping wg0 from a session through it is refused.
+  rc=0; vr rollback --last >"$tmp/cut.out" 2>&1 || rc=$?
+  cat "$tmp/cut.out"
+  [ "$rc" -eq 2 ] || die "a rollback that stops wg0 from wg0 exited $rc, expected 2"
+  grep -q 'stops wg-quick@wg0' "$tmp/cut.out" || die "the rollback that stops wg0 was not refused"
+  rc=0; pvm sudo vps-ready rollback --last || rc=$?
+  [ "$rc" -eq 0 ] || die "the last rollback exited $rc, expected 0"
+  ! pvm ip link show wg0 >/dev/null 2>&1 || die "wg0 is still there after the rollback"
+  pvm sudo test -f /etc/wireguard/wg0.key || die "the rollback removed the key"
+  pvm sudo test ! -e /etc/wireguard/wg0.conf || die "wg0.conf is left after the rollback"
+  { echo 'schema = 1'; wg_module "$laptop"; } | pvm 'cat >/tmp/wgonly.toml'
+  rc=0; pvm sudo vps-ready apply --yes --profile /tmp/wgonly.toml || rc=$?
+  [ "$rc" -eq 0 ] || die "applying net.wireguard again exited $rc, expected 0"
+  [ "$(pvm sudo wg show wg0 public-key)" = "$vm_pub" ] || die "the new apply did not reuse the key"
+  # The runner's side gave up its handshakes while wg0 was gone; new
+  # traffic starts one again.
+  wait_ssh 60
 }
 
 if [ "$cycle" = private-access ]; then
@@ -550,7 +678,7 @@ echo "== $distro: vps-ready audit"
 rc=0; vr audit || rc=$?
 [ "$rc" -le 1 ] || die "audit exited $rc, expected 0 or 1"
 vr audit --json >"$tmp/audit.json" || true
-jq -e '[.findings[] | select(.id | test("^(KRN|NET)-"))
+jq -e '[.findings[] | select((.id | test("^(KRN|NET)-")) and .id != "NET-008")
        | select(.status == "skip" or .status == "unknown")] | length == 0' "$tmp/audit.json" >/dev/null ||
   die "a KRN or NET control was not checked"
 vm test ! -e "$dropin" || die "$dropin exists before apply"

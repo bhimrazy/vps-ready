@@ -51,5 +51,10 @@ table inet vps_ready {
 {%- if !udp.is_empty() %}
     udp dport { {{ udp|join(", ") }} } accept
 {%- endif %}
+{%- if !wireguard.is_empty() %}
+    # WireGuard, which SSH may depend on. It does not answer packets
+    # without a valid handshake.
+    udp dport { {{ wireguard|join(", ") }} } accept
+{%- endif %}
   }
 }

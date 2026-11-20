@@ -98,6 +98,14 @@ pub struct Cmd {
     pub env: Vec<(String, String)>,
     /// Kill the process if it runs longer than this.
     pub timeout: Duration,
+    /// Standard input read from this host path instead of closed. Opened
+    /// without following a final symlink.
+    pub stdin: Option<PathBuf>,
+    /// Standard output written to a new file at this host path, with this
+    /// mode, instead of captured: opened with `O_CREAT | O_EXCL` and without
+    /// following a symlink, so it never writes into an existing file. For
+    /// output that must not pass through vps-ready, such as a private key.
+    pub stdout: Option<(PathBuf, u32)>,
 }
 
 impl Cmd {
@@ -112,7 +120,24 @@ impl Cmd {
             args: Vec::new(),
             env: Vec::new(),
             timeout: Self::DEFAULT_TIMEOUT,
+            stdin: None,
+            stdout: None,
         }
+    }
+
+    /// Reads standard input from `path`, see [`Cmd::stdin`].
+    #[must_use]
+    pub fn stdin_from(mut self, path: impl Into<PathBuf>) -> Self {
+        self.stdin = Some(path.into());
+        self
+    }
+
+    /// Writes standard output to a new file at `path` with `mode`, see
+    /// [`Cmd::stdout`].
+    #[must_use]
+    pub fn stdout_to(mut self, path: impl Into<PathBuf>, mode: u32) -> Self {
+        self.stdout = Some((path.into(), mode));
+        self
     }
 
     /// Appends one argument.
@@ -457,12 +482,55 @@ impl RealRunner {
 impl Runner for RealRunner {
     fn run(&self, cmd: &Cmd) -> Result<Output, SysError> {
         tracing::debug!(program = %cmd.program, args = ?cmd.args, "run");
+        let mut written: Option<File> = None;
+        let stdin = match &cmd.stdin {
+            Some(path) => {
+                // O_NONBLOCK: opening a FIFO does not wait for a writer.
+                let flags = OFlags::RDONLY
+                    | OFlags::NOFOLLOW
+                    | OFlags::NOCTTY
+                    | OFlags::NONBLOCK
+                    | OFlags::CLOEXEC;
+                let subject = || path.display().to_string();
+                let fd = rfs::open(path, flags, Mode::empty()).map_err(|e| errno(subject(), e))?;
+                let stat = rfs::fstat(&fd).map_err(|e| errno(subject(), e))?;
+                if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile {
+                    return Err(SysError::NotRegular {
+                        path: subject(),
+                        kind: FileKind::Other,
+                    });
+                }
+                Stdio::from(File::from(fd))
+            }
+            None => Stdio::null(),
+        };
+        let stdout = match &cmd.stdout {
+            Some((path, mode)) => {
+                let flags = OFlags::WRONLY
+                    | OFlags::CREATE
+                    | OFlags::EXCL
+                    | OFlags::NOFOLLOW
+                    | OFlags::CLOEXEC;
+                let subject = || path.display().to_string();
+                let fd = rfs::open(path, flags, perm(*mode)).map_err(|e| errno(subject(), e))?;
+                // The umask may have narrowed the mode, never widened it.
+                rfs::fchmod(&fd, perm(*mode)).map_err(|e| errno(subject(), e))?;
+                let file = File::from(fd);
+                // Kept to sync the file once the child has written it.
+                written = Some(
+                    file.try_clone()
+                        .map_err(|e| SysError::from_io(subject(), e))?,
+                );
+                Stdio::from(file)
+            }
+            None => Stdio::piped(),
+        };
         let mut child = Command::new(&cmd.program)
             .args(&cmd.args)
             .env("PATH", SYSTEM_PATH)
             .envs(cmd.env.iter().map(|(k, v)| (k, v)))
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
+            .stdin(stdin)
+            .stdout(stdout)
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| SysError::from_io(cmd.program.clone(), e))?;
@@ -488,6 +556,10 @@ impl Runner for RealRunner {
             }
         };
 
+        if let (Some(file), Some((path, _))) = (written, &cmd.stdout) {
+            file.sync_all()
+                .map_err(|e| SysError::from_io(path.display().to_string(), e))?;
+        }
         Ok(Output {
             status: status.code().unwrap_or(-1),
             stdout: join(stdout, &cmd.program)?,
@@ -903,6 +975,44 @@ mod tests {
         assert!(!out.ok());
         assert_eq!(out.stdout_str().unwrap(), "hi\n");
         assert_eq!(out.stderr, b"err\n");
+    }
+
+    #[test]
+    fn stdin_from_and_stdout_to_files() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let (input, output) = (dir.path().join("in"), dir.path().join("out"));
+        std::fs::write(&input, "abc\n").unwrap();
+        let cmd = Cmd::new("cat").stdin_from(&input).stdout_to(&output, 0o600);
+        let out = RealRunner.run(&cmd).unwrap();
+        assert!(out.ok() && out.stdout.is_empty(), "{out:?}");
+        assert_eq!(std::fs::read(&output).unwrap(), b"abc\n");
+        let mode = std::fs::metadata(&output).unwrap().permissions().mode();
+        assert_eq!(mode & 0o7777, 0o600);
+        // O_EXCL: an existing file is never written into.
+        let err = RealRunner.run(&cmd).unwrap_err();
+        assert!(matches!(err, SysError::Io { .. }), "{err:?}");
+        assert_eq!(std::fs::read(&output).unwrap(), b"abc\n");
+        // Nor through a symlink.
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&input, &link).unwrap();
+        let err = RealRunner
+            .run(&Cmd::new("cat").stdin_from(&link))
+            .unwrap_err();
+        assert!(matches!(err, SysError::Symlink(_)), "{err:?}");
+        // Nor a FIFO, which would block until a writer comes.
+        let fifo = dir.path().join("fifo");
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let err = RealRunner
+            .run(&Cmd::new("cat").stdin_from(&fifo))
+            .unwrap_err();
+        assert!(matches!(err, SysError::NotRegular { .. }), "{err:?}");
     }
 
     #[test]

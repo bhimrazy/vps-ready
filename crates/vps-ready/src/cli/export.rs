@@ -10,7 +10,7 @@ use anyhow::{Context, bail};
 
 use super::change::Host;
 use crate::VERSION_INFO;
-use crate::config::Profile;
+use crate::config::{Profile, STAGED_VIA};
 
 /// The release tarballs, by `uname -m`.
 const TARGETS: [(&str, &str); 2] = [
@@ -23,18 +23,33 @@ pub(super) const PROFILE_PATH: &str = "/etc/vps-ready/profile.toml";
 
 /// Prints the user-data for profile `spec` (a built-in name or a file),
 /// with the hashes from the file `checksums` and the tarballs downloaded
-/// from `base_url`, by default this version's GitHub release.
+/// from `base_url`, by default this version's GitHub release. Warnings go
+/// to `err`.
 pub(super) fn cloud_init(
     host: &Host,
     spec: &str,
     checksums: &Path,
     base_url: Option<&str>,
     out: &mut dyn Write,
+    err: &mut dyn Write,
 ) -> anyhow::Result<u8> {
     let (text, profile) = load(host, spec)?;
     if let Some(why) = refusal(&profile) {
         bail!("profile {spec}: {}", why.reason());
     }
+    let address = profile
+        .params("net.wireguard")
+        .and_then(|w| w.get("address"))
+        .and_then(toml::Value::as_str);
+    if address.is_some_and(|a| !a.is_empty()) {
+        writeln!(
+            err,
+            "warning: net.wireguard has an explicit `address`, so every server made from this \
+             export gets the same WireGuard subnet, and one laptop cannot reach two of them; \
+             drop `address` to derive one per server"
+        )?;
+    }
+
     // YAML 1.1 parsers break lines at these; TOML allows them in strings.
     if let Some(c) = text
         .chars()
@@ -143,7 +158,8 @@ pub(super) fn refusal(profile: &Profile) -> Option<Refusal> {
         .params("firewall.inbound")
         .and_then(|p| p.get("ssh_via"))
         .and_then(toml::Value::as_str);
-    if via.is_some_and(|v| !v.is_empty()) {
+    // The private profile's `"vpn"` stays in step 1 at first boot: SSH public.
+    if via.is_some_and(|v| !v.is_empty() && !v.starts_with(STAGED_VIA)) {
         return Some(Refusal::SshVia);
     }
     if let Some(admin) = profile.params("user.admin") {

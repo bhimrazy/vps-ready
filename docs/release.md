@@ -101,7 +101,7 @@ cargo install vps-ready --locked   # compiles from source; add --version <versio
   1. From a clean `main`, set the version to `0.3.0-alpha.1` locally (the `[workspace.package]` version and the `sshd-config` pin), run `cargo publish -p sshd-config --allow-dirty` with a short-lived API token, then discard the edit. This creates the crate; nothing depends on that pre-release.
   2. Configure trusted publishing for `sshd-config` as for the other two (owner `bhimrazy`, repo `vps-ready`, workflow `release.yml`, environment `crates-io`), turn on **trusted publishing only**, and revoke the token.
   3. Push the tag: the `crates` job then publishes `sshd-config` 0.3.0 before `vps-ready`.
-- If `vps-ready` uploads but `vpsready` fails, re-running the job fails on the already-published `vps-ready`. To recover, turn off trusted publishing only for `vpsready` in its crates.io settings, run `cargo publish -p vpsready --locked` with a short-lived token, then turn the setting back on and revoke the token.
+- The `crates` job publishes one crate at a time and skips a version that is already on crates.io, so if `vps-ready` uploads but `vpsready` fails, re-running the job (or the next tag) publishes only what is missing.
 
 ## Manual checks before a release
 
@@ -113,7 +113,7 @@ CI cannot join a tailnet, so before tagging a release that includes `net.tailsca
 - [ ] `ssh admin@<tailnet address>` works from another device in the tailnet. Delete the key file.
 - [ ] Apply again: the plan has no changes.
 - [ ] `rollback --last`, then apply again with the key file deleted (the one-off key is spent): the plan brings the node up with `tailscale up --accept-dns=false` and no `--auth-key`, and it is `Running` again.
-- [ ] Once `ssh_via` has shipped: through the `private` profile's two steps, close public SSH (`ssh_via = "tailscale0"`) and confirm from a login through `tailscale0`.
+- [ ] Close public SSH: from a login through `tailscale0`, apply `ssh_via = "tailscale0"` (or through the `private` profile's two steps) and confirm from a new login through `tailscale0`. `audit` shows `SSH-009` passing.
 - [ ] `sudo vps-ready rollback --last` from an SSH session through the tailnet shows the refusal ("this session comes through Tailscale") and changes nothing past it.
 - [ ] Reboot: `tailscaled` comes back and SSH through the tailnet works (and, with `ssh_via`, public SSH stays closed).
 - [ ] `rollback --last` until the start: the source, key and origin file are gone, `tailscale` is still installed, and the node is down but still logged in. Remove it from the tailnet with `sudo tailscale logout`.

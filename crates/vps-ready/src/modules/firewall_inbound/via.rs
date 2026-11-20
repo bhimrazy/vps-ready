@@ -43,27 +43,20 @@ pub(super) fn check(
              console, cloud-init)"
         )),
         Some(s) => {
-            let (server, client) = (s.server.ip().to_canonical(), s.client.ip().to_canonical());
-            let user = s.user.as_deref().unwrap_or("<user>");
-            let to = address(facts, via)
-                .map_or_else(|| format!("<address of {via}>"), |ip| ip.to_string());
+            let server = s.server.ip().to_canonical();
             let how = format!(
-                "connect through {via} first and apply from there (`ssh -t {user}@{to} sudo \
-                 vps-ready apply ...`)"
+                "connect through {via} first and apply from there (`{}`)",
+                apply_through(facts, via)
             );
-            // A login from this host to its own VPN address travels over lo.
-            let own = facts
-                .interfaces
-                .iter()
-                .any(|i| i.addresses.iter().any(|a| a.ip == client));
-            if !iface.is_some_and(|i| i.addresses.iter().any(|a| a.ip == server)) {
+            if !on(facts, via, server) {
                 problems.push(format!(
                     "this SSH session came in on {server}, not through {via}: {how}"
                 ));
-            } else if client.is_loopback() || own {
+            } else if local(facts) {
                 problems.push(format!(
-                    "this SSH session comes from {client}, on this server itself, so {via} did \
-                     not carry it: {how}"
+                    "this SSH session comes from {}, on this server itself, so {via} did \
+                     not carry it: {how}",
+                    s.client.ip().to_canonical()
                 ));
             }
         }
@@ -103,6 +96,57 @@ pub(super) fn check(
     Ok(notes)
 }
 
+/// Whether this is an SSH session that came in through `via` from
+/// elsewhere: the opposite of refusals 2 and 3.
+pub(crate) fn through(facts: &Facts, via: &str) -> bool {
+    facts
+        .session
+        .as_ref()
+        .is_some_and(|s| on(facts, via, s.server.ip().to_canonical()) && !local(facts))
+}
+
+/// The note of step 1 of a staged `ssh_via`, which keeps SSH public.
+pub(super) fn step_one(facts: &Facts, via: &str) -> String {
+    format!(
+        "step 1 of 2: SSH stays public until you apply this profile again from a login \
+         through {via} (`{}`)",
+        apply_through(facts, via)
+    )
+}
+
+/// Whether `ip` is an address of `via`.
+fn on(facts: &Facts, via: &str, ip: IpAddr) -> bool {
+    facts
+        .interfaces
+        .iter()
+        .filter(|i| i.name == via)
+        .any(|i| i.addresses.iter().any(|a| a.ip == ip))
+}
+
+/// Whether the session comes from this host: a login to its own VPN
+/// address travels over lo.
+fn local(facts: &Facts) -> bool {
+    facts.session.as_ref().is_some_and(|s| {
+        let client = s.client.ip().to_canonical();
+        client.is_loopback()
+            || facts
+                .interfaces
+                .iter()
+                .any(|i| i.addresses.iter().any(|a| a.ip == client))
+    })
+}
+
+/// The command that applies again through `via`.
+fn apply_through(facts: &Facts, via: &str) -> String {
+    let user = facts
+        .session
+        .as_ref()
+        .and_then(|s| s.user.as_deref())
+        .unwrap_or("<user>");
+    let to = address(facts, via).map_or_else(|| format!("<address of {via}>"), |ip| ip.to_string());
+    format!("ssh -t {user}@{to} sudo vps-ready apply ...")
+}
+
 /// Why `via` is never a private path, if it is not.
 fn not_private(facts: &Facts, via: &str) -> Option<String> {
     let default = facts
@@ -121,6 +165,74 @@ fn not_private(facts: &Facts, via: &str) -> Option<String> {
         Some(format!("{via} holds the host's default route"))
     } else {
         None
+    }
+}
+
+/// The interface the loaded `vps_ready` table limits SSH to, when it is
+/// one `ssh_via` takes as private and has only addresses the internet does
+/// not route. Audit counts it as a VPN's, since a NetBird or ZeroTier link
+/// has no type that says so. `None` without the routes or the interface:
+/// then nothing shows it is not the way out.
+pub(crate) fn private_via(facts: &Facts) -> Option<String> {
+    let name = ssh_rule(facts)?;
+    not_counted(facts, name).is_none().then(|| name.clone())
+}
+
+/// The interface the loaded `vps_ready` table limits SSH to and why
+/// [`private_via`] does not count it; `None` without such a rule, or when
+/// it is counted.
+pub(crate) fn uncounted_via(facts: &Facts) -> Option<(String, String)> {
+    let name = ssh_rule(facts)?;
+    Some((name.clone(), not_counted(facts, name)?))
+}
+
+/// The one interface that a rule of the loaded `vps_ready` table accepts
+/// SSH on.
+fn ssh_rule(facts: &Facts) -> Option<&String> {
+    let ssh = super::ssh_ports(facts);
+    facts
+        .firewall
+        .as_ref()?
+        .input_chains
+        .iter()
+        .filter(|c| c.family == "inet" && c.table == "vps_ready")
+        .flat_map(|c| &c.interface_ports)
+        .find_map(|p| match p.interfaces.as_slice() {
+            [name] if ssh.iter().any(|&port| p.ports.contains("tcp", port)) => Some(name),
+            _ => None,
+        })
+}
+
+/// Why `private_via` does not count `name`, if it does not.
+fn not_counted(facts: &Facts, name: &str) -> Option<String> {
+    let routed = facts
+        .routes
+        .iter()
+        .any(|r| r.dst == "default" && r.table.is_none());
+    if !routed {
+        return Some("the routes are unknown, so it may be the way out".to_owned());
+    }
+    let Some(iface) = facts.interfaces.iter().find(|i| i.name == name) else {
+        return Some("it does not exist".to_owned());
+    };
+    if iface.addresses.is_empty() {
+        Some("it has no address".to_owned())
+    } else if !iface.addresses.iter().all(|a| local_ip(a.ip)) {
+        Some("it has an address the internet routes".to_owned())
+    } else {
+        not_private(facts, name)
+    }
+}
+
+/// Whether the internet does not route `ip`: RFC 1918, shared
+/// (100.64.0.0/10, Tailscale's), link-local, or IPv6 unique local.
+fn local_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            let [a, b, ..] = v4.octets();
+            v4.is_private() || v4.is_link_local() || (a == 100 && b & 0xc0 == 64)
+        }
+        IpAddr::V6(v6) => v6.is_unique_local() || v6.is_unicast_link_local(),
     }
 }
 
@@ -143,7 +255,7 @@ pub(crate) fn is_tailscale_in(interfaces: &[Interface], ips: &[IpAddr], via: &st
 }
 
 /// An address of `via`, IPv4 first, for the `ssh` command.
-fn address(facts: &Facts, via: &str) -> Option<IpAddr> {
+pub(crate) fn address(facts: &Facts, via: &str) -> Option<IpAddr> {
     let mut ips: Vec<IpAddr> = facts
         .interfaces
         .iter()
@@ -204,7 +316,7 @@ fn key_expiry(facts: &Facts, via: &str) -> Option<String> {
 }
 
 /// How to get back in from the provider's console.
-fn console(facts: &Facts, via: &str) -> String {
+pub(crate) fn console(facts: &Facts, via: &str) -> String {
     let user = facts
         .session
         .as_ref()

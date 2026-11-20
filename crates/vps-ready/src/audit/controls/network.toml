@@ -1,4 +1,5 @@
-# Network stack controls. Checks read /proc/sys. Skipped inside a container.
+# Network stack controls. Checks read /proc/sys and are skipped inside a
+# container, except NET-008, which reads /etc/wireguard.
 
 [[control]]
 id = "NET-001"
@@ -68,3 +69,13 @@ title = "Multipath TCP disabled"
 why = "Multipath TCP is rarely needed on a server and adds kernel code to every TCP handshake. Go 1.24+ programs such as Caddy, Docker and tailscaled open MPTCP listeners by default, so a flaw in it is reachable from the network without any setup."
 check = { kind = "sysctl", key = "net.mptcp.enabled", one_of = ["0"], absent_ok = true }
 fix = "kernel.sysctl"
+
+# Metadata only: no file is opened. net.wireguard writes its files there as
+# root's with mode 0600.
+[[control]]
+id = "NET-008"
+severity = "medium"
+title = "WireGuard private keys readable only by root"
+why = "Files in /etc/wireguard hold private keys, in a key file or a config's PrivateKey. Anyone who can read the server's key can pose as the server to its peers."
+check = { kind = "wireguard_key_files" }
+fix = "net.wireguard"

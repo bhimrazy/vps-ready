@@ -15,11 +15,11 @@ use super::reload::{self, Reload, SYSTEMCTL_TIMEOUT};
 use super::{EngineError, StateDir, Txn, id};
 use crate::facts::Interface;
 use crate::facts::network::interface_with;
-use crate::modules::{firewall_inbound, net_tailscale};
+use crate::modules::{firewall_inbound, net_tailscale, net_wireguard};
 use crate::resource::sysctl::boot_id;
 use crate::resource::{
     Backup, Resource, ResourceError, Sysctl, after_path, authorized_keys, before_path, directory,
-    during_path, restore, service, tailscale_up, user,
+    during_path, restore, service, tailscale_up, user, wireguard,
 };
 use crate::sys::{Cmd, FileKind, FileOwner, Fs, FsLock, Sys, SysError};
 
@@ -129,6 +129,9 @@ pub enum Progress<'a> {
     },
     /// A dead-man rollback left a resource that changed since apply.
     Skip(&'a ByHand),
+    /// A rollback starts the firewall unit (it was active before apply and
+    /// may have been stopped since) instead of only reloading it if running.
+    FirewallStart,
     /// A rollback did not run a reload because its check failed.
     ReloadSkipped {
         /// The reload.
@@ -664,12 +667,15 @@ impl<'a> Engine<'a> {
     /// current one does not, unless the session comes through it: no timer
     /// covers a manual rollback. And it refuses to stop `tailscaled` or
     /// take the node down when SSH is limited to Tailscale afterwards, or
-    /// from a session through Tailscale's interface.
+    /// from a session through Tailscale's interface; the same for stopping
+    /// `wg-quick@wg0` under `ssh_via = "wg0"`, or, from a session through
+    /// `wg0`, stopping it or removing that session's peer.
     ///
     /// # Errors
     ///
     /// [`EngineError::OwnAccount`], [`EngineError::ViaRollback`],
-    /// [`EngineError::CutsTailscale`], or those of [`Engine::rollback`].
+    /// [`EngineError::CutsTailscale`], [`EngineError::CutsWireguard`], or
+    /// those of [`Engine::rollback`].
     pub fn rollback_by(
         &self,
         target: Target,
@@ -740,6 +746,30 @@ impl<'a> Engine<'a> {
                     via: None,
                     pending,
                 });
+            }
+        }
+        let wg = net_wireguard::INTERFACE;
+        let stops_wg = cuts_wireguard(&records);
+        let over_wg = who
+            .server
+            .and_then(|ip| interface_with(who.interfaces, ip.to_canonical()))
+            .is_some_and(|i| i.name == wg);
+        let drops_peer = over_wg
+            && who
+                .client
+                .is_some_and(|c| drops_peer(&records, c.to_canonical()));
+        if stops_wg || drops_peer {
+            let pending = matches!(journal::replay(&records)?, TxnState::PendingConfirm { .. });
+            let refuse = |via| EngineError::CutsWireguard {
+                txn: txn.id().to_owned(),
+                via,
+                pending,
+            };
+            if stops_wg && let Some(via) = self.via_after(&txn, &records)?.filter(|v| v == wg) {
+                return Err(refuse(Some(via)));
+            }
+            if over_wg {
+                return Err(refuse(None));
             }
         }
         // A pending, expired or unfinished transaction only returns to what
@@ -1193,7 +1223,9 @@ impl<'a> Engine<'a> {
                     .filter_map(|u| match u {
                         Undo::Restore {
                             resource, backup, ..
-                        } if !earlier_boot(backup, boot) => by_hand(&dir, resource, backup),
+                        } if !earlier_boot(backup, boot) => {
+                            by_hand(self.sys, &dir, resource, backup)
+                        }
                         _ => None,
                     })
                     .collect(),
@@ -1206,7 +1238,7 @@ impl<'a> Engine<'a> {
                 if earlier_boot(backup, boot) || unchanged(self.sys, &dir, resource, backup, uid)? {
                     continue;
                 }
-                changed.extend(by_hand(&dir, resource, backup).map(|mut step| {
+                changed.extend(by_hand(self.sys, &dir, resource, backup).map(|mut step| {
                     if let Backup::File {
                         n, original: None, ..
                     } = backup
@@ -1306,7 +1338,7 @@ impl<'a> Engine<'a> {
                 // up before it, such as the admin `ssh.server` relies on, so
                 // the unforced restores wait for a rerun.
                 if forced_failed && !force {
-                    held.extend(by_hand(&dir, resource, backup).map(|mut step| {
+                    held.extend(by_hand(self.sys, &dir, resource, backup).map(|mut step| {
                         step.step = format!("only after the steps above succeed, {}", step.step);
                         step
                     }));
@@ -1319,7 +1351,7 @@ impl<'a> Engine<'a> {
                             false
                         });
                     if !same && !force {
-                        if let Some(step) = by_hand(&dir, resource, backup) {
+                        if let Some(step) = by_hand(self.sys, &dir, resource, backup) {
                             progress(Progress::Skip(&step));
                             let line = Event::Skipped {
                                 resource: resource.clone(),
@@ -1349,10 +1381,11 @@ impl<'a> Engine<'a> {
                     Err(e) if best_effort => {
                         tracing::error!("{e}; restoring the others");
                         forced_failed |= force;
-                        let step = by_hand(&dir, resource, backup).unwrap_or_else(|| ByHand {
-                            resource: resource.clone(),
-                            step: "see the journal".into(),
-                        });
+                        let step =
+                            by_hand(self.sys, &dir, resource, backup).unwrap_or_else(|| ByHand {
+                                resource: resource.clone(),
+                                step: "see the journal".into(),
+                            });
                         unrestored.push((step, e));
                         continue;
                     }
@@ -1374,7 +1407,7 @@ impl<'a> Engine<'a> {
             left.append(&mut held);
             left.extend(failed.iter().map(|(reload, _)| ByHand {
                 resource: reload.name().to_owned(),
-                step: reload::line(&reload.rollback_steps(self.sys).1),
+                step: reload::line(&reload.rollback_steps(self.sys, &open.records).1),
             }));
             let source = match unrestored.into_iter().next() {
                 Some((_, e)) => e,
@@ -1440,7 +1473,7 @@ impl<'a> Engine<'a> {
             return Ok(());
         }
         progress(Progress::Reload(reload));
-        let (check, command) = reload.rollback_steps(self.sys);
+        let (check, command) = reload.rollback_steps(self.sys, &open.records);
         if let Some(check) = check
             && let Err(reason) = reload::run(self.sys, &check)
         {
@@ -1450,6 +1483,9 @@ impl<'a> Engine<'a> {
                 reason: &reason,
             });
             return note(open, Event::ReloadSkipped { reload, reason }, best_effort);
+        }
+        if reload == Reload::FirewallReload && command != reload.command() {
+            progress(Progress::FirewallStart);
         }
         if let Err(reason) = reload::run(self.sys, &command) {
             failed.push((reload, reason));
@@ -1480,6 +1516,53 @@ pub(super) fn cuts_tailscale(records: &[Record]) -> bool {
             backup: Backup::TailscaleUp { was_running: false },
             ..
         } => not_restored(records, resource),
+        _ => false,
+    })
+}
+
+/// Whether rolling back `records` stops the `wg-quick@wg0` apply started,
+/// not restored yet.
+pub(super) fn cuts_wireguard(records: &[Record]) -> bool {
+    records.iter().any(|r| match &r.event {
+        Event::Backup {
+            resource,
+            backup:
+                Backup::Service {
+                    unit,
+                    was_active: false,
+                    active: true,
+                    ..
+                },
+            ..
+        } if unit == net_wireguard::UNIT => not_restored(records, resource),
+        _ => false,
+    })
+}
+
+/// Whether rolling back `records` cuts the session from `client` (a tunnel
+/// address) through a running WireGuard interface that apply changed, not
+/// restored yet: it removes that client's peer, moves its address to another
+/// key, or moves the listen port its client connects to.
+pub(crate) fn drops_peer(records: &[Record], client: IpAddr) -> bool {
+    let holds = |ips: &Vec<String>| ips.iter().any(|ip| net_wireguard::contains(ip, client));
+    records.iter().any(|r| match &r.event {
+        Event::Backup {
+            resource,
+            backup:
+                Backup::WireguardSync {
+                    before: Some(before),
+                    after,
+                    ..
+                },
+            ..
+        } => {
+            not_restored(records, resource)
+                && (before.port != after.port
+                    || after
+                        .peers
+                        .iter()
+                        .any(|(key, ips)| holds(ips) && !before.peers.get(key).is_some_and(&holds)))
+        }
         _ => false,
     })
 }
@@ -1735,6 +1818,13 @@ fn unchanged(
         }
         // The node's state is Tailscale's: restoring only runs `tailscale down`.
         Backup::TailscaleUp { .. } => Ok(true),
+        // Restoring keeps the key.
+        Backup::WireguardKey { .. } => Ok(true),
+        Backup::WireguardSync {
+            interface,
+            before,
+            after,
+        } => wireguard::unchanged(sys, interface, before.as_ref(), after).map_err(at(resource)),
     }
 }
 
@@ -1745,7 +1835,7 @@ fn at(resource: &str) -> impl FnOnce(ResourceError) -> EngineError {
 
 /// How to restore `backup` by hand; `None` for a package, which rollback
 /// leaves as it is, and for a service or user that apply left as it was.
-fn by_hand(dir: &Path, resource: &str, backup: &Backup) -> Option<ByHand> {
+fn by_hand(sys: Sys, dir: &Path, resource: &str, backup: &Backup) -> Option<ByHand> {
     let step = match backup {
         Backup::File {
             path,
@@ -1767,11 +1857,19 @@ fn by_hand(dir: &Path, resource: &str, backup: &Backup) -> Option<ByHand> {
         Backup::Directory { .. } => directory::by_hand(backup)?,
         Backup::Sysctl { key, value, .. } => format!("sysctl -w '{key}={value}'"),
         Backup::Package { .. } => return None,
-        Backup::Service { .. } => service::by_hand(backup)?,
+        Backup::Service { .. } => service::by_hand(sys, backup)?,
         Backup::User { .. } => user::by_hand(backup)?,
         Backup::AuthorizedKeys { .. } => authorized_keys::by_hand(dir, backup)?,
         Backup::TailscaleUp { was_running } => tailscale_up::by_hand(*was_running)?,
+        // Rollback keeps the key.
+        Backup::WireguardKey { .. } => return None,
+        Backup::WireguardSync {
+            interface,
+            before,
+            after,
+        } => wireguard::by_hand(interface, before.as_ref(), after)?,
     };
+
     Some(ByHand {
         resource: resource.to_owned(),
         step,

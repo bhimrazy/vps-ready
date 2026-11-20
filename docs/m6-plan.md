@@ -1,6 +1,6 @@
 # M6 plan: private access (v0.6.0)
 
-> **Status: accepted (2026-11-18).** Nothing below is built yet. The owner accepted every recommendation in [Decisions](#decisions-for-the-owner).
+> **Status: built for v0.6.0.** All four waves are built: `export cloud-init`, `apply --deadman=off`, `FW-003`, the facts, `ssh_via` with `SSH-009`, `net.tailscale`, `net.wireguard` with `NET-008`, the `private` profile and the wizard's question. The plan is kept as the design record. The owner accepted every recommendation in [Decisions](#decisions-for-the-owner) on 2026-11-18. The web tunnel waits for M7; the other items under [Not in M6](#not-in-m6) are listed there with when they would come.
 
 M6 lets an admin reach SSH through a private network and then close it to the internet. It has three parts: `net.tailscale`, which installs Tailscale and joins a tailnet; `net.wireguard`, a WireGuard server on the host for admin access to the host itself; and `ssh_via`, a `firewall.inbound` parameter that accepts SSH only on one named interface (`tailscale0`, `wg0`, or any interface the admin set up, such as NetBird's). It also brings `export cloud-init`, moved here by the [M5 plan](m5-plan.md#direction-for-v060-private-access): a server hardened at first boot, before anyone logs in, is the other half of "never exposed". With a VPN for SSH and, later, a tunnel for the web, a server can end with no public TCP port at all; this plan says what that looks like, adds a `private` profile for it, and says why the web tunnel waits.
 
@@ -8,7 +8,7 @@ M6 lets an admin reach SSH through a private network and then close it to the in
 
 The engine, the journal and the safety timer stay as they are, apart from two new resource kinds, one new reload, one new field in the `pending-confirm` record, one new confirm refusal, and modules that can ask for the timer depending on the host.
 
-Debian 12/13 and Ubuntu 22.04/24.04 with systemd, as in M5. Earlier docs use "M6" for RHEL, Alpine, `drift` and the paranoid profile; with this plan those become M7.
+Debian 12/13 and Ubuntu 22.04/24.04 with systemd, as in M5. Earlier docs use "M6" for RHEL, Alpine, `drift` and the paranoid profile; with this plan those become M7 (RHEL and Alpine may move later than M7).
 
 ## Decisions
 
@@ -115,16 +115,16 @@ ssh_via = "tailscale0"     # or "wg0", "nb0", ...; "vpn" in the private profile
 **Refused at plan time when the SSH rule changes** (all read-only):
 1. The interface does not exist, is down, or has no address.
 2. No SSH session (the console, cloud-init): "`ssh_via` needs an SSH login through tailscale0".
-3. **The applying session does not come through the interface:** its server address (from the process tree, as `confirm` reads it) is not an address of `ssh_via`. The message says to connect through the VPN first and gives the command (`ssh admin@100.64.0.7 sudo vps-ready apply ...`). This check is address-based, so it is a precondition, not the proof: the proof is the confirm, a new login that arrives under the live `iifname` rule. It does keep the "never cut the current SSH port" invariant, since the session's path is the one kept open.
+3. **The applying session does not come through the interface:** its server address (from the process tree, as `confirm` reads it) is not an address of `ssh_via`, or its client address is loopback or an address of this host (a login to the host's own VPN address travels over `lo`, so the VPN did not carry it). The message says to connect through the VPN first and gives the command (`ssh admin@100.64.0.7 sudo vps-ready apply ...`). This check is address-based, so it is a precondition, not the proof: the proof is the confirm, a new login that arrives under the live `iifname` rule. It does keep the "never cut the current SSH port" invariant, since the session's path is the one kept open.
 4. The VPN would not come back after a reboot: for `tailscale0`, `tailscaled` is not enabled; for an interface with `/etc/wireguard/<if>.conf`, `wg-quick@<if>` is not enabled. For other interfaces vps-ready cannot tell, and says so in a note.
-5. `tailscale0` while this node's key expires: `tailscale status --json` shows `Self.KeyExpiry`. Tailscale's default is 180 days, and when it expires "connections to/from the given endpoint will stop working" (Tailscale's key expiry docs), which with `ssh_via` is a lockout on a date nobody remembers. The message says to disable key expiry for this machine in the admin console (or join with a tagged key) and apply again.
-6. `lo`, `docker0`, `br-*`, or an interface that is the host's default route: not a private path.
+5. `tailscale0` while this node's key expires: `tailscale status --json` shows `Self.KeyExpiry`. Also refused when Tailscale is not `Running` or its state is unknown (`tailscale status` failed), since then whether the key expires is unknown. Tailscale's default is 180 days, and when it expires "connections to/from the given endpoint will stop working" (Tailscale's key expiry docs), which with `ssh_via` is a lockout on a date nobody remembers. The message says to disable key expiry for this machine in the admin console (or join with a tagged key) and apply again.
+6. `lo`, `docker0`, a bridge or link for local containers or guests (`br-*`, `virbr*`, `lxcbr*`, `podman*`, `cni*`, `veth*`), or an interface that holds the host's default route in the main table: not a private path.
 7. `--deadman=off`.
 
 **When the loaded ruleset already has the same SSH rule** (interface and ports), the rule does not change, and refusals 1 to 5 become notes. So an apply from the console is planned when the VPN is down; a change that needs no timer (a sysctl) then works, but one that arms the timer (another port) needs a confirm through the VPN and rolls back at its deadline, which the console note says. Refusals 6 and 7 stay.
 
 **Notes, not refusals:**
-- **Console recovery.** The plan's last note before the prompt: "If tailscale0 stops working, SSH is closed. Your provider's web console logs in with a password, so set one for a sudo user (`sudo passwd admin`) if you have not; without it, recovery needs the provider's rescue mode. From the console: `sudo systemctl stop vps-ready-firewall` opens everything until the next boot; `sudo vps-ready rollback --txn <id>` undoes this change." It checks `/etc/shadow` and says which case applies. A refusal here would push every user to set a password; sshd still refuses passwords (`SSH-002`), so a console-only password is reasonable, but it is the admin's choice.
+- **Console recovery.** The plan's last note before the prompt: "If tailscale0 stops working, SSH is closed. Your provider's web console logs in with a password, so set one for a sudo user (`sudo passwd admin`) if you have not; without it, recovery needs the provider's rescue mode. From the console: `sudo systemctl stop vps-ready-firewall` opens everything until the next boot; `sudo vps-ready rollback --txn <id>` undoes this change." The note is the same on every host: it does not read `/etc/shadow`, by design, and tells the admin to make sure a sudo user has a password. A refusal here would push every user to set a password; sshd still refuses passwords (`SSH-002`), so a console-only password is reasonable, but it is the admin's choice.
 - Which unit brings the interface up at boot, and that SSH is unreachable from boot until it is up.
 
 **The safety timer and the confirm.** `ssh_via` arms the timer, as every `firewall.inbound` change does, and the confirm is stricter:
@@ -171,9 +171,9 @@ auto_update = true                             # default
 - **Key types.** The docs recommend a one-off or pre-approved key, ideally tagged: tagged devices have key expiry disabled by default, and an ephemeral node is removed from the tailnet once it goes idle (Tailscale's auth key docs), which would make the server disappear after an outage. vps-ready cannot see the key's type; the docs say so.
 - Verify: `BackendState` is `Running` and `Self.TailscaleIPs` is not empty.
 
-**Under `ssh_via = "tailscale0"`:** any planned change arms the timer (above). A change that stops `tailscaled` or brings the node down is refused while the applying session comes through `tailscale0`.
+**Under `ssh_via = "tailscale0"`:** any planned change arms the timer (above). The module never plans stopping `tailscaled` or bringing the node down; only a rollback does, so the refusal is at rollback time: a manual rollback that would stop `tailscaled` or run `tailscale down` is refused before anything is restored when the ruleset in force afterwards limits SSH to Tailscale's interface, or when the rollback's own session comes through it.
 
-**Rollback** runs `tailscale down` if the node was not `Running` before (it stays logged in), then the `Service` restore stops and disables `tailscaled` if it was off before. No `tailscale logout`: logging out expires the node key, so applying again would need a new auth key, and a one-off key is already spent. The package stays, as for every `Package`, and so does `/var/lib/tailscale`; the apt source, its key and the origin file are removed. The plan says so, with `tailscale logout` as the by-hand step.
+**Rollback** runs `tailscale down` if the node was not `Running` before (it stays logged in). On a fresh install the package's postinst enables and starts `tailscaled` before the `Service` snapshot, so the rollback leaves it running and enabled; the plan says so, with `sudo systemctl disable --now tailscaled` as the by-hand step. No `tailscale logout`: logging out expires the node key, so applying again would need a new auth key, and a one-off key is already spent. The package stays, as for every `Package`, and so does `/var/lib/tailscale`; the apt source, its key and the origin file are removed. The plan says so, with `tailscale logout` as the by-hand step.
 
 **Other notes in the plan:**
 - tailscaled adds its own netfilter rules (`ts-input` and friends). They are base chains in other tables and coexist with `inet vps_ready`, as fail2ban's do; a packet must pass every base chain.
@@ -228,8 +228,9 @@ AllowedIPs = 10.86.12.2/32
 
 **Changes to a running `wg0`: `wg set`, never `syncconf`.** The unit's `ExecReload` runs `wg syncconf %i <(wg-quick strip %i)`. A config without `PrivateKey` is likely to clear the key that `PostUp` loaded: wireguard-tools' `config_read_init` marks the private key as set for a full (non-append) parse, and `sync_conf` only adjusts peer replacement. That would cut every tunnel, including an SSH session through it, and a rollback would run the same reload. So:
 - A drop-in, `/etc/systemd/system/wg-quick@wg0.service.d/10-vps-ready.conf`, sets an empty `ExecReload=`, so `systemctl reload wg-quick@wg0` (by hand or by any tool) fails instead of clearing the key. It is a `File`, removed on rollback.
+- **As built (net.wireguard PR):** `WireguardSync` is a resource, not a reload. The engine drops the reloads of a module with no resource change, so a reload could not put back a running `wg0` that drifted while the files stayed the same; as a resource it diffs the runtime, shows each peer change in the plan, journals the peers before and after (public keys only), and rollback restores them. It runs the same `wg set` commands as below; the file's parse check is in `verify` (`wg-quick strip wg0`).
 - A new `Reload::WireguardSync`, run when the unit is active: check `wg-quick strip wg0` (the file parses), then compare the file's peers with `wg show wg0 peers` and `allowed-ips` and apply only the differences: `wg set wg0 peer <key> allowed-ips <ip>/32` for a new or changed peer, `wg set wg0 peer <key> remove` for a removed one, and `wg set wg0 listen-port <port>` for a new port. The key is never touched. On rollback the same reload runs against the restored file, so the runtime follows the file both ways.
-- **Precondition of the WireGuard PR:** a VM check of what `syncconf` does with a key-less file. If it keeps the key after all, the drop-in can go; the `wg set` path stays either way, since it is narrower.
+- **Precondition of the WireGuard PR:** a VM check of what `syncconf` does with a key-less file. If it keeps the key after all, the drop-in can go; the `wg set` path stays either way, since it is narrower. **Result:** `syncconf` clears the key (`wg show wg0 public-key` prints `(none)`; checked on Debian 13's wireguard-tools 1.0.20210914, and printed by the `private-access` VM cycle on all four images), so the drop-in stays.
 - `Address` is a `wg-quick` setting that only an interface restart applies. Changing it on a live `wg0` that vps-ready manages is refused ("bring wg0 down with `systemctl stop wg-quick@wg0` and apply again, from public SSH or the console"), so there is no restart reload.
 
 **Addresses.** IPv4 inside the tunnel only; the endpoint itself may be IPv4 or IPv6. The default subnet is a `/24` inside `10.0.0.0/8` derived from `/etc/machine-id` (two bytes of a SHA-256 over it and a fixed label), with the server at `.1`. Why this range and this rule:
@@ -243,6 +244,8 @@ AllowedIPs = 10.86.12.2/32
 **Peers** are public keys only. `check_params` checks: a `name` of lowercase letters, digits and `-`, unique; a `public_key` that decodes from base64 to 32 bytes, unique, and not the server's own; `host` as above. An empty `peers` list is allowed (the interface comes up, nothing can connect) with a note. Preshared keys are not in M6: they are a second secret per peer to generate and hand over.
 
 **Under `ssh_via = "wg0"`:** any planned change arms the timer (above), and a change to the applying session's own peer (the peer whose `AllowedIPs` holds the session's client address) is refused: removing it, changing its key or its `host`. The admin changes that peer from another path (public SSH while it is open, another peer, the console).
+
+- **As built (net.wireguard PR):** the own-peer refusal applies to any session through `wg0`, with or without `ssh_via`, since the change would cut the apply itself; a widened `AllowedIPs` that holds the client address counts. Changing `port` from such a session is refused too (the client's `Endpoint` names the old port), and the rollback guard treats a port change like a removed peer. A `wg0.conf` with the vps-ready header and a `PrivateKey` line someone added is not managed (not applicable, and refused in a plan), so it is never diffed or copied. A peer cannot take the server's own tunnel address. `ssh_via` on a WireGuard interface whose listen port cannot be read is refused unless `allow` has a UDP port (a note when the rule is already loaded).
 
 **The firewall port.** `firewall.inbound` accepts UDP on the listen port of the `wg0` that `net.wireguard` manages (from the `wg0.conf` it plans or the one on disk with our header), and on the port of the `ssh_via` interface when that is a WireGuard interface (`wg show <if> listen-port`, which prints no keys). Other WireGuard interfaces get a note naming their ports, and the user adds them to `allow`. This is the same rule as "never cut the current SSH port": a firewall apply must not cut the VPN that SSH depends on. WireGuard does not answer unauthenticated packets, so the open port reveals nothing. If `firewall.inbound` does not apply (ufw is active), the plan says to open the port there.
 
@@ -337,7 +340,7 @@ Evaluated, and recommended for a later release. A tunnel would let 80 and 443 cl
 
 ### CVE-2026-98432 follow-ups
 
-A use-after-free in the kernel's handling of IPv4 TCP options when building a SYN-ACK (Debian security tracker). The fix is the kernel update: Debian has it in 6.1.192-2 (bookworm-security) and 6.12.117-1 (trixie-security), which `updates.auto` installs; the running kernel changes only at the next reboot, and `updates.auto` leaves `Automatic-Reboot` to the admin. A mitigation is being considered for `firewall.inbound`, separately from the private-access work: drop IPv4 TCP packets that carry IP options, `meta nfproto ipv4 meta l4proto tcp ip hdrlength > 5 drop`, in a `prerouting` base chain at `raw` priority inside `inet vps_ready`, so Docker's published ports are covered too. If it lands, `check_loaded` and `FW-001` must keep reading only the `input` chain, and the `SSH-009`/`FW-003` checks likewise.
+A use-after-free in the kernel's handling of IPv4 TCP options when building a SYN-ACK (Debian security tracker). The fix is the kernel update: Debian has it in 6.1.192-2 (bookworm-security) and 6.12.117-1 (trixie-security), which `updates.auto` installs; the running kernel changes only at the next reboot, and `updates.auto` leaves `Automatic-Reboot` to the admin. `firewall.inbound` mitigates it, separately from the private-access work: it drops IPv4 TCP packets that carry IP options, `ip protocol tcp ip hdrlength > 5 counter drop`, in a `prerouting` base chain at `raw` priority inside `inet vps_ready` (`templates/firewall.nft`), so Docker's published ports are covered too. `check_loaded`, `FW-001` and the `SSH-009`/`FW-003` checks read only `input` hook chains, so the `prerouting` chain does not change them.
 
 ### Facts
 
@@ -353,16 +356,18 @@ A use-after-free in the kernel's handling of IPv4 TCP options when building a SY
 |---|---|---|---|
 | `WireguardKey` | `{ path, created, public_key }` | the file exists with the recorded public key | none: rollback keeps it; `rm` it to rotate |
 | `TailscaleUp` | `{ was_running }` | always (the node's state is Tailscale's) | `tailscale down` if it was not running before; `tailscale logout` to remove the node from the tailnet |
+| `WireguardSync` (as built) | `{ interface, before, after }`: port and peers' allowed IPs | the running interface is as before or after, or down | the `wg set` commands back to `before` |
 
 - Both are `partial`. Neither backup holds a secret.
-- `Reload::WireguardSync`, above. No restart reload.
+- `WireguardSync` is a resource as built, above. No restart reload.
+
 - `Cmd` gains stdout to a file opened with `O_EXCL` and a mode, and stdin from a file, if it does not have them.
 - `ModuleSteps` gains `deadman: bool`, for the VPN modules under `ssh_via`.
 - A v0.5 binary cannot read a journal with the new kinds; the release notes say so, as v0.3.0's did.
 
 ### The wizard
 
-The wizard adds one question after the ports, asked only when `firewall.inbound` applies:
+The wizard adds one question after the admin question and before the ports (a VPN changes what the ports start from), asked only when `firewall.inbound` applies:
 
 ```
 ? Private access for SSH
@@ -372,8 +377,9 @@ The wizard adds one question after the ports, asked only when `firewall.inbound`
 ```
 
 - Choosing a VPN builds on the `private` profile: the ports question then starts with nothing checked, and adding a domain (which adds `deploy.proxy`) checks 80 and 443.
-- **Tailscale:** "Auth key (hidden; Enter to log in yourself after)". A pasted key is written to `/run/vps-ready/tailscale-auth-key` (tmpfs, 0600), used as `auth_key_file`, and removed after the apply, whether it succeeded or not. It is never in `vps-ready.toml`. Hidden input needs `dialoguer`'s `password` feature, which adds `zeroize`, a small RustCrypto crate, as the one new dependency.
-- **WireGuard:** a peer name (default `laptop`) and its public key, checked with the same parser as the profile, asked again on a bad value, saved with `host = 2`. The line under the question shows how to make one (`wg genkey | tee laptop.key | wg pubkey`, or "Add tunnel" in the WireGuard app). After the confirm, the wizard prints the client config.
+- **Tailscale:** "Auth key (hidden; Enter to log in yourself after)", asked again unless it starts with Tailscale's key prefix. The file `/run/vps-ready/tailscale-auth-key` (tmpfs on systemd hosts, 0600) is created empty for the plan, which checks it as `auth_key_file`; the key goes into it only after the yes, and it is removed as soon as the engine finishes, before the wait for a confirm, whether the apply succeeded or not. From the yes until then, SIGHUP, SIGINT and SIGTERM are held back: one that arrives before the engine starts declines, and one during the apply ends the wizard (exit 128 + the signal) once the outcome is printed. A crash or SIGKILL leaves the file for the next `sudo vps-ready`, which removes it at the start. It is never in `vps-ready.toml`. Hidden input needs `dialoguer`'s `password` feature, which adds `zeroize`, a small RustCrypto crate, as the one new dependency.
+- **Already through the VPN:** when Tailscale is up and the login comes through it, `firewall.inbound` limits SSH in this one apply, so the wizard says so, shows the console note, and asks for the confirm through the VPN.
+- **WireGuard:** a peer name (default `laptop`) and its public key, checked with the same parser as the profile, asked again on a bad value, saved with `host = 2`. The line under the question shows how to make one (`wg genkey | tee laptop.key | wg pubkey`, or "Add tunnel" in the WireGuard app). Offered only where `net.wireguard` applies. The apply prints the client config; the wizard's step 2 line points to it and to `sudo vps-ready wireguard-config`, which prints it again.
 - **Step 2:** after step 1 the wizard prints the command to run through the VPN (the same `--profile` file). Run as `sudo vps-ready` from a session through the VPN with that file present, the wizard offers "Apply step 2: accept SSH only through tailscale0? (y/N)", with the console note under it.
 - The saved `vps-ready.toml` holds `extends = "private"`, the VPN module (WireGuard peers are public keys; Tailscale has no key) and the ports.
 

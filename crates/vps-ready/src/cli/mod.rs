@@ -1,8 +1,9 @@
 //! Command-line interface: argument definitions and command dispatch.
 //!
 //! Today: the wizard (no command, on a terminal), `version`, `detect`,
-//! `audit`, `plan`, `apply`, `rollback`, `confirm`, `history`, `modules`
-//! and `export cloud-init`. Further commands are added as their milestones land; see the
+//! `audit`, `plan`, `apply`, `rollback`, `confirm`, `history`, `modules`,
+//! `export cloud-init` and `wireguard-config`. Further commands are added as their milestones land; see the
+
 //! GitHub milestones.
 
 use std::cmp::Reverse;
@@ -110,7 +111,7 @@ pub enum Command {
     /// Show what `apply` would change. Does not need root, but then skips
     /// what only root can read.
     Plan {
-        /// The profile to plan: minimal, web or the path of a profile file.
+        /// The profile to plan: minimal, web, private or the path of a profile file.
         #[arg(long, value_name = "NAME|PATH")]
         profile: Option<String>,
         /// Plan only this module (repeatable). Default: the modules of the
@@ -125,7 +126,7 @@ pub enum Command {
     /// failure did not complete, and 4 when the changes are live and revert
     /// at a deadline unless confirmed.
     Apply {
-        /// The profile to apply: minimal, web or the path of a profile file.
+        /// The profile to apply: minimal, web, private or the path of a profile file.
         #[arg(long, value_name = "NAME|PATH")]
         profile: Option<String>,
         /// Apply only this module (repeatable). Default: the modules of the
@@ -211,6 +212,14 @@ pub enum Command {
     /// makes no network call.
     #[command(subcommand)]
     Export(Export),
+    /// Print the WireGuard client config of each peer of net.wireguard, or
+    /// of PEER, to paste into the device's WireGuard app with its own
+    /// private key. Needs root.
+    WireguardConfig {
+        /// The peer's name in the profile. Default: every peer.
+        #[arg(value_name = "PEER")]
+        peer: Option<String>,
+    },
 }
 
 /// What `export` prints.
@@ -220,8 +229,8 @@ pub enum Export {
     /// boot, before anyone logs in: it installs this version, checked
     /// against its SHA-256, and runs `apply --yes --deadman=off`.
     CloudInit {
-        /// The profile: minimal, web or the path of a profile file. It must
-        /// give user.admin its `authorized_keys`.
+        /// The profile: minimal, web, private or the path of a profile file.
+        /// It must give user.admin its `authorized_keys`.
         #[arg(long, value_name = "NAME|PATH")]
         profile: String,
         /// The checksums.txt of this version's release, downloaded and
@@ -396,6 +405,7 @@ pub fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
         let mut term = crate::tui::Terminal::new(cli.color_enabled())?;
         let host = change::Host {
             sigint_ends: Some(term.sigint_ends()),
+            defer: Some(term.defer()),
             ..real_host(cli)
         };
         let cwd = std::env::current_dir()?;
@@ -554,6 +564,16 @@ pub fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
             let n = change::history(&real_host(cli), cli.json, &mut out)?;
             code = ExitCode::from(n);
         }
+        Command::WireguardConfig { peer } => {
+            no_json(cli, "wireguard-config")?;
+            let n = change::wireguard_config(
+                &real_host(cli),
+                peer.as_deref(),
+                &mut out,
+                &mut io::stderr(),
+            )?;
+            code = ExitCode::from(n);
+        }
         Command::Export(Export::CloudInit {
             profile,
             checksums,
@@ -566,6 +586,7 @@ pub fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
                 checksums,
                 base_url.as_deref(),
                 &mut out,
+                &mut io::stderr(),
             )?;
             code = ExitCode::from(n);
         }
@@ -623,6 +644,7 @@ fn real_host(cli: &Cli) -> change::Host<'static> {
         stop: std::sync::Arc::new(AtomicBool::new(false)),
         catch_sigint: true,
         sigint_ends: None,
+        defer: None,
         tty: io::stderr().is_terminal(),
         poll: Duration::from_secs(1),
     }
@@ -666,7 +688,8 @@ fn log_notices(facts: &Facts, quiet: &[&str]) {
 
 /// Whether running as root would let an unknown control be checked: when
 /// `sshd -T`, `fail2ban-client` or `nft list ruleset` could not run (all
-/// need root), or a `/proc/sys` file is root-only on this kernel.
+/// need root), a `/proc/sys` file is root-only on this kernel, or
+/// `/etc/wireguard` could not be read.
 fn root_would_help(report: &Report, facts: &Facts) -> bool {
     report.findings.iter().any(|f| {
         matches!(f.outcome, Outcome::Unknown { .. })
@@ -692,6 +715,8 @@ fn root_would_help(report: &Report, facts: &Facts) -> bool {
                             .any(|n| n.ends_with(crate::facts::firewall::NEEDS_ROOT))
                 }
                 Check::Apparmor => false,
+                // /etc/wireguard is root's, mode 0700.
+                Check::WireguardKeyFiles => true,
                 // `/proc/sys/net/ipv4/conf` is readable by anyone.
                 Check::ReversePathFilter
                 | Check::IcmpRedirectsIgnored

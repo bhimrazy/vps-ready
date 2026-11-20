@@ -4,10 +4,12 @@
 
 use std::io;
 
+mod defer;
 #[cfg(test)]
 pub(crate) mod script;
 mod term;
 
+pub use defer::Defer;
 pub use term::Terminal;
 
 /// Follows the question of a [`Prompt::multi_select`].
@@ -40,6 +42,13 @@ pub trait Prompt {
     ///
     /// [`PromptError`].
     fn input(&mut self, question: &str, default: &str) -> Result<String, PromptError>;
+
+    /// A line of text that is not shown, e.g. a secret; empty is allowed.
+    ///
+    /// # Errors
+    ///
+    /// [`PromptError`].
+    fn password(&mut self, question: &str) -> Result<String, PromptError>;
 
     /// Yes or no.
     ///

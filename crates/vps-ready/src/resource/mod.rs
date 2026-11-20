@@ -23,6 +23,7 @@ pub(crate) mod service;
 pub(crate) mod sysctl;
 pub(crate) mod tailscale_up;
 pub(crate) mod user;
+pub(crate) mod wireguard;
 
 pub use apt_source::{
     AptSource, CADDY_FINGERPRINT, CADDY_KEY, DOCKER_FINGERPRINT, DOCKER_KEY, apt_source,
@@ -36,6 +37,7 @@ pub use service::Service;
 pub use sysctl::Sysctl;
 pub use tailscale_up::{TailscaleUp, check_key_file};
 pub use user::{Password, User};
+pub use wireguard::{SyncPeer, WgState, WireguardKey, WireguardSync, is_key};
 
 /// Errors from diffing, snapshotting, applying or restoring a resource.
 #[derive(Debug, thiserror::Error)]
@@ -170,6 +172,10 @@ pub enum Resource {
     AuthorizedKeys(AuthorizedKeys),
     /// This node logged in to a tailnet.
     TailscaleUp(TailscaleUp),
+    /// A WireGuard private key generated on the host.
+    WireguardKey(WireguardKey),
+    /// A running WireGuard interface's port and peers.
+    WireguardSync(WireguardSync),
 }
 
 impl Resource {
@@ -177,7 +183,8 @@ impl Resource {
     /// `directory:/etc/vps-ready`,
     /// `sysctl:kernel.kptr_restrict`, `package:unattended-upgrades` (or
     /// `package:docker-ce,containerd.io` for several),
-    /// `service:fail2ban.service`, `user:admin` or `authorized-keys:admin`.
+    /// `service:fail2ban.service`, `user:admin`, `authorized-keys:admin`,
+    /// `wireguard-key:/etc/wireguard/wg0.key` or `wireguard:wg0`.
     #[must_use]
     pub fn id(&self) -> String {
         match self {
@@ -189,6 +196,8 @@ impl Resource {
             Self::User(u) => format!("user:{}", u.name),
             Self::AuthorizedKeys(k) => format!("authorized-keys:{}", k.user),
             Self::TailscaleUp(_) => "tailscale:up".to_owned(),
+            Self::WireguardKey(k) => format!("wireguard-key:{}", k.path.display()),
+            Self::WireguardSync(w) => format!("wireguard:{}", w.interface),
         }
     }
 
@@ -200,10 +209,13 @@ impl Resource {
             | Self::Directory(_)
             | Self::Sysctl(_)
             | Self::Service(_)
-            | Self::AuthorizedKeys(_) => Reversibility::Reversible,
+            | Self::AuthorizedKeys(_)
+            | Self::WireguardSync(_) => Reversibility::Reversible,
             // Rollback leaves an installed package installed, and a removed
-            // user's home directory, and a node's login.
-            Self::Package(_) | Self::User(_) | Self::TailscaleUp(_) => Reversibility::Partial,
+            // user's home directory, a node's login and a generated key.
+            Self::Package(_) | Self::User(_) | Self::TailscaleUp(_) | Self::WireguardKey(_) => {
+                Reversibility::Partial
+            }
         }
     }
 
@@ -221,6 +233,9 @@ impl Resource {
             // `getent` in snapshot and in apply.
             Self::AuthorizedKeys(_) => Cmd::DEFAULT_TIMEOUT * 2,
             Self::TailscaleUp(_) => tailscale_up::TIMEOUT,
+            // `wg pubkey` in snapshot; `wg pubkey`, `genkey`, `pubkey` in apply.
+            Self::WireguardKey(_) => wireguard::WG_TIMEOUT * 4,
+            Self::WireguardSync(w) => w.timeout(),
         }
     }
 
@@ -237,6 +252,9 @@ impl Resource {
             }
             // `getent`, then `id`.
             Self::User(_) => Cmd::DEFAULT_TIMEOUT * 2,
+            // `wg pubkey`; `wg show` twice.
+            Self::WireguardKey(_) => wireguard::WG_TIMEOUT,
+            Self::WireguardSync(_) => wireguard::WG_TIMEOUT * 2,
         }
     }
 
@@ -260,6 +278,8 @@ impl Resource {
             Self::User(u) => u.diff(sys)?,
             Self::AuthorizedKeys(k) => k.diff(sys)?,
             Self::TailscaleUp(t) => t.diff(sys)?,
+            Self::WireguardKey(k) => k.diff(sys)?,
+            Self::WireguardSync(w) => w.diff(sys)?,
         };
         Ok(change.map(|(summary, diff)| Change {
             id: self.id(),
@@ -294,6 +314,8 @@ impl Resource {
             Self::User(u) => u.snapshot(sys),
             Self::AuthorizedKeys(k) => k.snapshot(sys, txn_dir, n),
             Self::TailscaleUp(t) => t.snapshot(sys),
+            Self::WireguardKey(k) => k.snapshot(sys),
+            Self::WireguardSync(w) => w.snapshot(sys),
         }
     }
 
@@ -313,6 +335,8 @@ impl Resource {
             Self::User(u) => return u.apply(sys).map(|uid| Applied { uid }),
             Self::AuthorizedKeys(k) => k.apply(sys),
             Self::TailscaleUp(t) => t.apply(sys),
+            Self::WireguardKey(k) => k.apply(sys),
+            Self::WireguardSync(w) => w.apply(sys),
         }?;
         Ok(Applied::default())
     }
@@ -413,6 +437,26 @@ pub enum Backup {
     TailscaleUp {
         /// Whether the node was `Running` before apply.
         was_running: bool,
+    },
+    /// A WireGuard private key. Holds only its public key.
+    #[serde(rename = "wireguard-key")]
+    WireguardKey {
+        /// The key file.
+        path: PathBuf,
+        /// Whether apply generates it.
+        created: bool,
+        /// The public key of a key that was there.
+        public_key: Option<String>,
+    },
+    /// A running WireGuard interface's port and peers. Public keys only.
+    #[serde(rename = "wireguard-sync")]
+    WireguardSync {
+        /// E.g. `wg0`.
+        interface: String,
+        /// Before apply; `None` if it was down.
+        before: Option<WgState>,
+        /// What apply sets.
+        after: WgState,
     },
 }
 
@@ -516,6 +560,11 @@ pub fn restore(sys: Sys, txn_dir: &Path, backup: &Backup) -> Result<(), Resource
             created_dir,
         } => authorized_keys::restore(sys, txn_dir, user, path, *n, *original, *created_dir),
         Backup::TailscaleUp { was_running } => tailscale_up::restore(sys, *was_running),
+        // Kept: client configs made since use its public key.
+        Backup::WireguardKey { .. } => Ok(()),
+        Backup::WireguardSync {
+            interface, before, ..
+        } => wireguard::restore(sys, interface, before.as_ref()),
     }
 }
 
@@ -711,7 +760,27 @@ mod tests {
                 Backup::TailscaleUp { was_running: false },
                 r#"{"kind":"tailscale-up","was_running":false}"#,
             ),
+            (
+                Backup::WireguardKey {
+                    path: "/etc/wireguard/wg0.key".into(),
+                    created: true,
+                    public_key: None,
+                },
+                r#"{"kind":"wireguard-key","path":"/etc/wireguard/wg0.key","created":true,"public_key":null}"#,
+            ),
+            (
+                Backup::WireguardSync {
+                    interface: "wg0".into(),
+                    before: None,
+                    after: WgState {
+                        port: 51820,
+                        peers: [("k".to_owned(), vec!["10.86.12.2/32".to_owned()])].into(),
+                    },
+                },
+                r#"{"kind":"wireguard-sync","interface":"wg0","before":null,"after":{"port":51820,"peers":{"k":["10.86.12.2/32"]}}}"#,
+            ),
         ];
+
         for (backup, json) in cases {
             assert_eq!(serde_json::to_string(&backup).unwrap(), json);
             assert_eq!(serde_json::from_str::<Backup>(json).unwrap(), backup);
