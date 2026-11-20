@@ -12,12 +12,11 @@ import Safety from '../components/landing/Safety.astro';
 import Tested from '../components/landing/Tested.astro';
 import Why from '../components/landing/Why.astro';
 import Landing from '../layouts/Landing.astro';
-import { TAGLINE } from '../lib/site';
 ---
 
 <Landing
   title="vps-ready: harden a fresh Linux VPS without locking yourself out"
-  description={`${TAGLINE} vps-ready audits a Debian or Ubuntu server, shows the exact plan, applies key-only SSH, a firewall, fail2ban and automatic updates, rolls back SSH and firewall changes that cut off your access, and can close public SSH behind Tailscale or WireGuard.`}
+  description="Harden a Debian or Ubuntu server: key-only SSH, a firewall and updates, rollback if you are locked out, and optional SSH only over Tailscale or WireGuard."
 >
   <Nav />
   <main id="main">

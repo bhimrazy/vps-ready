@@ -60,11 +60,15 @@ enabled = false
 sites = [{ domain = "app.example.com", upstream = "127.0.0.1:8080" }]
 ```
 
+Check it with `plan` first:
+
 ```sh
 sudo vps-ready plan --profile ./my-server.toml
 ```
 
 A typo in a key is an error that names the module, not a silently ignored line. `sudo = "password"` only works for an account that already has a password; vps-ready never asks for or sets one.
+
+### Run only some modules
 
 To run only some modules, name them with `--module`:
 

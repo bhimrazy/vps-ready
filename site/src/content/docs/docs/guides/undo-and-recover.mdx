@@ -10,6 +10,8 @@ import { Steps } from '@astrojs/starlight/components';
 
 Every `apply` is one **transaction**, journaled in `/var/lib/vps-ready`. You can undo it at any time, whether or not the safety timer is still running. This page shows how, and how to get back into a server you can no longer log in to.
 
+Before your first profile apply, check that your provider's web console works and that you can log in there, and take a provider snapshot. Neither is needed if all goes well; both turn a bad day into a short one.
+
 ## Undo the last apply
 
 To undo the most recent apply, run:
@@ -76,9 +78,7 @@ If a rollback starts but cannot finish, it exits 3 and says what is left to do b
 
 ## Get back in after a lockout
 
-**Before your first profile apply, check that your provider's web console works and that you can log in there, and take a provider snapshot.** Neither is needed if all goes well; both turn a bad day into a short one.
-
-If you just ran `apply` with a profile and have not confirmed yet, the safety net is still armed. Work down this list:
+If you cannot log in, work down this list. **If you just ran `apply` with a profile and have not confirmed yet, the safety net is still armed**, so the first step may be all you need:
 
 <Steps>
 

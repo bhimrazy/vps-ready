@@ -102,7 +102,7 @@ sudo vps-ready apply --profile minimal --deadman 10m   # from 1m to 30m, default
 
 - It needs systemd. On other init systems the three guarded modules are not offered.
 - Only one change can wait for a confirm at a time; `apply` refuses to start another until it is confirmed or rolled back.
-- The other modules (`ssh.bruteforce`, `kernel.sysctl`, `updates.auto`) cannot lock you out, so they apply without a confirm. You can still undo them with `rollback`.
+- `net.tailscale` and `net.wireguard` arm the timer only while `ssh_via` limits SSH to their interface. The other modules (`ssh.bruteforce`, `kernel.sysctl`, `updates.auto` and the `deploy.*` modules) cannot lock you out, so they apply without a confirm. You can still undo them with `rollback`.
 - A firewall at your cloud provider is outside the server; vps-ready cannot see or change it.
 
 ## If nobody confirms

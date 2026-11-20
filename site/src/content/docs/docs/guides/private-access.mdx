@@ -46,7 +46,9 @@ Each step works on its own. If the server is already running, skip the first.
 
    Paste `user-data.yaml` into the provider's user-data (or cloud-init) field. It is plain `#cloud-config` and far below the usual 16 KB limit.
 
-4. **Keep the provider's firewall closed, and do not log in, until first boot finishes.** The image's own SSH settings apply for the first minute or so, until cloud-init's last stage runs. Any login during that time, including a provisioning tool that waits for SSH, makes the apply refuse `--deadman=off`. Watch the server's console log in the provider's panel (often called the serial or boot log) for cloud-init's final message, `Cloud-init v. ... finished at ...`. The output of the apply comes just before it.
+4. **Keep the provider's firewall closed, and do not log in, until first boot finishes.** The image's own SSH settings apply for the first minute or so, until cloud-init's last stage runs. Any login during that time, including a provisioning tool that waits for SSH, makes the apply refuse `--deadman=off`.
+
+   Watch the server's console log in the provider's panel (often called the serial or boot log) for cloud-init's final message, `Cloud-init v. ... finished at ...`. The output of the apply comes just before it.
 
 5. **Open the provider's firewall for SSH, then check that it worked:**
 
@@ -138,7 +140,7 @@ Add `net.wireguard` to run a WireGuard interface, `wg0`, on the server. It insta
    sudo vps-ready apply --profile vps-ready.toml
    ```
 
-   With `firewall.inbound` in the change, the apply arms the safety timer, so confirm from a new SSH login as usual, through the public address. The client configs print before the confirm. To print them again, for all peers or one, run:
+   With `firewall.inbound` in the change, the apply arms the safety timer, so confirm from a new SSH login as usual, which still works through the public address. The client configs print before the confirm. To print them again, for all peers or one, run:
 
    ```sh
    sudo vps-ready wireguard-config laptop

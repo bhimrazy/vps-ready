@@ -71,7 +71,7 @@ Docker and the firewall get along, with one thing you must know.
 - **Published ports skip the firewall.** Traffic to a port Docker publishes (`-p 5432:5432`) is forwarded to the container and never passes the input rules of any host firewall, ufw and firewalld included. Only the rule that drops IPv4 TCP with IP options (CVE-2026-98432) runs before forwarding and covers them too. The plan lists those ports, and the `FW-002` control fails while they are open to the world.
 - **Forwarding stays on.** `kernel.sysctl` never turns off IP forwarding, which Docker needs.
 
-Published ports are public: `-p 5432:5432` makes a database reachable from anywhere even with the firewall on. Publish on loopback instead (`-p 127.0.0.1:5432:5432`) and put a reverse proxy in front, or filter forwarded traffic yourself in the `DOCKER-USER` chain. `deploy.docker` makes loopback the default; see [Deploy an app](/docs/guides/deployment-modules/).
+**Published ports are public.** `-p 5432:5432` makes a database reachable from anywhere even with the firewall on. Publish on loopback instead (`-p 127.0.0.1:5432:5432`) and put a reverse proxy in front, or filter forwarded traffic yourself in the `DOCKER-USER` chain. `deploy.docker` makes loopback the default; see [Deploy an app](/docs/guides/deployment-modules/).
 
 ## Your SSH server config
 

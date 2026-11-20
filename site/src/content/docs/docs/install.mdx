@@ -9,7 +9,7 @@ import { VERSION } from '../../../lib/site';
 
 export const script = 'https://github.com/bhimrazy/vps-ready/releases/latest/download/install.sh';
 
-vps-ready is one static binary for Linux on x86_64 and arm64, with nothing else to install. Run these on the server. The install script is the common way; a `.deb` package and `cargo` work too.
+vps-ready is one static binary for Linux on x86_64 and arm64, with nothing else to install. The install script is the common way; a `.deb` package and `cargo` work too. Run these on the server.
 
 <Tabs syncKey="install">
   <TabItem label="curl">
@@ -34,9 +34,9 @@ If `cosign`, or `gh` while logged in (`gh auth status`), is installed and the si
 | `--skip-verify` | Install even if the signature check fails; the SHA-256 check still runs |
 | `--version` | Print the version the script installs and exit |
 
-The command is also installed as `vpsready`, without the hyphen. Building with `cargo` needs a Rust toolchain on the server.
+The command is also installed as `vpsready`, without the hyphen.
 
-Where the binary lives matters, because the safety timer runs it as root later. `apply` refuses the admin user, SSH server config and firewall modules when the binary is under `/home`, `/tmp`, `/var/tmp` or `/dev/shm`, or when it or a parent directory is writable by anyone but root. The install script's `/usr/local/bin` and the `.deb`'s `/usr/bin` are fine. A `cargo install` as a normal user lands in `~/.cargo/bin`, so copy the binary to `/usr/local/bin` before you use a profile.
+Where the binary lives matters, because the safety timer runs it as root later. `apply` refuses the admin user, SSH server config and firewall modules when the binary is under `/home`, `/tmp`, `/var/tmp` or `/dev/shm`, or when it or a parent directory is writable by anyone but root. The install script's `/usr/local/bin` and the `.deb`'s `/usr/bin` are fine. Building with `cargo` needs a Rust toolchain on the server, and a `cargo install` as a normal user lands in `~/.cargo/bin`, so copy the binary to `/usr/local/bin` before you use a profile.
 
 ## Check the install
 

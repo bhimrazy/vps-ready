@@ -17,7 +17,7 @@ One static binary: audit, a plan you read first, and a rollback timer that undoe
 </pre>
 
 <p>
-<a href="https://github.com/bhimrazy/vps-ready/actions/workflows/ci.yml"><img src="https://github.com/bhimrazy/vps-ready/actions/workflows/ci.yml/badge.svg" alt="CI"></a> <a href="https://crates.io/crates/vps-ready"><img src="https://img.shields.io/crates/v/vps-ready.svg" alt="crates.io"></a> <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="License: MIT OR Apache-2.0"></a> <img src="https://img.shields.io/badge/rust-stable%20(MSRV%201.98)-orange.svg" alt="Rust stable, MSRV 1.98"> <img src="https://img.shields.io/badge/Debian%2012%2F13%20%7C%20Ubuntu%2022.04%2F24.04-supported-green.svg" alt="Debian 12/13, Ubuntu 22.04/24.04">
+<a href="https://github.com/bhimrazy/vps-ready/actions/workflows/ci.yml"><img src="https://github.com/bhimrazy/vps-ready/actions/workflows/ci.yml/badge.svg" alt="CI"></a> <a href="https://crates.io/crates/vps-ready"><img src="https://img.shields.io/crates/v/vps-ready.svg" alt="crates.io"></a> <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="License: MIT OR Apache-2.0"></a> <img src="https://img.shields.io/badge/rust-stable%20(MSRV%201.98)-orange.svg" alt="Rust stable, MSRV 1.98"> <a href="#supported-platforms"><img src="https://img.shields.io/badge/Debian%2012%2F13%20%7C%20Ubuntu%2022.04%2F24.04-supported-green.svg" alt="Debian 12/13, Ubuntu 22.04/24.04"></a>
 </p>
 
 <p>
@@ -27,7 +27,7 @@ One static binary: audit, a plan you read first, and a rollback timer that undoe
 </div>
 
 > [!NOTE]
-> vps-ready is at **v0.6** and works on Debian 12/13 and Ubuntu 22.04/24.04 with systemd: `audit` (34 controls), and `plan`, `apply`, `confirm` and `rollback` for [eleven modules](#what-it-does). Expect breaking changes before 1.0.
+> vps-ready is at **v0.6** and works on Debian 12/13 and Ubuntu 22.04/24.04 with systemd: `detect` and `audit` (34 controls), and `plan`, `apply`, `confirm` and `rollback` for [eleven modules](#what-it-does). Expect breaking changes before 1.0.
 
 ## Quick start
 

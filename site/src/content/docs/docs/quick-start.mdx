@@ -82,13 +82,13 @@ This is the same flow without the questions. The first two steps change nothing,
 
    Each module lists the controls it fixes and labels each change with its reversibility. Nothing is written. Without `--profile`, `plan` and `apply` cover only kernel settings and automatic updates, which cannot lock you out.
 
-3. **Apply: make the changes.** `apply` prints the plan again and asks before it changes anything (`Apply 16 changes? [y/N]`):
+3. **Apply: make the changes.** To apply, run:
 
    ```sh
    sudo vps-ready apply --profile minimal
    ```
 
-   With `minimal` or `web` it arms the safety timer before the first change, makes the changes, and then ends like this, with your own admin user, address and port:
+   `apply` prints the plan again and asks before it changes anything (`Apply 16 changes? [y/N]`). With `minimal` or `web` it arms the safety timer before the first change, makes the changes, and then ends like this, with your own admin user, address and port:
 
    ```text
    Changes are live. To keep them, open a NEW terminal on your computer and run
