@@ -245,11 +245,12 @@ impl Txn {
         let path = self.journal_path();
         let bytes = fs.read(&path)?;
         let clean = journal::clean_len(&bytes);
+        let records = journal::parse(&path, &bytes[..clean])?;
         if clean < bytes.len() {
             let owner = fs.metadata(&path)?.owner();
             fs.write_atomic(&path, &bytes[..clean], owner)?;
         }
-        journal::parse(&path, &bytes[..clean])
+        Ok(records)
     }
 }
 
@@ -454,6 +455,20 @@ mod tests {
             .unwrap();
         assert_eq!(done.read(&fs).unwrap(), records);
         assert!(!journal::is_unfinished(&done.read(&fs).unwrap()));
+    }
+
+    #[test]
+    fn resume_of_a_newer_journal_rewrites_nothing() {
+        let fs = FakeFs::new();
+        let state = StateDir::create(&fs, "/state", 0).unwrap();
+        let txn = state.create_txn(&fs, 0).unwrap();
+        let bytes = b"{\"at\":1,\"event\":\"begin\",\"format\":2,\"version\":\"9.9.9\",\"modules\":[]}\n{\"at\":2,\"ev";
+        fs.append_sync(&txn.journal_path(), bytes).unwrap();
+        assert!(matches!(
+            txn.resume(&fs),
+            Err(EngineError::JournalFormat { .. })
+        ));
+        assert_eq!(fs.read(&txn.journal_path()).unwrap(), bytes);
     }
 
     #[test]

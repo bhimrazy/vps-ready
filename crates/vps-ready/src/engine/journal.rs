@@ -425,25 +425,30 @@ pub fn parse(path: &Path, bytes: &[u8]) -> Result<Vec<Record>, EngineError> {
         .collect()
 }
 
-/// Refuses a journal whose `begin` record names a higher format, before any
-/// later record is parsed.
+/// Refuses a journal whose first record names a format this build does not
+/// know, before any later record is parsed. The record is read loosely, so a
+/// format or version of an unexpected type is refused, not a parse error.
 fn refuse_newer(path: &Path, body: &[u8]) -> Result<(), EngineError> {
-    #[derive(Deserialize)]
-    struct Head {
-        #[serde(default)]
-        format: u32,
-        #[serde(default)]
-        version: String,
-    }
     let first = body.split(|b| *b == b'\n').next().unwrap_or_default();
-    match serde_json::from_slice::<Head>(first) {
-        Ok(head) if head.format > FORMAT => Err(EngineError::JournalFormat {
-            path: path.display().to_string(),
-            format: head.format,
-            version: head.version,
-        }),
-        _ => Ok(()),
+    let Ok(head) = serde_json::from_slice::<serde_json::Value>(first) else {
+        return Ok(());
+    };
+    let known = match head.get("format") {
+        None | Some(serde_json::Value::Null) => return Ok(()),
+        Some(format) => format.as_u64().is_some_and(|n| n <= u64::from(FORMAT)),
+    };
+    if known {
+        return Ok(());
     }
+    let writer = match head.get("version").and_then(|v| v.as_str()) {
+        Some(version) => format!("vps-ready {version}"),
+        None => "a newer vps-ready".to_owned(),
+    };
+    Err(EngineError::JournalFormat {
+        path: path.display().to_string(),
+        format: head["format"].to_string(),
+        writer,
+    })
 }
 
 #[cfg(test)]

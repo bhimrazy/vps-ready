@@ -351,7 +351,7 @@ This narrows an M3 invariant: `ssh.server` "never writes ... crypto lists" ([the
 
 **Distro support.** A release stays supported for as long as its distro gives it free security updates: Ubuntu's standard support (not ESM) and, for Debian, Debian LTS, which follows the end of regular security support by about two years. Debian 12's regular security support ended in June 2026 and its LTS runs to June 2028, so Debian 12 stays. Support also needs the vendor repositories the modules use (Docker, Caddy, Tailscale, Cloudflare) to still publish for the release; when one stops, its module becomes not applicable there, with a note. A release leaves the list in a minor release, announced one release ahead. Ubuntu 22.04's standard support ends in 2027, so 1.x drops it in a minor release then.
 
-**Journal format.** The `begin` record already carries the writer's version. From v0.7.0 it also carries `format: 1`, and a binary that meets a higher format refuses that transaction with "written by vps-ready X; roll it back with that version or newer", instead of failing on an unknown record kind.
+**Journal format.** The `begin` record already carries the writer's version. From v0.7.0 it also carries `format: 1`, and a binary that meets a higher format refuses that transaction with "written by vps-ready X; use that version or newer", instead of failing on an unknown record kind.
 
 **Before tagging 1.0.0:**
 - Every piece above shipped in a 0.x release.

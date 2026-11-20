@@ -9,13 +9,13 @@ use crate::resource::after_path;
 
 const BIN: &str = "/usr/local/bin/vps-ready";
 /// Where the timer and the boot hook run the binary from.
-const COPY: &str = "/state/bin/vps-ready";
+pub(super) const COPY: &str = "/state/bin/vps-ready";
 const UPTIME: &str = "/proc/uptime";
 const WINDOW: Duration = Duration::from_secs(300);
 
 /// [`fixture`] on a host that can arm: a boot ID, 1000 s since boot and
 /// the binary.
-fn armable() -> FakeFs {
+pub(super) fn armable() -> FakeFs {
     let fs = fixture()
         .with_file(BOOT_ID, "a\n")
         .with_file(UPTIME, "1000.25 900.00\n")
@@ -33,7 +33,7 @@ fn set_uptime(fs: &FakeFs, secs: u64) {
 /// `test.lock` can lock the admin out, so a dead-man rollback restores it
 /// even if it changed; it reloads sshd. `test.keys` needs the dead-man too
 /// but is not forced. `test.plain` sets a sysctl.
-fn locking() -> [Demo; 3] {
+pub(super) fn locking() -> [Demo; 3] {
     [
         Demo {
             reloads: vec![Reload::SshdReload],
@@ -54,7 +54,7 @@ fn version_ok() -> Output {
 }
 
 /// Answers `systemd-run`, `systemctl` and every check with success.
-fn dm_runner() -> FakeRunner {
+pub(super) fn dm_runner() -> FakeRunner {
     runner(Output::success(""))
         .on("systemd-run", Vec::<String>::new(), Output::success(""))
         .on(COPY, ["version"], version_ok())
@@ -73,12 +73,16 @@ fn apply_dm(fs: &dyn Fs, runner: &FakeRunner, plan: &Plan) -> Result<ApplyOutcom
     Engine::lock(&state, Sys { fs, runner })?.apply(plan, &deadman_cfg(), &mut |_| {})
 }
 
-fn timer(fs: &dyn Fs, runner: &FakeRunner, txn: &str) -> Result<DeadmanOutcome, EngineError> {
+pub(super) fn timer(
+    fs: &dyn Fs,
+    runner: &FakeRunner,
+    txn: &str,
+) -> Result<DeadmanOutcome, EngineError> {
     let state = state(fs);
     Engine::lock(&state, Sys { fs, runner })?.deadman(txn, Path::new(COPY), 0, &mut |_| {})
 }
 
-fn boot_hook(fs: &dyn Fs, runner: &FakeRunner) -> Result<Vec<Rollback>, EngineError> {
+pub(super) fn boot_hook(fs: &dyn Fs, runner: &FakeRunner) -> Result<Vec<Rollback>, EngineError> {
     let state = state(fs);
     Engine::lock(&state, Sys { fs, runner })?.deadman_boot(Path::new(COPY), &mut |_| {})
 }
@@ -89,7 +93,7 @@ fn manual(fs: &dyn Fs, runner: &FakeRunner) -> Result<Rollback, EngineError> {
 }
 
 /// Applies `plan` and expects it to wait for a confirm.
-fn pending(fs: &dyn Fs, plan: &Plan) -> (String, Deadline) {
+pub(super) fn pending(fs: &dyn Fs, plan: &Plan) -> (String, Deadline) {
     match apply_dm(fs, &dm_runner(), plan).unwrap() {
         ApplyOutcome::Pending { txn, deadline } => (txn, deadline),
         other => panic!("{other:?}"),

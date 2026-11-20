@@ -1,0 +1,6 @@
+{"at":1795164930,"event":"begin","format":1,"version":"0.7.0","modules":["test.lock"]}
+{"at":1795164930,"event":"armed","unit":"vps-ready-deadman-20261120T085530Z-1","boot_id":"a","deadline":{"boottime":1630,"wall":1795165560}}
+{"at":1795164930,"event":"backup","resource":"file:/etc/demo.conf","backup":{"kind":"file","path":"/etc/demo.conf","n":1,"original":{"mode":420,"uid":0,"gid":0}},"force_restore":true}
+{"at":1795164930,"event":"applied","resource":"file:/etc/demo.conf"}
+{"at":1795164930,"event":"reloaded","reload":"sshd-reload"}
+{"at":1795164930,"event":"state","state":"pending-confirm","deadline":{"boottime":1300,"wall":1795165230},"live_since":1000,"unit":"vps-ready-deadman-20261120T085530Z-2"}
