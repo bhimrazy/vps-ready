@@ -1,0 +1,31 @@
+---
+source: crates/vps-ready/src/cli/module_docs.rs
+expression: out
+---
+net.tunnel
+  Run a Cloudflare Tunnel connector, for a website with no public port
+  Applies to this host.
+
+Why
+  A web server on ports 80 and 443 is open to every scanner on the internet. A
+  Cloudflare Tunnel connector opens outbound connections to Cloudflare's edge
+  and receives visitors through them, so the host needs no inbound port at all;
+  firewall.inbound can then leave 80 and 443 closed.
+
+Params (in the module's profile table)
+  provider (default "cloudflare")
+      The tunnel provider; "cloudflare" is the only one.
+  token_file (default "")
+      A file holding the token of a tunnel created in the Cloudflare dashboard,
+      owned by root with mode 0600, not a symlink, in directories only root can
+      write to. The connector's unit copies it at each start
+      (`LoadCredential=`); vps-ready never reads it. After replacing it, run
+      `sudo systemctl restart vps-ready-cloudflared`. Empty: cloudflared is
+      installed, and no connector runs.
+  auto_update (default true)
+      Let unattended-upgrades (updates.auto) install cloudflared's updates; a
+      path unit then restarts the connector on the new binary, which drops
+      visitors' connections for a moment.
+
+Fixes these audit controls
+  none

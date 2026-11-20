@@ -1,0 +1,72 @@
+---
+source: crates/vps-ready/src/modules/net_tunnel/tests.rs
+expression: plan
+---
+modules:
+  - id: net.tunnel
+    title: "Run a Cloudflare Tunnel connector, for a website with no public port"
+    status: applicable
+    changes:
+      - id: "directory:/etc/apt/keyrings"
+        summary: "create directory /etc/apt/keyrings (0755 0:0)"
+        diff: ~
+        reversibility: reversible
+      - id: "file:/etc/apt/keyrings/cloudflared.asc"
+        summary: "create /etc/apt/keyrings/cloudflared.asc (0644 0:0): PGP public key, fingerprint CC94 B39C 77AE 7342 A68B 8962 8A68 2D30 8D4E 5E73 (52 lines)"
+        diff: ~
+        reversibility: reversible
+      - id: "file:/etc/apt/sources.list.d/cloudflared.sources"
+        summary: "create /etc/apt/sources.list.d/cloudflared.sources (0644 0:0)"
+        diff: "@@ -0,0 +1,7 @@\n+# Written by vps-ready. `vps-ready rollback --last` removes it.\n+Types: deb\n+URIs: https://pkg.cloudflare.com/cloudflared\n+Suites: any\n+Components: main\n+Architectures: amd64\n+Signed-By: /etc/apt/keyrings/cloudflared.asc\n"
+        reversibility: reversible
+      - id: "file:/etc/apt/apt.conf.d/52vps-ready-cloudflared"
+        summary: "create /etc/apt/apt.conf.d/52vps-ready-cloudflared (0644 0:0)"
+        diff: "@@ -0,0 +1,2 @@\n+// Written by vps-ready (net.tunnel). `vps-ready rollback --last` removes it.\n+Unattended-Upgrade::Origins-Pattern { \"origin=cloudflared,codename=any\"; };\n"
+        reversibility: reversible
+      - id: "package:cloudflared"
+        summary: install cloudflared
+        diff: ~
+        reversibility: partial
+      - id: "directory:/etc/vps-ready"
+        summary: "create directory /etc/vps-ready (0755 0:0)"
+        diff: ~
+        reversibility: reversible
+      - id: "file:/etc/vps-ready/cloudflared.yml"
+        summary: "create /etc/vps-ready/cloudflared.yml (0644 0:0)"
+        diff: "@@ -0,0 +1,4 @@\n+# Written by vps-ready (net.tunnel). `vps-ready rollback --last` restores\n+# the previous state; edits here are replaced by the next apply.\n+# vps-ready-cloudflared.service reads it, and no other config file.\n+no-autoupdate: true\n"
+        reversibility: reversible
+      - id: "file:/etc/vps-ready/cloudflared-restart.sh"
+        summary: "create /etc/vps-ready/cloudflared-restart.sh (0644 0:0)"
+        diff: "@@ -0,0 +1,34 @@\n+# Written by vps-ready (net.tunnel). `vps-ready rollback --last` removes it.\n+# vps-ready-cloudflared-restart.service runs it when /usr/bin/cloudflared\n+# changes: it restarts the connector until it runs the new binary.\n+set -u\n+bin=/usr/bin/cloudflared\n+unit=vps-ready-cloudflared.service\n+retries=0\n+while :; do\n+  # dpkg links the old binary to .dpkg-tmp, which can trigger the path unit,\n+  # before it renames .dpkg-new into place.\n+  waited=0\n+  while [ -e \"$bin.dpkg-new\" ] || [ -e \"$bin.dpkg-tmp\" ]; do\n+    [ \"$waited\" -lt 60 ] || break\n+    sleep 1\n+    waited=$((waited + 1))\n+  done\n+  # Under Type=notify this returns once the connector is connected; a\n+  # failure (no edge for a moment) is tried again like a stale binary.\n+  if systemctl try-restart \"$unit\"; then\n+    pid=$(systemctl show --property=MainPID --value \"$unit\")\n+    [ \"${pid:-0}\" != 0 ] || exit 0\n+    running=$(stat -L -c %d:%i \"/proc/$pid/exe\" 2>/dev/null) || exit 0\n+    [ \"$running\" != \"$(stat -L -c %d:%i \"$bin\")\" ] || exit 0\n+    why=\"cloudflared runs an old binary\"\n+  else\n+    why=\"the connector did not start again\"\n+  fi\n+  if [ \"$retries\" -ge 5 ]; then\n+    echo \"$why\" >&2\n+    exit 1\n+  fi\n+  retries=$((retries + 1))\n+  sleep 5\n+done\n"
+        reversibility: reversible
+      - id: "file:/etc/systemd/system/vps-ready-cloudflared.service"
+        summary: "create /etc/systemd/system/vps-ready-cloudflared.service (0644 0:0)"
+        diff: "@@ -0,0 +1,26 @@\n+# Written by vps-ready (net.tunnel). `vps-ready rollback --last` restores\n+# the previous state; edits here are replaced by the next apply.\n+[Unit]\n+Description=Cloudflare Tunnel connector (vps-ready net.tunnel)\n+After=network-online.target\n+Wants=network-online.target\n+\n+[Service]\n+Type=notify\n+TimeoutStartSec=30\n+LoadCredential=token:/root/cloudflared-token\n+ExecStart=/usr/bin/cloudflared tunnel --config /etc/vps-ready/cloudflared.yml --metrics 127.0.0.1:20241 run --token-file ${CREDENTIALS_DIRECTORY}/token\n+DynamicUser=yes\n+NoNewPrivileges=yes\n+ProtectSystem=strict\n+ProtectHome=yes\n+PrivateTmp=yes\n+CapabilityBoundingSet=\n+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK\n+IPAddressDeny=link-local multicast 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 168.63.129.16 fc00::/7\n+IPAddressAllow=localhost 192.0.2.53\n+Restart=on-failure\n+RestartSec=5s\n+\n+[Install]\n+WantedBy=multi-user.target\n"
+        reversibility: reversible
+      - id: "file:/etc/systemd/system/vps-ready-cloudflared-restart.service"
+        summary: "create /etc/systemd/system/vps-ready-cloudflared-restart.service (0644 0:0)"
+        diff: "@@ -0,0 +1,9 @@\n+# Written by vps-ready (net.tunnel). `vps-ready rollback --last` restores\n+# the previous state; edits here are replaced by the next apply.\n+[Unit]\n+Description=Restart the Cloudflare Tunnel connector on a new cloudflared (vps-ready net.tunnel)\n+\n+[Service]\n+Type=oneshot\n+TimeoutStartSec=10min\n+ExecStart=/bin/sh /etc/vps-ready/cloudflared-restart.sh\n"
+        reversibility: reversible
+      - id: "file:/etc/systemd/system/vps-ready-cloudflared-restart.path"
+        summary: "create /etc/systemd/system/vps-ready-cloudflared-restart.path (0644 0:0)"
+        diff: "@@ -0,0 +1,11 @@\n+# Written by vps-ready (net.tunnel). `vps-ready rollback --last` restores\n+# the previous state; edits here are replaced by the next apply.\n+[Unit]\n+Description=Watch cloudflared for upgrades (vps-ready net.tunnel)\n+\n+[Path]\n+PathChanged=/usr/bin/cloudflared\n+Unit=vps-ready-cloudflared-restart.service\n+\n+[Install]\n+WantedBy=multi-user.target\n"
+        reversibility: reversible
+      - id: "service:vps-ready-cloudflared.service"
+        summary: enable and start vps-ready-cloudflared.service
+        diff: ~
+        reversibility: reversible
+      - id: "service:vps-ready-cloudflared-restart.path"
+        summary: enable and start vps-ready-cloudflared-restart.path
+        diff: ~
+        reversibility: reversible
+    reloads:
+      - daemon-reload
+    notes:
+      - "no port is opened: the connector connects out to Cloudflare's edge on port 7844 (TCP and UDP), and firewall.inbound's established,related rule covers the replies"
+      - "the connector's address filter (`IPAddressDeny=`) is not in effect on this host if the container does not support cgroup BPF"
+      - "in a container, systemd may not hand the token to the connector (`LoadCredential=`): its start then fails and the apply rolls back"
+      - "the connector's start waits for its first connection to Cloudflare; if the start fails, the tunnel did not connect: check the token in /root/cloudflared-token and that outbound port 7844 is open, then apply again"
+      - "any local user can read the connector's metrics on 127.0.0.1:20241 (connection counts, the tunnel's ID, the cloudflared version), but not the token"
+      - "in the Cloudflare dashboard, give this tunnel a published route for each site, e.g. app.example.com -> http://127.0.0.1:80. With deploy.proxy, Caddy answers on 127.0.0.1:80. Without it, point the route at your app's loopback address instead. Only loopback targets work: the connector cannot reach Docker bridges or private networks, so such a route answers 502"
+      - "anyone who controls this Cloudflare account can route the internet to any address this host reaches on loopback, including SSH. Turn on two-factor login for the account, and add no routes to ssh:// or other local services"
+      - "rollback stops and removes the connector and its units, and keeps the cloudflared package and /root/cloudflared-token; the tunnel then shows as down in the dashboard, where deleting it is up to you"

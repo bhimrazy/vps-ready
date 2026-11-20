@@ -21,6 +21,10 @@ net.wireguard
   Does not apply to this host: whether the kernel has WireGuard is unknown:
   /sys/module/wireguard is missing and modprobe could not tell.
 
+net.tunnel
+  Run a Cloudflare Tunnel connector, for a website with no public port
+  Applies to this host.
+
 deploy.docker
   Install Docker with logs capped and ports on loopback by default
   Applies to this host.

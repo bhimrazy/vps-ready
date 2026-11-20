@@ -1,0 +1,26 @@
+# Written by vps-ready (net.tunnel). `vps-ready rollback --last` restores
+# the previous state; edits here are replaced by the next apply.
+[Unit]
+Description=Cloudflare Tunnel connector (vps-ready net.tunnel)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+TimeoutStartSec=30
+LoadCredential=token:{{ token_file }}
+ExecStart=/usr/bin/cloudflared tunnel --config /etc/vps-ready/cloudflared.yml --metrics 127.0.0.1:20241{% if edge_auto %} --edge-ip-version auto{% endif %} run --token-file ${CREDENTIALS_DIRECTORY}/token
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+IPAddressDeny=link-local multicast 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 168.63.129.16 fc00::/7
+IPAddressAllow=localhost{% for ip in resolvers %} {{ ip }}{% endfor %}
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

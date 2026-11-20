@@ -319,7 +319,7 @@ pub fn run(controls: Vec<Control>, facts: &Facts) -> Report {
         .map(|mut control| {
             let (outcome, note) = match control.check {
                 Check::ExposedListeners => exposed_listeners(facts),
-                Check::SshPrivateOnly => (ssh_private_only(facts), tailscale_expiry(facts)),
+                Check::SshPrivateOnly => (ssh_private_only(facts), ssh_private_note(facts)),
                 _ => (evaluate(&control.check, facts), None),
             };
             let mut manual_fix = None;
@@ -1140,6 +1140,20 @@ fn ssh_limited_to_missing(facts: &Facts) -> Option<String> {
         })
         .collect();
     (!anywhere && !broken.is_empty()).then(|| format!("SSH is limited to {}", broken.join("; ")))
+}
+
+/// SSH-009's note: the Tailscale warning, and a caveat while a tunnel
+/// connector runs, whose routes the inbound rules do not see.
+fn ssh_private_note(facts: &Facts) -> Option<String> {
+    let tunnel = facts.cloudflared.connector_runs().then(|| {
+        "a Cloudflare Tunnel connector runs on this host; its account can route to SSH on \
+         loopback"
+            .to_owned()
+    });
+    match (tailscale_expiry(facts), tunnel) {
+        (Some(a), Some(b)) => Some(format!("{a}; {b}")),
+        (a, b) => a.or(b),
+    }
 }
 
 /// A warning when the loaded rules accept SSH on Tailscale's interface and

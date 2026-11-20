@@ -12,6 +12,9 @@ use crate::sys::{Cmd, Sys};
 
 const FIREWALL_UNIT: &str = "vps-ready-firewall.service";
 
+/// net.tunnel's connector, `net_tunnel::UNIT`.
+const CLOUDFLARED_UNIT: &str = "vps-ready-cloudflared.service";
+
 /// A reload a module needs after its resources are applied. A closed set,
 /// so the journal records it by name and a rollback in a later process
 /// runs the same commands from that name alone.
@@ -41,6 +44,11 @@ pub enum Reload {
     /// serving. A rollback that removed the Caddyfile stops and disables
     /// Caddy instead (see [`Reload::rollback_steps`]).
     CaddyReload,
+    /// `systemctl try-restart vps-ready-cloudflared.service`, after
+    /// `daemon-reload`: a running connector reads its unit, config and
+    /// token only at start. Under `Type=notify` it returns once the
+    /// connector is connected again.
+    CloudflaredRestart,
 }
 
 /// The Caddyfile [`Reload::CaddyReload`] checks, and the one Caddy's unit
@@ -62,6 +70,21 @@ impl Reload {
             Self::DaemonReload => "daemon-reload",
             Self::DockerRestart => "docker-restart",
             Self::CaddyReload => "caddy-reload",
+            Self::CloudflaredRestart => "cloudflared-restart",
+        }
+    }
+
+    /// The unit whose daemon this reload restarts or reloads, when the
+    /// dead-man boot hook runs before that unit starts. The hook skips the
+    /// reload then, since the daemon reads the restored config as it starts.
+    #[must_use]
+    pub fn after_boot_hook(self) -> Option<&'static str> {
+        match self {
+            Self::SshdReload => Some("ssh.service"),
+            Self::DockerRestart => Some("docker.service"),
+            Self::CaddyReload => Some("caddy.service"),
+            Self::CloudflaredRestart => Some(CLOUDFLARED_UNIT),
+            Self::FirewallReload | Self::Fail2banRestart | Self::DaemonReload => None,
         }
     }
 
@@ -74,7 +97,7 @@ impl Reload {
                 Some(Cmd::new("nft").args(["-c", "-f", "/etc/vps-ready/firewall.nft"]))
             }
             Self::Fail2banRestart => Some(Cmd::new("fail2ban-client").arg("-t")),
-            Self::DaemonReload => None,
+            Self::DaemonReload | Self::CloudflaredRestart => None,
             Self::DockerRestart => Some(Cmd::new("dockerd").arg("--validate")),
             Self::CaddyReload => Some(Cmd::new("caddy").args([
                 "validate",
@@ -96,6 +119,7 @@ impl Reload {
             Self::DaemonReload => &["daemon-reload"],
             Self::DockerRestart => &["try-restart", "docker.service"],
             Self::CaddyReload => &["reload-or-restart", "caddy.service"],
+            Self::CloudflaredRestart => &["try-restart", CLOUDFLARED_UNIT],
         };
         Cmd::new("systemctl")
             .args(args.iter().copied())
@@ -221,14 +245,31 @@ mod tests {
         assert_eq!(check("out", "err\n"), format!("{cmd}: err"));
     }
 
-    const ALL: [Reload; 6] = [
+    const ALL: [Reload; 7] = [
         Reload::SshdReload,
         Reload::FirewallReload,
         Reload::Fail2banRestart,
         Reload::DaemonReload,
         Reload::DockerRestart,
         Reload::CaddyReload,
+        Reload::CloudflaredRestart,
     ];
+
+    /// A reload the boot hook skips is safe only if its daemon starts after
+    /// the hook.
+    #[test]
+    fn reloads_skipped_at_boot_start_after_the_hook() {
+        let hook = crate::engine::deadman::hook_unit(Path::new("/usr/local/bin/vps-ready"));
+        let before = hook
+            .lines()
+            .find_map(|l| l.strip_prefix("Before="))
+            .unwrap();
+        for reload in ALL {
+            if let Some(unit) = reload.after_boot_hook() {
+                assert!(before.split(' ').any(|u| u == unit), "{reload}: {before}");
+            }
+        }
+    }
 
     #[test]
     fn serializes_by_name() {
@@ -269,6 +310,10 @@ mod tests {
                 (
                     Some("caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile".into()),
                     "systemctl reload-or-restart caddy.service".into()
+                ),
+                (
+                    None,
+                    "systemctl try-restart vps-ready-cloudflared.service".into()
                 ),
             ]
         );

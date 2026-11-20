@@ -14,6 +14,7 @@ use serde::Serialize;
 use crate::sys::{Cmd, Fs, Output, Runner, SysError};
 
 pub mod bridges;
+pub mod cloudflared;
 pub mod docker;
 pub mod firewall;
 pub mod listeners;
@@ -28,6 +29,7 @@ pub mod updates;
 pub mod virt;
 
 pub use bridges::Bridge;
+pub use cloudflared::Cloudflared;
 pub use docker::{DaemonJson, DockerDaemon, DockerEngine, DockerService};
 pub use firewall::{Firewall, FirewallTools, InputChain, InterfacePorts, Ports, PublishedPort};
 pub use listeners::{Listener, Proto};
@@ -101,6 +103,8 @@ pub struct Facts {
     pub wireguard: Wireguard,
     /// Tailscale's state. `None` without `tailscale` or its daemon.
     pub tailscale: Option<Tailscale>,
+    /// cloudflared's version, units and config files.
+    pub cloudflared: Cloudflared,
     /// Human-readable notes about facts that could not be determined.
     pub notices: Vec<String>,
 }
@@ -181,6 +185,7 @@ pub fn collect(fs: &dyn Fs, runner: &dyn Runner, env: &Env) -> Result<Facts, Fac
     let routes = network::routes(runner, &mut notices);
     let wireguard = network::wireguard(fs, runner, &mut notices);
     let tailscale = network::tailscale(runner, &mut notices);
+    let cloudflared = cloudflared::detect(fs, runner, &mut notices);
     Ok(Facts {
         os,
         init,
@@ -202,6 +207,7 @@ pub fn collect(fs: &dyn Fs, runner: &dyn Runner, env: &Env) -> Result<Facts, Fac
         routes,
         wireguard,
         tailscale,
+        cloudflared,
         notices,
     })
 }
@@ -385,7 +391,7 @@ mod tests {
     /// so they are pinned in `firewall`'s tests; `systemctl show docker.service`,
     /// `docker info`, `docker ps` and `docker network ls` run only on a host
     /// with Docker, so they are pinned in `docker`'s.
-    const READ_ONLY_COMMANDS: [&[&str]; 18] = [
+    const READ_ONLY_COMMANDS: [&[&str]; 21] = [
         &["systemd-detect-virt", "--container"],
         &["systemd-detect-virt", "--vm"],
         &["ssh", "-V"],
@@ -435,6 +441,23 @@ mod tests {
         &["modprobe", "--dry-run", "wireguard"],
         &["wg", "show", "all", "listen-port"],
         &["tailscale", "status", "--json", "--peers=false"],
+        &["cloudflared", "--version"],
+        &[
+            "systemctl",
+            "list-units",
+            "--no-legend",
+            "--plain",
+            "--full",
+            "--state=active",
+            "*cloudflared*",
+        ],
+        &[
+            "systemctl",
+            "list-unit-files",
+            "--no-legend",
+            "--full",
+            "*cloudflared*",
+        ],
     ];
 
     #[test]

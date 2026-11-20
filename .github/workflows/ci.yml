@@ -174,7 +174,7 @@ jobs:
     needs: [changes, build-musl]
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -233,6 +233,8 @@ jobs:
         run: test/container-proxy.sh "$DISTRO" bin/vps-ready
       - name: Apply and roll back net.tailscale in the container
         run: test/container-tailscale.sh "$DISTRO" bin/vps-ready
+      - name: Apply and roll back net.tunnel in the container
+        run: test/container-tunnel.sh "$DISTRO" bin/vps-ready
       - name: Install wireguard-tools; net.wireguard needs the kernel module
         run: test/container-wireguard.sh "$DISTRO" bin/vps-ready
 

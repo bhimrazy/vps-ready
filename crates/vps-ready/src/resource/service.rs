@@ -34,6 +34,9 @@ pub(super) const TIMEOUT: Duration =
 struct State {
     enabled: bool,
     active: bool,
+    /// `ActiveState=inactive`: not active, and not failed or on the way
+    /// up or down either (`activating` covers a pending auto-restart).
+    settled: bool,
 }
 
 impl Service {
@@ -144,6 +147,7 @@ pub(crate) fn by_hand(sys: Sys, backup: &Backup) -> Option<String> {
         .unwrap_or(State {
             enabled: *enabled,
             active: *active,
+            settled: !*active,
         });
     let enable = (now.enabled != *was_enabled).then_some(*was_enabled);
     let start = (now.active != *was_active).then_some(*was_active);
@@ -162,11 +166,17 @@ pub(crate) fn by_hand(sys: Sys, backup: &Backup) -> Option<String> {
     Some(step)
 }
 
-/// Brings `unit` to `enabled` and `active`: stops first, starts last.
+/// Brings `unit` to `enabled` and `active`: stops first, starts last. A
+/// unit that must be inactive but is failed or between states (after a
+/// failed start, `Restart=` may have one queued) is stopped and its failure
+/// reset, so no process or `systemctl --failed` entry is left behind.
 fn converge(sys: Sys, unit: &str, enabled: bool, active: bool) -> Result<(), ResourceError> {
     let now = state(sys, unit)?;
-    if now.active && !active {
+    if !active && !now.settled {
         run(sys, &systemctl(["stop", unit]))?;
+        if !now.active {
+            run(sys, &systemctl(["reset-failed", unit]))?;
+        }
     }
     if now.enabled != enabled {
         let verb = if enabled { "enable" } else { "disable" };
@@ -200,11 +210,13 @@ fn state(sys: Sys, unit: &str) -> Result<State, ResourceError> {
         "disabled" | "" => false,
         other => return Err(refuse(format!("its unit file state is {other}"))),
     };
-    let active = matches!(
-        prop(&props, "ActiveState"),
-        "active" | "reloading" | "refreshing"
-    );
-    Ok(State { enabled, active })
+    let state = prop(&props, "ActiveState");
+    let active = matches!(state, "active" | "reloading" | "refreshing");
+    Ok(State {
+        enabled,
+        active,
+        settled: matches!(state, "inactive" | ""),
+    })
 }
 
 /// A unit name with a suffix, made of the characters systemd allows, that
@@ -449,6 +461,39 @@ mod tests {
             runner.calls()[1..],
             [show_cmd(), change("stop", UNIT), change("disable", UNIT)]
         );
+    }
+
+    /// After a failed start, `Restart=` may have queued another try
+    /// (`activating`), or the unit is `failed`: restoring it to off stops
+    /// it and clears the failure, so no process or `--failed` entry stays.
+    #[test]
+    fn restore_stops_and_resets_a_failed_or_restarting_unit() {
+        for state in ["failed", "activating", "deactivating"] {
+            let fs = FakeFs::new();
+            let runner = runner(show("loaded", "enabled", state));
+            let sys = Sys {
+                fs: &fs,
+                runner: &runner,
+            };
+            let backup = Backup::Service {
+                unit: UNIT.into(),
+                was_enabled: false,
+                was_active: false,
+                enabled: true,
+                active: true,
+            };
+            restore(sys, Path::new(TXN), &backup).unwrap();
+            assert_eq!(
+                runner.calls(),
+                [
+                    show_cmd(),
+                    change("stop", UNIT),
+                    change("reset-failed", UNIT),
+                    change("disable", UNIT)
+                ],
+                "{state}"
+            );
+        }
     }
 
     #[test]

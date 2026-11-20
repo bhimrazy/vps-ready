@@ -404,6 +404,18 @@ fn ssh_009_and_fw_003_pass_on_the_loaded_table() {
     facts.ipv6 = true;
     assert_eq!(finding(&facts, "SSH-009").outcome, Outcome::Pass);
     assert_eq!(finding(&facts, "SSH-009").note, None);
+    // A tunnel connector's account can route around the inbound rules.
+    let mut tunnel = facts.clone();
+    tunnel.cloudflared.active = vec!["vps-ready-cloudflared.service".into()];
+    let with = finding(&tunnel, "SSH-009");
+    assert_eq!(with.outcome, Outcome::Pass);
+    assert_eq!(
+        with.note.as_deref(),
+        Some(
+            "a Cloudflare Tunnel connector runs on this host; its account can route to SSH on \
+             loopback"
+        )
+    );
     let fw = finding(&facts, "FW-003");
     assert_eq!(fw.outcome, Outcome::Pass);
 

@@ -43,6 +43,18 @@ pub const TAILSCALE_KEY: &str = include_str!("../../keys/tailscale.asc");
 /// publish it; it is the key that signs the repository's `InRelease` files.
 pub const TAILSCALE_FINGERPRINT: &str = "2596A99EAAB33821893C0A79458CA832957F5868";
 
+/// Cloudflare's armored public key, from
+/// <https://pkg.cloudflare.com/cloudflare-ascii-pubkey.gpg>: the same key as
+/// <https://pkg.cloudflare.com/cloudflare-main.gpg>, which Cloudflare's
+/// install docs use (RSA 4096, created 2025-10-23). Retrieved 2026-11-20;
+/// file SHA-256
+/// `13cd7aecdf37b445eb5135e967c7913c7fd66f3bd7408a97630e2db257b86281`.
+pub const CLOUDFLARE_KEY: &str = include_str!("../../keys/cloudflare.asc");
+
+/// The fingerprint of [`CLOUDFLARE_KEY`]'s primary key. Cloudflare does not
+/// publish it; it is the key that signs the repository's `InRelease` files.
+pub const CLOUDFLARE_FINGERPRINT: &str = "CC94B39C77AE7342A68B89628A682D308D4E5E73";
+
 /// A vendor's apt repository.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AptSource {
@@ -109,6 +121,20 @@ impl AptSource {
             fingerprint: CADDY_FINGERPRINT,
             uri: "https://dl.cloudsmith.io/public/caddy/stable/deb/debian",
             suite: "any-version".to_owned(),
+            component: "main",
+        }
+    }
+
+    /// Cloudflare's `cloudflared` repository, one suite for every
+    /// distribution and release.
+    #[must_use]
+    pub fn cloudflared() -> Self {
+        Self {
+            name: "cloudflared",
+            key: CLOUDFLARE_KEY,
+            fingerprint: CLOUDFLARE_FINGERPRINT,
+            uri: "https://pkg.cloudflare.com/cloudflared",
+            suite: "any".to_owned(),
             component: "main",
         }
     }
@@ -376,6 +402,26 @@ mod tests {
     }
 
     #[test]
+    fn cloudflared_uses_its_fixed_suite() {
+        for arch in ["amd64", "arm64"] {
+            assert_eq!(
+                source_file(&AptSource::cloudflared(), arch),
+                format!(
+                    "# Written by vps-ready. `vps-ready rollback --last` removes it.\n\
+                     Types: deb\n\
+                     URIs: https://pkg.cloudflare.com/cloudflared\n\
+                     Suites: any\n\
+                     Components: main\n\
+                     Architectures: {arch}\n\
+                     Signed-By: /etc/apt/keyrings/cloudflared.asc\n"
+                )
+            );
+        }
+        let resources = apt_source(&AptSource::cloudflared(), "amd64");
+        assert_eq!(files(&resources)[0].1, CLOUDFLARE_KEY);
+    }
+
+    #[test]
     fn files_are_root_owned_and_world_readable() {
         for resource in apt_source(&AptSource::caddy(), "amd64") {
             let owner = match resource {
@@ -564,6 +610,7 @@ mod tests {
             (DOCKER_KEY, DOCKER_FINGERPRINT),
             (CADDY_KEY, CADDY_FINGERPRINT),
             (TAILSCALE_KEY, TAILSCALE_FINGERPRINT),
+            (CLOUDFLARE_KEY, CLOUDFLARE_FINGERPRINT),
         ] {
             let Some(found) = gpg_fingerprints(key) else {
                 return;

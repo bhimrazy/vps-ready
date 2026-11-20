@@ -309,4 +309,9 @@ wireguard:
   dir:
     state: missing
 tailscale: ~
+cloudflared:
+  version: ~
+  units: []
+  active: []
+  configs: []
 notices: []

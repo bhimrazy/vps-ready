@@ -1,6 +1,6 @@
 ---
 title: Profiles and modules
-description: What the built-in profiles change, what each of the eleven modules writes, what it checks first, and how to undo it.
+description: What the built-in profiles change, what each of the twelve modules writes, what it checks first, and how to undo it.
 sidebar:
   order: 2
 ---
@@ -26,6 +26,7 @@ vps-ready groups its changes into **modules**, and a **profile** picks which mod
 - **minimal** is for any server you log into over SSH.
 - **web** is minimal plus the web ports (UDP 443 is for HTTP/3), fail2ban and Docker with safe defaults.
 - **`net.tailscale` and `net.wireguard` are in no built-in profile.** Add one in your own profile; see [Tailscale](#nettailscale-tailscale) and [WireGuard](#netwireguard-wireguard) below.
+- **`net.tunnel` is in no built-in profile.** Add it in your own profile; see [Cloudflare Tunnel](#nettunnel-cloudflare-tunnel) below.
 - **private** is for a server with no public SSH: SSH only through a VPN, and no public port unless you add one. It names no VPN, so you extend it; see [The private profile](#the-private-profile) below.
 - **`deploy.proxy` (Caddy) and `deploy.user` are in no built-in profile.** They need values only you have (domains, deploy keys), so you add them in your own profile, or the guided setup adds Caddy when you give it a domain. See [Deploy an app](/docs/guides/deployment-modules/).
 
@@ -108,13 +109,14 @@ Each failed control in `audit` names the module that fixes it; the full list is 
 | 2 | `ssh.server` | yes | Turns off root and password logins, and refuses unless that way in exists |
 | 3 | `net.tailscale` | under `ssh_via` on Tailscale | Before the firewall: a private path to SSH that needs no open port |
 | 4 | `net.wireguard` | under `ssh_via = "wg0"` | Before the firewall, which opens its UDP port |
-| 5 | `deploy.docker` | no | Before the firewall, so the firewall knows Docker's bridges |
-| 6 | `firewall.inbound` | yes | Drops unsolicited traffic, always allowing the SSH ports in use |
-| 7 | `ssh.bruteforce` | no | Can only ban an address, and never yours |
-| 8 | `kernel.sysctl` | no | Cannot lock you out |
-| 9 | `updates.auto` | no | Cannot lock you out |
-| 10 | `deploy.proxy` | no | After the firewall, so it can read whether ports 80 and 443 are open |
-| 11 | `deploy.user` | no | Last: a login for CI, separate from the admin |
+| 5 | `net.tunnel` | no | Before `deploy.proxy`, which reads whether a tunnel is planned |
+| 6 | `deploy.docker` | no | Before the firewall, so the firewall knows Docker's bridges |
+| 7 | `firewall.inbound` | yes | Drops unsolicited traffic, always allowing the SSH ports in use |
+| 8 | `ssh.bruteforce` | no | Can only ban an address, and never yours |
+| 9 | `kernel.sysctl` | no | Cannot lock you out |
+| 10 | `updates.auto` | no | Cannot lock you out |
+| 11 | `deploy.proxy` | no | After the firewall, so it can read whether ports 80 and 443 are open |
+| 12 | `deploy.user` | no | Last: a login for CI, separate from the admin |
 
 The order is fixed. The admin user comes first because turning off root and password logins is only safe once there is another way in, and the firewall comes after the admin user and SSH so it can allow the SSH port your login really uses. On their own, the three deployment modules do not touch the SSH server, the firewall's SSH rule or the admin's login, so they do not arm the safety timer. In a run with a guarded module, as in the `web` profile, they share its transaction: confirm it, or the timer undoes them too. The three guarded modules share one transaction, so a single new login confirms all of them together. To see which part fails on a tricky server, apply `--module user.admin` on its own first, then the rest.
 
@@ -254,6 +256,29 @@ The private key never passes through vps-ready: `wg0.conf` holds no `PrivateKey`
 **Undo:** the config, the drop-in and the unit's state are restored, and peers it changed on a running `wg0` are put back with `wg set`. The generated key stays, so client configs made meanwhile keep working: `sudo rm /etc/wireguard/wg0.key` and apply again for a new one. A rollback that would stop `wg-quick@wg0` is refused while `ssh_via` limits SSH to `wg0`, and one that would stop it or remove your session's peer is refused from a session through `wg0`: roll back from public SSH or the provider's console.
 
 `export cloud-init` warns about an explicit `address`, which every server made from it would share.
+
+### `net.tunnel`: Cloudflare Tunnel
+
+**Changes:** installs `cloudflared` from Cloudflare's repository (suite `any`; its key is built into vps-ready, fingerprint `CC94 B39C 77AE 7342 A68B 8962 8A68 2D30 8D4E 5E73`), and with `auto_update = true` (the default) writes `/etc/apt/apt.conf.d/52vps-ready-cloudflared` so that `updates.auto` installs cloudflared's updates too. With `token_file`, it writes and starts `vps-ready-cloudflared.service`, the connector, with its config `/etc/vps-ready/cloudflared.yml`, and `vps-ready-cloudflared-restart.path`, which restarts the connector on the new binary after each upgrade (the package restarts nothing itself).
+
+```toml
+[modules."net.tunnel"]
+provider = "cloudflare"                 # the only value
+token_file = "/root/cloudflared-token"  # optional
+auto_update = true                      # default
+```
+
+Create the tunnel in the Cloudflare dashboard (a remotely-managed tunnel: its routes live at Cloudflare, and the host needs only its token), save the token to a file owned by root with mode `0600`, not a symlink, in directories only root can write to, and set `token_file`. The token never passes through vps-ready: the unit's `LoadCredential=` copies the file at each start into a directory only the connector can read, and the plan, the journal and the process list never contain it. After replacing the file, run `sudo systemctl restart vps-ready-cloudflared`. Then give the tunnel a published route for each site in the dashboard, to a loopback address such as `http://127.0.0.1:80`; the plan says so. Without `token_file`, only `cloudflared` and the update origin are installed.
+
+The connector runs as a fresh unprivileged user (`DynamicUser=yes`) with a sandbox, and `IPAddressDeny=` keeps it off link-local addresses (the cloud metadata service), private ranges and Azure's platform address, except the resolvers in `/etc/resolv.conf` at apply time: apply again when they change. Inside a container, or without cgroup BPF, systemd does not enforce that filter, and the plan says so. Its start is the check: the unit starts only once cloudflared has a connection to Cloudflare's edge (outbound port 7844), so a bad token or a blocked port fails the apply, which rolls back. Verify then runs `cloudflared tunnel ready` against the metrics address `127.0.0.1:20241` and checks the connector runs the installed binary. No inbound port is opened.
+
+**Trust:** whoever controls the Cloudflare account can add a route from the internet to any address the connector reaches on loopback, SSH included, which the inbound firewall does not see. Turn on two-factor login for the account, and add no routes but the web ones. While a connector runs, `SSH-009` says so in its finding.
+
+**Checks first:** Debian and Ubuntu with systemd. A `cloudflared.service` from Cloudflare's own install, or another cloudflared unit, is left alone. A `cloudflared` older than 2025.4.0 (which `--token-file` needs) and another listener on `127.0.0.1:20241` are refused.
+
+**Undo:** the connector, the path unit, their files, the repository, its key and the origin file are removed. The package and the token file stay; the tunnel then shows as down in the dashboard, where deleting it is up to you.
+
+`export cloud-init` refuses a profile with `token_file`, as for Tailscale's `auth_key_file`.
 
 ### `deploy.docker`, `deploy.proxy` and `deploy.user`: deployment
 

@@ -27,7 +27,7 @@ One static binary: audit, a plan you read first, and a rollback timer that undoe
 </div>
 
 > [!NOTE]
-> vps-ready is at **v0.6** and works on Debian 12/13 and Ubuntu 22.04/24.04 with systemd: `detect` and `audit` (34 controls), and `plan`, `apply`, `confirm` and `rollback` for [eleven modules](#what-it-does). Expect breaking changes before 1.0.
+> vps-ready is at **v0.6** and works on Debian 12/13 and Ubuntu 22.04/24.04 with systemd: `detect` and `audit` (34 controls), and `plan`, `apply`, `confirm` and `rollback` for [twelve modules](#what-it-does). Expect breaking changes before 1.0.
 
 ## Quick start
 
@@ -110,11 +110,12 @@ Hardening is grouped into modules:
 | `updates.auto` | Automatic security updates with `unattended-upgrades` | `UPD-001` | no |
 | `net.tailscale` | Tailscale from its own apt repository, `tailscaled` running, and a tailnet login from a root-only auth key file (never Tailscale SSH, never the tailnet's DNS) | none | no |
 | `net.wireguard` | A WireGuard interface, `wg0`, for admin access to this host only: a private key generated on the host that never leaves it, peers by public key, the client config printed for each device | `NET-008` | under `ssh_via = "wg0"` |
+| `net.tunnel` | A Cloudflare Tunnel connector for a remotely-managed tunnel: `cloudflared` from Cloudflare's apt repository, run as vps-ready's own sandboxed unit with the tunnel's token from a root-only file, so a website needs no inbound port | none | no |
 | `deploy.docker` | Docker Engine from Docker's own apt repository, with safer defaults: published ports bind to 127.0.0.1, `live-restore`, local log rotation | `FW-002` | no |
 | `deploy.proxy` | Caddy from its official apt repository as a reverse proxy with automatic HTTPS for the sites you list; with `behind_tunnel = true`, plain HTTP on loopback only for a Cloudflare Tunnel, with no certificate and no public port | none | no |
 | `deploy.user` | A login for CI that can run one command, with your keys | none | no |
 
-Profiles pick the modules: **minimal** is `user.admin`, `ssh.server`, `firewall.inbound` (SSH only), `kernel.sysctl` and `updates.auto`; **web** adds ports 80 and 443 (TCP, and UDP for HTTP/3) and `ssh.bruteforce` and `deploy.docker`; **private** is the `web` hardening without Docker and with no open port, and `ssh_via = "vpn"`: you extend it with `net.tailscale` or `net.wireguard`, apply it once to set up the VPN, then again from a login through the VPN to close public SSH. A profile file can extend any of them and set your own admin name and keys. A plain `apply`, without `--profile` or `--module`, leaves the modules that can lock you out (and `ssh.bruteforce`, which installs packages) out, so it changes only kernel settings and automatic updates. `net.tailscale`, `net.wireguard`, `deploy.proxy` and `deploy.user` are in no built-in profile: you add them in a profile file. `firewall.inbound`'s `ssh_via` accepts SSH only on one interface (`tailscale0`, `wg0` or one you set up), and the confirm must then come through it. Logging, a **paranoid** profile and backups come later.
+Profiles pick the modules: **minimal** is `user.admin`, `ssh.server`, `firewall.inbound` (SSH only), `kernel.sysctl` and `updates.auto`; **web** adds ports 80 and 443 (TCP, and UDP for HTTP/3) and `ssh.bruteforce` and `deploy.docker`; **private** is the `web` hardening without Docker and with no open port, and `ssh_via = "vpn"`: you extend it with `net.tailscale` or `net.wireguard`, apply it once to set up the VPN, then again from a login through the VPN to close public SSH. A profile file can extend any of them and set your own admin name and keys. A plain `apply`, without `--profile` or `--module`, leaves the modules that can lock you out (and `ssh.bruteforce`, which installs packages) out, so it changes only kernel settings and automatic updates. `net.tailscale`, `net.wireguard`, `net.tunnel`, `deploy.proxy` and `deploy.user` are in no built-in profile: you add them in a profile file. `firewall.inbound`'s `ssh_via` accepts SSH only on one interface (`tailscale0`, `wg0` or one you set up), and the confirm must then come through it. Logging, a **paranoid** profile and backups come later.
 
 ## How a run works
 

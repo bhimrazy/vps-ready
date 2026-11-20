@@ -128,6 +128,8 @@ pub(super) enum Refusal {
     /// User-data is readable by any process on the host through the
     /// metadata service, so it must not lead to an auth key.
     TailscaleAuthKey,
+    /// The same for a tunnel token.
+    TunnelToken,
     /// At first boot no SSH session can come through the VPN.
     SshVia,
 }
@@ -143,6 +145,12 @@ impl Refusal {
                 "net.tailscale has `auth_key_file`, and nothing at first boot puts a key there \
                  safely: user-data is readable through the metadata service. Leave it out, and \
                  log in with `sudo tailscale up --accept-dns=false` after the first boot"
+            }
+            Self::TunnelToken => {
+                "net.tunnel has `token_file`, and nothing at first boot puts a token there \
+                 safely: user-data is readable through the metadata service. Leave it out, and \
+                 after the first boot save the token to a root-only file, set `token_file` and \
+                 apply again"
             }
             Self::SshVia => {
                 "firewall.inbound has `ssh_via`: at first boot no SSH session can come through \
@@ -168,12 +176,17 @@ pub(super) fn refusal(profile: &Profile) -> Option<Refusal> {
             return Some(Refusal::NoAdminKeys);
         }
     }
-    profile
-        .params("net.tailscale")
-        .and_then(|t| t.get("auth_key_file"))
-        .and_then(toml::Value::as_str)
-        .is_some_and(|path| !path.is_empty())
-        .then_some(Refusal::TailscaleAuthKey)
+    let set = |module: &str, key: &str| {
+        profile
+            .params(module)
+            .and_then(|t| t.get(key))
+            .and_then(toml::Value::as_str)
+            .is_some_and(|path| !path.is_empty())
+    };
+    if set("net.tailscale", "auth_key_file") {
+        return Some(Refusal::TailscaleAuthKey);
+    }
+    set("net.tunnel", "token_file").then_some(Refusal::TunnelToken)
 }
 
 /// The profile's text as written to the server, and the profile. A

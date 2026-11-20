@@ -26,8 +26,8 @@ pub(crate) mod user;
 pub(crate) mod wireguard;
 
 pub use apt_source::{
-    AptSource, CADDY_FINGERPRINT, CADDY_KEY, DOCKER_FINGERPRINT, DOCKER_KEY, apt_source,
-    architecture, configured_elsewhere,
+    AptSource, CADDY_FINGERPRINT, CADDY_KEY, CLOUDFLARE_FINGERPRINT, CLOUDFLARE_KEY,
+    DOCKER_FINGERPRINT, DOCKER_KEY, apt_source, architecture, configured_elsewhere,
 };
 pub use authorized_keys::AuthorizedKeys;
 pub use directory::Directory;
