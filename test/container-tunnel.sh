@@ -121,6 +121,21 @@ for f in $connector; do ct test ! -e "$f" || die "$f is left after the rollback"
 ct journalctl -b -u vps-ready-cloudflared.service --no-pager -o cat >"$tmp/connector.log" || true
 cat "$tmp/connector.log"
 ! grep -Eiq 'ERR.*(config|yaml)' "$tmp/connector.log" || die "cloudflared logged a config error"
+# A container may not pass LoadCredential= on (seen on all four images), so
+# the connector can fail before it reads its config: check the config with
+# cloudflared run directly, which reads the same token file and rejects it.
+planned_config=$(jq -r '.modules[] | select(.id == "net.tunnel") | .changes[] |
+  select(.id == "file:/etc/vps-ready/cloudflared.yml") | .diff' "$tmp/token-plan.json" |
+  sed -n 's/^+//p')
+[ -n "$planned_config" ] || die "the plan has no cloudflared.yml"
+printf '%s\n' "$planned_config" >"$tmp/cloudflared.yml"
+ct mkdir -p /etc/vps-ready
+docker cp "$tmp/cloudflared.yml" "$name:/etc/vps-ready/cloudflared.yml"
+ct timeout 30 cloudflared tunnel --config /etc/vps-ready/cloudflared.yml \
+  --metrics 127.0.0.1:20241 run --token-file /root/cloudflared-token >"$tmp/direct.log" 2>&1 || true
+cat "$tmp/direct.log"
+! grep -Eiq 'ERR.*(config|yaml)' "$tmp/direct.log" || die "cloudflared rejects the config"
+grep -q 'token is not valid' "$tmp/direct.log" || die "cloudflared did not read the token file"
 ! grep -q placeholder-not-a-tunnel-token "$tmp/apply.log" "$tmp/token-plan.json" ||
   die "the token is in vps-ready's output"
 ! ct grep -rq placeholder-not-a-tunnel-token /var/lib/vps-ready || die "the token is in the journal"
@@ -141,7 +156,8 @@ done
 
 echo "== $distro: the restart script with a connector on another binary"
 ct sh -n /etc/vps-ready/cloudflared-restart.sh || die "the restart script fails sh -n"
-# The failed start leaves the unit loaded as failed.
+# The failed start leaves the unit loaded as failed, without its file.
+ct systemctl daemon-reload
 ct systemctl reset-failed vps-ready-cloudflared.service 2>/dev/null || true
 ct systemd-run --unit=vps-ready-cloudflared.service /bin/sleep infinity >/dev/null
 rc=0; ct sh /etc/vps-ready/cloudflared-restart.sh 2>"$tmp/stale.log" || rc=$?

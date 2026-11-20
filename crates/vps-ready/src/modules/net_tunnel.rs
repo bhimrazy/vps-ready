@@ -354,6 +354,13 @@ impl Module for NetTunnel {
 
         notes.extend(resolver_notes(&resolvers));
         notes.extend(filter_note(facts, sys, ours_active));
+        if facts.virtualization.in_container() {
+            notes.push(
+                "in a container, systemd may not hand the token to the connector \
+                 (`LoadCredential=`): its start then fails and the apply rolls back"
+                    .to_owned(),
+            );
+        }
         if !facts.cloudflared.configs.is_empty() {
             let configs: Vec<String> = facts
                 .cloudflared

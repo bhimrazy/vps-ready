@@ -64,6 +64,7 @@ modules:
     notes:
       - "no port is opened: the connector connects out to Cloudflare's edge on port 7844 (TCP and UDP), and firewall.inbound's established,related rule covers the replies"
       - "the connector's address filter (`IPAddressDeny=`) is not in effect on this host if the container does not support cgroup BPF"
+      - "in a container, systemd may not hand the token to the connector (`LoadCredential=`): its start then fails and the apply rolls back"
       - "the connector's start waits for its first connection to Cloudflare; if the start fails, the tunnel did not connect: check the token in /root/cloudflared-token and that outbound port 7844 is open, then apply again"
       - "any local user can read the connector's metrics on 127.0.0.1:20241 (connection counts, the tunnel's ID, the cloudflared version), but not the token"
       - "in the Cloudflare dashboard, give this tunnel a published route for each site, e.g. app.example.com -> http://127.0.0.1:80. With deploy.proxy, Caddy answers on 127.0.0.1:80. Without it, point the route at your app's loopback address instead. Only loopback targets work: the connector cannot reach Docker bridges or private networks, so such a route answers 502"
