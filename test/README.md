@@ -62,6 +62,14 @@ starts Caddy again, and a second rollback undoes it. It needs network access.
 empty, `tailscaled` runs and is `NeedsLogin`, `unattended-upgrade --dry-run`
 lists the Tailscale origin, and `rollback --last` removes the source, the key
 and the origin file and keeps the package. It needs network access.
+`test/container-tunnel.sh <distro> [binary]` installs cloudflared with
+`net.tunnel` and `updates.auto`, without a token: the next plan is empty and
+`unattended-upgrade --dry-run` lists the cloudflared origin. A placeholder
+token makes the apply fail at the connector's start and roll back. The
+restart script fails on a stale binary, and with a stand-in connector ten
+reinstalls of cloudflared each end with it on the new binary. `rollback
+--last` removes the source, the key and the origin file and keeps the
+package. It needs network access.
 `test/container-wireguard.sh <distro> [binary]` checks that `net.wireguard`
 does not apply without the kernel's WireGuard module (skipped with a note when
 the host has it loaded) and that `wireguard-tools` installs with the

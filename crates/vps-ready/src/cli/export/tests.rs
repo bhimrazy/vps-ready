@@ -293,6 +293,29 @@ fn refuses_a_tailscale_auth_key_file() {
 }
 
 #[test]
+fn refuses_a_tunnel_token_file() {
+    let with = |extra: &str| {
+        fs(
+            &format!("{KEYED}\n[modules.\"net.tunnel\"]\n{extra}\n"),
+            &checksums(),
+        )
+    };
+    let err = export(
+        &with("token_file = \"/root/cloudflared-token\""),
+        PROFILE,
+        None,
+    )
+    .unwrap_err();
+    assert!(
+        err.starts_with(&format!(
+            "profile {PROFILE}: net.tunnel has `token_file`, and nothing at first boot"
+        )),
+        "{err}"
+    );
+    assert!(export(&with("auto_update = false"), PROFILE, None).is_ok());
+}
+
+#[test]
 fn refuses_checksums_without_a_tarball() {
     let v = VERSION_INFO.version;
     let only_x86: String = checksums()

@@ -1366,6 +1366,15 @@ fn new_server(
             "<file>".to_owned(),
             " (without firewall.inbound's `ssh_via`)".to_owned(),
         ),
+        (Saved::To(path), Some(Refusal::TunnelToken)) => {
+            let path = path.display().to_string();
+            let first = format!(" (remove net.tunnel's `token_file` from {path} first)");
+            (path, first)
+        }
+        (Saved::No, Some(Refusal::TunnelToken)) => (
+            "<file>".to_owned(),
+            " (without net.tunnel's `token_file`)".to_owned(),
+        ),
         // A built-in profile has no keys.
         (Saved::Base, _) => (
             "<file>".to_owned(),

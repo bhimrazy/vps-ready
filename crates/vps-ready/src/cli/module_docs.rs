@@ -186,6 +186,7 @@ mod tests {
             "kernel.sysctl",
             "net.tailscale",
             "net.wireguard",
+            "net.tunnel",
             "deploy.proxy",
             "deploy.user",
         ] {

@@ -19,6 +19,7 @@ pub mod deploy_user;
 pub mod firewall_inbound;
 pub mod kernel_sysctl;
 pub mod net_tailscale;
+pub mod net_tunnel;
 pub mod net_wireguard;
 pub mod ssh_bruteforce;
 pub mod ssh_server;
@@ -33,6 +34,7 @@ pub use deploy_user::DeployUser;
 pub use firewall_inbound::FirewallInbound;
 pub use kernel_sysctl::KernelSysctl;
 pub use net_tailscale::NetTailscale;
+pub use net_tunnel::NetTunnel;
 pub use net_wireguard::NetWireguard;
 pub use ssh_bruteforce::SshBruteforce;
 pub use ssh_server::SshServer;
@@ -238,7 +240,7 @@ pub trait Module {
 
 /// Every module, in the order the plan lists and applies them. The VPN
 /// modules come before `firewall.inbound`, which sees their planned
-/// resources.
+/// resources, and `net.tunnel` before `deploy.proxy`.
 /// `deploy.docker` comes before `firewall.inbound`, which then accepts
 /// input from the bridges of a Docker it installs; `deploy.proxy` after
 /// `firewall.inbound`, whose planned ruleset it reads for ports 80 and 443;
@@ -250,6 +252,7 @@ pub fn all() -> &'static [&'static dyn Module] {
         &SshServer,
         &NetTailscale,
         &NetWireguard,
+        &NetTunnel,
         &DeployDocker,
         &FirewallInbound,
         &SshBruteforce::ROOT,
@@ -270,6 +273,7 @@ pub fn with_test() -> &'static [&'static dyn Module] {
         &SshServer,
         &NetTailscale,
         &NetWireguard,
+        &NetTunnel,
         &DeployDocker,
         &FirewallInbound,
         &SshBruteforce::ROOT,

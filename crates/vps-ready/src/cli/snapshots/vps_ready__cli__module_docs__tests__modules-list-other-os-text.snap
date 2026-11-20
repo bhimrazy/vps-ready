@@ -23,6 +23,11 @@ net.wireguard
   Does not apply to this host: WireGuard is set up only on Debian and Ubuntu so
   far.
 
+net.tunnel
+  Run a Cloudflare Tunnel connector, for a website with no public port
+  Does not apply to this host: the tunnel is set up only on Debian and Ubuntu so
+  far.
+
 deploy.docker
   Install Docker with logs capped and ports on loopback by default
   Does not apply to this host: Docker is installed only on Debian and Ubuntu so

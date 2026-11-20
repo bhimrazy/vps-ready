@@ -12,6 +12,9 @@ use crate::sys::{Cmd, Sys};
 
 const FIREWALL_UNIT: &str = "vps-ready-firewall.service";
 
+/// net.tunnel's connector, `net_tunnel::UNIT`.
+const CLOUDFLARED_UNIT: &str = "vps-ready-cloudflared.service";
+
 /// A reload a module needs after its resources are applied. A closed set,
 /// so the journal records it by name and a rollback in a later process
 /// runs the same commands from that name alone.
@@ -41,6 +44,11 @@ pub enum Reload {
     /// serving. A rollback that removed the Caddyfile stops and disables
     /// Caddy instead (see [`Reload::rollback_steps`]).
     CaddyReload,
+    /// `systemctl try-restart vps-ready-cloudflared.service`, after
+    /// `daemon-reload`: a running connector reads its unit, config and
+    /// token only at start. Under `Type=notify` it returns once the
+    /// connector is connected again.
+    CloudflaredRestart,
 }
 
 /// The Caddyfile [`Reload::CaddyReload`] checks, and the one Caddy's unit
@@ -62,6 +70,7 @@ impl Reload {
             Self::DaemonReload => "daemon-reload",
             Self::DockerRestart => "docker-restart",
             Self::CaddyReload => "caddy-reload",
+            Self::CloudflaredRestart => "cloudflared-restart",
         }
     }
 
@@ -74,7 +83,7 @@ impl Reload {
                 Some(Cmd::new("nft").args(["-c", "-f", "/etc/vps-ready/firewall.nft"]))
             }
             Self::Fail2banRestart => Some(Cmd::new("fail2ban-client").arg("-t")),
-            Self::DaemonReload => None,
+            Self::DaemonReload | Self::CloudflaredRestart => None,
             Self::DockerRestart => Some(Cmd::new("dockerd").arg("--validate")),
             Self::CaddyReload => Some(Cmd::new("caddy").args([
                 "validate",
@@ -96,6 +105,7 @@ impl Reload {
             Self::DaemonReload => &["daemon-reload"],
             Self::DockerRestart => &["try-restart", "docker.service"],
             Self::CaddyReload => &["reload-or-restart", "caddy.service"],
+            Self::CloudflaredRestart => &["try-restart", CLOUDFLARED_UNIT],
         };
         Cmd::new("systemctl")
             .args(args.iter().copied())
@@ -221,13 +231,14 @@ mod tests {
         assert_eq!(check("out", "err\n"), format!("{cmd}: err"));
     }
 
-    const ALL: [Reload; 6] = [
+    const ALL: [Reload; 7] = [
         Reload::SshdReload,
         Reload::FirewallReload,
         Reload::Fail2banRestart,
         Reload::DaemonReload,
         Reload::DockerRestart,
         Reload::CaddyReload,
+        Reload::CloudflaredRestart,
     ];
 
     #[test]
@@ -269,6 +280,10 @@ mod tests {
                 (
                     Some("caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile".into()),
                     "systemctl reload-or-restart caddy.service".into()
+                ),
+                (
+                    None,
+                    "systemctl try-restart vps-ready-cloudflared.service".into()
                 ),
             ]
         );
