@@ -570,6 +570,7 @@ fn a_leftover_key_file_goes_even_when_a_transaction_is_unfinished() {
     let state = StateDir::create(&fs, STATE, 0).unwrap();
     let txn = state.create_txn(&fs, 1_792_755_766).unwrap();
     let begin = Event::Begin {
+        format: crate::engine::journal::FORMAT,
         version: "0.3.0".into(),
         modules: vec!["kernel.sysctl".into()],
     };

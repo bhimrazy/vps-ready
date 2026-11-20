@@ -402,6 +402,7 @@ impl<'a> Engine<'a> {
         let id = txn.id().to_owned();
         let mut open = Open::new(self.sys.fs, txn, Vec::new())?;
         open.append(Event::Begin {
+            format: crate::engine::journal::FORMAT,
             version: crate::VERSION_INFO.version.to_owned(),
             modules: plan.changed_modules(),
         })?;
