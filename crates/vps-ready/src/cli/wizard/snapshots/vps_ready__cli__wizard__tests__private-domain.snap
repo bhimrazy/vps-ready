@@ -26,11 +26,14 @@ Unchecked ports will be blocked.
   [ ] 8080/tcp (app)
 ? More ports to open, e.g. 8080/tcp or 53/udp (Enter for none): 
 ? Pick which modules to run yourself? (y/N) no
-Caddy can serve your apps over HTTPS and get their certificates. Each domain
-needs a DNS record for this server.
+Caddy can serve your apps over HTTPS, through a Cloudflare Tunnel or directly
+(asked after the domains).
 ? Domain to serve, e.g. app.example.com (Enter for none): app.example.com
 ? Address of the app behind app.example.com, e.g. 127.0.0.1:8080: 127.0.0.1:8080
 ? Another domain (Enter for no more): 
+? How do visitors reach this site
+    Through a Cloudflare Tunnel (no public ports; DNS on Cloudflare)
+  > Directly, on ports 80 and 443 (Caddy gets the certificate)
   Ports 80/tcp, 443/tcp and 443/udp are opened for Caddy.
 
 After you apply, you have 5 minutes to log in from a new terminal and confirm.

@@ -18,8 +18,8 @@ Audit: 14 passed, 12 failed (1 high, 5 medium, 6 low), 5 unknown. vps-ready can 
   > WireGuard on this server (the private profile)
   Two steps: this apply sets it up and keeps SSH public; applying again from a
   login through wg0 closes SSH to the internet.
-  Make a key pair on the device you will connect from: `wg genkey | tee
-  laptop.key | wg pubkey`, or "Add tunnel" in the WireGuard app.
+  Make a key pair on the device you will connect from: `(umask 077; wg genkey |
+  tee laptop.key | wg pubkey)`, or "Add tunnel" in the WireGuard app.
 ? Name of the device: My Laptop
 ? Its public key: AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=
   peer name "My Laptop" is not 1 to 32 lowercase letters, digits and `-`

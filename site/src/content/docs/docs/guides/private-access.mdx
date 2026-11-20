@@ -12,6 +12,10 @@ import { Aside, Steps } from '@astrojs/starlight/components';
 `export cloud-init`, `apply --deadman=off`, the `net.tailscale` and `net.wireguard` modules, `ssh_via` in `firewall.inbound`, the `private` profile, the wizard's private access question, and the audit controls `FW-003`, `SSH-009` and `NET-008`.
 </Aside>
 
+<Aside type="note" title="New in v0.7.0">
+The `net.tunnel` module, `deploy.proxy`'s `behind_tunnel`, and the wizard's tunnel question for the `private` profile: [a website with no public port](#a-website-with-no-public-port).
+</Aside>
+
 A new server answers SSH to the whole internet. This guide narrows that to your own devices in three steps, and shows how to get back in if the private network fails.
 
 First, [harden the server at first boot](#harden-at-first-boot), before anyone logs in. Next, [join a private network](#join-a-private-network) such as Tailscale or WireGuard, so you can reach the same SSH server through it. Last, [close public SSH](#close-public-ssh) from a login that already comes through that network.
@@ -66,11 +70,12 @@ The exported script runs `vps-ready apply --profile /etc/vps-ready/profile.toml 
 
 If something fails (a download, the hash, a login during first boot, the apply), the server keeps the image's defaults and is not hardened. `cloud-init status` then shows `error`, and `/var/log/cloud-init-output.log` says why. Fix the cause and create the server again.
 
-`export` refuses three kinds of profile:
+`export` refuses four kinds of profile:
 
 - `user.admin` without `authorized_keys`. Add your public keys to the profile.
 - `net.tailscale` with `auth_key_file`. Any process on the server can read user-data through the provider's metadata service, so it must not lead to a key. Leave the key out, and log in with `sudo tailscale up --accept-dns=false` after the first boot.
 - `firewall.inbound` with an explicit `ssh_via`, such as `"tailscale0"`. No SSH session can come through the VPN at first boot, so apply it later, from a session through the VPN.
+- `net.tunnel` with `token_file`, for the same reason as Tailscale's key. Leave it out, and after the first boot save the token to a root-only file, set `token_file` and apply again.
 
 The [`private` profile](#the-private-profile) does export: its `ssh_via = "vpn"` stays in step 1 at first boot, with public SSH open.
 
@@ -249,9 +254,58 @@ authorized_keys = ["ssh-ed25519 AAAAC3Nza... me@laptop"]
 sudo vps-ready apply --profile private.toml
 ```
 
-The first apply sets up the VPN and keeps SSH public, with the note "step 1 of 2: SSH stays public until you apply this profile again from a login through tailscale0" (`wg0` for WireGuard). The second, from a session through the VPN, closes public SSH with the same checks, timer and confirm as the steps above. It has an empty `allow`: add `"80/tcp", "443/tcp", "443/udp"` for a web app.
+The first apply sets up the VPN and keeps SSH public, with the note "step 1 of 2: SSH stays public until you apply this profile again from a login through tailscale0" (`wg0` for WireGuard). The second, from a session through the VPN, closes public SSH with the same checks, timer and confirm as the steps above. It has an empty `allow`: add `"80/tcp", "443/tcp", "443/udp"` for a web app, or serve it through a tunnel and keep `allow` empty, as in [A website with no public port](#a-website-with-no-public-port).
 
-The guided setup (`sudo vps-ready`) asks the same thing as "Private access for SSH": none, Tailscale, or WireGuard on this server. For Tailscale it asks for an auth key, or you log in by hand afterwards. For WireGuard it asks for the device's name and its public key, and the apply prints the client config. It asks whether to save your answers to `vps-ready.toml`, then prints the step 2 command. Run `sudo vps-ready` again from a login through the VPN, in the directory that holds that root-owned file, and it offers to apply step 2. If you decline the save, it cannot offer step 2: run the printed command with your profile instead.
+The guided setup (`sudo vps-ready`) asks the same thing as "Private access for SSH": none, Tailscale, or WireGuard on this server. For Tailscale it asks for an auth key, or you log in by hand afterwards. For WireGuard it asks for the device's name and its public key, and the apply prints the client config. A domain for Caddy then adds the [tunnel question](#a-website-with-no-public-port). It asks whether to save your answers to `vps-ready.toml`, then prints the step 2 command. Run `sudo vps-ready` again from a login through the VPN, in the directory that holds that root-owned file, and it offers to apply step 2. If you decline the save, it cannot offer step 2: run the printed command with your profile instead.
+
+### A website with no public port
+
+With a VPN for SSH, a web app is what keeps 80 and 443 open. A [Cloudflare Tunnel](/docs/guides/profiles-and-modules/#nettunnel-cloudflare-tunnel) closes them too: `cloudflared` on the server connects out to Cloudflare, which sends the requests for your domains back through that connection to Caddy on loopback.
+
+| Setup | Open to the internet |
+|---|---|
+| Tailscale for SSH, a tunnel for the web | No inbound port |
+| WireGuard for SSH, a tunnel for the web | UDP 51820 only, which answers nothing without a valid handshake |
+| A VPN for SSH, a web app without a tunnel | 80 and 443 |
+
+The domains' DNS must be on Cloudflare. In the Cloudflare dashboard, create a tunnel and copy its token from the install command it shows. Then add the tunnel and `behind_tunnel` to the private profile, and leave `allow` empty:
+
+```toml
+schema = 1
+extends = "private"
+
+[modules."net.tailscale"]
+
+[modules."net.tunnel"]
+token_file = "/etc/vps-ready/cloudflared-token"
+
+[modules."deploy.proxy"]
+behind_tunnel = true
+sites = [{ domain = "app.example.com", upstream = "127.0.0.1:8080" }]
+```
+
+Save the token to `token_file` in a file only root can read, and apply:
+
+```sh
+sudo install -d -m 0755 /etc/vps-ready
+sudo sh -c 'umask 077; cat > /etc/vps-ready/cloudflared-token'   # paste <token>, then Ctrl-D
+sudo vps-ready apply --profile private.toml
+```
+
+The plan then says which published route to give the tunnel in the dashboard for each site, such as `app.example.com` to `http://127.0.0.1:80`. The connector's start waits for its first connection to Cloudflare, so a bad token or a blocked outbound port 7844 fails the apply, which rolls back the whole transaction, the SSH hardening included.
+
+The guided setup asks this for you. On the `private` profile, a domain for Caddy adds one question:
+
+```text
+? How do visitors reach this site
+  > Through a Cloudflare Tunnel (no public ports; DNS on Cloudflare)
+    Directly, on ports 80 and 443 (Caddy gets the certificate)
+? Tunnel token (hidden; Enter to add it later):
+```
+
+The tunnel choice adds `net.tunnel` and `behind_tunnel = true` and opens no port. The token is not shown as you type it, and it is asked again unless it decodes as cloudflared decodes it; pasting the whole install command works too. Before the plan, the wizard creates `/etc/vps-ready/cloudflared-token` as a new, empty file owned by root with mode `0600`; it writes the token there only after you answer `y`, outside the transaction, so the journal never holds a copy and a rollback keeps it. Unlike a Tailscale auth key, the connector reads it again at every start, so it stays after the apply. If you decline, stop the wizard, or the plan fails, no token is written; the empty file is removed when the wizard can (Ctrl-C at `Apply N changes?` leaves it, and the next run reuses it). When the file holds a token already, the wizard offers to keep it; a replacement is written only after the `y`, so declining keeps the old one, and if the connector already runs, restart it afterwards with `sudo systemctl restart vps-ready-cloudflared`. A file at that path that others can read, or that is not root's, is refused: fix its owner and mode or move it away first. Enter instead of a token adds `net.tunnel` without `token_file`: the plan says how to add one later. Outside the `private` profile the question is not asked, but a profile file can combine the same modules. Nor is it asked when a cloudflared unit that vps-ready did not write exists, such as `cloudflared.service` from Cloudflare's own install: `net.tunnel` leaves that setup alone, and `behind_tunnel` works with it.
+
+The tunnel's routes are set at Cloudflare, so whoever controls the account can route the internet to anything the server reaches on loopback, SSH included. Turn on two-factor login for the account, and add no routes but the web ones.
 
 ### Why the second apply must come through the VPN
 
@@ -350,3 +404,4 @@ A manual rollback can refuse while SSH depends on the VPN:
 
 - More ways back in: [Undo changes and recover](/docs/guides/undo-and-recover/#get-back-in-after-a-lockout).
 - What each VPN module writes and undoes: [`net.tailscale`](/docs/guides/profiles-and-modules/#nettailscale-tailscale) and [`net.wireguard`](/docs/guides/profiles-and-modules/#netwireguard-wireguard).
+- What the tunnel writes and undoes: [`net.tunnel`](/docs/guides/profiles-and-modules/#nettunnel-cloudflare-tunnel).

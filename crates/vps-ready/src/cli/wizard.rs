@@ -25,7 +25,7 @@ use crate::modules::deploy_proxy::{self, Caddyfile, Domain, Upstream};
 use crate::modules::firewall_inbound::{self, Allow};
 use crate::modules::user_admin::{self, SessionKeys};
 use crate::modules::{Applicability, Module, ModuleError};
-use crate::modules::{net_tailscale, net_wireguard};
+use crate::modules::{net_tailscale, net_tunnel, net_wireguard};
 use crate::resource::ResourceError;
 use crate::resource::authorized_keys::is_plain_key;
 use crate::sys::{FileKind, FileOwner, Fs, SysError};
@@ -41,9 +41,16 @@ const AUTH_KEY_FILE: &str = net_tailscale::WIZARD_KEY_FILE;
 /// between its create and rename.
 const AUTH_KEY_TEMP: &str = "/run/vps-ready/.tailscale-auth-key.vps-ready-tmp";
 
+/// [`Fs::write_atomic`]'s temp file for [`TOKEN_FILE`], left by a crash
+/// between its create and rename.
+const TOKEN_TEMP: &str = "/etc/vps-ready/.cloudflared-token.vps-ready-tmp";
+
 /// What every Tailscale auth key starts with. Split, so that no text in
 /// the source looks like a key.
 const AUTH_KEY_PREFIX: &str = concat!("tskey", "-");
+
+/// A pasted tunnel token, kept for every start of the connector.
+const TOKEN_FILE: &str = net_tunnel::WIZARD_TOKEN_FILE;
 
 /// What the private profile opens when `deploy.proxy` serves a site.
 const WEB_PORTS: [&str; 3] = ["80/tcp", "443/tcp", "443/udp"];
@@ -76,6 +83,7 @@ pub(super) fn run<R: BufRead>(
         builder,
         picked,
         auth_key,
+        tunnel,
     } = match ask(host, &facts, prompt, out) {
         Err(e) if interrupted(&e) => {
             writeln!(out, "Nothing was changed.")?;
@@ -85,15 +93,26 @@ pub(super) fn run<R: BufRead>(
     };
     // The key goes only into the profile applied now, never the saved one.
     let mut applied = builder.clone();
-    let mut key = match auth_key {
-        Some(key) => {
+    let token = match tunnel {
+        Some(TunnelToken::New { token, existing }) => Some((token, existing)),
+        Some(TunnelToken::Keep) | None => None,
+    };
+    let mut secrets = if auth_key.is_some() || token.is_some() {
+        let mut secrets = Secrets::new(host);
+        // Before the plan, which checks the files' owner and mode.
+        if let Some((token, existing)) = token {
+            secrets.with_token(token, existing)?;
+        }
+        if let Some(key) = auth_key {
             applied.set_params(
                 "net.tailscale",
                 toml::Table::from_iter([("auth_key_file".to_owned(), AUTH_KEY_FILE.into())]),
             );
-            Some(KeyFile::placeholder(host, key)?)
+            secrets.with_auth_key(key)?;
         }
-        None => None,
+        Some(secrets)
+    } else {
+        None
     };
     let profile = applied.build(host.modules)?;
     if arms_timer(host, &facts, &profile) {
@@ -115,14 +134,14 @@ pub(super) fn run<R: BufRead>(
         false,
         Some(engine::deadman::DEFAULT_WINDOW),
         Some(&mut input),
-        match &mut key {
-            Some(key) => key as &mut dyn change::Around,
+        match &mut secrets {
+            Some(secrets) => secrets as &mut dyn change::Around,
             None => &mut plain,
         },
         out,
         err,
     );
-    let signal = key.take().and_then(KeyFile::finish);
+    let signal = secrets.take().and_then(Secrets::finish);
     if let Some(sig) = signal {
         // Now that the key is gone and the outcome is printed, an error
         // too.
@@ -168,14 +187,24 @@ fn timer_note(out: &mut dyn Write, via: Option<&str>) -> std::io::Result<()> {
     )
 }
 
-/// [`AUTH_KEY_FILE`] for one apply. It is created empty before the plan,
-/// which checks its owner and mode, and holds the key only from the yes
-/// until the engine is done, while [`Defer`] holds back the signals that
-/// would end the wizard. Dropping it removes the file; a crash or SIGKILL
-/// leaves it for [`remove_key_file`] at the next start.
-struct KeyFile<'a> {
+/// The secret files of one apply: a Tailscale auth key at
+/// [`AUTH_KEY_FILE`], and the tunnel's token at [`TOKEN_FILE`]. Before the
+/// plan, which checks their owner and mode, each is a file without the
+/// secret: an empty new one, or for a token, the file it replaces. The
+/// secrets are written only from the yes, while [`Defer`] holds back the
+/// signals that would end the wizard, so a decline, an error before the
+/// engine starts or a kill at the question leaves neither on disk.
+///
+/// The auth key is removed once the engine is done. The token stays, as
+/// the connector reads it at every start; a file this run created for it
+/// is removed when the engine never started. A crash or SIGKILL leaves an
+/// auth key for [`remove_key_file`] at the next start.
+struct Secrets<'a> {
     fs: &'a dyn Fs,
-    key: Zeroizing<String>,
+    key: Option<Zeroizing<String>>,
+    token: Option<TokenFile>,
+    /// Set once [`change::Around::before`] let the engine start.
+    started: bool,
     defer: Option<Defer>,
     /// Set when a held-back signal arrived, so a wait for a confirm ends.
     stop: Arc<AtomicBool>,
@@ -183,25 +212,48 @@ struct KeyFile<'a> {
     signal: Option<c_int>,
 }
 
-impl<'a> KeyFile<'a> {
-    /// Creates [`AUTH_KEY_FILE`] empty, root's with mode 0600, in a
-    /// directory only root can write to, as `net.tailscale` requires.
-    fn placeholder(host: &Host<'a>, key: Zeroizing<String>) -> anyhow::Result<Self> {
-        let file = Self {
+/// The token for [`TOKEN_FILE`], and what was there before.
+struct TokenFile {
+    token: Zeroizing<String>,
+    /// Created empty by this run, which removes it if the engine never
+    /// starts.
+    created: bool,
+    /// Its directory too.
+    created_dir: bool,
+}
+
+impl<'a> Secrets<'a> {
+    fn new(host: &Host<'a>) -> Self {
+        Self {
             fs: host.sys.fs,
-            key,
+            key: None,
+            token: None,
+            started: false,
             defer: host.defer.clone(),
             stop: Arc::clone(&host.stop),
             signal: None,
-        };
+        }
+    }
+
+    /// With only an auth key, as [`Secrets::with_auth_key`] adds it.
+    #[cfg(test)]
+    fn placeholder(host: &Host<'a>, key: Zeroizing<String>) -> anyhow::Result<Self> {
+        let mut secrets = Self::new(host);
+        secrets.with_auth_key(key)?;
+        Ok(secrets)
+    }
+
+    /// Creates [`AUTH_KEY_FILE`] empty, root's with mode 0600, in a
+    /// directory only root can write to, as `net.tailscale` requires.
+    fn with_auth_key(&mut self, key: Zeroizing<String>) -> anyhow::Result<()> {
         let path = Path::new(AUTH_KEY_FILE);
         let Some(dir) = path.parent() else {
             bail!("{AUTH_KEY_FILE} has no directory");
         };
-        if !file.fs.exists(dir) {
-            file.fs.create_dir(dir, root_only(0o700))?;
+        if !self.fs.exists(dir) {
+            self.fs.create_dir(dir, root_only(0o700))?;
         }
-        let meta = file.fs.metadata(dir)?;
+        let meta = self.fs.metadata(dir)?;
         if meta.kind != FileKind::Dir || meta.uid != 0 || meta.mode & 0o022 != 0 {
             bail!(
                 "{} is not a directory only root can write to, so the auth key is not \
@@ -209,30 +261,96 @@ impl<'a> KeyFile<'a> {
                 dir.display()
             );
         }
-        file.write(b"")?;
-        Ok(file)
+        self.key = Some(key);
+        self.write_key(b"")?;
+        Ok(())
+    }
+
+    /// Gets [`TOKEN_FILE`] ready for the plan without the token: a new
+    /// empty file (O_EXCL, root's, 0600) in a directory only root can write
+    /// to. An existing one, root's and private, stays as it is until the
+    /// yes.
+    fn with_token(&mut self, token: Zeroizing<String>, existing: Existing) -> anyhow::Result<()> {
+        let fs = self.fs;
+        let path = Path::new(TOKEN_FILE);
+        let Some(dir) = path.parent() else {
+            bail!("{TOKEN_FILE} has no directory");
+        };
+        let mut file = TokenFile {
+            token,
+            created: false,
+            created_dir: false,
+        };
+        match existing {
+            Existing::Token | Existing::NotToken => {}
+            // Empty, as an earlier run left it before its yes.
+            Existing::Leftover => file.created = true,
+            Existing::None => {
+                file.created_dir = !fs.exists(dir);
+                if file.created_dir {
+                    fs.create_dir(dir, root_only(0o755))?;
+                }
+                let created = only_root_writes(fs, dir)
+                    .and_then(|()| Ok(fs.create_new(path, b"", root_only(0o600))?));
+                if let Err(e) = created {
+                    if file.created_dir {
+                        let _ = fs.remove_dir(dir);
+                    }
+                    return Err(e);
+                }
+                file.created = true;
+            }
+        }
+        self.token = Some(file);
+        Ok(())
     }
 
     /// Through a temp file created with O_EXCL and mode 0600.
-    fn write(&self, bytes: &[u8]) -> Result<(), SysError> {
+    fn write_key(&self, bytes: &[u8]) -> Result<(), SysError> {
         self.fs
             .write_atomic(Path::new(AUTH_KEY_FILE), bytes, root_only(0o600))
     }
 
-    /// Removes the file and lets the signals end the process again.
-    /// Returns the last one held back, for the caller to end with.
+    /// Removes the auth key, and a token file the engine never used, and
+    /// lets the signals end the process again. Returns the last one held
+    /// back, for the caller to end with.
     fn finish(mut self) -> Option<c_int> {
         self.release();
         self.signal
     }
 
     fn release(&mut self) {
-        if let Err(e) = remove_key_file(self.fs) {
+        if self.key.is_some()
+            && let Err(e) = remove_key_file(self.fs)
+        {
             tracing::warn!("removing {AUTH_KEY_FILE}: {e}; delete it yourself");
+        }
+        if !self.started {
+            self.discard_token();
         }
         if let Some(sig) = self.defer.as_ref().and_then(Defer::release) {
             self.signal = Some(sig);
             self.stop.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// Removes a token file this run created (or reused empty). One it did
+    /// not create holds what it held before, unless a signal came while
+    /// [`change::Around::before`] wrote the token: then it holds the new one.
+    fn discard_token(&mut self) {
+        let Some(file) = self.token.take() else {
+            return;
+        };
+        if !file.created {
+            return;
+        }
+        let path = Path::new(TOKEN_FILE);
+        if let Err(e) = self.fs.remove(path) {
+            tracing::warn!("removing {TOKEN_FILE}: {e}; delete it yourself");
+        } else if file.created_dir
+            && let Some(dir) = path.parent()
+        {
+            let _ = self.fs.remove_dir(dir);
         }
     }
 
@@ -242,30 +360,40 @@ impl<'a> KeyFile<'a> {
     }
 }
 
-impl change::Around for KeyFile<'_> {
-    /// Writes the key, unless a signal came first: that declines.
+impl change::Around for Secrets<'_> {
+    /// Writes the secrets, unless a signal came first: that declines.
     fn before(&mut self) -> anyhow::Result<bool> {
         if let Some(defer) = &self.defer {
             defer.hold();
         }
         if !self.signalled() {
-            self.write(self.key.as_bytes())?;
+            if let Some(key) = &self.key {
+                self.write_key(key.as_bytes())?;
+            }
+            if let Some(file) = &self.token {
+                self.fs.write_atomic(
+                    Path::new(TOKEN_FILE),
+                    file.token.as_bytes(),
+                    root_only(0o600),
+                )?;
+            }
         }
         if self.signalled() {
             self.release();
             return Ok(false);
         }
+        self.started = true;
         Ok(true)
     }
 
-    /// Removes the file before a wait for a confirm. A signal held back
-    /// meanwhile stops that wait, so the outcome is printed first.
+    /// Removes the auth key before a wait for a confirm. A signal held
+    /// back meanwhile stops that wait, so the outcome is printed first.
     fn after(&mut self) {
         self.release();
     }
 }
 
-impl Drop for KeyFile<'_> {
+impl Drop for Secrets<'_> {
     fn drop(&mut self) {
         self.release();
     }
@@ -288,6 +416,45 @@ fn remove_key_file(fs: &dyn Fs) -> Result<(), SysError> {
             Ok(()) | Err(SysError::NotFound(_)) => {}
             Err(e) => return Err(e),
         }
+    }
+    Ok(())
+}
+
+/// The tunnel's token, from [`ask_tunnel_token`].
+enum TunnelToken {
+    /// [`TOKEN_FILE`] holds one already.
+    Keep,
+    /// Pasted, for [`TOKEN_FILE`].
+    New {
+        token: Zeroizing<String>,
+        existing: Existing,
+    },
+}
+
+/// What [`TOKEN_FILE`] is before the wizard writes a pasted token. Each
+/// is root's and private, as the plan requires; any other file is refused
+/// at the question.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Existing {
+    None,
+    /// Holds a token.
+    Token,
+    /// Empty: left by a run stopped before its yes, and reused as new.
+    Leftover,
+    /// Holds something else.
+    NotToken,
+}
+
+/// Whether only root can write to `dir`, as the plan requires of the
+/// directories above a secret file.
+fn only_root_writes(fs: &dyn Fs, dir: &Path) -> anyhow::Result<()> {
+    let meta = fs.metadata(dir)?;
+    if meta.kind != FileKind::Dir || meta.uid != 0 || meta.mode & 0o022 != 0 {
+        bail!(
+            "{} is not a directory only root can write to, so the tunnel token is not written \
+             there",
+            dir.display()
+        );
     }
     Ok(())
 }
@@ -496,8 +663,13 @@ fn start_checks(host: &Host) -> anyhow::Result<()> {
     let state = StateDir::create(host.sys.fs, host.state_dir, host.state_uid)?;
     let engine = Engine::lock(&state, host.sys)?;
     // An auth key from a run that ended without its cleanup, removed
-    // before an unfinished transaction can stop the start.
+    // before an unfinished transaction can stop the start, and a token's
+    // temp file.
     remove_key_file(host.sys.fs)?;
+    match host.sys.fs.remove(Path::new(TOKEN_TEMP)) {
+        Ok(()) | Err(SysError::NotFound(_)) => {}
+        Err(e) => return Err(e.into()),
+    }
     engine.ensure_finished()?;
     Ok(())
 }
@@ -559,6 +731,8 @@ struct Answers {
     picked: bool,
     /// A pasted Tailscale auth key, for this apply only.
     auth_key: Option<Zeroizing<String>>,
+    /// The tunnel's token, when the sites go through one.
+    tunnel: Option<TunnelToken>,
 }
 
 /// The questions, in order.
@@ -575,11 +749,12 @@ fn ask(
     ask_ports(host, facts, prompt, out, &mut builder)?;
     let picked = prompt.confirm("Pick which modules to run yourself?", false)?
         && ask_modules(host, facts, prompt, out, &mut builder)?;
-    ask_sites(host, facts, prompt, out, &mut builder)?;
+    let tunnel = ask_sites(host, facts, prompt, out, &mut builder)?;
     Ok(Answers {
         builder,
         picked,
         auth_key,
+        tunnel,
     })
 }
 
@@ -705,8 +880,8 @@ fn ask_wireguard_peer(
     say(
         out,
         "  ",
-        "Make a key pair on the device you will connect from: `wg genkey | tee laptop.key | \
-         wg pubkey`, or \"Add tunnel\" in the WireGuard app.",
+        "Make a key pair on the device you will connect from: `(umask 077; wg genkey | tee \
+         laptop.key | wg pubkey)`, or \"Add tunnel\" in the WireGuard app.",
     )?;
     loop {
         let name = prompt.input("Name of the device", "laptop")?;
@@ -1058,31 +1233,42 @@ fn proxy_without_sites(profile: &Profile) -> bool {
 
 /// With `deploy.docker` still in the profile after the module list, or
 /// `deploy.proxy` picked there, the sites `deploy.proxy` serves: none is
-/// fine, and at least one adds the module.
+/// fine, and at least one adds the module. On the private profile, they go
+/// through a Cloudflare Tunnel or open 80 and 443; returns the tunnel's
+/// token.
 fn ask_sites(
     host: &Host,
     facts: &Facts,
     prompt: &mut dyn Prompt,
     out: &mut dyn Write,
     builder: &mut ProfileBuilder,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Option<TunnelToken>> {
     let profile = builder.build(host.modules)?;
     let picked = proxy_without_sites(&profile);
     if profile.params("deploy.docker").is_none() && !picked {
-        return Ok(());
+        return Ok(None);
     }
     let Some(module) = find(host, "deploy.proxy") else {
-        return Ok(());
+        return Ok(None);
     };
     if let Applicability::NotApplicable { reason } = module.applicable(facts) {
         writeln!(out, "HTTPS sites: skipped, {reason}.")?;
-        return Ok(());
+        return Ok(None);
     }
+    let private = builder.base() == "private";
+    let tunnel = private
+        && find(host, "net.tunnel")
+            .is_some_and(|m| m.applicable(facts) == Applicability::Applicable);
     say(
         out,
         "",
-        "Caddy can serve your apps over HTTPS and get their certificates. Each domain \
-         needs a DNS record for this server.",
+        if tunnel {
+            "Caddy can serve your apps over HTTPS, through a Cloudflare Tunnel or directly \
+             (asked after the domains)."
+        } else {
+            "Caddy can serve your apps over HTTPS and get their certificates. Each domain \
+             needs a DNS record for this server."
+        },
     )?;
     if deploy_proxy::caddyfile_state(host.sys)? == Caddyfile::Other {
         say(
@@ -1131,8 +1317,9 @@ fn ask_sites(
             builder.remove("deploy.proxy");
             writeln!(out, "  deploy.proxy is left out: it needs a domain.")?;
         }
-        return Ok(());
+        return Ok(None);
     }
+    let count = sites.len();
     let sites = sites
         .into_iter()
         .map(|(domain, upstream)| {
@@ -1142,14 +1329,147 @@ fn ask_sites(
             ]))
         })
         .collect();
-    builder.set_params(
-        "deploy.proxy",
-        toml::Table::from_iter([("sites".to_owned(), toml::Value::Array(sites))]),
-    );
-    if builder.base() == "private" {
+    let mut proxy = toml::Table::from_iter([("sites".to_owned(), toml::Value::Array(sites))]);
+    if tunnel && ask_through_tunnel(prompt, count)? {
+        let token = ask_tunnel_token(host, facts, prompt, out)?;
+        let mut params = toml::Table::new();
+        if token.is_some() {
+            params.insert("token_file".to_owned(), TOKEN_FILE.into());
+        }
+        builder.set_params("net.tunnel", params);
+        proxy.insert("behind_tunnel".to_owned(), true.into());
+        builder.set_params("deploy.proxy", proxy);
+        say(
+            out,
+            "  ",
+            "No port is opened: cloudflared connects out to Cloudflare, and Caddy listens on \
+             loopback only.",
+        )?;
+        return Ok(token);
+    }
+    builder.set_params("deploy.proxy", proxy);
+    if private {
         open_web_ports(host, out, builder)?;
     }
-    Ok(())
+    Ok(None)
+}
+
+/// Whether visitors reach the `count` sites through a Cloudflare Tunnel
+/// rather than on 80 and 443.
+fn ask_through_tunnel(prompt: &mut dyn Prompt, count: usize) -> anyhow::Result<bool> {
+    let items = [
+        "Through a Cloudflare Tunnel (no public ports; DNS on Cloudflare)".to_owned(),
+        "Directly, on ports 80 and 443 (Caddy gets the certificate)".to_owned(),
+    ];
+    let question = if count == 1 {
+        "How do visitors reach this site"
+    } else {
+        "How do visitors reach these sites"
+    };
+    Ok(prompt.select(question, &items, 0)? == 0)
+}
+
+/// The tunnel's token, hidden as it is typed and asked again unless it has
+/// the shape of one; [`TOKEN_FILE`] kept if it holds one and the answer is
+/// yes. `None` to add it later.
+fn ask_tunnel_token(
+    host: &Host,
+    facts: &Facts,
+    prompt: &mut dyn Prompt,
+    out: &mut dyn Write,
+) -> anyhow::Result<Option<TunnelToken>> {
+    let fs = host.sys.fs;
+    let path = Path::new(TOKEN_FILE);
+    let existing = match fs.metadata(path) {
+        Ok(meta) if meta.kind != FileKind::File => bail!(
+            "{TOKEN_FILE} is not a regular file ({:?}): move it away and run the wizard again",
+            meta.kind
+        ),
+        // Nothing is written before the yes, so the plan must accept it.
+        Ok(meta) if meta.uid != 0 || meta.mode & 0o077 != 0 => bail!(
+            "{TOKEN_FILE} is readable by others or not root's: `sudo chown root:root` and \
+             `sudo chmod 600` it, or move it away, then run the wizard again"
+        ),
+        Ok(_) => {
+            let (bytes, _) = fs.read_nofollow(path)?;
+            let bytes = Zeroizing::new(bytes);
+            if bytes.is_empty() {
+                Existing::Leftover
+            } else if std::str::from_utf8(&bytes).is_ok_and(net_tunnel::is_token) {
+                Existing::Token
+            } else {
+                Existing::NotToken
+            }
+        }
+        Err(SysError::NotFound(_)) => Existing::None,
+        Err(e) => return Err(e.into()),
+    };
+    if matches!(existing, Existing::Token | Existing::NotToken) {
+        if existing == Existing::Token {
+            if prompt.confirm(
+                &format!("{TOKEN_FILE} holds a tunnel token. Keep it?"),
+                true,
+            )? {
+                return Ok(Some(TunnelToken::Keep));
+            }
+        } else {
+            say(
+                out,
+                "  ",
+                &format!(
+                    "{TOKEN_FILE} holds no tunnel token, so the token you paste replaces it \
+                     after you apply."
+                ),
+            )?;
+        }
+    }
+    say(
+        out,
+        "  ",
+        &format!(
+            "Create a tunnel in the Cloudflare dashboard and copy its token, the long string \
+             in the install command it shows. It is saved to {TOKEN_FILE}, readable only by \
+             root, for the connector to read at each start."
+        ),
+    )?;
+    loop {
+        let typed =
+            Zeroizing::new(prompt.password("Tunnel token (hidden; Enter to add it later)")?);
+        // The whole install command works too: the token is its last word.
+        let token = typed.split_whitespace().last().unwrap_or_default();
+        if token.is_empty() {
+            return Ok(None);
+        }
+        if net_tunnel::is_token(token) {
+            let running = facts
+                .cloudflared
+                .active
+                .iter()
+                .any(|u| u == net_tunnel::UNIT);
+            if existing != Existing::None && running {
+                // The apply restarts nothing when the unit is unchanged.
+                say(
+                    out,
+                    "  ",
+                    &format!(
+                        "The connector runs now: after the apply, run `sudo systemctl restart \
+                         {}` to use the new token.",
+                        net_tunnel::UNIT.trim_end_matches(".service")
+                    ),
+                )?;
+            }
+            return Ok(Some(TunnelToken::New {
+                token: Zeroizing::new(token.to_owned()),
+                existing,
+            }));
+        }
+        say(
+            out,
+            "  ",
+            "That is not a tunnel token: copy it from the install command in the Cloudflare \
+             dashboard.",
+        )?;
+    }
 }
 
 /// Adds [`WEB_PORTS`] to `firewall.inbound`'s `allow`, which the private

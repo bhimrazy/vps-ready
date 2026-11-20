@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use askama::Template;
 use serde::Deserialize;
+use zeroize::Zeroizing;
 
 use super::{
     Applicability, Module, ModuleError, ModuleSteps, ParamDoc, PlanCx, parse_params, refuse,
@@ -30,6 +31,10 @@ pub const PACKAGE: &str = "cloudflared";
 const BINARY: &str = "/usr/bin/cloudflared";
 
 const DIR: &str = "/etc/vps-ready";
+
+/// Where the wizard writes a pasted token. Unlike a Tailscale auth key it
+/// is read again at every start of the connector, so it stays.
+pub(crate) const WIZARD_TOKEN_FILE: &str = "/etc/vps-ready/cloudflared-token";
 const UNIT_FILE: &str = "/etc/systemd/system/vps-ready-cloudflared.service";
 /// Restarts the connector after an upgrade replaced [`BINARY`].
 const RESTART_UNIT: &str = "vps-ready-cloudflared-restart.service";
@@ -137,6 +142,72 @@ impl Params {
         }
         Ok(())
     }
+}
+
+/// Whether `text` has the shape of a remotely-managed tunnel's token:
+/// base64 of a JSON object with the account (`a`), the tunnel's ID (`t`)
+/// and its secret (`s`, base64 too), decoded as strictly as cloudflared
+/// does, so that a token the connector would refuse is asked again rather
+/// than rolling back the apply. For the wizard, which writes the token
+/// itself; the module never reads one.
+#[must_use]
+pub fn is_token(text: &str) -> bool {
+    #[derive(Deserialize)]
+    struct Token<'a> {
+        a: &'a str,
+        t: &'a str,
+        s: &'a str,
+    }
+    let Some(json) = decode_base64(text.trim()) else {
+        return false;
+    };
+    serde_json::from_slice::<Token>(&json).is_ok_and(|t| {
+        !t.a.is_empty()
+            && is_uuid(t.t)
+            && decode_base64(t.s).is_some_and(|secret| !secret.is_empty())
+    })
+}
+
+/// Standard base64 with its `=` padding, as Go's `base64.StdEncoding`
+/// decodes it (cloudflared trims spaces first), with the unused low bits
+/// zero, as every encoder writes them.
+fn decode_base64(text: &str) -> Option<Zeroizing<Vec<u8>>> {
+    if text.is_empty() || !text.len().is_multiple_of(4) {
+        return None;
+    }
+    let body = text
+        .strip_suffix("==")
+        .or_else(|| text.strip_suffix('='))
+        .unwrap_or(text);
+    let mut out = Zeroizing::new(Vec::with_capacity(text.len() * 3 / 4));
+    let (mut acc, mut bits) = (0u32, 0u32);
+    for c in body.bytes() {
+        let v = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        };
+        acc = (acc << 6) | u32::from(v);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+            acc &= (1 << bits) - 1;
+        }
+    }
+    (acc == 0).then_some(out)
+}
+
+/// e.g. `c3a1f0e2-0000-4000-8000-000000000000`.
+fn is_uuid(text: &str) -> bool {
+    text.len() == 36
+        && text.char_indices().all(|(i, c)| match i {
+            8 | 13 | 18 | 23 => c == '-',
+            _ => c.is_ascii_hexdigit(),
+        })
 }
 
 /// The connector unit, as `templates/cloudflared.service` renders it.
@@ -685,6 +756,31 @@ fn runs_installed_binary(sys: Sys, pid: &str) -> Result<bool, String> {
             String::from_utf8_lossy(&out.stderr).trim()
         )),
     }
+}
+
+/// A token of the shape [`is_token`] accepts, from placeholder values
+/// around `secret` (base64), so that no real-looking token is in the
+/// source.
+#[cfg(test)]
+pub(crate) fn placeholder_token(secret: &str) -> String {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let json = format!(
+        r#"{{"a":"placeholder-account","t":"00000000-0000-0000-0000-000000000000","s":"{secret}"}}"#
+    );
+    let mut out = String::new();
+    for chunk in json.as_bytes().chunks(3) {
+        let v = chunk
+            .iter()
+            .enumerate()
+            .fold(0u32, |v, (i, &b)| v | u32::from(b) << (16 - 8 * i));
+        for i in 0..=chunk.len() {
+            out.push(char::from(ALPHABET[(v >> (18 - 6 * i) & 63) as usize]));
+        }
+        for _ in chunk.len()..3 {
+            out.push('=');
+        }
+    }
+    out
 }
 
 #[cfg(test)]
