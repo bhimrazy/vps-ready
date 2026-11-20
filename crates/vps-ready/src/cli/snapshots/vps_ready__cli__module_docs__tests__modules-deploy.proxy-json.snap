@@ -12,7 +12,12 @@ expression: out
     {
       "name": "sites",
       "default": "[]",
-      "help": "Required: the sites Caddy serves, e.g. [{ domain = \"app.example.com\", upstream = \"127.0.0.1:8080\" }]. Each domain needs a DNS record for this host and ports 80 and 443 open."
+      "help": "Required: the sites Caddy serves, e.g. [{ domain = \"app.example.com\", upstream = \"127.0.0.1:8080\" }]. Each domain needs a DNS record for this host and ports 80 and 443 open, unless behind_tunnel is set."
+    },
+    {
+      "name": "behind_tunnel",
+      "default": "false",
+      "help": "Serve every site as plain HTTP on loopback only, for a Cloudflare Tunnel connector (net.tunnel) to forward to: TLS ends at Cloudflare, Caddy gets no certificate, and no public port is needed. The visitor's address comes from Cf-Connecting-Ip."
     }
   ],
   "controls": []

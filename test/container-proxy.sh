@@ -11,6 +11,8 @@
 # Caddy reaches an upstream on 127.0.0.1 -> rollback --last -> Caddy's source,
 # key and Caddyfile are gone, the package stays and Caddy is stopped and
 # disabled -> apply again starts Caddy -> rollback --last again.
+# Then behind_tunnel: Caddy answers plain HTTP on loopback to a forged
+# X-Forwarded-For, and the upstream sees only the Cf-Connecting-Ip address.
 # The site is app.localhost, for which Caddy uses its own CA (as `tls internal`
 # would), so no ACME CA is involved. The container is capped at 1 GB and 1 CPU
 # and is removed afterwards.
@@ -132,5 +134,46 @@ echo "== $distro: vps-ready rollback --last, again"
 rc=0; vr rollback --last || rc=$?
 [ "$rc" -eq 0 ] || die "second rollback exited $rc, expected 0"
 for f in $managed; do ct test ! -e "$f" || die "$f is left after the second rollback"; done
+
+cat >"$tmp/tunnel.toml" <<'EOF'
+schema = 1
+
+[modules."deploy.proxy"]
+behind_tunnel = true
+sites = [{ domain = "app.example.com", upstream = "127.0.0.1:8081" }]
+EOF
+docker cp "$tmp/tunnel.toml" "$name:/root/tunnel.toml"
+# An upstream that echoes the X-Forwarded-For it got.
+cat >"$tmp/echo.json" <<'EOF'
+{"admin": {"disabled": true},
+ "apps": {"http": {"servers": {"up": {"listen": ["127.0.0.1:8081"],
+   "routes": [{"handle": [{"handler": "static_response",
+     "body": "xff={http.request.header.X-Forwarded-For}"}]}]}}}}}
+EOF
+docker cp "$tmp/echo.json" "$name:/root/echo.json"
+docker exec -d "$name" caddy run --config /root/echo.json
+
+echo "== $distro: vps-ready apply --yes --profile tunnel.toml (behind_tunnel)"
+rc=0; vr apply --yes --profile /root/tunnel.toml || rc=$?
+[ "$rc" -eq 0 ] || die "tunnel apply exited $rc, expected 0"
+[ "$(ct systemctl is-active caddy.service)" = active ] ||
+  die "Caddy is not running in tunnel mode"
+body=$(ct curl -fsS --retry 10 --retry-delay 1 --retry-all-errors \
+  -H 'Host: app.example.com' -H 'Cf-Connecting-Ip: 192.0.2.7' \
+  -H 'X-Forwarded-For: 198.51.100.9' http://127.0.0.1/) ||
+  die "plain HTTP through Caddy failed"
+[ "$body" = "xff=192.0.2.7" ] || die "the upstream saw: $body"
+code=$(ct curl -s -o /dev/null -w '%{http_code}' -H 'Host: app.example.com' \
+  -H 'X-Forwarded-Proto: http' http://127.0.0.1/)
+[ "$code" = 308 ] || die "X-Forwarded-Proto: http got $code, expected 308"
+# Only loopback listens on 80 and 443.
+public=$(ct ss -H -ltn 'sport = :80 or sport = :443' | awk '{print $4}' |
+  grep -v -e '^127\.0\.0\.1:' -e '^\[::1\]:' || true)
+[ -z "$public" ] || die "public listeners on 80 or 443: $public"
+
+echo "== $distro: vps-ready rollback --last (behind_tunnel)"
+rc=0; vr rollback --last || rc=$?
+[ "$rc" -eq 0 ] || die "tunnel rollback exited $rc, expected 0"
+for f in $managed; do ct test ! -e "$f" || die "$f is left after the tunnel rollback"; done
 
 echo "OK [$distro]"
