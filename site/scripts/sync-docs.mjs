@@ -47,6 +47,12 @@ const PAGES = {
     order: 10,
     note: 'This is the plan for v0.6.0, which is built. The web tunnel and the other items it leaves out are not built yet.',
   },
+  'm7-plan.md': {
+    slug: 'project/m7-plan',
+    label: 'Design notes: M7',
+    order: 11,
+    note: 'This is the accepted plan for v0.7.0 to v1.0.0. Nothing in it is built yet.',
+  },
 };
 const DOCS_OUT = join(site, 'src/content/docs/docs');
 const CONTROLS_SLUG = 'reference/security-controls';

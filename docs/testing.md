@@ -15,7 +15,7 @@ flowchart TB
     paths -- no --> done["merge"]
     vm --> done
     nightly["Nightly schedule"] --> vm
-    nightly --> cloud["Layer 4: Hetzner cloud<br/>protected environment"]
+    release["Before a release, by hand"] --> cloud["Layer 4: Hetzner cloud<br/>protected environment"]
 ```
 
 The cheap layers run on every change; the slow, expensive ones run only where they can catch something the cheap ones can't.
@@ -94,8 +94,9 @@ Layer 1 covers the rest of the dead-man design on fakes: a crash at every journa
 
 **Locally on your Mac:** there is no KVM, but `test/vm-cycle.sh` can drive a Lima VM you already have (see [test/README.md](../test/README.md)).
 
-## Layer 4: real cloud (nightly, a few €/month)
+## Layer 4: real cloud (before each release, a few €/month)
 
+- Run by hand (`workflow_dispatch`) before each release, not nightly (M7 plan, decision 20).
 - `hcloud` creates ephemeral Hetzner servers per distro and arch (CAX = arm64) using the exported cloud-init profile.
 - This catches what only real provider images do: cloud-init sshd drop-ins, provider agents, IPv6 via router advertisements, provider firewalls.
 - Run external `nmap` and SSH checks, then **always destroy** the servers (`trap`). The API token lives in a protected environment and never runs on fork PRs.
