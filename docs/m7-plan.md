@@ -1,6 +1,6 @@
 # M7 plan: web through a tunnel, depth, and v1.0
 
-> **Status: accepted (2026-11-20).** v0.6.0 is released; nothing below is built yet. Every recommendation in [Decisions](#decisions) was accepted as written.
+> **Status: accepted (2026-11-20); wave 1 shipped in v0.7.0.** `net.tunnel`, `deploy.proxy` `behind_tunnel`, the tunnel in the `private` profile and the wizard, and the journal `format` field are built; the rest is not. Every recommendation in [Decisions](#decisions) was accepted as written.
 
 M7 lets a web app run with no public port through a Cloudflare Tunnel, adds drift detection, CI-friendly audit output and security-key SSH logins, and then makes the tool stable as v1.0.
 

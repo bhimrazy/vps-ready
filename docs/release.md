@@ -118,6 +118,16 @@ CI cannot join a tailnet, so before tagging a release that includes `net.tailsca
 - [ ] Reboot: `tailscaled` comes back and SSH through the tailnet works (and, with `ssh_via`, public SSH stays closed).
 - [ ] `rollback --last` until the start: the source, key and origin file are gone, `tailscale` is still installed, and the node is down but still logged in. Remove it from the tailnet with `sudo tailscale logout`.
 
+CI cannot use a real Cloudflare account either, so before tagging a release that includes `net.tunnel`, the maintainer runs this on one fresh Debian 13 and one fresh Ubuntu 24.04 VM and pastes the result into the release PR. The container tests cannot pass `LoadCredential=`, so this is the only check of the real connector unit:
+
+- [ ] In the Cloudflare dashboard, create a remotely-managed tunnel on a test domain. Save its token to `/etc/vps-ready/cloudflared-token` (owner root, mode `0600`). Add a published route from a test hostname to `http://127.0.0.1:80`.
+- [ ] Apply the `private` profile with the wizard's tunnel choice (or `net.tunnel` and `deploy.proxy` `behind_tunnel = true`) for that hostname. The plan and the journal show the token file's path, never the token; the apply waits for the first connection and passes.
+- [ ] `systemctl status vps-ready-cloudflared.service` is active, and the tunnel shows healthy in the dashboard.
+- [ ] From outside the VM, `curl -I https://<hostname>` is served through the tunnel (Caddy's response), and `nc -vz <address> 80` and `443` fail. `ss -tlnp` on the VM shows Caddy on loopback only.
+- [ ] Apply again: the plan has no changes.
+- [ ] Reboot: the connector comes back by itself, the hostname still serves, and ports 80 and 443 stay closed.
+- [ ] `rollback --last` until the start: the unit, its path unit, the config, the repository, its key and the origin file are gone, `cloudflared` is still installed, and the hostname no longer serves. Delete the tunnel in the dashboard.
+
 ## No self-update
 
 A root tool that replaces itself is extra attack surface for a program that usually runs once per box. Provide `vps-ready version --check` (notify only) and let packages handle upgrades.
