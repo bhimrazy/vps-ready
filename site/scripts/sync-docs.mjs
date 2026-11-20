@@ -45,7 +45,7 @@ const PAGES = {
     slug: 'project/m6-plan',
     label: 'Design notes: M6',
     order: 10,
-    note: 'This is the plan for v0.6.0, which is built. The web tunnel and the other items it leaves out are not built yet.',
+    note: 'This is the plan for v0.6.0, which is built and released. The web tunnel and the other items it leaves out are not built yet.',
   },
   'm7-plan.md': {
     slug: 'project/m7-plan',

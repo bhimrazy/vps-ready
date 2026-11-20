@@ -20,6 +20,10 @@ With no arguments on a terminal, vps-ready starts a short setup. It checks that 
   > Web apps or Docker: opens ports 80 and 443 (recommended: Docker is installed)
     Something else: only SSH is open
 ? Admin user for logging in: admin
+? Private access for SSH
+  > None: SSH stays reachable from the internet, with keys only
+    Tailscale (the private profile)
+    WireGuard on this server (the private profile)
 ? Open ports besides SSH (22, always open) (Space toggles, Enter continues)
   [x] 80/tcp
   [x] 443/tcp
@@ -34,6 +38,7 @@ needs a DNS record for this server.
 
 - The recommended answer comes first and says why.
 - The admin line says whether the name is a new or an existing account, and which SSH keys it gets.
+- Tailscale or WireGuard moves the answers onto the `private` profile: SSH is closed to the internet in a second apply, from a login through the VPN. [Private access](/docs/guides/private-access/) walks through it.
 - Ports that something listens on are offered unchecked; unchecked ports are blocked.
 - `y` to the module question lets you pick modules one by one.
 - The Caddy questions appear when Docker is part of the setup, or when you tick `deploy.proxy` in the module list. Press Enter at the first one to skip Caddy. A domain with an upstream adds the `deploy.proxy` module, and a bad domain, a duplicate, or an upstream written as `localhost:8080` is asked again with the reason. See [Deploy an app](/docs/guides/deployment-modules/#caddy-with-domains-and-upstreams).

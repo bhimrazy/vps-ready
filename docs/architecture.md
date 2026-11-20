@@ -322,7 +322,7 @@ A new module follows the same rules: use the program's drop-in directory when it
 
 ## CLI surface (v1)
 
-Commands are `clap` derive structs in `src/cli`. Today `version`, `detect`, `audit`, `plan`, `apply`, `confirm`, `rollback`, `history`, `modules` and `export cloud-init` exist; the rest arrive with their milestones (see the GitHub milestones).
+Commands are `clap` derive structs in `src/cli`. Today `version`, `detect`, `audit`, `plan`, `apply`, `confirm`, `rollback`, `history`, `modules`, `export cloud-init` and `wireguard-config` exist; the rest arrive with their milestones (see the GitHub milestones).
 
 ```
 vps-ready                      the guided wizard on a terminal (stdin and stdout); help and exit 2 otherwise
@@ -335,6 +335,7 @@ vps-ready confirm [--txn ID] [--extend [DUR]]
 vps-ready rollback [--last | --txn ID]
 vps-ready history | drift
 vps-ready export cloud-init --profile X --checksums checksums.txt [--base-url URL] > user-data.yaml
+vps-ready wireguard-config [PEER]       the client config of each net.wireguard peer (root)
 vps-ready modules [ID]                  list modules; with an ID, why, params and the controls fixed (no root; not the files touched: that needs a plan against a host)
 vps-ready version
 ```

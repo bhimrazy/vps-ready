@@ -101,7 +101,7 @@ Hardening is grouped into modules:
 |---|---|---|---|
 | `user.admin` | A login user other than root, with your SSH keys (copied from the account you logged in with, or given in a profile) and sudo | needed before root login is turned off | yes |
 | `ssh.server` | One drop-in, `/etc/ssh/sshd_config.d/00-vps-ready.conf`, that turns off root and password logins and the other failing settings; reloads sshd. The port stays 22 | `SSH-001` to `SSH-007` | yes |
-| `firewall.inbound` | Drops unsolicited inbound traffic in vps-ready's own nftables table, always allowing every current SSH port; Docker's and fail2ban's rules stay untouched. A port you add to `allow` that a service listens on fails `FW-003` (low) by design, so every open port stays visible | `FW-001` | yes |
+| `firewall.inbound` | Drops unsolicited inbound traffic in vps-ready's own nftables table, always allowing every current SSH port; Docker's and fail2ban's rules stay untouched. `FW-003` (low) lists every port open to the internet and fails on any beyond SSH, 80, 443 and WireGuard's port, so a port you add to `allow` for a service stays visible | `FW-001` | yes |
 | `ssh.bruteforce` | fail2ban's `sshd` jail, reading the journal and banning in nftables | `SSH-008` | no |
 | `kernel.sysctl` | Safer kernel and network settings | `KRN-*`, `NET-*` | no |
 | `updates.auto` | Automatic security updates with `unattended-upgrades` | `UPD-001` | no |
@@ -118,7 +118,7 @@ Profiles pick the modules: **minimal** is `user.admin`, `ssh.server`, `firewall.
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/how-it-works.png">
-    <img src="assets/how-it-works-light.png" alt="Three phases. 1, detect and audit (available now): reads live state, reports controls, read-only. 2, plan and apply (available now): a readable diff of every change, then snapshot, validate and atomic write, rolled back on any failure; rollback --last undoes a transaction and history lists them. 3, confirm or revert (planned, M3): SSH and firewall changes arm a dead-man timer and are reverted unless confirmed from a new SSH login." width="100%">
+    <img src="assets/how-it-works-light.png" alt="Three phases. 1, detect and audit (available now): reads live state, reports controls, read-only. 2, plan and apply (available now): a readable diff of every change, then snapshot, validate and atomic write, rolled back on any failure; rollback --last undoes a transaction and history lists them. 3, confirm or revert (available now): SSH and firewall changes arm a dead-man timer and are reverted unless confirmed from a new SSH login." width="100%">
   </picture>
 </p>
 

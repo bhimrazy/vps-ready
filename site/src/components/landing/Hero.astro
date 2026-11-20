@@ -8,7 +8,10 @@ import Tab from './ui/Tab.astro';
 import Terminal from './ui/Terminal.astro';
 
 const scenes = Object.keys(heroScenes);
-const quick = `curl -fsSL ${INSTALL_URL} | sudo sh`;
+// Copy takes the first line only, so pasting cannot run the script before it has been read.
+const quick = [`curl -fsSLO ${INSTALL_URL}`, 'less install.sh', 'sudo sh install.sh'];
+const quickLine = (l: string, copy: boolean) =>
+  `<span class="flex items-start gap-[1ch]"><span class="flex-none text-muted select-none" aria-hidden="true">$</span><span ${copy ? 'data-cmd ' : ''}class="min-w-0">${breakableCommand(l)}</span></span>`;
 ---
 
 <header
@@ -17,7 +20,7 @@ const quick = `curl -fsSL ${INSTALL_URL} | sudo sh`;
 >
   <div class="mx-auto w-full max-w-[1160px] px-4 grid grid-cols-[minmax(0,1fr)_minmax(0,580px)] items-center gap-12 max-[920px]:grid-cols-[minmax(0,1fr)]">
     <div class="grid min-w-0 justify-items-start gap-7">
-      <span class="font-mono text-xs leading-none font-medium tracking-[0.1em] text-brand uppercase">Linux VPS hardening &middot; v{VERSION}</span>
+      <span class="font-mono text-xs leading-none font-medium tracking-[0.1em] text-brand uppercase">Debian and Ubuntu VPS hardening &middot; v{VERSION}</span>
       <h1
         class="max-w-[15ch] font-mono text-[clamp(34px,3.4vw,44px)] leading-[1.15] font-bold tracking-[-0.03em] text-balance max-[920px]:max-w-none"
       >
@@ -30,9 +33,9 @@ const quick = `curl -fsSL ${INSTALL_URL} | sudo sh`;
       <div class="flex w-full max-w-full items-stretch overflow-hidden rounded-[10px] border border-line bg-bg">
         <code
           id="quick-cmd"
-          class="flex min-w-0 flex-1 items-start gap-[1ch] px-4 py-3 text-left font-mono text-[12.5px] leading-[1.6] wrap-normal break-normal whitespace-pre-wrap"
-          ><span class="flex-none text-muted select-none" aria-hidden="true">$</span><span data-cmd class="min-w-0" set:html={breakableCommand(quick)} /></code
-        >
+          class="grid min-w-0 flex-1 gap-0.5 px-4 py-3 text-left font-mono text-[12.5px] leading-[1.6] wrap-normal break-normal whitespace-pre-wrap"
+          set:html={quick.map((l, i) => quickLine(l, i === 0)).join('')}
+        ></code>
         <button
           type="button"
           id="quick-copy"
@@ -42,9 +45,9 @@ const quick = `curl -fsSL ${INSTALL_URL} | sudo sh`;
         </button>
       </div>
       <p class="font-sans text-[13px] text-muted">
-        Linux x86_64 and arm64 &middot;{' '}
+        Debian 12/13, Ubuntu 22.04/24.04 &middot; x86_64 and arm64 &middot;{' '}
         <a class="inline-flex items-center gap-1 text-muted underline-offset-2 hover:text-ink hover:underline max-sm:-my-3 max-sm:py-3" href={INSTALL_URL}
-          >View the script first<svg
+          >View the script<svg
             class="size-3"
             viewBox="0 0 16 16"
             fill="none"
