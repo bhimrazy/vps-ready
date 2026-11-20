@@ -1,14 +1,15 @@
 #!/bin/sh
 # Apply, reboot and roll back with the real binary in a KVM virtual machine.
 #
-# Usage: test/vm-cycle.sh <distro> <binary> <image> [cloud-init|private-access]
+# Usage: test/vm-cycle.sh <distro> <binary> <image> [cloud-init|private-access|tunnel]
 #   e.g. ubuntu-24.04
 #   <image> is a cloud image (qcow2). The script boots it with QEMU and KVM
 #   (2 vCPUs, 2 GiB, a copy-on-write overlay, so the image is not changed),
 #   seeds a throwaway SSH key and a passwordless sudo user with cloud-init,
 #   and drives the VM over SSH on 127.0.0.1:$VM_SSH_PORT (default 2222).
 #   The binary must match the VM's CPU; CI uses the x86_64 musl build.
-#   With `cloud-init` or `private-access`, it runs only that cycle below.
+#   With `cloud-init`, `private-access` or `tunnel`, it runs only that cycle
+#   below.
 # Needs: qemu-system-x86_64, qemu-img, cloud-localds, ssh, jq, and /dev/kvm;
 #   python3 for the cloud-init cycle.
 #
@@ -113,10 +114,19 @@
 #     rollback --last until the start: public SSH reopens, stopping wg0 is
 #       refused through wg0 and done from public SSH, the key stays, and a
 #       new apply brings back the same public key.
+#   tunnel (only with the `tunnel` argument): net.tunnel with a placeholder
+#   token file and no Cloudflare account. LoadCredential= hands the file to
+#   a sandboxed DynamicUser process byte for byte; the connector unit starts,
+#   cloudflared reads the credential and rejects the token (not "no such
+#   file" or "permission denied"), so the apply fails and rolls back, with
+#   the address filter in effect. The units, config, source and key are
+#   gone, the package and the token file stay, and the token's bytes are in
+#   none of the plan, the apply output, the boot's journal, /etc, /root
+#   (but its own file) or /var/lib/vps-ready.
 set -eu
 cd "$(dirname "$0")/.."
 
-usage="usage: $0 <distro> <binary> <image|-> [cloud-init|private-access]"
+usage="usage: $0 <distro> <binary> <image|-> [cloud-init|private-access|tunnel]"
 distro=${1:?$usage}
 bin=${2:?$usage}
 image=${3:?$usage}
@@ -130,7 +140,7 @@ www_pid=
 wg_link=
 
 [ -f "$bin" ] || { echo "binary not found: $bin" >&2; exit 2; }
-case $cycle in all | cloud-init | private-access) ;; *) echo "$usage" >&2; exit 2 ;; esac
+case $cycle in all | cloud-init | private-access | tunnel) ;; *) echo "$usage" >&2; exit 2 ;; esac
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 2; }
 
 cleanup() {
@@ -657,6 +667,88 @@ private_access_cycle() {
   # traffic starts one again.
   wait_ssh 60
 }
+
+tunnel_cycle() {
+  echo "== $distro: tunnel, waiting for SSH and cloud-init"
+  wait_ssh 300
+  vm sudo cloud-init status --wait >/dev/null 2>&1 || true
+  vm 'cat >/tmp/vps-ready' <"$bin"
+  vm sudo install -m 755 /tmp/vps-ready /usr/local/bin/vps-ready
+
+  # Not a token: cloudflared rejects it before it connects anywhere. Sent on
+  # stdin, so that no command line (which sudo logs) carries it.
+  marker=vps-ready-placeholder-not-a-tunnel-token
+  printf '%s' "$marker" | vm "sudo sh -c 'umask 077 && cat >/root/cloudflared-token'"
+  sum=$(vm sudo sha256sum /root/cloudflared-token | cut -d' ' -f1)
+
+  echo "== $distro: LoadCredential= reaches a DynamicUser process"
+  # The connector unit's sandbox without the address filter; only a hash
+  # of the credential is printed.
+  vm 'sudo tee /usr/local/sbin/vr-cred-hash >/dev/null' <<'EOF'
+sha256sum <"$CREDENTIALS_DIRECTORY/token"
+EOF
+  got=$(vm sudo systemd-run --quiet --wait --pipe -p DynamicUser=yes \
+    -p LoadCredential=token:/root/cloudflared-token -p NoNewPrivileges=yes \
+    -p ProtectSystem=strict -p ProtectHome=yes -p PrivateTmp=yes -p CapabilityBoundingSet= \
+    /bin/sh /usr/local/sbin/vr-cred-hash | cut -d' ' -f1)
+  vm sudo rm -f /usr/local/sbin/vr-cred-hash
+  [ "$got" = "$sum" ] || die "a DynamicUser process reads another credential (got '${got}')"
+
+  printf '%s\n' 'schema = 1' '[modules."net.tunnel"]' 'token_file = "/root/cloudflared-token"' |
+    vm 'cat >/tmp/tunnel.toml'
+  vr plan --json --profile /tmp/tunnel.toml >"$tmp/tunnel-plan.json"
+  jq -e '.modules[] | select(.id == "net.tunnel") | .changes[] |
+    select(.id == "service:vps-ready-cloudflared.service")' "$tmp/tunnel-plan.json" >/dev/null ||
+    die "the plan does not start the connector"
+
+  echo "== $distro: apply with the placeholder token"
+  rc=0; vr apply --yes --profile /tmp/tunnel.toml >"$tmp/tunnel-apply.out" 2>&1 || rc=$?
+  cat "$tmp/tunnel-apply.out"
+  [ "$rc" -ne 0 ] || die "apply with a placeholder token succeeded"
+  grep -q 'vps-ready-cloudflared.service' "$tmp/tunnel-apply.out" ||
+    die "apply does not name the connector"
+  expect_newest rolled-back
+  vm sudo journalctl -b -u vps-ready-cloudflared.service --no-pager -o cat >"$tmp/connector.log"
+  cat "$tmp/connector.log"
+  grep -q 'Tunnel token is not valid' "$tmp/connector.log" ||
+    die "cloudflared did not read the token and reject it"
+  ! grep -Eiq 'failed to read token file|no such file|permission denied' "$tmp/connector.log" ||
+    die "cloudflared could not read the credential"
+  ! grep -Eiq 'ERR.*(config|yaml)' "$tmp/connector.log" || die "cloudflared logged a config error"
+  ! grep -q 'BPF/cgroup firewalling' "$tmp/connector.log" || die "the address filter is not in effect"
+
+  echo "== $distro: the rollback removed the connector"
+  for f in /etc/systemd/system/vps-ready-cloudflared.service \
+           /etc/systemd/system/vps-ready-cloudflared-restart.service \
+           /etc/systemd/system/vps-ready-cloudflared-restart.path \
+           /etc/vps-ready/cloudflared.yml /etc/vps-ready/cloudflared-restart.sh \
+           /etc/apt/sources.list.d/cloudflared.sources /etc/apt/keyrings/cloudflared.asc \
+           /etc/apt/apt.conf.d/52vps-ready-cloudflared; do
+    vm test ! -e "$f" || die "$f is left after the rollback"
+  done
+  for u in vps-ready-cloudflared.service vps-ready-cloudflared-restart.path; do
+    [ "$(vm systemctl is-active "$u" || true)" != active ] || die "$u is still active"
+    [ "$(vm systemctl is-enabled "$u" 2>/dev/null || true)" != enabled ] || die "$u is still enabled"
+  done
+  vm sudo test -f /root/cloudflared-token || die "the rollback removed the token file"
+  # shellcheck disable=SC2016 # dpkg-query's format, not the shell's
+  vm dpkg-query -W -f '${Status}\n' cloudflared | grep -q 'install ok installed' ||
+    die "cloudflared should stay installed"
+
+  echo "== $distro: the token is nowhere else"
+  ! grep -q "$marker" "$tmp/tunnel-plan.json" "$tmp/tunnel-apply.out" ||
+    die "the token is in the plan or the output"
+  ! vm sudo journalctl -b --no-pager -o cat | grep -q "$marker" || die "the token is in the journal"
+  ! vm sudo grep -rqs "$marker" /var/lib/vps-ready || die "the token is in vps-ready's journal"
+  ! vm sudo grep -rqs --exclude=cloudflared-token "$marker" /etc /root ||
+    die "the token is in a file other than its own"
+}
+
+if [ "$cycle" = tunnel ]; then
+  tunnel_cycle
+  echo "OK [$distro]"
+  exit 0
+fi
 
 if [ "$cycle" = private-access ]; then
   private_access_cycle
