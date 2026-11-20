@@ -18,5 +18,6 @@ http://app.example.com {
 	redir @plain https://{host}{uri} 308
 	reverse_proxy 127.0.0.1:8080 {
 		header_up X-Forwarded-For {client_ip}
+		header_up X-Forwarded-Host {host}
 	}
 }

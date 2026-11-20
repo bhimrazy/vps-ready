@@ -1222,8 +1222,10 @@ fn behind_tunnel_notes_open_web_ports() {
         planned.push(unit("vps-ready-cloudflared.service"));
         steps_with(&params(TUNNELED), &planned, &fs, &runner)
             .unwrap()
-            .notes[2..]
-            .to_vec()
+            .notes
+            .into_iter()
+            .filter(|n| n.contains("loopback only"))
+            .collect::<Vec<_>>()
     };
     assert_eq!(
         notes("\"80/tcp\", \"443/tcp\""),
@@ -1239,7 +1241,124 @@ fn behind_tunnel_notes_open_web_ports() {
              firewall.inbound's `allow`"
         ]
     );
+    assert_eq!(
+        notes("\"443/udp\""),
+        [
+            "443/udp is open but Caddy listens on loopback only: drop it from \
+             firewall.inbound's `allow`"
+        ]
+    );
+    assert_eq!(
+        notes("\"443/tcp\", \"443/udp\""),
+        [
+            "443/tcp and 443/udp are open but Caddy listens on loopback only: drop them from \
+             firewall.inbound's `allow`"
+        ]
+    );
     assert!(notes("").is_empty());
+}
+
+/// `[::1]` is bound and trusted only where loopback has it.
+#[test]
+fn behind_tunnel_uses_ipv6_loopback_only_where_it_exists() {
+    let runner = Host::default();
+    let with = caddyfile_of(&steps(&params(TUNNELED), &fs(), &runner));
+    assert!(with.contains("default_bind 127.0.0.1 [::1]\n"), "{with}");
+    assert!(with.contains("static 127.0.0.1/32 ::1/128\n"), "{with}");
+
+    // IPv6 disabled: no if_inet6, or none on lo.
+    let no_file = FakeFs::new()
+        .with_dir("/etc", root_dir())
+        .with_dir("/etc/apt", root_dir())
+        .with_dir("/etc/apt/sources.list.d", root_dir())
+        .with_file("/proc/net/fib_trie", FIB_TRIE);
+    let no_lo = fs().with_file(
+        "/proc/net/if_inet6",
+        "20010db8000000000000000000000010 02 40 00 80     eth0\n",
+    );
+    for fs in [no_file, no_lo] {
+        let without = caddyfile_of(&steps(&params(TUNNELED), &fs, &runner));
+        assert!(without.contains("default_bind 127.0.0.1\n"), "{without}");
+        assert!(without.contains("static 127.0.0.1/32\n"), "{without}");
+        assert!(!without.contains("::1"), "{without}");
+    }
+}
+
+/// Behind a tunnel only port 80 is bound, and a hand-written Caddyfile
+/// says `behind_tunnel` is not applied either.
+#[test]
+fn behind_tunnel_notes_for_listeners_and_a_hand_written_caddyfile() {
+    let (fs, runner) = (fs(), Host::default().with_caddy());
+    let mut facts = facts();
+    let listener = |port, process: &str| crate::facts::Listener {
+        proto: Proto::Tcp,
+        addr: "0.0.0.0".into(),
+        port,
+        processes: vec![process.to_owned()],
+    };
+    facts.listeners = vec![listener(443, "nginx")];
+    let notes = |text: &str, facts: &Facts, fs: &FakeFs| {
+        let params = params(text);
+        DeployProxy
+            .plan(
+                &PlanCx {
+                    facts,
+                    params: &params,
+                    planned: &[],
+                },
+                Sys {
+                    fs,
+                    runner: &runner,
+                },
+            )
+            .unwrap()
+            .notes
+    };
+    let taken = |notes: &[String]| {
+        notes
+            .iter()
+            .any(|n| n.starts_with("something else listens"))
+    };
+    assert!(taken(&notes(ONE, &facts, &fs)));
+    assert!(!taken(&notes(TUNNELED, &facts, &fs)));
+    facts.listeners = vec![listener(80, "nginx")];
+    assert!(taken(&notes(TUNNELED, &facts, &fs)));
+
+    let hand = with_caddyfile("app.example.com {\n\tfile_server\n}\n");
+    let all = notes(TUNNELED, &facts, &hand);
+    assert!(
+        all.iter()
+            .any(|n| n.contains("`sites` is not used (nor is behind_tunnel applied);")),
+        "{all:?}"
+    );
+}
+
+/// The failure hint names the ports of the mode.
+#[test]
+fn verify_names_the_ports_of_the_mode() {
+    for (text, ports) in [(ONE, "port 80 or 443"), (TUNNELED, "port 80")] {
+        let (fs, runner) = (with_caddyfile(&format!("{HEADER}\n")), Host::default());
+        let facts = facts();
+        let params = params(text);
+        let cx = PlanCx {
+            facts: &facts,
+            params: &params,
+            planned: &[],
+        };
+        let err = DeployProxy
+            .verify(
+                &cx,
+                Sys {
+                    fs: &fs,
+                    runner: &runner,
+                },
+            )
+            .unwrap_err();
+        assert!(
+            err.ends_with(&format!("(another program on {ports}?)")),
+            "{err}"
+        );
+    }
 }
 
 /// Without a connector planned or on the host, nothing forwards to Caddy.
@@ -1336,7 +1455,9 @@ fn switching_modes_rewrites_the_caddyfile() {
         .apply(&off, &Deadman::default(), &mut |_| {})
         .unwrap();
     assert_eq!(fs.read(Path::new(CADDYFILE)).unwrap(), before);
+    assert_eq!(reloads(&runner), 3);
 
     engine.rollback(Target::Last, &mut |_| {}).unwrap();
     assert_eq!(fs.read(Path::new(CADDYFILE)).unwrap(), after);
+    assert_eq!(reloads(&runner), 4);
 }

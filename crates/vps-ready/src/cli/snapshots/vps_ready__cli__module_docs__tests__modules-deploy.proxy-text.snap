@@ -9,7 +9,8 @@ deploy.proxy
 Why
   An app published on 127.0.0.1 is safe from the internet but also out of its
   reach. Caddy in front of it serves it over HTTPS, gets and renews the
-  certificates by itself, and redirects HTTP to HTTPS.
+  certificates by itself, and redirects HTTP to HTTPS. Behind a tunnel it serves
+  plain HTTP on loopback instead, and the tunnel's edge does the TLS.
 
 Params (in the module's profile table)
   sites (default [])
