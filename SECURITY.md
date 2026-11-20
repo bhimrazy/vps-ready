@@ -32,13 +32,14 @@ require an attacker who is already root.
 
 | Version | Supported |
 | ------- | --------- |
-| `0.6.x` | best effort: fixes ship in the next 0.6.x release |
-| `0.5.x` | no: upgrade to 0.6.x |
-| `0.4.x` | no: upgrade to 0.6.x |
-| `0.3.x` | no: upgrade to 0.6.x |
-| `0.2.x` | no: upgrade to 0.6.x |
-| `0.1.x` | no: upgrade to 0.6.x |
-| `0.1.0-alpha.x` (pre-release) | no: upgrade to 0.6.x |
+| `0.7.x` | best effort: fixes ship in the next 0.7.x release |
+| `0.6.x` | no: upgrade to 0.7.x |
+| `0.5.x` | no: upgrade to 0.7.x |
+| `0.4.x` | no: upgrade to 0.7.x |
+| `0.3.x` | no: upgrade to 0.7.x |
+| `0.2.x` | no: upgrade to 0.7.x |
+| `0.1.x` | no: upgrade to 0.7.x |
+| `0.1.0-alpha.x` (pre-release) | no: upgrade to 0.7.x |
 
 The latest minor version receives security fixes.
 

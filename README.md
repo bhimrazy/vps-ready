@@ -27,14 +27,14 @@ One static binary: audit, a plan you read first, and a rollback timer that undoe
 </div>
 
 > [!NOTE]
-> vps-ready is at **v0.6** and works on Debian 12/13 and Ubuntu 22.04/24.04 with systemd: `detect` and `audit` (34 controls), and `plan`, `apply`, `confirm` and `rollback` for [twelve modules](#what-it-does). Expect breaking changes before 1.0.
+> vps-ready is at **v0.7** and works on Debian 12/13 and Ubuntu 22.04/24.04 with systemd: `detect` and `audit` (34 controls), and `plan`, `apply`, `confirm` and `rollback` for [twelve modules](#what-it-does). Expect breaking changes before 1.0.
 
 ## Quick start
 
 On the server, as root. Installation is three steps on purpose: download, read, run.
 
 ```console
-# curl -fsSLO https://github.com/bhimrazy/vps-ready/releases/download/v0.6.0/install.sh
+# curl -fsSLO https://github.com/bhimrazy/vps-ready/releases/download/v0.7.0/install.sh
 # less install.sh
 # sh install.sh
 ```
@@ -115,7 +115,7 @@ Hardening is grouped into modules:
 | `deploy.proxy` | Caddy from its official apt repository as a reverse proxy with automatic HTTPS for the sites you list; with `behind_tunnel = true`, plain HTTP on loopback only for a Cloudflare Tunnel, with no certificate and no public port | none | no |
 | `deploy.user` | A login for CI that can run one command, with your keys | none | no |
 
-Profiles pick the modules: **minimal** is `user.admin`, `ssh.server`, `firewall.inbound` (SSH only), `kernel.sysctl` and `updates.auto`; **web** adds ports 80 and 443 (TCP, and UDP for HTTP/3) and `ssh.bruteforce` and `deploy.docker`; **private** is the `web` hardening without Docker and with no open port, and `ssh_via = "vpn"`: you extend it with `net.tailscale` or `net.wireguard`, apply it once to set up the VPN, then again from a login through the VPN to close public SSH. A profile file can extend any of them and set your own admin name and keys. A plain `apply`, without `--profile` or `--module`, leaves the modules that can lock you out (and `ssh.bruteforce`, which installs packages) out, so it changes only kernel settings and automatic updates. `net.tailscale`, `net.wireguard`, `net.tunnel`, `deploy.proxy` and `deploy.user` are in no built-in profile: you add them in a profile file. `firewall.inbound`'s `ssh_via` accepts SSH only on one interface (`tailscale0`, `wg0` or one you set up), and the confirm must then come through it. Logging, a **paranoid** profile and backups come later.
+Profiles pick the modules: **minimal** is `user.admin`, `ssh.server`, `firewall.inbound` (SSH only), `kernel.sysctl` and `updates.auto`; **web** adds ports 80 and 443 (TCP, and UDP for HTTP/3) and `ssh.bruteforce` and `deploy.docker`; **private** is the `web` hardening without Docker and with no open port, and `ssh_via = "vpn"`: you extend it with `net.tailscale` or `net.wireguard`, apply it once to set up the VPN, then again from a login through the VPN to close public SSH. For a website, the wizard can add `net.tunnel` and `deploy.proxy`'s `behind_tunnel` to it, so no port is open at all. A profile file can extend any of them and set your own admin name and keys. A plain `apply`, without `--profile` or `--module`, leaves the modules that can lock you out (and `ssh.bruteforce`, which installs packages) out, so it changes only kernel settings and automatic updates. `net.tailscale`, `net.wireguard`, `net.tunnel`, `deploy.proxy` and `deploy.user` are in no built-in profile: you add them in a profile file. `firewall.inbound`'s `ssh_via` accepts SSH only on one interface (`tailscale0`, `wg0` or one you set up), and the confirm must then come through it. Logging, a **paranoid** profile and backups come later.
 
 ## How a run works
 
@@ -161,7 +161,7 @@ Architectures: x86_64 and aarch64, as static musl binaries. Windows, BSD, Kubern
 | [Testing strategy](docs/testing.md) | Unit tests with fakes, systemd containers, real VMs, nightly cloud runs |
 | [Decisions](docs/decisions.md) | What is decided and why, and what is still open |
 
-The roadmap lives in the [GitHub milestones](https://github.com/bhimrazy/vps-ready/milestones): M0 skeleton, M1 read-only `detect` and `audit` (v0.1.0), M2 engine and safe modules (v0.2.0), M3 SSH, firewall and dead-man switch (v0.3.0), M4 interactive wizard (v0.4.0), M5 deployment readiness (v0.5.0), M6 private access (v0.6.0), M7 web through a tunnel and more depth.
+The roadmap lives in the [GitHub milestones](https://github.com/bhimrazy/vps-ready/milestones): M0 skeleton, M1 read-only `detect` and `audit` (v0.1.0), M2 engine and safe modules (v0.2.0), M3 SSH, firewall and dead-man switch (v0.3.0), M4 interactive wizard (v0.4.0), M5 deployment readiness (v0.5.0), M6 private access (v0.6.0), M7 web through a tunnel (v0.7.0) and more depth.
 
 ## Development
 

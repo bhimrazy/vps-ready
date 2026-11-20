@@ -45,13 +45,13 @@ const PAGES = {
     slug: 'project/m6-plan',
     label: 'Design notes: M6',
     order: 10,
-    note: 'This is the plan for v0.6.0, which is built and released. The web tunnel and the other items it leaves out are not built yet.',
+    note: 'This is the plan for v0.6.0, which is built and released. The web tunnel it leaves out shipped in v0.7.0 (see the M7 plan); the other items it leaves out are not built yet.',
   },
   'm7-plan.md': {
     slug: 'project/m7-plan',
     label: 'Design notes: M7',
     order: 11,
-    note: 'This is the accepted plan for v0.7.0 to v1.0.0. Nothing in it is built yet.',
+    note: 'This is the accepted plan for v0.7.0 to v1.0.0. Wave 1 (the tunnel and the journal format) shipped in v0.7.0; drift, audit output formats and the JSON Schema are planned for v0.8.0 and are not built yet.',
   },
 };
 const DOCS_OUT = join(site, 'src/content/docs/docs');

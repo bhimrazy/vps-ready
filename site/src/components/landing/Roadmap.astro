@@ -16,7 +16,7 @@ const stops: Stop[] = [
   { m: 'M4', name: 'Wizard', text: 'Guided setup and module explanations', state: 'done', pill: 'v0.4.0' },
   { m: 'M5', name: 'Deploy-ready', text: 'Docker, Caddy, a deploy user, a .deb', state: 'done', pill: 'v0.5.0' },
   { m: 'M6', name: 'Private access', text: 'SSH over a VPN, then close public 22', state: 'done', pill: 'v0.6.0' },
-  { m: 'M7', name: 'Tunnel and depth', text: 'Web through a tunnel, deeper checks', state: 'next', pill: 'next' },
+  { m: 'M7', name: 'Tunnel and depth', text: 'Web through a tunnel, then drift and CI output', state: 'next', pill: 'v0.8.0 next' },
 ];
 const dot = {
   done: 'border-brand bg-brand text-on-accent',
@@ -28,7 +28,7 @@ const dot = {
 <Section id="roadmap" alt>
   <SectionHead label="Roadmap">
     <Fragment slot="title">Built in small, safe releases.</Fragment>
-    Each release is tagged and signed. Private access shipped in v0.6.0.
+    Each release is tagged and signed. A website with no public port shipped in v0.7.0.
   </SectionHead>
 
   <div

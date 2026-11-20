@@ -252,7 +252,7 @@ impl Module for NetTunnel {
             ParamDoc {
                 name: "token_file",
                 default: "\"\"",
-                help: "A file holding the token of a tunnel created in the Cloudflare dashboard, owned by root with mode 0600, not a symlink, in directories only root can write to. The connector's unit copies it at each start (`LoadCredential=`); vps-ready never reads it. After replacing it, run `sudo systemctl restart vps-ready-cloudflared`. Empty: cloudflared is installed, and no connector runs.",
+                help: "A file holding the token of a tunnel created in the Cloudflare dashboard, owned by root with mode 0600, not a symlink, in directories only root can write to. The connector's unit copies it at each start (`LoadCredential=`); the module never reads it (the guided setup only checks whether an existing file holds a token). After replacing it, run `sudo systemctl restart vps-ready-cloudflared`. Empty: cloudflared is installed, and no connector runs.",
             },
             ParamDoc {
                 name: "auto_update",

@@ -57,6 +57,12 @@ const mods = [
     icon: '<path d="M4 12h16M14 6l6 6-6 6"/>',
   },
   {
+    id: 'net.tunnel',
+    text: "Runs a Cloudflare Tunnel connector from Cloudflare's own repository, so a website needs no public port. Its token stays in a root-only file.",
+    profiles: [],
+    icon: '<path d="M3 12h4M17 12h4"/><path d="M7 7c0-1 1-2 2-2h6c1 0 2 1 2 2v10c0 1-1 2-2 2H9c-1 0-2-1-2-2z"/>',
+  },
+  {
     id: 'deploy.docker',
     text: 'Installs Docker Engine from Docker\'s repository with safer defaults: ports bind to 127.0.0.1, logs rotate.',
     profiles: ['web'],
@@ -64,7 +70,7 @@ const mods = [
   },
   {
     id: 'deploy.proxy',
-    text: 'Installs Caddy as a reverse proxy with automatic HTTPS for the sites you list.',
+    text: 'Installs Caddy as a reverse proxy with automatic HTTPS for the sites you list, or plain HTTP on loopback behind a Cloudflare Tunnel.',
     profiles: [],
     icon: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/>',
   },
@@ -79,7 +85,7 @@ const mods = [
 
 <Section id="modules" alt>
   <SectionHead label="Under the hood">
-    <Fragment slot="title">Eleven modules, always run in a safe order.</Fragment>
+    <Fragment slot="title">Twelve modules, always run in a safe order.</Fragment>
     The admin user exists before SSH is locked down, and SSH ports are open before the firewall closes everything else. The audit
     checks 34 controls, and the modules fix 26 of them.
   </SectionHead>
