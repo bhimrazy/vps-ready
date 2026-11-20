@@ -120,8 +120,11 @@ pub(crate) fn unchanged(sys: Sys, backup: &Backup) -> Result<bool, ResourceError
         && (now.active == *was_active || now.active == *active))
 }
 
-/// How to restore `backup` by hand; `None` if apply changed nothing.
-pub(crate) fn by_hand(backup: &Backup) -> Option<String> {
+/// How to restore `backup` by hand; `None` if apply changed nothing. The
+/// steps cover what differs from the original now, so a unit stopped since
+/// apply gets its `start` even if apply only enabled it. Without the
+/// current state, they cover what apply changed.
+pub(crate) fn by_hand(sys: Sys, backup: &Backup) -> Option<String> {
     let Backup::Service {
         unit,
         was_enabled,
@@ -132,8 +135,18 @@ pub(crate) fn by_hand(backup: &Backup) -> Option<String> {
     else {
         return None;
     };
-    let enable = (was_enabled != enabled).then_some(*was_enabled);
-    let start = (was_active != active).then_some(*was_active);
+    if was_enabled == enabled && was_active == active {
+        return None;
+    }
+    let now = state(sys, unit)
+        .ok()
+        .filter(|now| now.enabled != *was_enabled || now.active != *was_active)
+        .unwrap_or(State {
+            enabled: *enabled,
+            active: *active,
+        });
+    let enable = (now.enabled != *was_enabled).then_some(*was_enabled);
+    let start = (now.active != *was_active).then_some(*was_active);
     let step = match (enable, start) {
         (Some(true), Some(true)) => format!("systemctl enable --now {unit}"),
         (Some(false), Some(false)) => format!("systemctl disable --now {unit}"),
@@ -474,7 +487,7 @@ mod tests {
         };
         assert!(unchanged(sys, &noop).unwrap());
         restore(sys, Path::new(TXN), &noop).unwrap();
-        assert_eq!(by_hand(&noop), None);
+        assert_eq!(by_hand(sys, &noop), None);
         assert_eq!(runner.calls(), []);
     }
 
@@ -512,14 +525,24 @@ mod tests {
 
     #[test]
     fn by_hand_steps() {
+        // The current state is unreadable, so the steps follow apply.
+        let fs = FakeFs::new();
+        let runner = FakeRunner::new();
+        let sys = Sys {
+            fs: &fs,
+            runner: &runner,
+        };
         let step = |was_enabled, was_active, enabled, active| {
-            by_hand(&Backup::Service {
-                unit: UNIT.into(),
-                was_enabled,
-                was_active,
-                enabled,
-                active,
-            })
+            by_hand(
+                sys,
+                &Backup::Service {
+                    unit: UNIT.into(),
+                    was_enabled,
+                    was_active,
+                    enabled,
+                    active,
+                },
+            )
         };
         assert_eq!(
             step(false, false, true, true).as_deref(),
@@ -538,5 +561,41 @@ mod tests {
             Some("systemctl stop fail2ban.service")
         );
         assert_eq!(step(true, true, true, true), None);
+    }
+
+    #[test]
+    fn by_hand_names_the_dimension_that_drifted() {
+        let backup = |was_enabled, was_active| Backup::Service {
+            unit: UNIT.into(),
+            was_enabled,
+            was_active,
+            enabled: true,
+            active: true,
+        };
+        let step = |out: Output, backup: &Backup| {
+            let fs = FakeFs::new();
+            let runner = runner(out);
+            by_hand(
+                Sys {
+                    fs: &fs,
+                    runner: &runner,
+                },
+                backup,
+            )
+        };
+        // Apply only enabled a running unit; someone stopped it since.
+        assert_eq!(
+            step(show("loaded", "enabled", "inactive"), &backup(false, true)).as_deref(),
+            Some("systemctl disable fail2ban.service; systemctl start fail2ban.service")
+        );
+        assert_eq!(
+            step(show("loaded", "disabled", "inactive"), &backup(false, true)).as_deref(),
+            Some("systemctl start fail2ban.service")
+        );
+        // Applied state still in place: undo what apply did.
+        assert_eq!(
+            step(show("loaded", "enabled", "active"), &backup(false, false)).as_deref(),
+            Some("systemctl disable --now fail2ban.service")
+        );
     }
 }

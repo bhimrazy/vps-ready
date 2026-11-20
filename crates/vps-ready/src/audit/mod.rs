@@ -1044,10 +1044,15 @@ fn ssh_private_only(facts: &Facts) -> Outcome {
     }
     let via = crate::modules::firewall_inbound::private_via(facts);
     if via.is_none() && !facts.interfaces.iter().any(crate::facts::Interface::is_vpn) {
-        return Outcome::Skip {
-            reason: "there is no VPN interface (WireGuard or tailscale0) and no `ssh_via` rule"
+        let reason = match crate::modules::firewall_inbound::uncounted_via(facts) {
+            Some((name, why)) => format!(
+                "there is no VPN interface (WireGuard or tailscale0), and the `ssh_via` \
+                 interface {name} is not counted as private: {why}"
+            ),
+            None => "there is no VPN interface (WireGuard or tailscale0) and no `ssh_via` rule"
                 .to_owned(),
         };
+        return Outcome::Skip { reason };
     }
     let Some(firewall) = &facts.firewall else {
         let reason = "the firewall ruleset could not be read".to_owned();

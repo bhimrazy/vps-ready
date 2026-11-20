@@ -174,15 +174,23 @@ fn not_private(facts: &Facts, via: &str) -> Option<String> {
 /// has no type that says so. `None` without the routes or the interface:
 /// then nothing shows it is not the way out.
 pub(crate) fn private_via(facts: &Facts) -> Option<String> {
-    let routed = facts
-        .routes
-        .iter()
-        .any(|r| r.dst == "default" && r.table.is_none());
-    if !routed {
-        return None;
-    }
+    let name = ssh_rule(facts)?;
+    not_counted(facts, name).is_none().then(|| name.clone())
+}
+
+/// The interface the loaded `vps_ready` table limits SSH to and why
+/// [`private_via`] does not count it; `None` without such a rule, or when
+/// it is counted.
+pub(crate) fn uncounted_via(facts: &Facts) -> Option<(String, String)> {
+    let name = ssh_rule(facts)?;
+    Some((name.clone(), not_counted(facts, name)?))
+}
+
+/// The one interface that a rule of the loaded `vps_ready` table accepts
+/// SSH on.
+fn ssh_rule(facts: &Facts) -> Option<&String> {
     let ssh = super::ssh_ports(facts);
-    let name = facts
+    facts
         .firewall
         .as_ref()?
         .input_chains
@@ -192,10 +200,28 @@ pub(crate) fn private_via(facts: &Facts) -> Option<String> {
         .find_map(|p| match p.interfaces.as_slice() {
             [name] if ssh.iter().any(|&port| p.ports.contains("tcp", port)) => Some(name),
             _ => None,
-        })?;
-    let iface = facts.interfaces.iter().find(|i| &i.name == name)?;
-    let local = !iface.addresses.is_empty() && iface.addresses.iter().all(|a| local_ip(a.ip));
-    (local && not_private(facts, name).is_none()).then(|| name.clone())
+        })
+}
+
+/// Why `private_via` does not count `name`, if it does not.
+fn not_counted(facts: &Facts, name: &str) -> Option<String> {
+    let routed = facts
+        .routes
+        .iter()
+        .any(|r| r.dst == "default" && r.table.is_none());
+    if !routed {
+        return Some("the routes are unknown, so it may be the way out".to_owned());
+    }
+    let Some(iface) = facts.interfaces.iter().find(|i| i.name == name) else {
+        return Some("it does not exist".to_owned());
+    };
+    if iface.addresses.is_empty() {
+        Some("it has no address".to_owned())
+    } else if !iface.addresses.iter().all(|a| local_ip(a.ip)) {
+        Some("it has an address the internet routes".to_owned())
+    } else {
+        not_private(facts, name)
+    }
 }
 
 /// Whether the internet does not route `ip`: RFC 1918, shared

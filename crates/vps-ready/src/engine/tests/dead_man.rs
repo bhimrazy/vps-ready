@@ -1712,6 +1712,13 @@ impl crate::sys::Runner for UnitRunner {
     }
 }
 
+fn reloads_of(run: &UnitRunner) -> Vec<String> {
+    calls(&run.inner)
+        .into_iter()
+        .filter(|c| c.starts_with("systemctl") && c.contains("reload-or-restart"))
+        .collect()
+}
+
 /// A rollback, manual, by the timer, by the boot hook or after a failed
 /// verify, restarts the firewall unit only if it was active before the
 /// transaction: stopped since, its table is gone. One stopped before (the
@@ -1755,8 +1762,7 @@ fn a_rollback_restarts_the_firewall_unit_if_it_was_active() {
             "try-reload-or-restart",
             (true, false),
         ),
-        // Active but disabled before. (Stopped since, a manual rollback
-        // refuses the changed unit.)
+        // Active but disabled before.
         (
             true,
             (false, true),
@@ -1764,9 +1770,22 @@ fn a_rollback_restarts_the_firewall_unit_if_it_was_active() {
             "reload-or-restart",
             (false, true),
         ),
+        // The same, stopped since: a manual rollback refuses the changed
+        // unit; the timer and the boot hook leave it, with a step by hand.
+        (
+            true,
+            (false, true),
+            true,
+            "reload-or-restart",
+            (false, true),
+        ),
     ];
     for (with_service, before, stopped, verb, after) in cases {
         for path in ["manual", "timer", "boot", "verify"] {
+            // The unit is only stopped in a window that outlives the apply.
+            if stopped && path == "verify" {
+                continue;
+            }
             let case = format!("{with_service} {before:?} {stopped} {path}");
             let fs = armable();
             let facts = facts();
@@ -1784,6 +1803,7 @@ fn a_rollback_restarts_the_firewall_unit_if_it_was_active() {
                 .apply(&plan, &deadman_cfg(), &mut |_| {})
                 .unwrap();
             let engine = || Engine::lock(&st, sys).unwrap();
+            let mut skipped = Vec::new();
             match (path, out) {
                 ("verify", ApplyOutcome::RolledBack { .. }) => {}
                 (_, ApplyOutcome::Pending { txn, .. }) => {
@@ -1791,35 +1811,72 @@ fn a_rollback_restarts_the_firewall_unit_if_it_was_active() {
                         run.set((true, false));
                     }
                     match path {
-                        "manual" => drop(engine().rollback(Target::Last, &mut |_| {}).unwrap()),
+                        "manual" if stopped && with_service => {
+                            let err = engine().rollback(Target::Last, &mut |_| {}).unwrap_err();
+                            let EngineError::Changed { changed, .. } = err else {
+                                panic!("{case}: {err:?}");
+                            };
+                            let steps: Vec<_> = changed.iter().map(|c| &c.step[..]).collect();
+                            assert_eq!(
+                                steps,
+                                [format!(
+                                    "systemctl disable {FW_UNIT}; systemctl start {FW_UNIT}"
+                                )],
+                                "{case}"
+                            );
+                            // Only apply's reload ran, and the unit is as left.
+                            assert_eq!(
+                                reloads_of(&run),
+                                [format!("systemctl try-reload-or-restart {FW_UNIT}")],
+                                "{case}"
+                            );
+                            assert_eq!(*run.unit.lock().unwrap(), (true, false), "{case}");
+                            continue;
+                        }
+                        "manual" => {
+                            let mut told = false;
+                            let mut seen =
+                                |p: Progress| told |= matches!(p, Progress::FirewallStart);
+                            drop(engine().rollback(Target::Last, &mut seen).unwrap());
+                            // The admin is told when the unit may be started.
+                            assert_eq!(told, verb == "reload-or-restart", "{case}");
+                        }
                         "timer" => {
                             set_uptime(&fs, 5000);
                             let out = engine()
                                 .deadman(&txn, Path::new(COPY), 0, &mut |_| {})
                                 .unwrap();
-                            assert!(
-                                matches!(out, DeadmanOutcome::RolledBack(_)),
-                                "{case}: {out:?}"
-                            );
+                            let DeadmanOutcome::RolledBack(done) = out else {
+                                panic!("{case}: {out:?}");
+                            };
+                            skipped = done.skipped;
                         }
                         _ => {
                             fs.write(Path::new(BOOT_ID), b"b\n").unwrap();
                             let done = engine().deadman_boot(Path::new(COPY), &mut |_| {});
-                            assert_eq!(done.unwrap().len(), 1, "{case}");
+                            let done = done.unwrap();
+                            assert_eq!(done.len(), 1, "{case}");
+                            skipped = done[0].skipped.clone();
                         }
                     }
                 }
                 (_, out) => panic!("{case}: {out:?}"),
             }
-            let reloads: Vec<String> = calls(&run.inner)
-                .into_iter()
-                .filter(|c| c.starts_with("systemctl") && c.contains("reload-or-restart"))
-                .collect();
+            let reloads = reloads_of(&run);
             let want = [
                 format!("systemctl try-reload-or-restart {FW_UNIT}"),
                 format!("systemctl {verb} {FW_UNIT}"),
             ];
             assert_eq!(reloads, want, "{case}");
+            // The timer and the boot hook leave a unit changed since apply
+            // (enabled stays), and the reload still starts it.
+            let after = if stopped && with_service && matches!(path, "timer" | "boot") {
+                let units: Vec<_> = skipped.iter().map(|s| s.resource.as_str()).collect();
+                assert_eq!(units, [format!("service:{FW_UNIT}")], "{case}");
+                (true, true)
+            } else {
+                after
+            };
             assert_eq!(*run.unit.lock().unwrap(), after, "{case}");
         }
     }
