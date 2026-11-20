@@ -408,6 +408,7 @@ mod tests {
             Record {
                 at: 1,
                 event: Event::Begin {
+                    format: crate::engine::journal::FORMAT,
                     version: "0.2.0".into(),
                     modules: vec!["kernel.sysctl".into()],
                 },

@@ -486,6 +486,7 @@ fn apply_errors_exit_2() {
     // A transaction is unfinished.
     let txn = state.create_txn(&fs, 1_792_755_766).unwrap();
     let begin = Event::Begin {
+        format: crate::engine::journal::FORMAT,
         version: "0.2.0".into(),
         modules: vec!["kernel.sysctl".into()],
     };

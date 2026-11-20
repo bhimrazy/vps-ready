@@ -15,6 +15,7 @@ fn applied(fs: &FakeFs) -> String {
     let rec = |event| Record { at: 1, event };
     let records = [
         rec(Event::Begin {
+            format: crate::engine::journal::FORMAT,
             version: "0.3.0".into(),
             modules: vec!["user.admin".into(), "ssh.server".into()],
         }),
@@ -165,6 +166,7 @@ fn a_rollback_does_not_remove_the_account_running_it() {
 fn later(fs: &FakeFs, events: Vec<Event>) -> String {
     let txn = super::state(fs).create_txn(fs, 1).unwrap();
     let begin = Event::Begin {
+        format: crate::engine::journal::FORMAT,
         version: "0.3.0".into(),
         modules: vec!["ssh.server".into()],
     };
@@ -334,7 +336,7 @@ fn a_rollback_that_restores_ssh_via_needs_a_session_through_it() {
     assert_eq!(fs.read(Path::new(RULESET)).unwrap(), via.as_bytes());
 }
 
-fn state_of(fs: &dyn Fs, txn: &str) -> TxnState {
+pub(super) fn state_of(fs: &dyn Fs, txn: &str) -> TxnState {
     let records: Vec<Record> = events(fs, txn)
         .into_iter()
         .map(|event| Record { at: 0, event })

@@ -1132,6 +1132,7 @@ fn a_created_account_whose_name_was_taken_since_is_not_removed() {
     let resource = "user:admin".to_owned();
     let records = [
         rec(Event::Begin {
+            format: crate::engine::journal::FORMAT,
             version: "0.3.0".into(),
             modules: vec!["user.admin".into()],
         }),
@@ -1204,6 +1205,7 @@ fn a_failed_forced_restore_keeps_the_admin_it_relies_on() {
     let drop_in = crate::modules::ssh_server::DROP_IN;
     let records = [
         rec(Event::Begin {
+            format: crate::engine::journal::FORMAT,
             version: "0.3.0".into(),
             modules: vec!["user.admin".into(), "ssh.server".into()],
         }),
@@ -1316,6 +1318,7 @@ fn rollback_last_picks_pending_then_the_newest_applied_or_confirmed() {
     let rec = |event| Record { at: 1, event };
     let begin = || {
         rec(Event::Begin {
+            format: crate::engine::journal::FORMAT,
             version: "0.3.0".into(),
             modules: Vec::new(),
         })
@@ -1526,6 +1529,7 @@ fn every_command_of_the_boot_hook_is_bounded() {
     };
     let records = [
         rec(Event::Begin {
+            format: crate::engine::journal::FORMAT,
             version: "0.3.0".into(),
             modules: vec!["user.admin".into(), "ssh.bruteforce".into()],
         }),

@@ -1,0 +1,4 @@
+{"at":1792932000,"event":"begin","format":1,"version":"0.7.0","modules":["kernel.sysctl"]}
+{"at":1792932001,"event":"backup","resource":"sysctl:kernel.kptr_restrict","backup":{"kind":"sysctl","key":"kernel.kptr_restrict","value":"0","applied":"1","boot_id":"a"}}
+{"at":1792932001,"event":"applied","resource":"sysctl:kernel.kptr_restrict"}
+{"at":1792932002,"event":"state","state":"applied"}

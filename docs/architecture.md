@@ -215,7 +215,9 @@ stateDiagram-v2
   RolledBack --> [*]
 ```
 
-The journal events, one JSON object per line: `begin`, `armed` (unit, boot ID, first deadline), `backup` (with `force_restore`), `applied` (with the uid of a created account), `reloaded`, `extended` (a new unit and deadline), `confirmed` (session, user, client), `rollback`, `restored`, `skipped` (a resource the dead-man left, with the by-hand step), `reload-skipped` (a rollback reload whose check failed), `retry` (a timer that finishes an incomplete dead-man rollback) and `state`. `state pending-confirm` carries the unit, the deadline, `live_since`, the applying session, the `admins` who may confirm, the session's `ssh_port` and, when the firewall limits SSH to one interface, `ssh_via` (absent otherwise, so older journals read as before).
+The journal events, one JSON object per line: `begin` (the writer's version and `format`), `armed` (unit, boot ID, first deadline), `backup` (with `force_restore`), `applied` (with the uid of a created account), `reloaded`, `extended` (a new unit and deadline), `confirmed` (session, user, client), `rollback`, `restored`, `skipped` (a resource the dead-man left, with the by-hand step), `reload-skipped` (a rollback reload whose check failed), `retry` (a timer that finishes an incomplete dead-man rollback) and `state`. `state pending-confirm` carries the unit, the deadline, `live_since`, the applying session, the `admins` who may confirm, the session's `ssh_port` and, when the firewall limits SSH to one interface, `ssh_via` (absent otherwise, so older journals read as before).
+
+`begin` carries `format: 1` from 0.7.0; a journal without it (0.6 and earlier) reads as format 0. A journal with a higher format is refused whole, by name ("roll it back with that version or newer"), before any later record is parsed, so a newer record kind never fails as a parse error. The 1.x promise is that every journal since 0.7.0 reads. `crates/vps-ready/tests/fixtures/journal/<minor>/journal.jsonl` holds one journal per 0.x, and a test reads and rolls back each; a release that changes the journal adds its directory.
 
 ## Dead-man switch (the headline feature)
 
