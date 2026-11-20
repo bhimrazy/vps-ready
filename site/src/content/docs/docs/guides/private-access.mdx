@@ -1,6 +1,6 @@
 ---
 title: Private access
-description: Harden a server at first boot, reach SSH through Tailscale or another VPN, close public SSH safely, and get back in if the VPN stops working.
+description: Harden a server at first boot, reach SSH through Tailscale, WireGuard or another VPN, close public SSH safely, and get back in if the VPN stops working.
 sidebar:
   label: Private access
   order: 6
@@ -15,7 +15,7 @@ import { Aside, Steps } from '@astrojs/starlight/components';
 This guide takes a server from "never exposed" to "SSH only through a private network":
 
 1. **Harden it at first boot**, before anyone logs in, with `export cloud-init`.
-2. **Join a private network**, such as Tailscale, so you can reach the same SSH server over it.
+2. **Join a private network**, such as Tailscale or WireGuard, so you can reach the same SSH server over it.
 3. **Close public SSH** with `ssh_via`, applied from a login that already comes through the VPN.
 
 Each step works on its own. You can skip the first one on a server that is already running.
@@ -80,7 +80,7 @@ Flags and exit codes: [`export cloud-init`](/docs/reference/commands/#export-clo
 
 ## Join a private network
 
-`ssh_via` works with any network interface the server has, so you can use the module below or set up a VPN yourself.
+`ssh_via` works with any network interface the server has, so you can use one of the modules below or set up a VPN yourself.
 
 ### Tailscale
 
@@ -121,7 +121,7 @@ Add `net.wireguard` to run a WireGuard interface, `wg0`, on the server. It insta
 1. **Make a key pair on each device** you will connect from, and keep the private key there:
 
    ```sh
-   wg genkey | tee laptop.key | wg pubkey
+   (umask 077; wg genkey | tee laptop.key | wg pubkey)
    ```
 
    The WireGuard app's "Add tunnel" does the same. Only the public key, which `wg pubkey` prints, goes into the profile.
@@ -144,7 +144,7 @@ Add `net.wireguard` to run a WireGuard interface, `wg0`, on the server. It insta
    sudo vps-ready apply --profile vps-ready.toml
    ```
 
-   Afterwards it prints each device's client config. Print it again, for all peers or one, at any time:
+   With `firewall.inbound` in the change, the apply arms the safety timer: confirm from a new SSH login as usual, which works through the public address. The client configs print before the confirm. Print them again, for all peers or one, at any time:
 
    ```sh
    sudo vps-ready wireguard-config laptop
@@ -165,7 +165,7 @@ Add `net.wireguard` to run a WireGuard interface, `wg0`, on the server. It insta
 
    Without `endpoint`, the address comes from your SSH session or the default route, and the command says on stderr when the server has no public address of its own.
 
-4. **Connect.** Paste the config into the WireGuard app (or save it as `/etc/wireguard/wg0.conf` on a Linux device) and replace the `PrivateKey` line with the contents of `laptop.key`. Turn the tunnel on, then log in through it:
+4. **Connect.** Paste the config into the WireGuard app (or save it as `/etc/wireguard/wg0.conf` on a Linux device) and replace the placeholder after `PrivateKey =` with the contents of `laptop.key`. Turn the tunnel on (on Linux, `sudo wg-quick up wg0`), then log in through it:
 
    ```sh
    ssh admin@10.86.12.1
@@ -183,7 +183,7 @@ allow = ["80/tcp", "443/tcp", "443/udp"]
 ssh_via = "wg0"
 ```
 
-vps-ready refuses `ssh_via = "wg0"` unless `wg-quick@wg0` is enabled, which `net.wireguard` does. While SSH depends on `wg0`, any change `net.wireguard` plans arms the safety timer and needs a confirm through `wg0`, and removing the peer your session comes through, or changing its key or `host`, is refused. After `rollback`, the generated server key stays so that client configs keep working: `sudo rm /etc/wireguard/wg0.key` and apply again for a new one. More detail: [`net.wireguard`](/docs/guides/profiles-and-modules/#netwireguard-wireguard).
+vps-ready refuses `ssh_via = "wg0"` unless `wg-quick@wg0` is enabled, which `net.wireguard` does. While SSH depends on `wg0`, any change `net.wireguard` plans arms the safety timer and needs a confirm through `wg0`, and removing the peer your session comes through, or changing its key or `host`, is refused. After `rollback`, the generated server key stays so that client configs keep working: `sudo rm /etc/wireguard/wg0.key` and apply again for a new one. Every device then needs the new public key in its config, so do this while SSH does not depend on `wg0`. More detail: [`net.wireguard`](/docs/guides/profiles-and-modules/#netwireguard-wireguard).
 
 ### Another VPN
 
@@ -255,7 +255,7 @@ sudo vps-ready apply --profile private.toml
 
 The first apply sets up the VPN and keeps SSH public, with the note "step 1 of 2: SSH stays public until you apply this profile again from a login through tailscale0" (`wg0` for WireGuard). The second, from a session through the VPN, closes public SSH with the same checks, timer and confirm as the steps above. It has an empty `allow`: add `"80/tcp", "443/tcp", "443/udp"` for a web app.
 
-The guided setup (`sudo vps-ready`) asks the same thing as "Private access for SSH": none, Tailscale, or WireGuard on this server. For Tailscale it asks for an auth key, or you log in by hand afterwards. For WireGuard it asks for the device's name and its public key, and the apply prints the client config. It then prints the step 2 command and offers to save your answers to `vps-ready.toml`. Run `sudo vps-ready` again from a login through the VPN, in the directory that holds that file, and it offers to apply step 2.
+The guided setup (`sudo vps-ready`) asks the same thing as "Private access for SSH": none, Tailscale, or WireGuard on this server. For Tailscale it asks for an auth key, or you log in by hand afterwards. For WireGuard it asks for the device's name and its public key, and the apply prints the client config. It asks whether to save your answers to `vps-ready.toml`, then prints the step 2 command. Run `sudo vps-ready` again from a login through the VPN, in the directory that holds that root-owned file, and it offers to apply step 2. If you decline the save, it cannot offer step 2: run the printed command with your profile instead.
 
 ### Why the second apply must come through the VPN
 
@@ -288,7 +288,7 @@ error: this SSH login connected to 203.0.113.10, which is not an address of tail
 
 While SSH depends on the VPN, any change to it is as risky as closing public SSH:
 
-- A change that `net.tailscale` plans arms the safety timer and needs a confirm through Tailscale.
+- A change that `net.tailscale` or `net.wireguard` plans arms the safety timer and needs a confirm through the VPN.
 - Every change that arms the timer needs a confirm through the VPN, unless the change removes `ssh_via`. One applied from the console while the VPN is down rolls back at its deadline.
 - `--deadman=off` is refused when the plan arms the timer.
 - An apply without `ssh_via` opens public SSH again, behind the timer like any firewall change.
@@ -345,7 +345,7 @@ With `ssh_via`, a broken VPN closes SSH. Plan your way back in before you need i
 A manual rollback can refuse while SSH depends on the VPN:
 
 - **It would limit SSH to the VPN again**, with no timer to undo it. Run it from an SSH login through the VPN, from another machine.
-- **It would stop `tailscaled` or take the node off the tailnet** while SSH depends on Tailscale. Remove `ssh_via` first, or roll back the transaction that set it.
-- **It would cut your own session**, which comes through Tailscale. Run it from the console or a public SSH login.
+- **It would stop `tailscaled` or `wg-quick@wg0`, or take the node off the tailnet,** while SSH depends on that VPN. Remove `ssh_via` first, or roll back the transaction that set it.
+- **It would cut your own session**, which comes through the VPN (for WireGuard, by stopping `wg-quick@wg0` or removing your peer). Run it from the console or a public SSH login.
 
 More ways back in: [Undo changes and recover](/docs/guides/undo-and-recover/#locked-out).
