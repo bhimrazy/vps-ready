@@ -179,15 +179,16 @@ http://app.example.com {
 	redir @plain https://{host}{uri} 308
 	reverse_proxy 127.0.0.1:8080 {
 		header_up X-Forwarded-For {client_ip}
+		header_up X-Forwarded-Host {host}
 	}
 }
 ```
 
 - **TLS ends at Cloudflare's edge.** The `http://` site address turns off Caddy's automatic HTTPS for that site (Caddy's Automatic HTTPS docs), so Caddy needs neither port 80 for the ACME challenge nor 443, and gets no certificate. The hop from cloudflared to Caddy is loopback.
 - **HTTPS redirect.** A visitor on `http://` reaches Caddy with `X-Forwarded-Proto: http` set by the edge, and Caddy redirects. Without the header, nothing is redirected, which is safe. The docs also point to the dashboard's "Always Use HTTPS", which redirects at the edge.
-- **Loopback only.** `default_bind` keeps Caddy off public addresses, so even with `firewall.inbound` not applied, nothing listens publicly. `FW-003` then shows no web port.
+- **Loopback only.** `default_bind` (`127.0.0.1`, plus `[::1]` only when loopback has it, since Caddy cannot bind `::1` where IPv6 is disabled) keeps Caddy off public addresses, so even with `firewall.inbound` not applied, nothing listens publicly. `FW-003` then shows no web port.
 - **Host header.** Caddy matches the site by `Host`. cloudflared's `httpHostHeader` is empty by default, which is expected to pass the visitor's hostname through. The release gate checks it end to end. If it does not hold, the plan's route note adds "HTTP Host Header: app.example.com".
-- **Client addresses.** Every request reaches Caddy from `127.0.0.1`. With loopback as the only trusted proxy, Caddy takes the visitor's address from `Cf-Connecting-Ip`, which the edge sets. `X-Forwarded-For` is not trusted as a source: its leftmost value comes from the visitor. For the upstream, `header_up X-Forwarded-For {client_ip}` replaces the header with that one address; Caddy would otherwise append to the incoming one for a trusted peer. Layer 2 sends a forged `X-Forwarded-For` and checks the upstream sees only the `Cf-Connecting-Ip` address; the release gate checks a real visit.
+- **Client addresses.** Every request reaches Caddy from `127.0.0.1`. With loopback as the only trusted proxy, Caddy takes the visitor's address from `Cf-Connecting-Ip`, which the edge sets. `X-Forwarded-For` is not trusted as a source: its leftmost value comes from the visitor. For the upstream, `header_up X-Forwarded-For {client_ip}` replaces the header with that one address; Caddy would otherwise append to the incoming one for a trusted peer. For the same reason `header_up X-Forwarded-Host {host}` replaces a visitor-supplied `X-Forwarded-Host`, which a trusted peer would keep. Layer 2 sends a forged `X-Forwarded-For` and `X-Forwarded-Host` and checks the upstream sees only the `Cf-Connecting-Ip` address and the real host; the release gate checks a real visit.
 - **Plan-time changes:** the DNS note ("app.example.com does not point here") is skipped, since the domain points at Cloudflare. The `firewall.inbound` note about opening 80 and 443 is replaced, when `allow` still opens them, by "80/tcp and 443/tcp are open but Caddy listens on loopback only: drop them from `allow`". A note when no tunnel connector is planned or running ("nothing forwards to Caddy yet: add `net.tunnel`").
 - **Switching** `behind_tunnel` on or off rewrites the Caddyfile and reloads Caddy in one apply. Turning it off brings back automatic HTTPS, which needs 80 and 443 open, and the existing note says so.
 - One mode per host: every site is behind the tunnel, or none is (see Not in M7).
@@ -351,7 +352,7 @@ This narrows an M3 invariant: `ssh.server` "never writes ... crypto lists" ([the
 
 **Distro support.** A release stays supported for as long as its distro gives it free security updates: Ubuntu's standard support (not ESM) and, for Debian, Debian LTS, which follows the end of regular security support by about two years. Debian 12's regular security support ended in June 2026 and its LTS runs to June 2028, so Debian 12 stays. Support also needs the vendor repositories the modules use (Docker, Caddy, Tailscale, Cloudflare) to still publish for the release; when one stops, its module becomes not applicable there, with a note. A release leaves the list in a minor release, announced one release ahead. Ubuntu 22.04's standard support ends in 2027, so 1.x drops it in a minor release then.
 
-**Journal format.** The `begin` record already carries the writer's version. From v0.7.0 it also carries `format: 1`, and a binary that meets a higher format refuses that transaction with "written by vps-ready X; roll it back with that version or newer", instead of failing on an unknown record kind.
+**Journal format.** The `begin` record already carries the writer's version. From v0.7.0 it also carries `format: 1`, and a binary that meets a higher format refuses that transaction with "written by vps-ready X; use that version or newer", instead of failing on an unknown record kind.
 
 **Before tagging 1.0.0:**
 - Every piece above shipped in a 0.x release.

@@ -10,6 +10,10 @@ use super::{EngineError, Reload};
 use crate::facts::SessionId;
 use crate::resource::Backup;
 
+/// The journal format this build writes and reads. A journal with a higher
+/// one is refused whole, since its records may not parse here.
+pub const FORMAT: u32 = 1;
+
 /// One journal line: when it was written and what happened.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Record {
@@ -26,6 +30,9 @@ pub struct Record {
 pub enum Event {
     /// The transaction started.
     Begin {
+        /// Journal format of the writer. Absent (`0`) before 0.7.
+        #[serde(default)]
+        format: u32,
         /// Version of the vps-ready that started it.
         version: String,
         /// IDs of the modules in the plan.
@@ -405,6 +412,7 @@ pub fn parse(path: &Path, bytes: &[u8]) -> Result<Vec<Record>, EngineError> {
     let Some(body) = bytes[..clean].strip_suffix(b"\n") else {
         return Ok(Vec::new());
     };
+    refuse_newer(path, body)?;
     body.split(|b| *b == b'\n')
         .enumerate()
         .map(|(i, line)| {
@@ -417,6 +425,32 @@ pub fn parse(path: &Path, bytes: &[u8]) -> Result<Vec<Record>, EngineError> {
         .collect()
 }
 
+/// Refuses a journal whose first record names a format this build does not
+/// know, before any later record is parsed. The record is read loosely, so a
+/// format or version of an unexpected type is refused, not a parse error.
+fn refuse_newer(path: &Path, body: &[u8]) -> Result<(), EngineError> {
+    let first = body.split(|b| *b == b'\n').next().unwrap_or_default();
+    let Ok(head) = serde_json::from_slice::<serde_json::Value>(first) else {
+        return Ok(());
+    };
+    let known = match head.get("format") {
+        None | Some(serde_json::Value::Null) => return Ok(()),
+        Some(format) => format.as_u64().is_some_and(|n| n <= u64::from(FORMAT)),
+    };
+    if known {
+        return Ok(());
+    }
+    let writer = match head.get("version").and_then(|v| v.as_str()) {
+        Some(version) => format!("vps-ready {version}"),
+        None => "a newer vps-ready".to_owned(),
+    };
+    Err(EngineError::JournalFormat {
+        path: path.display().to_string(),
+        format: head["format"].to_string(),
+        writer,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,6 +461,7 @@ mod tests {
 
     fn begin() -> Event {
         Event::Begin {
+            format: crate::engine::journal::FORMAT,
             version: "0.2.0".into(),
             modules: vec!["kernel.sysctl".into()],
         }
@@ -528,7 +563,7 @@ mod tests {
         let line = |event| serde_json::to_string(&rec(event)).unwrap();
         assert_eq!(
             line(begin()),
-            r#"{"at":7,"event":"begin","version":"0.2.0","modules":["kernel.sysctl"]}"#
+            r#"{"at":7,"event":"begin","format":1,"version":"0.2.0","modules":["kernel.sysctl"]}"#
         );
         assert_eq!(
             line(Event::Backup {

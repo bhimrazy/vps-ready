@@ -11,6 +11,9 @@
 # Caddy reaches an upstream on 127.0.0.1 -> rollback --last -> Caddy's source,
 # key and Caddyfile are gone, the package stays and Caddy is stopped and
 # disabled -> apply again starts Caddy -> rollback --last again.
+# Between the last two steps, the running public Caddy is switched to
+# behind_tunnel and back: the upstream sees only the Cf-Connecting-Ip address
+# and the real host whatever the visitor forges, and only loopback listens.
 # The site is app.localhost, for which Caddy uses its own CA (as `tls internal`
 # would), so no ACME CA is involved. The container is capped at 1 GB and 1 CPU
 # and is removed afterwards.
@@ -54,8 +57,8 @@ managed="/etc/apt/sources.list.d/caddy.sources /etc/apt/keyrings/caddy.asc /etc/
 
 for f in $managed; do ct test ! -e "$f" || die "$f exists before apply"; done
 
-echo "== $distro: install curl"
-ct sh -c 'apt-get update -qq && apt-get install -y -qq --no-install-recommends curl >/dev/null'
+echo "== $distro: install curl and iproute2"
+ct sh -c 'apt-get update -qq && apt-get install -y -qq --no-install-recommends curl iproute2 >/dev/null'
 
 cat >"$tmp/proxy.toml" <<'EOF'
 schema = 1
@@ -127,6 +130,64 @@ body=$(ct curl -fsS -k --retry 10 --retry-delay 1 --retry-all-errors \
   --resolve app.localhost:443:127.0.0.1 https://app.localhost/) ||
   die "HTTPS through Caddy failed after the second apply"
 [ "$body" = "hello from upstream" ] || die "unexpected answer: $body"
+
+# Switch the running, public Caddy to behind_tunnel in place.
+cat >"$tmp/tunnel.toml" <<'EOF'
+schema = 1
+
+[modules."deploy.proxy"]
+behind_tunnel = true
+sites = [{ domain = "app.example.com", upstream = "127.0.0.1:8081" }]
+EOF
+docker cp "$tmp/tunnel.toml" "$name:/root/tunnel.toml"
+# An upstream that echoes the forwarded headers it got.
+cat >"$tmp/echo.json" <<'EOF'
+{"admin": {"disabled": true},
+ "apps": {"http": {"servers": {"up": {"listen": ["127.0.0.1:8081"],
+   "routes": [{"handle": [{"handler": "static_response",
+     "body": "xff={http.request.header.X-Forwarded-For} xfh={http.request.header.X-Forwarded-Host}"}]}]}}}}}
+EOF
+docker cp "$tmp/echo.json" "$name:/root/echo.json"
+docker exec -d "$name" caddy run --config /root/echo.json
+
+echo "== $distro: vps-ready apply --yes --profile tunnel.toml (public to behind_tunnel)"
+rc=0; vr apply --yes --profile /root/tunnel.toml || rc=$?
+[ "$rc" -eq 0 ] || die "tunnel apply exited $rc, expected 0"
+[ "$(ct systemctl is-active caddy.service)" = active ] ||
+  die "Caddy is not running in tunnel mode"
+# Visitor-controlled forwarding headers never reach the upstream.
+body=$(ct curl -fsS --retry 10 --retry-delay 1 --retry-all-errors \
+  -H 'Host: app.example.com' -H 'Cf-Connecting-Ip: 192.0.2.7' \
+  -H 'X-Forwarded-For: 198.51.100.9' -H 'X-Forwarded-Host: evil.example' \
+  http://127.0.0.1/) || die "plain HTTP through Caddy failed"
+[ "$body" = "xff=192.0.2.7 xfh=app.example.com" ] || die "the upstream saw: $body"
+# Without the edge's header the peer is loopback itself.
+body=$(ct curl -fsS -H 'Host: app.example.com' -H 'X-Forwarded-For: 198.51.100.9' \
+  http://127.0.0.1/) || die "request without Cf-Connecting-Ip failed"
+[ "$body" = "xff=127.0.0.1 xfh=app.example.com" ] || die "the upstream saw: $body"
+# http is redirected to https; https passes through.
+loc=$(ct curl -s -o /dev/null -w '%{http_code} %{redirect_url}' \
+  -H 'Host: app.example.com' -H 'X-Forwarded-Proto: http' http://127.0.0.1/)
+[ "$loc" = "308 https://app.example.com/" ] || die "X-Forwarded-Proto: http got: $loc"
+code=$(ct curl -s -o /dev/null -w '%{http_code}' \
+  -H 'Host: app.example.com' -H 'X-Forwarded-Proto: https' http://127.0.0.1/)
+[ "$code" = 200 ] || die "X-Forwarded-Proto: https got $code, expected 200"
+# Only loopback listens on 80 and 443, [::1]:80 too, after the live switch.
+sockets=$(ct ss -H -ltn 'sport = :80 or sport = :443') || die "ss failed"
+listening=$(echo "$sockets" | awk '{print $4}')
+echo "$listening" | grep -qx '127\.0\.0\.1:80' || die "nothing listens on 127.0.0.1:80: $listening"
+public=$(echo "$listening" | grep -v -e '^127\.0\.0\.1:' -e '^\[::1\]:' -e '^$' || true)
+[ -z "$public" ] || die "public listeners on 80 or 443: $public"
+# Docker may leave the container without ::1; then Caddy must not bind it.
+if ct grep -q '^00000000000000000000000000000001 ' /proc/net/if_inet6; then
+  echo "$listening" | grep -qx '\[::1\]:80' || die "nothing listens on [::1]:80: $listening"
+fi
+
+echo "== $distro: vps-ready rollback --last (behind_tunnel back to public)"
+rc=0; vr rollback --last || rc=$?
+[ "$rc" -eq 0 ] || die "tunnel rollback exited $rc, expected 0"
+ct grep -q default_bind /etc/caddy/Caddyfile && die "the tunnel Caddyfile is left after rollback"
+[ "$(ct systemctl is-active caddy.service)" = active ] || die "Caddy stopped after the tunnel rollback"
 
 echo "== $distro: vps-ready rollback --last, again"
 rc=0; vr rollback --last || rc=$?

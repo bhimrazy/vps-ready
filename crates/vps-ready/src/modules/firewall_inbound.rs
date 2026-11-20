@@ -750,6 +750,25 @@ pub(crate) fn accepted_tcp(cx: &PlanCx, sys: Sys) -> Result<Option<BTreeSet<u16>
     Ok(ruleset_text(cx.planned, sys)?.map(|text| tcp_ports(&text)))
 }
 
+/// The UDP ports of [`accepted_tcp`]'s ruleset, which includes WireGuard's.
+///
+/// # Errors
+///
+/// Reading the ruleset on disk.
+pub(crate) fn accepted_udp(cx: &PlanCx, sys: Sys) -> Result<Option<BTreeSet<u16>>, ModuleError> {
+    Ok(ruleset_text(cx.planned, sys)?.map(|text| {
+        text.lines()
+            .filter_map(|l| {
+                l.trim()
+                    .strip_prefix("udp dport {")?
+                    .strip_suffix("} accept")
+            })
+            .flat_map(|ports| ports.split(','))
+            .filter_map(|p| p.trim().parse().ok())
+            .collect()
+    }))
+}
+
 /// The interface SSH is limited to (`ssh_via`) by the ruleset in `planned`,
 /// else by the one on disk, which the unit loads; `None` when neither
 /// limits it.

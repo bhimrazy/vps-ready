@@ -48,6 +48,19 @@ pub enum EngineError {
         /// What is wrong with it.
         reason: String,
     },
+    /// The journal was written in a newer format.
+    #[error(
+        "{path} uses journal format {format}, written by {writer}; \
+         use that version or newer"
+    )]
+    JournalFormat {
+        /// The journal file.
+        path: String,
+        /// Its `format`, as written.
+        format: String,
+        /// Who wrote it: `vps-ready <version>`, or a placeholder.
+        writer: String,
+    },
     /// A journal line other than a torn final one does not parse.
     #[error("{path} line {line}: {source}")]
     Journal {
