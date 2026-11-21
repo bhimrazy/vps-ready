@@ -1,5 +1,7 @@
 [workspace]
-members = ["crates/*"]
+members = ["crates/*", "xtask"]
+# Plain `cargo build` builds the shipped crates only, not xtask.
+default-members = ["crates/*"]
 # cargo-fuzz targets need nightly; see fuzz/.
 exclude = ["fuzz"]
 resolver = "3"
@@ -20,6 +22,9 @@ sshd-config = { path = "crates/sshd-config", version = "=0.7.0" }
 anyhow = "1.0.104"
 askama = { version = "0.16.1", default-features = false, features = ["derive", "std"] }
 clap = { version = "4.6.7", features = ["derive", "env", "wrap_help"] }
+# xtask only: man pages and shell completions, never in the shipped binary.
+clap_complete = "4.6.11"
+clap_mangen = "0.3.3"
 dialoguer = { version = "0.12.0", default-features = false, features = ["password"] }
 owo-colors = "4.4.0"
 rustix = { version = "1.1.5", default-features = false, features = ["std", "fs"] }

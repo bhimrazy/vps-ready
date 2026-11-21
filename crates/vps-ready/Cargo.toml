@@ -50,5 +50,13 @@ proptest.workspace = true
 tempfile.workspace = true
 yaml-rust2.workspace = true
 
+# cargo-binstall: only the release tarballs, never third-party prebuilt
+# binaries (quick-install). binstall checks no signature on them.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ version }-{ target }{ archive-suffix }"
+pkg-fmt = "tgz"
+bin-dir = "{ name }-{ version }-{ target }/{ bin }{ binary-ext }"
+disabled-strategies = ["quick-install"]
+
 [lints]
 workspace = true

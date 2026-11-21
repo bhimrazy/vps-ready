@@ -195,7 +195,7 @@ Prints `#cloud-config` user-data to paste into the provider's user-data field wh
 | Flag | What it does |
 |---|---|
 | `--profile NAME\|PATH` | The profile. Its `user.admin` must list `authorized_keys`: at first boot there is no SSH session to copy keys from. A profile with `net.tailscale`'s `auth_key_file` or an explicit `ssh_via` in `firewall.inbound` is refused ([why](/docs/guides/private-access/#harden-at-first-boot)). The `private` profile exports, and stays in its step 1 at first boot |
-| `--checksums PATH` | The `checksums.txt` of the same release as this binary. Download it and verify its signature first, as in [Verify a release by hand](/docs/install/#verify-a-release-by-hand); the hashes in the user-data come from it |
+| `--checksums PATH` | The `checksums.txt` of the same release as this binary. Download it and verify its signature first, as in [Verify a release](/docs/install/#verify-a-release); the hashes in the user-data come from it |
 | `--base-url URL` | Download the tarballs from `URL` instead of the GitHub release, e.g. a mirror. The SHA-256 is checked either way |
 
 The image's own SSH settings apply for the first minute or so, until `runcmd` runs; keep the provider's firewall closed until first boot finishes. Do not log in while it runs: any login during first boot, including a provisioning tool that waits for SSH, makes the apply refuse `--deadman=off`. If anything fails (a login, a download, the hash, the apply), the server keeps the image's defaults: check `cloud-init status` (it shows `error`) and `/var/log/cloud-init-output.log` before you open the server up.

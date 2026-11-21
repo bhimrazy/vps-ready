@@ -2,12 +2,17 @@
 // Shell commands for the docs that wrap only at spaces and after "/" in
 // URLs (never mid-word), with a Copy button that copies the exact lines.
 // Used where Expressive Code would break a long URL mid-word.
+// With `scroll`, lines keep their layout and the block scrolls sideways
+// instead; a line that starts with spaces continues the command above it
+// and gets no prompt.
 import { breakableCommand } from '../../lib/wrap';
 
 interface Props {
   lines: string[];
+  scroll?: boolean;
 }
-const { lines } = Astro.props;
+const { lines, scroll } = Astro.props;
+const escape = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 ---
 
 <figure
@@ -15,8 +20,11 @@ const { lines } = Astro.props;
   data-command
 >
   <pre
-    class="m-0 grid gap-0.5 border-0 bg-transparent py-3.5 pr-20 pl-4 font-mono text-[0.8125rem] leading-[1.7] text-(--sl-color-white)">{lines.map((l) => (
-      <span class="flex items-start gap-[1ch]"><span class="flex-none text-(--sl-color-gray-3) select-none" aria-hidden="true">$</span><span class="min-w-0 break-normal whitespace-pre-wrap" data-cmd set:html={breakableCommand(l)} /></span>
+    class:list={[
+      'm-0 grid gap-0.5 border-0 bg-transparent py-3.5 pr-20 pl-4 font-mono text-[0.8125rem] leading-[1.7] text-(--sl-color-white)',
+      scroll && 'overflow-x-auto',
+    ]}>{lines.map((l) => (
+      <span class="flex items-start gap-[1ch]"><span class:list={['flex-none text-(--sl-color-gray-3) select-none', scroll && !/^\S/.test(l) && 'invisible']} aria-hidden="true">$</span><span class:list={['min-w-0', scroll ? 'whitespace-pre' : 'break-normal whitespace-pre-wrap']} data-cmd set:html={scroll ? escape(l) : breakableCommand(l)} /></span>
     ))}</pre>
   <button
     type="button"
