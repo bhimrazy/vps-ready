@@ -19,18 +19,18 @@ pub struct Bridge {
     pub docker: bool,
 }
 
-pub(super) fn detect(fs: &dyn Fs, notices: &mut Vec<String>) -> Vec<Bridge> {
+pub(super) fn detect(fs: &dyn Fs, notices: &mut Vec<String>) -> Option<Vec<Bridge>> {
     let paths = match fs.read_dir(Path::new("/sys/class/net")) {
         Ok(paths) => paths,
-        Err(SysError::NotFound(_)) => return Vec::new(),
+        Err(SysError::NotFound(_)) => return Some(Vec::new()),
         Err(err) => {
             notices.push(format!(
                 "reading /sys/class/net: {err}; bridges are unknown"
             ));
-            return Vec::new();
+            return None;
         }
     };
-    paths
+    let bridges = paths
         .iter()
         .filter_map(|p| p.file_name()?.to_str())
         // A name that cannot be quoted in a ruleset is left out. Only root
@@ -40,7 +40,8 @@ pub(super) fn detect(fs: &dyn Fs, notices: &mut Vec<String>) -> Vec<Bridge> {
             name: name.to_owned(),
             docker: is_docker(name),
         })
-        .collect()
+        .collect();
+    Some(bridges)
 }
 
 /// `docker0`, or `br-` and 12 lowercase hex digits.
@@ -77,6 +78,7 @@ mod tests {
         });
         let mut notices = Vec::new();
         let got: Vec<(String, bool)> = detect(&fs, &mut notices)
+            .unwrap()
             .into_iter()
             .map(|b| (b.name, b.docker))
             .collect();
@@ -89,7 +91,7 @@ mod tests {
                 ("docker0".to_owned(), true),
             ]
         );
-        assert!(detect(&FakeFs::new(), &mut notices).is_empty());
+        assert_eq!(detect(&FakeFs::new(), &mut notices), Some(Vec::new()));
         assert!(notices.is_empty());
     }
 

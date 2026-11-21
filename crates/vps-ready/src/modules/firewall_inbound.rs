@@ -155,6 +155,9 @@ struct Ruleset {
     docker: bool,
     /// Interfaces named `br-*` that are not Docker's, which that leaves out.
     not_docker: Vec<String>,
+    /// Whether the bridges are known. If not, `br-*` is left out: it may
+    /// match a bridge Docker did not name.
+    bridges_known: bool,
 }
 
 impl Ruleset {
@@ -182,6 +185,7 @@ impl Ruleset {
             wireguard: Vec::new(),
             docker: facts.docker,
             not_docker: not_docker(facts),
+            bridges_known: facts.bridges_known,
         }
     }
 
@@ -660,11 +664,23 @@ fn stage(
 /// What accepting input from Docker's bridges means, after `why`, e.g.
 /// `Docker is installed`.
 fn docker_notes(facts: &Facts, why: &str) -> Vec<String> {
+    let bridges = if facts.bridges_known {
+        "docker0 and br-*"
+    } else {
+        "docker0"
+    };
     let mut notes = vec![format!(
-        "{why}: input from docker0 and br-* is accepted, so containers can reach \
-         services on the host; a compromised container can reach all of them, as with \
-         no firewall"
+        "{why}: input from {bridges} is accepted, so containers can reach services on \
+         the host; a compromised container can reach all of them, as with no firewall"
     )];
+    if !facts.bridges_known {
+        notes.push(
+            "user-defined Docker networks (`docker network create`) are not opened: the \
+             bridges could not be read from /sys/class/net, and br-* may match one Docker \
+             did not name"
+                .to_owned(),
+        );
+    }
     let others = not_docker(facts);
     if !others.is_empty() {
         notes.push(format!(
@@ -878,15 +894,18 @@ fn check_loaded(json: &[u8], want: &Ruleset) -> Result<(), String> {
         return Ok(());
     };
     // Public SSH is closed only if nothing but the `ssh_via` rule accepts
-    // the SSH ports. A rule that accepts all ports on one interface
-    // (`iifname "x" accept`) is not seen: the parser takes it as narrow.
+    // the SSH ports, besides the accepts for Docker's bridges, which reach
+    // only containers.
     let only_via = |p: &crate::facts::InterfacePorts| p.interfaces == [via.as_str()];
+    let bridge = |p: &&crate::facts::InterfacePorts| {
+        want.docker && p.interfaces.iter().all(|i| i == "docker0" || i == "br-*")
+    };
     let mut wrong = Vec::new();
     for &port in &want.ssh {
         let via_rules: Vec<_> = chain
             .interface_ports
             .iter()
-            .filter(|p| p.ports.contains("tcp", port))
+            .filter(|p| p.ports.contains("tcp", port) && !bridge(p))
             .collect();
         if chain.open_ports.iter().any(|p| p.contains("tcp", port))
             || chain.unread_ports.iter().any(|p| p == "tcp")

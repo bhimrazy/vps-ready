@@ -254,6 +254,7 @@ docker_engine:
     state: missing
   daemon: ~
 bridges: []
+bridges_known: true
 apparmor: false
 interfaces:
   - name: lo

@@ -28,7 +28,9 @@ table inet vps_ready {
 {%- if docker %}
     # Containers reaching services on the host.
     iifname "docker0" accept
-{%- if not_docker.is_empty() %}
+{%- if !bridges_known %}
+    # br-* left out: the bridges could not be read.
+{%- else if not_docker.is_empty() %}
     iifname "br-*" accept
 {%- else %}
     # Except the br-* interfaces that Docker did not name.

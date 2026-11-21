@@ -457,6 +457,186 @@ fn ssh_009_and_fw_003_pass_on_the_loaded_table() {
     ));
 }
 
+/// [`LOADED_VIA`] with its `wg0` renamed `via`, and the rule exprs `extra`
+/// before its `ssh_via` rule, where the template puts deploy.docker's.
+fn via_with(via: &str, extra: &[serde_json::Value]) -> Vec<u8> {
+    let text = std::fs::read_to_string(testdata(LOADED_VIA)).unwrap();
+    let quoted = format!("\"{via}\"");
+    let mut json: serde_json::Value =
+        serde_json::from_str(&text.replace("\"wg0\"", &quoted)).unwrap();
+    let objects = json["nftables"].as_array_mut().unwrap();
+    let at = objects
+        .iter()
+        .position(|o| o["rule"]["expr"].to_string().contains(&quoted))
+        .unwrap();
+    for (i, expr) in extra.iter().enumerate() {
+        let rule = serde_json::json!({"rule": {
+            "family": "inet", "table": "vps_ready", "chain": "input", "expr": expr
+        }});
+        objects.insert(at + i, rule);
+    }
+    serde_json::to_vec(&json).unwrap()
+}
+
+fn iifname_accept(name: &str) -> serde_json::Value {
+    serde_json::json!([
+        {"match": {"op": "==", "left": {"meta": {"key": "iifname"}}, "right": name}},
+        {"accept": null}
+    ])
+}
+
+/// An accept with no port match opens every port: SSH-009 and FW-003 see
+/// SSH and postgres reachable beyond the VPN.
+#[test]
+fn an_accept_without_a_port_fails_ssh_009_and_fw_003() {
+    use crate::audit::Outcome;
+    use serde_json::json;
+    let tcp = json!([
+        {"match": {"op": "==", "left": {"meta": {"key": "l4proto"}}, "right": "tcp"}},
+        {"accept": null}
+    ]);
+    let new = json!([
+        {"match": {"op": "in", "left": {"ct": {"key": "state"}}, "right": "new"}},
+        {"accept": null}
+    ]);
+    let cases = [
+        (vec![iifname_accept("eth0")], "on eth0"),
+        (vec![tcp], "from any interface"),
+        (vec![new], "from any interface"),
+    ];
+    let mut facts = via_facts("10.77.0.1:22");
+    facts.listeners = vec![listener(22, "sshd"), listener(5432, "postgres")];
+    for (extra, on) in cases {
+        facts.firewall = crate::facts::firewall::parse_json(&via_with("wg0", &extra));
+        assert_eq!(
+            finding(&facts, "SSH-009").outcome,
+            Outcome::Fail {
+                found: format!("SSH is accepted beyond a VPN: tcp/22 {on}")
+            },
+            "{extra:?}"
+        );
+        assert!(
+            matches!(
+                finding(&facts, "FW-003").outcome,
+                Outcome::Fail { found } if found.contains("tcp/5432 (postgres)")
+            ),
+            "{extra:?}"
+        );
+    }
+    // `ct state new accept` leaves nothing for the default to drop.
+    facts.firewall = crate::facts::firewall::parse_json(&via_with(
+        "wg0",
+        &[json!([
+            {"match": {"op": "in", "left": {"ct": {"key": "state"}}, "right": "new"}},
+            {"accept": null}
+        ])],
+    ));
+    assert!(matches!(
+        finding(&facts, "FW-001").outcome,
+        Outcome::Fail { found } if found.contains("to every port")
+    ));
+    // firewalld's interface zone that accepts all: a goto, then the zone.
+    let mut json: serde_json::Value = serde_json::from_slice(&via_with(
+        "wg0",
+        &[json!([
+            {"match": {"op": "==", "left": {"meta": {"key": "iifname"}}, "right": "eth0"}},
+            {"goto": {"target": "trusted"}}
+        ])],
+    ))
+    .unwrap();
+    let objects = json["nftables"].as_array_mut().unwrap();
+    objects.push(json!({"chain": {"family": "inet", "table": "vps_ready", "name": "trusted"}}));
+    objects.push(json!({"rule": {
+        "family": "inet", "table": "vps_ready", "chain": "trusted", "expr": [{"accept": null}]
+    }}));
+    facts.firewall = crate::facts::firewall::parse_json(&serde_json::to_vec(&json).unwrap());
+    assert_eq!(
+        finding(&facts, "SSH-009").outcome,
+        Outcome::Fail {
+            found: "SSH is accepted beyond a VPN: tcp/22 on eth0".into()
+        }
+    );
+}
+
+/// Containers reach every host port through Docker's bridges, but those
+/// are not the internet: the table still limits SSH to `ssh_via`.
+#[test]
+fn docker_bridge_accepts_keep_ssh_limited_to_the_interface() {
+    use crate::audit::Outcome;
+    let json = via_with("wg0", &[iifname_accept("docker0"), iifname_accept("br-*")]);
+    let params: Params = parse_params(&params("allow = [\"80/tcp\"]\nssh_via = \"wg0\"")).unwrap();
+    let mut facts = via_facts("10.77.0.1:22");
+    let mut want = Ruleset::new(&facts, &params);
+    want.docker = true;
+    assert_eq!(check_loaded(&json, &want), Ok(()));
+    // Without deploy.docker, those accepts are not the table's.
+    want.docker = false;
+    assert_eq!(
+        check_loaded(&json, &want),
+        Err("it accepts tcp/22 on interfaces other than wg0".to_owned())
+    );
+    facts.firewall = crate::facts::firewall::parse_json(&json);
+    facts.docker = true;
+    facts.bridges = vec![crate::facts::Bridge {
+        name: "docker0".to_owned(),
+        docker: true,
+    }];
+    assert_eq!(finding(&facts, "SSH-009").outcome, Outcome::Pass);
+    assert_eq!(finding(&facts, "FW-003").outcome, Outcome::Pass);
+    // A bridge Docker did not name: `br-*` may face the internet, unless
+    // the rule leaves it out, as the template does.
+    facts.bridges.push(crate::facts::Bridge {
+        name: "br-lan".to_owned(),
+        docker: false,
+    });
+    assert_eq!(
+        finding(&facts, "SSH-009").outcome,
+        Outcome::Fail {
+            found: "SSH is accepted beyond a VPN: tcp/22 on br-*".into()
+        }
+    );
+    let except_lan = serde_json::json!([
+        {"match": {"op": "==", "left": {"meta": {"key": "iifname"}}, "right": "br-*"}},
+        {"match": {"op": "!=", "left": {"meta": {"key": "iifname"}}, "right": "br-lan"}},
+        {"accept": null}
+    ]);
+    facts.firewall = crate::facts::firewall::parse_json(&via_with(
+        "wg0",
+        &[iifname_accept("docker0"), except_lan],
+    ));
+    assert_eq!(finding(&facts, "SSH-009").outcome, Outcome::Pass);
+    assert_eq!(finding(&facts, "FW-003").outcome, Outcome::Pass);
+    // Unknown bridges: `br-*` may be anything.
+    facts.bridges_known = false;
+    assert!(matches!(
+        finding(&facts, "SSH-009").outcome,
+        Outcome::Fail { found } if found.ends_with("on br-*")
+    ));
+
+    // `ssh_via` on another VPN: the Docker accepts before its rule are not
+    // the `ssh_via` rule.
+    let mut nb0 = via_on("nb0", "10.78.0.1");
+    nb0.docker = true;
+    nb0.firewall = crate::facts::firewall::parse_json(&via_with(
+        "nb0",
+        &[iifname_accept("docker0"), iifname_accept("br-*")],
+    ));
+    nb0.listeners = vec![listener(22, "sshd")];
+    assert_eq!(
+        crate::modules::firewall_inbound::private_via(&nb0).as_deref(),
+        Some("nb0")
+    );
+    assert_eq!(finding(&nb0, "SSH-009").outcome, Outcome::Pass);
+    assert_eq!(finding(&nb0, "FW-003").outcome, Outcome::Pass);
+    // Without a counted VPN, the skip names nb0, not docker0.
+    nb0.routes.clear();
+    nb0.interfaces.retain(|i| !i.is_vpn());
+    match finding(&nb0, "SSH-009").outcome {
+        Outcome::Skip { reason } => assert!(reason.contains("interface nb0 is not"), "{reason}"),
+        other => panic!("{other:?}"),
+    }
+}
+
 /// The table limits SSH to `name`, a `tun` link with `ip`, on the hosts
 /// of [`via_facts`].
 fn via_on(name: &str, ip: &str) -> Facts {
