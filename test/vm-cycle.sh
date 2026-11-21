@@ -794,7 +794,8 @@ vm sudo install -m 755 /tmp/vps-ready /usr/local/bin/vps-ready
 echo "== $distro: sudo"
 sudo_version=$(vm sudo -V | head -n 1)
 echo "$sudo_version"
-visudo_path=$(vm sudo sh -c 'readlink -f "$(command -v visudo)"')
+# One string, so the remote shell sees the quotes.
+visudo_path=$(vm 'readlink -f "$(PATH=$PATH:/usr/sbin command -v visudo)"')
 echo "visudo: $visudo_path"
 # Ubuntu 26.04's cloud image must really run sudo-rs, or this checks nothing new.
 if [ "$distro" = ubuntu-26.04 ]; then
