@@ -5,12 +5,18 @@ on:
   push:
     branches: [main]
   pull_request:
+    # Everything built into the binary the VMs run, and the cycle itself.
     paths:
-      - crates/vps-ready/src/cli/**
-      - crates/vps-ready/src/engine/**
-      - crates/vps-ready/src/resource/**
-      - crates/vps-ready/src/modules/**
-      - crates/vps-ready/src/sys/**
+      - crates/vps-ready/src/**
+      - crates/vps-ready/templates/**
+      - crates/vps-ready/keys/**
+      - crates/vps-ready/build.rs
+      - crates/vps-ready/Cargo.toml
+      - crates/sshd-config/src/**
+      - crates/sshd-config/Cargo.toml
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
       - test/vm-*
       - .github/workflows/vm.yml
   schedule:
