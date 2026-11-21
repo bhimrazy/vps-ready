@@ -406,8 +406,8 @@ pub trait Fs {
     /// [`SysError::Permission`] or [`SysError::Io`].
     fn append_sync(&self, path: &Path, bytes: &[u8]) -> Result<(), SysError>;
 
-    /// Removes the file or symlink at `path` (not a directory). The removal
-    /// is durable only after [`Fs::sync_dir`] on the parent.
+    /// Removes the file or symlink at `path` (not a directory) and syncs its
+    /// parent, so the removal is durable.
     ///
     /// # Errors
     ///
@@ -909,7 +909,9 @@ impl Fs for RealFs {
     fn remove(&self, path: &Path) -> Result<(), SysError> {
         let (dir, name) = self.open_parent(path)?;
         rfs::unlinkat(&dir, name, AtFlags::empty())
-            .map_err(|e| errno(path.display().to_string(), e))
+            .map_err(|e| errno(path.display().to_string(), e))?;
+        // The held fd, not the path: the parent's owner may swap it meanwhile.
+        rfs::fsync(&dir).map_err(|e| errno(path.display().to_string(), e))
     }
 
     fn create_dir_all(&self, path: &Path, mode: u32) -> Result<(), SysError> {
