@@ -20,9 +20,9 @@ function tagDate(tag: string): string {
 export const RELEASE_DATE = tagDate(`v${VERSION}`);
 
 export const REPO = 'https://github.com/bhimrazy/vps-ready';
-export const INSTALL_URL = `${REPO}/releases/latest/download/install.sh`;
 // The assets of this version's release, named as the release workflow names them.
 export const RELEASE_BASE = `${REPO}/releases/download/v${VERSION}`;
+export const INSTALL_URL = `${RELEASE_BASE}/install.sh`;
 export const RELEASE_ASSETS = [
   { arch: 'x86_64', deb: `vps-ready_${VERSION}_amd64.deb`, tarball: `vps-ready-${VERSION}-x86_64-unknown-linux-musl.tar.gz` },
   { arch: 'aarch64', deb: `vps-ready_${VERSION}_arm64.deb`, tarball: `vps-ready-${VERSION}-aarch64-unknown-linux-musl.tar.gz` },
@@ -47,7 +47,7 @@ export const LINKS = {
 };
 // Shown in every footer; net.tailscale runs `tailscale up` only with an auth key.
 export const NO_TELEMETRY =
-  'No telemetry and no self-update. vps-ready itself reaches the network only through apt and, if you configure it, tailscale up.';
+  'No telemetry and no self-update. vps-ready itself uses the network only for apt, for tailscale up if you configure Tailscale, and to look up the domains you list for Caddy.';
 export const EMAIL = 'contact@bhimraj.com.np';
 export const MAILTO = `mailto:${EMAIL}?subject=vps-ready%3A%20&body=Hi%20Bhimraj%2C%0A%0A%0A%0A---%0Avps-ready%20version%20(vps-ready%20--version)%3A%20%0AServer%20OS%3A%20`;
 

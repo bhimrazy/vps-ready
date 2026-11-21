@@ -1,5 +1,5 @@
 ---
-title: "vps-ready: audit and harden a Debian or Ubuntu VPS"
+title: "Audit and harden a Debian or Ubuntu VPS"
 description: vps-ready audits a fresh server and hardens it, with a plan you review first, a journal you can undo, and a safety net that rolls back lockouts.
 sidebar:
   label: Introduction
@@ -31,7 +31,7 @@ Every command before `apply` only reads. `apply` shows the plan again and asks b
 - **Guard against lockouts.** Root and password logins stay on until an admin user with an SSH key and sudo exists. The firewall always allows the SSH port that is actually in use.
 - **Prove it from a new login.** Risky changes roll back on their own unless a new SSH login runs `confirm` in time, even if your terminal is gone or the server reboots.
 - **Show, then do.** Nothing changes without a plan you can read. Every change is labeled reversible or partial.
-- **Your files stay yours.** vps-ready writes its own drop-in files and never rewrites your `sshd_config` in place. No telemetry and no self-update. vps-ready itself reaches the network only through apt and, if you configure it, `tailscale up`.
+- **Your files stay yours.** vps-ready writes its own drop-in files and never rewrites your `sshd_config` in place. No telemetry and no self-update. vps-ready itself uses the network only for apt, for `tailscale up` if you configure Tailscale, and to look up the domains you list for Caddy.
 
 Checks read the live state (`sshd -T`, `/proc/sys`, `apt-config`, `nft`, `ss`), not a guess at what a config file means.
 

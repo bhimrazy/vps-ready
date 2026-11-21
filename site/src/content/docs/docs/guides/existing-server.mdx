@@ -8,7 +8,7 @@ sidebar:
 
 import { Steps } from '@astrojs/starlight/components';
 
-vps-ready is built for fresh servers, but it is careful on busy ones too. It reads the live state, changes only what fails, writes its own files instead of editing yours, and tells you in the plan what it will leave alone. The rule is simple: **read the plan before you apply**, because the firewall blocks any port your services need that the profile does not allow.
+vps-ready is built for fresh servers, but it is careful on busy ones too. It reads the live state, changes only what fails, writes its own files instead of editing yours, and tells you in the plan what it will leave alone. **Read the plan before you apply**, because the firewall blocks any port your services need that the profile does not allow.
 
 <Steps>
 
@@ -65,7 +65,7 @@ vps-ready's rules do not show in `ufw status`. Use `sudo nft list table inet vps
 
 ## Docker ports and the firewall
 
-Docker and the firewall get along, with one thing you must know.
+Docker works with the firewall, with one exception: published ports.
 
 - **Containers keep working.** When Docker is installed, traffic from `docker0` and `br-*` to the host is accepted, so containers can still reach services on the host. A `br-*` interface that Docker did not name, such as a netplan or LXD bridge, is filtered like any other. The plan notes the cost: a compromised container can reach every host service, as with no firewall.
 - **Published ports skip the firewall.** Traffic to a port Docker publishes (`-p 5432:5432`) is forwarded to the container and never passes the input rules of any host firewall, ufw and firewalld included. Only the rule that drops IPv4 TCP with IP options (CVE-2026-98432) runs before forwarding and covers them too. The plan lists those ports, and the `FW-002` control fails while they are open to the world.

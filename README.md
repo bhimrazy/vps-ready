@@ -8,7 +8,7 @@
 <div align="center">
 
 **Secure a fresh Debian or Ubuntu server without locking yourself out.**<br>
-One static binary: audit, a plan you read first, and a rollback timer that undoes SSH and firewall changes unless a new login confirms.
+One static binary: audit, a plan you read first, and a safety timer that undoes SSH and firewall changes unless a new login confirms.
 
 <pre>
 ✅ Rolls back unless a new SSH login confirms   ✅ Plan first, journaled rollback after
@@ -75,7 +75,7 @@ Run that command from a new terminal. If the new login works, `confirm` succeeds
   <br><sub>A real session in a Debian 13 VM: the end of <code>audit</code>, all of <code>plan</code>, and <code>apply</code> from its prompt on (it prints the same plan first).</sub>
 </p>
 
-The command is also installed as `vpsready`, without the hyphen. With Rust installed you can build from source instead: `cargo install vps-ready --locked`. Each release also has `.deb` packages for Debian and Ubuntu (checked against `checksums.txt`) and an SBOM; a signed apt repository, and dnf and apk packages, wait until they are needed. The trust model of each install channel is in [the release doc](docs/release.md).
+The command is also installed as `vpsready`, without the hyphen. With Rust installed you can build from source instead: `cargo install vps-ready --locked`. Each release also has `.deb` packages for Debian and Ubuntu (checked against `checksums.txt`) and an SBOM. There is no apt repository: the binaries and `.deb` packages come from GitHub releases. The trust model of each install channel is in [the release doc](docs/release.md).
 
 ## Why
 
@@ -91,7 +91,7 @@ Auditors report problems and leave the fixes to you. Configuration management fi
 | `vps-ready detect` | Read-only facts: distro, init system, virtualization, effective SSH config, listening ports, whether Docker is present | available |
 | `vps-ready audit` | Checks the host against controls with stable IDs (for example `SSH-002`), each with the reason it matters. Lists only failed and unknown controls, and `--all` adds the rest. Text or JSON (`--json`, always complete); exits 0 only when no control fails or is unknown | available |
 | `vps-ready plan` | A diff of every file and setting that would change, with a one-line reason for each | available |
-| `vps-ready apply` | Snapshots originals, validates, writes atomically and rolls back if anything fails. Changes that could lock you out arm a dead-man timer first and wait for a confirm. Exit codes: 0 applied or confirmed, 1 failed or rolled back, 2 error, 3 rollback did not complete, 4 still pending (you pressed Ctrl-C while it waited; the timer keeps running) | available |
+| `vps-ready apply` | Snapshots originals, validates, writes atomically and rolls back if anything fails. Changes that could lock you out arm a safety timer first and wait for a confirm. Exit codes: 0 applied or confirmed, 1 failed or rolled back, 2 error, 3 rollback did not complete, 4 still pending (you pressed Ctrl-C while it waited; the timer keeps running) | available |
 | `vps-ready confirm` | Run from a **new** SSH login, as the admin, to prove the new configuration works (no code to type). Without it, the change reverts automatically. `--extend` adds time | available |
 | `vps-ready rollback` | Restores the previous state from the transaction journal (`--last` or `--txn ID`); `vps-ready history` lists transactions | available |
 | `vps-ready modules [ID]` | Lists the modules and whether each applies to this server; with an ID, why it matters, its params and the audit controls it fixes. No root needed. `--json` too | available |
@@ -100,7 +100,7 @@ Auditors report problems and leave the fixes to you. Configuration management fi
 
 Hardening is grouped into modules:
 
-| Module | What it does | Fixes | Dead-man |
+| Module | What it does | Fixes | Safety timer |
 |---|---|---|---|
 | `user.admin` | A login user other than root, with your SSH keys (copied from the account you logged in with, or given in a profile) and sudo | needed before root login is turned off | yes |
 | `ssh.server` | One drop-in, `/etc/ssh/sshd_config.d/00-vps-ready.conf`, that turns off root and password logins and the other failing settings; reloads sshd. The port stays 22 | `SSH-001` to `SSH-007` | yes |
@@ -122,29 +122,29 @@ Profiles pick the modules: **minimal** is `user.admin`, `ssh.server`, `firewall.
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/how-it-works.png">
-    <img src="assets/how-it-works-light.png" alt="Three phases. 1, detect and audit (available now): reads live state, reports controls, read-only. 2, plan and apply (available now): a readable diff of every change, then snapshot, validate and atomic write, rolled back on any failure; rollback --last undoes a transaction and history lists them. 3, confirm or revert (available now): SSH and firewall changes arm a dead-man timer and are reverted unless confirmed from a new SSH login." width="100%">
+    <img src="assets/how-it-works-light.png" alt="Three phases. 1, detect and audit (available now): reads live state, reports controls, read-only. 2, plan and apply (available now): a readable diff of every change, then snapshot, validate and atomic write, rolled back on any failure; rollback --last undoes a transaction and history lists them. 3, confirm or revert (available now): SSH and firewall changes arm a safety timer and are reverted unless confirmed from a new SSH login." width="100%">
   </picture>
 </p>
 
-If any step inside `apply` fails, the engine restores the snapshots in reverse order before it ever reaches the confirm step. For the modules that can lock you out, the engine arms the dead-man timer **before the first change**, so even a crash or a dropped connection mid-apply is rolled back. The full design is in [the design doc](docs/design.md#dead-man-switch).
+If any step inside `apply` fails, the engine restores the snapshots in reverse order before it ever reaches the confirm step. For the modules that can lock you out, the engine arms the safety timer **before the first change**, so even a crash or a dropped connection mid-apply is rolled back. The full design is in [the design doc](docs/design.md#dead-man-switch).
 
 ## Safety guarantees
 
 The engine is built around these rules, so they hold for every module rather than being left to each one.
 
 - **Guard against lockouts.** Passwords and root login are not disabled until a keyed sudo user has logged in from a fresh session. The firewall always allows the SSH port that is actually in use.
-- **Confirm from a new connection.** Your open terminal proves nothing, because sshd reloads and conntrack keep existing sessions alive. The dead-man timer reverts the admin user, SSH and firewall changes unless you confirm from a new SSH login within 5 minutes (`--deadman 1m` to `30m`), even if the tool or the terminal is gone, and even across a reboot. tmux, screen, mosh and connections shared through `ControlMaster` count as old.
+- **Confirm from a new connection.** Your open terminal proves nothing, because sshd reloads and conntrack keep existing sessions alive. The safety timer reverts the admin user, SSH and firewall changes unless you confirm from a new SSH login within 5 minutes (`--deadman 1m` to `30m`), even if the tool or the terminal is gone, and even across a reboot. tmux, screen, mosh and connections shared through `ControlMaster` count as old.
 - **Show, then do.** Nothing changes without a plan you can read. Every change carries a reversibility label: reversible, or partial when rollback leaves part of it in place (an installed package, a created user's home).
 - **Effective state over file state.** Checks use `sshd -T`, `/proc/sys`, `apt-config`, `nft` and `ss`, not a guess at what a config file means.
 - **Drop-ins, not edits.** The tool owns files like `/etc/ssh/sshd_config.d/00-vps-ready.conf` and never rewrites your `sshd_config` in place. That is also what beats cloud-init re-enabling passwords.
 - **Docker- and cloud-aware.** Container ports bypass ufw and firewalld by default; `ip_forward=0` kills Docker; cloud metadata must stay reachable. vps-ready handles each of these instead of only warning about it.
-- **No network calls** except package installs. No telemetry, no self-update.
+- **No telemetry and no self-update.** vps-ready itself uses the network only for apt, for `tailscale up` if you configure Tailscale, and to look up the domains you list for Caddy.
 
 ## Supported platforms
 
 | Family | Distros | Firewall | Init | Status |
 |---|---|---|---|---|
-| Debian | Ubuntu 22.04, 24.04, 26.04; Debian 12, 13 | nftables (its own table; not applied while ufw or firewalld is active) | systemd | since v0.2; Ubuntu 26.04 tested since v0.8 |
+| Debian | Ubuntu 22.04, 24.04, 26.04; Debian 12, 13 | nftables (its own table; not applied while ufw or firewalld is active) | systemd | since v0.2; Ubuntu 26.04 in the test matrix from v0.8.0 |
 | RHEL | Rocky and Alma 9, 10; Fedora | firewalld | systemd | later |
 | Alpine | 3.2x | nftables | OpenRC | later |
 
