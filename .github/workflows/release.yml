@@ -45,11 +45,6 @@ jobs:
     env:
       TARGET: ${{ matrix.target }}
       DEB_ARCH: ${{ matrix.deb_arch }}
-      # Pinned nFPM release and the SHA-256 of its Linux x86_64 tarball, so a
-      # tarball replaced upstream, with its checksums.txt, fails the job.
-      NFPM_VERSION: 2.48.0
-      NFPM_SHA256: 6d7f9a28b2f397934403950fcbba83f598b08d02edbe79a0815b3b4897341750
-      CARGO_AUDITABLE_VERSION: 0.7.7
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -74,66 +69,16 @@ jobs:
           crate=$(cargo pkgid -p vps-ready | sed 's/.*[#@]//')
           [ "$crate" = "$VERSION" ] || { echo "tag v$VERSION != crate $crate"; exit 1; }
 
-      - run: cargo install --locked --version "$CARGO_AUDITABLE_VERSION" cargo-auditable
+      - run: scripts/install-cargo-auditable.sh
 
       # Linked with rust-lld and the musl CRT bundled with the Rust target
-      # (see .cargo/config.toml).
+      # (see .cargo/config.toml). Also checks the binary is static and
+      # carries its dependency list.
       - run: scripts/release-build.sh "$TARGET"
 
-      - name: Check the binary is static and carries its dependency list
-        run: |
-          bin="target/$TARGET/release/vps-ready"
-          file "$bin" | tee /dev/stderr | grep -Eq 'statically linked|static-pie linked'
-          readelf -S "$bin" | grep -q '\.dep-v0'
-
-      # Generated from the clap definitions, so they match this build's CLI.
-      - name: Man pages, completions and the Debian changelog
-        run: |
-          gen=target/gen-docs
-          cargo xtask gen-docs "$gen"
-          for f in "$gen"/man/*.1; do gzip -9n < "$f" > "$f.gz"; done
-          maintainer=$(sed -n 's/^maintainer: //p' packaging/nfpm.yaml)
-          {
-            echo "vps-ready ($VERSION) unstable; urgency=medium"
-            echo
-            echo "  * Release notes: https://github.com/$GITHUB_REPOSITORY/releases/tag/v$VERSION"
-            echo
-            echo " -- $maintainer  $(date -u -R -d "@$SOURCE_DATE_EPOCH")"
-          } | gzip -9n > "$gen/changelog.gz"
-
-      - name: Package
-        run: |
-          name="vps-ready-$VERSION-$TARGET"
-          mkdir -p "dist/$name"
-          cp "target/$TARGET/release/vps-ready" LICENSE-APACHE LICENSE-MIT NOTICE README.md "dist/$name/"
-          cp -R target/gen-docs/man target/gen-docs/completions "dist/$name/"
-          rm "dist/$name"/man/*.gz
-          tar --sort=name --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner \
-            -C dist -cf - "$name" | gzip -n > "dist/$name.tar.gz"
-
-      # The runner is x86_64 whatever the target, so the Linux x86_64 nFPM is
-      # the one to run. The tarball must match the pinned NFPM_SHA256, or the
-      # job fails.
-      - name: Install nFPM
-        run: |
-          file="nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
-          base="https://github.com/goreleaser/nfpm/releases/download/v$NFPM_VERSION"
-          mkdir -p "$RUNNER_TEMP/nfpm"
-          cd "$RUNNER_TEMP/nfpm"
-          curl --proto '=https' --tlsv1.2 -fsSLO "$base/$file"
-          echo "$NFPM_SHA256  $file" | sha256sum -c -
-          tar -xzf "$file" nfpm
-          echo "$PWD" >> "$GITHUB_PATH"
-
-      - name: Build the .deb
-        run: |
-          deb="vps-ready_${VERSION}_${DEB_ARCH}.deb"
-          ARCH="$DEB_ARCH" BINARY="target/$TARGET/release/vps-ready" \
-            nfpm package -f packaging/nfpm.yaml -p deb -t "dist/$deb"
-          dpkg-deb --info "dist/$deb"
-          dpkg-deb --contents "dist/$deb" | tee "$RUNNER_TEMP/contents"
-          [ "$(dpkg-deb --field "dist/$deb" Architecture)" = "$DEB_ARCH" ]
-          grep -q ' ./usr/share/man/man1/vps-ready.1.gz$' "$RUNNER_TEMP/contents"
+      # The tarball and the .deb, with the man pages, completions and
+      # changelog; checks the .deb's version and contents.
+      - run: scripts/package.sh "$TARGET" "$DEB_ARCH"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

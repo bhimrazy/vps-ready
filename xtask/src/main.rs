@@ -40,12 +40,18 @@ fn main() -> ExitCode {
 }
 
 /// Writes the man pages and completions under `dir` and returns the files
-/// written, sorted.
+/// written, sorted. Empties `dir/man` and `dir/completions` first, so stale
+/// pages from a renamed subcommand don't ship.
 fn gen_docs(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
     let man = dir.join("man");
     let completions = dir.join("completions");
-    std::fs::create_dir_all(&man)?;
-    std::fs::create_dir_all(&completions)?;
+    for d in [&man, &completions] {
+        match std::fs::remove_dir_all(d) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+            _ => {}
+        }
+        std::fs::create_dir_all(d)?;
+    }
 
     // One page for the command and one per visible subcommand.
     clap_mangen::generate_to(vps_ready::cli::Cli::command(), &man)?;
@@ -103,6 +109,17 @@ mod tests {
         for w in &want {
             assert!(dir.join(w).is_file(), "missing {w}");
         }
+    }
+
+    #[test]
+    fn removes_stale_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("man")).unwrap();
+        let stale = tmp.path().join("man/vps-ready-gone.1");
+        std::fs::write(&stale, "").unwrap();
+        let files = gen_docs(tmp.path()).unwrap();
+        assert!(!stale.exists());
+        assert!(files.iter().all(|f| f.exists()));
     }
 
     #[test]

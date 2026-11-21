@@ -18,10 +18,10 @@ A hardening tool that runs as root is a prime supply-chain target. Users who car
   ```
 
   Why `panic = "abort"` is safe here: the engine never relies on `Drop` running during a panic to clean up. A crash mid-transaction is handled the same way as a power cut, by the on-disk journal and the dead-man timer ([the architecture doc](architecture.md)).
-- **Reproducible builds** (the target, not yet verified bit for bit). The steps:
+- **Reproducible builds** (the target). CI builds each release binary twice, from different paths and cargo homes, and fails if the hashes differ. That shows two builds match; it does not yet show that a published asset rebuilds to the same bytes. The steps:
   1. `--locked` plus the pinned toolchain: same inputs, same compiler.
   2. `SOURCE_DATE_EPOCH` set to the tag's commit timestamp, used for anything that would otherwise embed "now" (tarball mtimes, build metadata).
-  3. `--remap-path-prefix` for the checkout, cargo home and rustup paths, so absolute paths from the build machine don't leak into panic messages. CI builds the binary twice, from different paths and cargo homes, and fails if the hashes differ.
+  3. `--remap-path-prefix` for the checkout, cargo home and rustup paths, so absolute paths from the build machine don't leak into panic messages.
   4. Deterministic archives: `tar --sort=name --mtime=@$SOURCE_DATE_EPOCH --owner=0 --group=0 --numeric-owner`, then `gzip -n`.
   5. Planned: `make reproduce VERSION=v0.3.0`: it checks out the tag, builds both targets with the same toolchain in a container, and compares the SHA256 of each tarball with the published `checksums.txt`. Anyone can run it.
 

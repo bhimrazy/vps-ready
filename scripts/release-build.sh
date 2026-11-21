@@ -16,7 +16,8 @@ rustup_home=${RUSTUP_HOME:-$HOME/.rustup}
 
 # Without these, panic locations embed the checkout, cargo home and rustup
 # paths of the build machine, so a rebuild elsewhere differs. Unit separated,
-# so paths may contain spaces.
+# so paths may contain spaces. It replaces any other rustflags (RUSTFLAGS,
+# rustflags in .cargo/config.toml) for this build.
 CARGO_ENCODED_RUSTFLAGS=$(printf '%s\037%s\037%s' \
 	"--remap-path-prefix=$root=/build" \
 	"--remap-path-prefix=$cargo_home=/cargo" \
@@ -32,3 +33,13 @@ for p in "$root" "$cargo_home" "$rustup_home"; do
 		exit 1
 	fi
 done
+
+# Static, and carrying the dependency list (needs file and readelf).
+file "$bin" | grep -Eq 'statically linked|static-pie linked' || {
+	echo "error: $bin is not static" >&2
+	exit 1
+}
+readelf -S "$bin" | grep -q '\.dep-v0' || {
+	echo "error: $bin has no .dep-v0 section" >&2
+	exit 1
+}
