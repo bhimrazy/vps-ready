@@ -82,13 +82,7 @@ pub(super) fn restore(sys: Sys, path: &Path, created: bool) -> Result<(), Resour
         return Ok(());
     }
     match sys.fs.remove_dir(path) {
-        Ok(()) => {
-            if let Some(parent) = path.parent() {
-                sys.fs.sync_dir(parent)?;
-            }
-            Ok(())
-        }
-        Err(SysError::NotFound(_)) => Ok(()),
+        Ok(()) | Err(SysError::NotFound(_)) => Ok(()),
         Err(SysError::Io { source, .. }) if source.kind() == io::ErrorKind::DirectoryNotEmpty => {
             tracing::warn!(dir = %path.display(), "left in place: it holds other files");
             Ok(())
