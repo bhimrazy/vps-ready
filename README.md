@@ -27,14 +27,14 @@ One static binary: audit, a plan you read first, and a safety timer that undoes 
 </div>
 
 > [!NOTE]
-> vps-ready is at **v0.7** and works on Debian 12/13 and Ubuntu 22.04/24.04/26.04 with systemd: `detect` and `audit` (34 controls), and `plan`, `apply`, `confirm` and `rollback` for [twelve modules](#what-it-does). Expect breaking changes before 1.0.
+> vps-ready is at **v0.8** and works on Debian 12/13 and Ubuntu 22.04/24.04/26.04 with systemd: `detect` and `audit` (34 controls), and `plan`, `apply`, `confirm` and `rollback` for [twelve modules](#what-it-does). Expect breaking changes before 1.0.
 
 ## Quick start
 
 On the server, as root. Installation is three steps on purpose: download, read, run.
 
 ```console
-# curl -fsSLO https://github.com/bhimrazy/vps-ready/releases/download/v0.7.0/install.sh
+# curl -fsSLO https://github.com/bhimrazy/vps-ready/releases/download/v0.8.0/install.sh
 # less install.sh
 # sh install.sh
 ```
@@ -159,7 +159,7 @@ Architectures: x86_64 and aarch64, as static musl binaries. Windows, BSD, Kubern
 | [Supply chain and release](docs/release.md) | How users can trust a root tool: signing, provenance, reproducible builds, install script; the release checklist |
 | [M7 plan](docs/m7-plan.md) | The accepted plan from v0.7.0 to v1.0.0 |
 
-The roadmap lives in the [GitHub milestones](https://github.com/bhimrazy/vps-ready/milestones): M0 skeleton, M1 read-only `detect` and `audit` (v0.1.0), M2 engine and safe modules (v0.2.0), M3 SSH, firewall and dead-man switch (v0.3.0), M4 interactive wizard (v0.4.0), M5 deployment readiness (v0.5.0), M6 private access (v0.6.0), M7 web through a tunnel (v0.7.0) and more depth.
+The roadmap lives in the [GitHub milestones](https://github.com/bhimrazy/vps-ready/milestones): M0 skeleton, M1 read-only `detect` and `audit` (v0.1.0), M2 engine and safe modules (v0.2.0), M3 SSH, firewall and dead-man switch (v0.3.0), M4 interactive wizard (v0.4.0), M5 deployment readiness (v0.5.0), M6 private access (v0.6.0), M7 web through a tunnel (v0.7.0), Ubuntu 26.04, packaging and security fixes (v0.8.0), then `config.toml`, drift, SARIF and JUnit output and a JSON Schema (v0.9.0).
 
 ## Development
 
