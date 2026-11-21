@@ -1,0 +1,2 @@
+# Static by design: one musl binary runs on every supported release.
+vps-ready: statically-linked-binary [usr/bin/vps-ready]
