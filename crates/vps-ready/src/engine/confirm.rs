@@ -255,10 +255,10 @@ impl Engine<'_> {
     /// loopback is refused too. When the transaction limits SSH to an
     /// interface, the login's server address must be one of that
     /// interface's in `interfaces`, the host's now.
-    /// Journals `confirmed` and
-    /// the state, and only then stops its timers and disables the boot hook,
-    /// best effort: a timer or a hook that runs anyway finds it confirmed.
-    /// Returns its ID.
+    /// Journals `confirmed` and the state, and only then stops its timers
+    /// and disables the boot hook unless another transaction still needs
+    /// it, best effort: a timer or a hook that runs anyway finds it
+    /// confirmed. Returns its ID.
     ///
     /// # Errors
     ///
