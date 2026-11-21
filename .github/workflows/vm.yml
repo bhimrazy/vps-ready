@@ -17,6 +17,7 @@ on:
       - Cargo.toml
       - Cargo.lock
       - rust-toolchain.toml
+      - .cargo/config.toml
       - test/vm-*
       - .github/workflows/vm.yml
   schedule:

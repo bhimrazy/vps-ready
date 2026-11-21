@@ -144,7 +144,7 @@ The engine is built around these rules, so they hold for every module rather tha
 
 | Family | Distros | Firewall | Init | Status |
 |---|---|---|---|---|
-| Debian | Ubuntu 22.04, 24.04, 26.04; Debian 12, 13 | nftables (its own table; not applied while ufw or firewalld is active) | systemd | since v0.2 |
+| Debian | Ubuntu 22.04, 24.04, 26.04; Debian 12, 13 | nftables (its own table; not applied while ufw or firewalld is active) | systemd | since v0.2; Ubuntu 26.04 tested since v0.8 |
 | RHEL | Rocky and Alma 9, 10; Fedora | firewalld | systemd | later |
 | Alpine | 3.2x | nftables | OpenRC | later |
 

@@ -792,7 +792,15 @@ vm sudo install -m 755 /tmp/vps-ready /usr/local/bin/vps-ready
 # found through sudo's process tree, SUDO_USER, `visudo -cf` on a drop-in,
 # and `sudo -n -l -U` exiting 0 for a user with or without rules.
 echo "== $distro: sudo"
-vm sudo -V | head -n 1
+sudo_version=$(vm sudo -V | head -n 1)
+echo "$sudo_version"
+visudo_path=$(vm sudo sh -c 'readlink -f "$(command -v visudo)"')
+echo "visudo: $visudo_path"
+# Ubuntu 26.04's cloud image must really run sudo-rs, or this checks nothing new.
+if [ "$distro" = ubuntu-26.04 ]; then
+  case $sudo_version in "sudo-rs "*) ;; *) die "sudo is not sudo-rs: $sudo_version" ;; esac
+  case $visudo_path in */cargo/bin/visudo | *visudo-rs) ;; *) die "visudo is not sudo-rs's: $visudo_path" ;; esac
+fi
 vr detect --json >"$tmp/detect.json"
 jq -e '.session.user == "ci"' "$tmp/detect.json" >/dev/null ||
   { jq .session "$tmp/detect.json"; die "detect under sudo does not find ci's session"; }
@@ -802,13 +810,15 @@ vm "echo 'ci ALL=(ALL:ALL NOPASSWD: ALL' >/tmp/vr-sudoers-bad"
 vm sudo visudo -cf /tmp/vr-sudoers-ok >/dev/null || die "visudo -cf rejects a valid drop-in"
 ! vm sudo visudo -cf /tmp/vr-sudoers-bad >/dev/null 2>&1 || die "visudo -cf accepts a broken drop-in"
 vm rm -f /tmp/vr-sudoers-ok /tmp/vr-sudoers-bad
-# sudo_l <user>: `sudo -n -l -U <user>` as vps-ready runs it, into sudo-l.out.
+# sudo_l <user>: `sudo -n -l -U <user>` as vps-ready runs it. Its stdout,
+# which is what vps-ready reads, goes to sudo-l.out.
 sudo_l() {
-  rc=0; vm sudo env LC_ALL=C sudo -n -l -U "$1" >"$tmp/sudo-l.out" 2>&1 || rc=$?
-  [ "$rc" -eq 0 ] || { cat "$tmp/sudo-l.out"; die "sudo -n -l -U $1 exited $rc, expected 0"; }
+  rc=0; vm sudo env LC_ALL=C sudo -n -l -U "$1" >"$tmp/sudo-l.out" 2>"$tmp/sudo-l.err" || rc=$?
+  [ "$rc" -eq 0 ] || { cat "$tmp/sudo-l.out" "$tmp/sudo-l.err"; die "sudo -n -l -U $1 exited $rc, expected 0"; }
 }
 has_rules() { grep -q ' may run the following commands on ' "$tmp/sudo-l.out"; }
 sudo_l ci
+cat "$tmp/sudo-l.out"
 has_rules || { cat "$tmp/sudo-l.out"; die "sudo -l -U ci lists no rules"; }
 vm sudo useradd -m -s /bin/bash vr-sudo
 sudo_l vr-sudo
@@ -819,7 +829,7 @@ vm sudo usermod -aG sudo vr-sudo
 sudo_l vr-sudo
 has_rules || { cat "$tmp/sudo-l.out"; die "sudo -l -U lists no rules for a member of sudo"; }
 ! vm sudo -u vr-sudo sudo -n true 2>/dev/null || die "sudo without a password for a member of sudo"
-vm sudo userdel -r vr-sudo 2>/dev/null
+vm sudo userdel -r vr-sudo 2>/dev/null || die "userdel vr-sudo failed"
 # `--deadman=off` on a change that arms the timer sees this login.
 rc=0; vr apply --yes --module ssh.server --deadman=off >"$tmp/off.out" 2>&1 || rc=$?
 cat "$tmp/off.out"

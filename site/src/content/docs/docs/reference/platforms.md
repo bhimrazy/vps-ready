@@ -8,7 +8,7 @@ sidebar:
 
 | Family | Distros | Firewall | Init | Status |
 |---|---|---|---|---|
-| Debian | Ubuntu 22.04, 24.04, 26.04; Debian 12, 13 | nftables, its own table | systemd | since v0.2; Ubuntu 26.04 since v0.8 |
+| Debian | Ubuntu 22.04, 24.04, 26.04; Debian 12, 13 | nftables, its own table | systemd | since v0.2; Ubuntu 26.04 tested since v0.8 |
 | RHEL | Rocky and Alma 9, 10; Fedora | firewalld | systemd | planned, later |
 | Alpine | 3.2x | nftables | OpenRC | planned, later |
 

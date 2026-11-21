@@ -8,7 +8,7 @@
 # With <ssh-config>, it captures the VM whose `Host vm` reaches a user with
 # passwordless sudo instead, as test/vm-cycle.sh's `fixtures` cycle does. A VM
 # already has a login, so the before-login scenarios are left out, and the
-# sshd drop-ins the scenarios write are put back afterwards.
+# sshd drop-ins the scenarios write are put back on exit.
 #
 # Writes crates/vps-ready/testdata/hosts/<distro>/:
 #   root/...        files the facts code reads (os-release, /proc/1/comm,
@@ -27,6 +27,7 @@ image="vps-ready-test:$distro"
 out="crates/vps-ready/testdata/hosts/$distro"
 name="vps-ready-capture-$distro-$$"
 tmp=$(mktemp -d)
+restore=
 
 # x <argv...>: runs argv on the host as root, exactly: over SSH, each word is
 # quoted for the remote shell.
@@ -36,7 +37,16 @@ if [ -n "$sshcfg" ]; then
     for a; do cmd="$cmd '$(printf '%s' "$a" | sed "s/'/'\\\\''/g")'"; done
     ssh -F "$sshcfg" -o BatchMode=yes vm "sudo$cmd"
   }
-  cleanup() { rm -rf "$tmp"; }
+  # Puts the VM's sshd drop-ins back from dropins.tar, once that is known
+  # good: unpacked on the VM first, and swapped in only if it holds them.
+  cleanup() {
+    if [ -n "$restore" ]; then
+      x sh -c 'd=$(mktemp -d) && tar -C "$d" -xpf - && [ -d "$d/sshd_config.d" ] &&
+        rm -rf /etc/ssh/sshd_config.d && mv "$d/sshd_config.d" /etc/ssh/ && rmdir "$d"' \
+        <"$tmp/dropins.tar" || echo "could not restore /etc/ssh/sshd_config.d on the VM" >&2
+    fi
+    rm -rf "$tmp"
+  }
 else
   x() { docker exec "$name" "$@"; }
   cleanup() { docker rm -f "$name" >/dev/null 2>&1 || true; rm -rf "$tmp"; }
@@ -100,6 +110,9 @@ x cat /proc/net/if_inet6 >"$out/root/proc/net/if_inet6"
 mkdir -p "$out/root/etc/ssh"
 x cat /etc/ssh/sshd_config >"$out/root/etc/ssh/sshd_config"
 x tar -C /etc/ssh -cf - sshd_config.d >"$tmp/dropins.tar"
+tar -tf "$tmp/dropins.tar" | grep -q '^sshd_config.d/$' ||
+  { echo "the copy of /etc/ssh/sshd_config.d is not a tar of it" >&2; exit 1; }
+[ -z "$sshcfg" ] || restore=1
 tar -C "$out/root/etc/ssh" -xf "$tmp/dropins.tar"
 
 # A VM has its own kernel: the settings in facts/sysctl.rs (KEYS, and
@@ -150,9 +163,6 @@ x sh -c '
 scenario sshd-T-dropin-99 sshd -T
 x mv /etc/ssh/sshd_config.d/99-late.conf /etc/ssh/sshd_config.d/00-vps-ready.conf
 scenario sshd-T-dropin-00 sshd -T
-if [ -n "$sshcfg" ]; then
-  x sh -c 'rm -rf /etc/ssh/sshd_config.d && tar -C /etc/ssh -xpf -' <"$tmp/dropins.tar"
-fi
 
 cat "$tmp/plain.tsv" "$tmp/scenarios.tsv" >"$out/commands.tsv"
 echo "captured $(wc -l <"$out/commands.tsv" | tr -d ' ') commands into $out"
