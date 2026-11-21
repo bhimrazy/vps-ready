@@ -20,6 +20,11 @@
 #   cycle needs an image, since it boots fresh overlays.
 #
 # Cycles:
+#   sudo (sudo-rs on Ubuntu 26.04): detect under sudo finds the session and
+#     SUDO_USER is set; visudo -cf accepts a valid drop-in and rejects a
+#     broken one; sudo -n -l -U exits 0 and lists rules for a NOPASSWD user
+#     and a member of sudo (who needs a password), none for a user without;
+#     apply --deadman=off of ssh.server is refused, naming this login.
 #   kernel.sysctl, same boot: weaken five keys -> apply -> the controls pass
 #     -> rollback --last -> the keys are weak again and the drop-in is gone.
 #   kernel.sysctl, across a reboot: weaken -> plan -> apply -> reboot -> every
@@ -771,6 +776,8 @@ wait_ssh 300
 vm sudo cloud-init status --wait >/dev/null 2>&1 || true
 vm cat /etc/os-release | grep PRETTY_NAME
 vm uname -r
+vm systemctl --version | head -n 1
+vm ssh -V
 
 if [ "$cycle" = fixtures ]; then
   test/capture-host-fixtures.sh "$distro" "$sshcfg"
@@ -813,6 +820,11 @@ sudo_l vr-sudo
 has_rules || { cat "$tmp/sudo-l.out"; die "sudo -l -U lists no rules for a member of sudo"; }
 ! vm sudo -u vr-sudo sudo -n true 2>/dev/null || die "sudo without a password for a member of sudo"
 vm sudo userdel -r vr-sudo 2>/dev/null
+# `--deadman=off` on a change that arms the timer sees this login.
+rc=0; vr apply --yes --module ssh.server --deadman=off >"$tmp/off.out" 2>&1 || rc=$?
+cat "$tmp/off.out"
+[ "$rc" -eq 2 ] || die "apply --deadman=off from a login exited $rc, expected 2"
+grep -q 'someone is logged in (.*ci@' "$tmp/off.out" || die "apply --deadman=off did not name this login"
 
 echo "== $distro: vps-ready audit"
 rc=0; vr audit || rc=$?

@@ -373,17 +373,21 @@ fn a_fresh_host_gets_docker_from_its_repository() {
 /// Ubuntu's codename and repository.
 #[test]
 fn ubuntu_uses_its_own_repository() {
-    let (fs, runner) = (fs(), Apt::default());
-    let facts = host("ubuntu-24.04", &[]);
-    let steps = steps(&facts, &fs, &runner);
-    let Some(Resource::File(source)) = steps.resources.get(2) else {
-        panic!("{:?}", steps.resources);
-    };
-    let source = String::from_utf8(source.content.clone()).unwrap();
-    assert!(
-        source.contains("URIs: https://download.docker.com/linux/ubuntu\nSuites: noble\n"),
-        "{source}"
-    );
+    for (name, codename) in [("ubuntu-24.04", "noble"), ("ubuntu-26.04", "resolute")] {
+        let (fs, runner) = (fs(), Apt::default());
+        let facts = host(name, &[]);
+        let steps = steps(&facts, &fs, &runner);
+        let Some(Resource::File(source)) = steps.resources.get(2) else {
+            panic!("{name}: {:?}", steps.resources);
+        };
+        let source = String::from_utf8(source.content.clone()).unwrap();
+        assert!(
+            source.contains(&format!(
+                "URIs: https://download.docker.com/linux/ubuntu\nSuites: {codename}\n"
+            )),
+            "{source}"
+        );
+    }
 }
 
 /// Apply installs and restarts Docker; the next plan is empty; rollback

@@ -1,0 +1,9 @@
+Id=firewalld.service
+LoadState=not-found
+ActiveState=inactive
+UnitFileState=
+
+Id=nftables.service
+LoadState=loaded
+ActiveState=inactive
+UnitFileState=disabled

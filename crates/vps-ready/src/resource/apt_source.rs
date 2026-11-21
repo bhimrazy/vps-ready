@@ -317,6 +317,7 @@ mod tests {
             ("debian", "trixie", "debian"),
             ("ubuntu", "jammy", "ubuntu"),
             ("ubuntu", "noble", "ubuntu"),
+            ("ubuntu", "resolute", "ubuntu"),
         ];
         for (id, codename, path) in hosts {
             for arch in ["amd64", "arm64"] {
@@ -357,6 +358,7 @@ mod tests {
             ("debian", "trixie"),
             ("ubuntu", "jammy"),
             ("ubuntu", "noble"),
+            ("ubuntu", "resolute"),
         ];
         for (id, codename) in hosts {
             let source = AptSource::tailscale(id, codename).unwrap();
