@@ -32,14 +32,15 @@ require an attacker who is already root.
 
 | Version | Supported |
 | ------- | --------- |
-| `0.7.x` | best effort: fixes ship in the next 0.7.x release |
-| `0.6.x` | no: upgrade to 0.7.x |
-| `0.5.x` | no: upgrade to 0.7.x |
-| `0.4.x` | no: upgrade to 0.7.x |
-| `0.3.x` | no: upgrade to 0.7.x |
-| `0.2.x` | no: upgrade to 0.7.x |
-| `0.1.x` | no: upgrade to 0.7.x |
-| `0.1.0-alpha.x` (pre-release) | no: upgrade to 0.7.x |
+| `0.8.x` | best effort: fixes ship in the next 0.8.x release |
+| `0.7.x` | no: upgrade to 0.8.x |
+| `0.6.x` | no: upgrade to 0.8.x |
+| `0.5.x` | no: upgrade to 0.8.x |
+| `0.4.x` | no: upgrade to 0.8.x |
+| `0.3.x` | no: upgrade to 0.8.x |
+| `0.2.x` | no: upgrade to 0.8.x |
+| `0.1.x` | no: upgrade to 0.8.x |
+| `0.1.0-alpha.x` (pre-release) | no: upgrade to 0.8.x |
 
 The latest minor version receives security fixes.
 
@@ -52,7 +53,7 @@ each of those files. The `.deb` files are not signed on their own:
 `checksums.txt` and the attestations cover them.
 
 Check the signature first, then each file against `checksums.txt`. Set `V` to
-the version you downloaded, for example `V=0.7.0`:
+the version you downloaded, for example `V=0.8.0`:
 
 ```sh
 # 1. Signature on the checksums: signed by the release workflow for this tag

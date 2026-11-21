@@ -1,6 +1,8 @@
 # M7 plan: web through a tunnel, depth, and v1.0
 
 > **Status: accepted (2026-11-20); wave 1 shipped in v0.7.0.** `net.tunnel`, `deploy.proxy` `behind_tunnel`, the tunnel in the `private` profile and the wizard, and the journal `format` field are built; the rest is not. Every recommendation in [Accepted recommendations](#accepted-recommendations) was accepted as written.
+>
+> **v0.8.0** shipped Ubuntu 26.04 (PR 10), packaging (man pages, shell completions, a Debian-policy `.deb`, auditable release builds) and fixes to the firewall audit and the engine. The rest of wave 2 (PRs 6 to 9: SARIF and JUnit, `config.toml`, `drift`, the JSON Schema) moves to v0.9.0. The release numbers below are the original plan; the PR numbers stay.
 
 M7 lets a web app run with no public port through a Cloudflare Tunnel, adds drift detection, CI-friendly audit output and security-key SSH logins, and then makes the tool stable as v1.0.
 
