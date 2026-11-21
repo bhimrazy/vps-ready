@@ -4,11 +4,13 @@ import Panel from './ui/Panel.astro';
 import Section from './ui/Section.astro';
 import SectionHead from './ui/SectionHead.astro';
 
-// Answers mark inline code with backticks.
-const faqs = [
+// Answers mark inline code with backticks. A third item links to the guide
+// with the long answer.
+const faqs: [string, string, [string, string]?][] = [
   [
     'Is it safe on a server that is already running things?',
     'It audits first and shows the full plan. Nothing changes until you approve it. Every change is journaled, and `sudo vps-ready rollback --last` restores the previous state.',
+    ['Harden a server that is already running services', '/docs/guides/existing-server/'],
   ],
   [
     'Which systems does it support?',
@@ -25,6 +27,7 @@ const faqs = [
   [
     'What if I lose access after confirming?',
     "Run `sudo vps-ready rollback --last` from any working session, or from your provider's console.",
+    ['Undo changes and recover from an SSH lockout', '/docs/guides/undo-and-recover/'],
   ],
 ];
 ---
@@ -36,7 +39,7 @@ const faqs = [
   </SectionHead>
   <Panel class="mx-auto max-w-[760px]">
     {
-      faqs.map(([q, a]) => (
+      faqs.map(([q, a, more]) => (
         <details class="group border-t border-line first:border-t-0">
           <summary class="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 font-semibold hover:bg-surface [&::-webkit-details-marker]:hidden">
             {q}
@@ -55,6 +58,14 @@ const faqs = [
           </summary>
           <p class="max-w-[70ch] px-5 pb-[18px] text-[15px] leading-[1.7] text-muted">
             {a.split('`').map((part, i) => (i % 2 ? <Code>{part}</Code> : part))}
+            {more && (
+              <>
+                {' '}
+                <a class="text-brand no-underline hover:underline" href={more[1]}>
+                  {more[0]}
+                </a>
+              </>
+            )}
           </p>
         </details>
       ))

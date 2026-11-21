@@ -7,7 +7,7 @@
 
 <div align="center">
 
-**Harden a fresh Debian or Ubuntu server without locking yourself out.**<br>
+**Secure a fresh Debian or Ubuntu server without locking yourself out.**<br>
 One static binary: audit, a plan you read first, and a rollback timer that undoes SSH and firewall changes unless a new login confirms.
 
 <pre>
@@ -21,7 +21,7 @@ One static binary: audit, a plan you read first, and a rollback timer that undoe
 </p>
 
 <p>
-<a href="#quick-start">Quick start</a> &bull; <a href="#how-a-run-works">How it works</a> &bull; <a href="#safety-guarantees">Safety</a> &bull; <a href="#supported-platforms">Platforms</a> &bull; <a href="#documentation">Docs</a> &bull; <a href="#contributing-and-security">Contributing</a>
+<a href="https://vps-ready.bhimraj.com.np/docs/"><b>User docs</b></a> &bull; <a href="#quick-start">Quick start</a> &bull; <a href="#how-a-run-works">How it works</a> &bull; <a href="#safety-guarantees">Safety</a> &bull; <a href="#supported-platforms">Platforms</a> &bull; <a href="#documentation">Docs</a> &bull; <a href="#contributing-and-security">Contributing</a>
 </p>
 
 </div>
@@ -132,7 +132,7 @@ If any step inside `apply` fails, the engine restores the snapshots in reverse o
 
 The engine is built around these rules, so they hold for every module rather than being left to each one.
 
-- **Never lock the user out.** Passwords and root login are not disabled until a keyed sudo user has logged in from a fresh session. The firewall always allows the SSH port that is actually in use.
+- **Guard against lockouts.** Passwords and root login are not disabled until a keyed sudo user has logged in from a fresh session. The firewall always allows the SSH port that is actually in use.
 - **Confirm from a new connection.** Your open terminal proves nothing, because sshd reloads and conntrack keep existing sessions alive. The dead-man timer reverts the admin user, SSH and firewall changes unless you confirm from a new SSH login within 5 minutes (`--deadman 1m` to `30m`), even if the tool or the terminal is gone, and even across a reboot. tmux, screen, mosh and connections shared through `ControlMaster` count as old.
 - **Show, then do.** Nothing changes without a plan you can read. Every change carries a reversibility label: reversible, partial, or irreversible.
 - **Effective state over file state.** Checks use `sshd -T`, `/proc/sys`, `apt-config`, `nft` and `ss`, not a guess at what a config file means.

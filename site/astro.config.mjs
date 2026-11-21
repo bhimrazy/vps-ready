@@ -10,7 +10,9 @@ export default defineConfig({
   integrations: [
     starlight({
       title: 'vps-ready',
-      description: 'Make a fresh VPS ready and secure, safely.',
+      // The same text as DESCRIPTION in src/lib/site.ts.
+      description:
+        'Harden a fresh Debian or Ubuntu VPS: key-only SSH, a default-deny firewall and automatic updates. Every change is shown first and can be rolled back.',
       logo: {
         light: './src/assets/brand/logo-light.svg',
         dark: './src/assets/brand/logo-dark.svg',
@@ -19,7 +21,10 @@ export default defineConfig({
       favicon: '/favicon.svg',
       head: [
         { tag: 'meta', attrs: { property: 'og:image', content: 'https://vps-ready.bhimraj.com.np/og.png' } },
-        { tag: 'meta', attrs: { property: 'og:image:alt', content: 'vps-ready: Make a fresh VPS ready and secure, safely.' } },
+        { tag: 'meta', attrs: { property: 'og:image:width', content: '1200' } },
+        { tag: 'meta', attrs: { property: 'og:image:height', content: '630' } },
+        { tag: 'meta', attrs: { property: 'og:image:type', content: 'image/png' } },
+        { tag: 'meta', attrs: { property: 'og:image:alt', content: 'vps-ready: Secure a fresh server without locking yourself out.' } },
         { tag: 'meta', attrs: { name: 'twitter:image', content: 'https://vps-ready.bhimraj.com.np/og.png' } },
       ],
       // Replaced by src/pages/404.astro, which also covers the landing page.

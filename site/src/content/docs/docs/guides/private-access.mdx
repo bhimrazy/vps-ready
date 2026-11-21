@@ -1,5 +1,5 @@
 ---
-title: Private access
+title: SSH only over Tailscale or WireGuard
 description: Harden a server at first boot, reach SSH through Tailscale, WireGuard or another VPN, close public SSH safely, and get back in if the VPN stops working.
 sidebar:
   label: Private access
@@ -18,7 +18,7 @@ The `net.tunnel` module, `deploy.proxy`'s `behind_tunnel`, and the wizard's tunn
 
 A new server answers SSH to the whole internet. This guide narrows that to your own devices in three steps, and shows how to get back in if the private network fails.
 
-First, [harden the server at first boot](#harden-at-first-boot), before anyone logs in. Next, [join a private network](#join-a-private-network) such as Tailscale or WireGuard, so you can reach the same SSH server through it. Last, [close public SSH](#close-public-ssh) from a login that already comes through that network.
+First, [harden the server at first boot](#harden-at-first-boot), before anyone logs in. Next, [join a private network](#join-a-private-network) such as Tailscale or WireGuard, so you can reach the same SSH server through it. Last, [close public SSH](#close-public-ssh-port-22-to-the-internet) from a login that already comes through that network.
 
 Each step works on its own. If the server is already running, skip the first.
 
@@ -79,13 +79,13 @@ If something fails (a download, the hash, a login during first boot, the apply),
 
 The [`private` profile](#the-private-profile) does export: its `ssh_via = "vpn"` stays in step 1 at first boot, with public SSH open.
 
-Flags and exit codes: [`export cloud-init`](/docs/reference/commands/#export-cloud-init).
+Flags and exit codes: [`export cloud-init`](/docs/reference/commands/#vps-ready-export-cloud-init).
 
 ## Join a private network
 
 `ssh_via` works with any network interface the server has, so you can use one of the modules below or set up a VPN yourself.
 
-### Tailscale
+### SSH over Tailscale
 
 Add `net.tailscale` to your profile. It installs Tailscale from Tailscale's own repository, keeps `tailscaled` running, and adds Tailscale to automatic updates. It opens no port, because Tailscale needs none.
 
@@ -113,7 +113,7 @@ Use a tagged key that is not ephemeral. A tagged node has key expiry off, and an
 
 vps-ready never turns on Tailscale SSH and never accepts the tailnet's DNS settings. A node you already logged in by hand is left as it is. More detail: [`net.tailscale`](/docs/guides/profiles-and-modules/#nettailscale-tailscale).
 
-### WireGuard
+### SSH over WireGuard
 
 Add `net.wireguard` to run a WireGuard interface, `wg0`, on the server. It installs `wireguard-tools`, makes the server's private key on the server (it never passes through vps-ready), and keeps `wg-quick@wg0` running. `firewall.inbound` opens its UDP port, 51820 by default. It is for admin access to this server only, so your devices reach the server's tunnel address and nothing else.
 
@@ -176,7 +176,7 @@ Add `net.wireguard` to run a WireGuard interface, `wg0`, on the server. It insta
 
 </Steps>
 
-Then close public SSH as in [Close public SSH](#close-public-ssh), from the session you just opened, with `ssh_via = "wg0"` and the server's tunnel address (`10.86.12.1` here) in the confirm command:
+Then close public SSH as in [Close public SSH](#close-public-ssh-port-22-to-the-internet), from the session you just opened, with `ssh_via = "wg0"` and the server's tunnel address (`10.86.12.1` here) in the confirm command:
 
 ```toml
 [modules."firewall.inbound"]
@@ -190,7 +190,7 @@ vps-ready refuses `ssh_via = "wg0"` unless `wg-quick@wg0` is enabled, which `net
 
 Any interface works: a `wg0` you set up with `wg-quick`, or the interface of another mesh VPN. Make sure it comes back after a reboot (for `wg0`, `sudo systemctl enable wg-quick@wg0`). For `tailscaled` and `wg-quick@<interface>`, vps-ready checks that; for other interfaces it cannot tell, and the plan says so.
 
-## Close public SSH
+## Close public SSH (port 22) to the internet
 
 `ssh_via` limits the firewall's SSH rule to one interface. Everything else in `firewall.inbound` stays the same, and the SSH server itself is not changed. It takes two applies, so that the private path carries a real login before public SSH closes.
 
@@ -402,6 +402,6 @@ A manual rollback can refuse while SSH depends on the VPN:
 
 ## Next
 
-- More ways back in: [Undo changes and recover](/docs/guides/undo-and-recover/#get-back-in-after-a-lockout).
+- More ways back in: [Undo changes and recover](/docs/guides/undo-and-recover/#locked-out-of-ssh-get-back-in).
 - What each VPN module writes and undoes: [`net.tailscale`](/docs/guides/profiles-and-modules/#nettailscale-tailscale) and [`net.wireguard`](/docs/guides/profiles-and-modules/#netwireguard-wireguard).
 - What the tunnel writes and undoes: [`net.tunnel`](/docs/guides/profiles-and-modules/#nettunnel-cloudflare-tunnel).

@@ -9,7 +9,11 @@ export const VERSION = execFileSync('git', ['describe', '--tags', '--abbrev=0', 
 
 export const REPO = 'https://github.com/bhimrazy/vps-ready';
 export const INSTALL_URL = `${REPO}/releases/latest/download/install.sh`;
-export const TAGLINE = 'Make a fresh VPS ready and secure, safely.';
+export const TAGLINE = 'Open source VPS hardening for Debian and Ubuntu';
+export const HEADLINE = 'Secure a fresh server without locking yourself out.';
+// Also in astro.config.mjs, which cannot import this file.
+export const DESCRIPTION =
+  'Harden a fresh Debian or Ubuntu VPS: key-only SSH, a default-deny firewall and automatic updates. Every change is shown first and can be rolled back.';
 
 export const LINKS = {
   issues: `${REPO}/issues`,

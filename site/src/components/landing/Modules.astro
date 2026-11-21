@@ -5,6 +5,24 @@ import Pill from './ui/Pill.astro';
 import Section from './ui/Section.astro';
 import SectionHead from './ui/SectionHead.astro';
 
+// Each card links to its module's section in the guide.
+const guide = '/docs/guides/profiles-and-modules/';
+const anchors: Record<string, string> = {
+  'user.admin': 'useradmin-the-admin-user',
+  'ssh.server': 'sshserver-the-ssh-server-config',
+  'firewall.inbound': 'firewallinbound-the-firewall',
+  'ssh.bruteforce': 'sshbruteforce-fail2ban-web-profile',
+  'kernel.sysctl': 'kernelsysctl-kernel-settings',
+  'updates.auto': 'updatesauto-automatic-security-updates',
+  'net.tailscale': 'nettailscale-tailscale',
+  'net.wireguard': 'netwireguard-wireguard',
+  'net.tunnel': 'nettunnel-cloudflare-tunnel',
+  'deploy.docker': 'deploydocker-deployproxy-and-deployuser-deployment',
+  'deploy.proxy': 'deploydocker-deployproxy-and-deployuser-deployment',
+  'deploy.user': 'deploydocker-deployproxy-and-deployuser-deployment',
+};
+const link = 'text-brand no-underline hover:underline';
+
 const mods = [
   {
     id: 'user.admin',
@@ -86,7 +104,7 @@ const mods = [
 <Section id="modules" alt>
   <SectionHead label="Under the hood">
     <Fragment slot="title">Twelve modules, always run in a safe order.</Fragment>
-    The admin user exists before SSH is locked down, and SSH ports are open before the firewall closes everything else. The audit
+    The admin user exists before SSH logins are restricted, and SSH ports are open before the firewall closes everything else. The audit
     checks 34 controls, and the modules fix 26 of them.
   </SectionHead>
   <div class="grid grid-cols-3 gap-4 max-[920px]:grid-cols-2 max-[600px]:grid-cols-1">
@@ -94,7 +112,11 @@ const mods = [
       mods.map((m) => (
         <Card class="grid content-start gap-2.5">
           <Icon d={m.icon} />
-          <h3 class="mt-1 font-mono text-sm font-bold">{m.id}</h3>
+          <h3 class="mt-1 font-mono text-sm font-bold">
+            <a href={`${guide}#${anchors[m.id]}`} class="text-ink no-underline hover:text-brand hover:underline">
+              {m.id}
+            </a>
+          </h3>
           <p class="text-sm text-muted">{m.text}</p>
           <div class="mt-1 flex flex-wrap gap-1.5">
             {m.profiles.map((p) => (
@@ -109,7 +131,7 @@ const mods = [
   <div class="mt-9 grid max-w-[70ch] gap-2.5 text-sm text-muted *:[&>b]:font-semibold *:[&>b]:text-ink">
     <p>
       <b>Profiles.</b> <span class="font-mono">minimal</span> sets up the admin user, SSH, the firewall, kernel settings and automatic
-      updates. <span class="font-mono">web</span> adds the web ports, ssh.bruteforce (fail2ban) and Docker. <span class="font-mono">private</span> takes SSH off the internet: it is accepted only through a VPN you add with net.tailscale or net.wireguard. The rest you add in your own profile or switch on one by one.
+      updates. <span class="font-mono">web</span> adds the web ports, ssh.bruteforce (fail2ban) and Docker. <span class="font-mono">private</span> takes SSH off the internet: it is accepted only through a VPN you add with net.tailscale or net.wireguard (see <a class={link} href="/docs/guides/private-access/">SSH only over Tailscale or WireGuard</a>). The rest you add in your own profile or switch on one by one.
     </p>
     <p><b>Systems.</b> Runs on Debian 12 and 13 and Ubuntu 22.04 and 24.04, on x86_64 and arm64. Tested nightly in x86_64 VMs on all four.</p>
   </div>

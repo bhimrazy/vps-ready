@@ -1,5 +1,5 @@
 ---
-import { INSTALL_URL, VERSION } from '../../lib/site';
+import { INSTALL_URL, TAGLINE, VERSION } from '../../lib/site';
 import { breakableCommand } from '../../lib/wrap';
 import { frameHtml, SCREEN } from '../../scripts/motion';
 import { heroScenes } from '../../scripts/scenes';
@@ -20,11 +20,11 @@ const quickLine = (l: string, copy: boolean) =>
 >
   <div class="mx-auto w-full max-w-[1160px] px-4 grid grid-cols-[minmax(0,1fr)_minmax(0,580px)] items-center gap-12 max-[920px]:grid-cols-[minmax(0,1fr)]">
     <div class="grid min-w-0 justify-items-start gap-7">
-      <span class="font-mono text-xs leading-none font-medium tracking-[0.1em] text-brand uppercase">Debian and Ubuntu VPS hardening &middot; v{VERSION}</span>
+      <span class="font-mono text-xs leading-[1.6] font-medium tracking-[0.1em] text-brand uppercase">{TAGLINE} &middot; v{VERSION}</span>
       <h1
         class="max-w-[15ch] font-mono text-[clamp(34px,3.4vw,44px)] leading-[1.15] font-bold tracking-[-0.03em] text-balance max-[920px]:max-w-none"
       >
-        Harden a fresh server <em class="block text-brand not-italic">without locking yourself out.</em>
+        Secure a fresh server <em class="block text-brand not-italic">without locking yourself out.</em>
       </h1>
       <p class="max-w-[44ch] text-lg text-muted">
         SSH keys, a firewall and automatic updates in one run, with the plan shown first. SSH and firewall changes roll back unless a new SSH login confirms them.

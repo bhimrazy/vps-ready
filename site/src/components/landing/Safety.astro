@@ -38,7 +38,7 @@ const ticks = ['0:00', '1:00', '2:00', '3:00', '4:00', '5:00'];
     <Fragment slot="title">If a change locks you out, it rolls back on its own.</Fragment>
     Before changing SSH or the firewall, <span class="whitespace-nowrap">vps-ready</span> starts a safety timer (5 minutes by default).
     Log in again from a new terminal and run <Code>vps-ready confirm</Code> to keep the changes. If you can't get back in, everything
-    rolls back, even if the server reboots.
+    rolls back, even if the server reboots. <a class="text-brand no-underline hover:underline" href="/docs/guides/safety-net/">How the safety net works</a>
   </SectionHead>
     <Panel id="dm">
       <div slot="head" class="flex min-w-0 items-stretch self-stretch" role="group" aria-label="Choose what happens">
