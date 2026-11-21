@@ -1,5 +1,5 @@
 ---
-import { AUTHOR, CONTACTS, EMAIL, LINKS, MAIL_ICON, MAILTO, REPO, TAGLINE, VERSION } from '../../lib/site';
+import { AUTHOR, CONTACTS, EMAIL, LINKS, MAIL_ICON, MAILTO, NO_TELEMETRY, REPO, TAGLINE, VERSION } from '../../lib/site';
 import Logo from './Logo.astro';
 import Card from './ui/Card.astro';
 import Icon from './ui/Icon.astro';
@@ -26,7 +26,8 @@ const projectLinks = [
   ['GitHub', REPO],
   ['Issues', LINKS.issues],
   ['Releases', LINKS.releases],
-  ['Security', `${REPO}/blob/main/SECURITY.md`],
+  ['Verify', LINKS.verify],
+  ['Security', LINKS.policy],
   ['crates.io', LINKS.crates],
 ];
 const row =
@@ -144,7 +145,10 @@ const row =
         }
       </nav>
     </div>
-    <div class="font-mono text-xs text-subtle">MIT or Apache-2.0 &middot; Open source on GitHub</div>
+    <div class="flex flex-wrap justify-between gap-x-6 gap-y-2 font-mono text-xs text-subtle">
+      <span>MIT or Apache-2.0 &middot; {NO_TELEMETRY}</span>
+      <span>A tool by <a href={AUTHOR.site} rel="author" class="text-subtle underline-offset-2 hover:text-ink hover:underline">{AUTHOR.name}</a></span>
+    </div>
     </div>
   </div>
 </footer>

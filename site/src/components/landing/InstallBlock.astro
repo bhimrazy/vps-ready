@@ -12,11 +12,10 @@ interface Props {
   class?: string;
 }
 const { primaryCopy, class: cls } = Astro.props;
-// Copy takes only the first line of each method: for "read it first" that is
+// Copy takes only the first line of each method: for the install script that is
 // the download, so pasting cannot run the script before it has been read.
 const methods = [
-  { key: 'read', label: 'read it first', lines: [`curl -fsSLO ${INSTALL_URL}`, 'less install.sh', 'sudo sh install.sh'] },
-  { key: 'curl', label: 'curl', lines: [`curl -fsSL ${INSTALL_URL} | sudo sh`] },
+  { key: 'read', label: 'install script', lines: [`curl -fsSLO ${INSTALL_URL}`, 'less install.sh', 'sudo sh install.sh'] },
   { key: 'cargo', label: 'cargo', lines: ['cargo install vps-ready --locked'] },
 ];
 const line = (l: string, copy: boolean) =>

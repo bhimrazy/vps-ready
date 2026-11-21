@@ -1,7 +1,7 @@
 ---
 import Default from '@astrojs/starlight/components/Footer.astro';
 import FeedbackWidget from '../FeedbackWidget.astro';
-import { AUTHOR, CONTACTS, EMAIL, MAILTO, TAGLINE, VERSION } from '../../lib/site';
+import { AUTHOR, CONTACTS, EMAIL, LINKS, MAILTO, NO_TELEMETRY, TAGLINE, VERSION } from '../../lib/site';
 ---
 
 <Default />
@@ -18,7 +18,15 @@ import { AUTHOR, CONTACTS, EMAIL, MAILTO, TAGLINE, VERSION } from '../../lib/sit
     <a href={MAILTO}>{EMAIL}</a>
   </div>
   <div class="flex flex-wrap justify-between gap-x-5 gap-y-1.5">
-    <span>Built and maintained by <a href={AUTHOR.site}>{AUTHOR.name}</a></span>
+    <span class="flex flex-wrap gap-x-4 gap-y-1.5">
+      <a href={LINKS.releases}>Releases</a>
+      <a href={LINKS.verify}>Verify</a>
+      <a href={LINKS.policy}>Security</a>
+    </span>
+    <span>{NO_TELEMETRY}</span>
+  </div>
+  <div class="flex flex-wrap justify-between gap-x-5 gap-y-1.5">
+    <span>A tool by <a href={AUTHOR.site} rel="author">{AUTHOR.name}</a></span>
     <span class="flex gap-4">
       <a href={AUTHOR.github}>GitHub</a>
       <a href={AUTHOR.x}>X</a>
