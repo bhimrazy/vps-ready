@@ -1,7 +1,7 @@
 #!/bin/sh
 # Apply, reboot and roll back with the real binary in a KVM virtual machine.
 #
-# Usage: test/vm-cycle.sh <distro> <binary> <image> [cloud-init|private-access|tunnel]
+# Usage: test/vm-cycle.sh <distro> <binary> <image> [cloud-init|private-access|tunnel|fixtures]
 #   e.g. ubuntu-24.04
 #   <image> is a cloud image (qcow2). The script boots it with QEMU and KVM
 #   (2 vCPUs, 2 GiB, a copy-on-write overlay, so the image is not changed),
@@ -9,7 +9,8 @@
 #   and drives the VM over SSH on 127.0.0.1:$VM_SSH_PORT (default 2222).
 #   The binary must match the VM's CPU; CI uses the x86_64 musl build.
 #   With `cloud-init`, `private-access` or `tunnel`, it runs only that cycle
-#   below.
+#   below. With `fixtures`, it only captures the fresh VM with
+#   test/capture-host-fixtures.sh, into crates/vps-ready/testdata/hosts/<distro>.
 # Needs: qemu-system-x86_64, qemu-img, cloud-localds, ssh, jq, and /dev/kvm;
 #   python3 for the cloud-init cycle.
 #
@@ -126,7 +127,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 
-usage="usage: $0 <distro> <binary> <image|-> [cloud-init|private-access|tunnel]"
+usage="usage: $0 <distro> <binary> <image|-> [cloud-init|private-access|tunnel|fixtures]"
 distro=${1:?$usage}
 bin=${2:?$usage}
 image=${3:?$usage}
@@ -140,7 +141,7 @@ www_pid=
 wg_link=
 
 [ -f "$bin" ] || { echo "binary not found: $bin" >&2; exit 2; }
-case $cycle in all | cloud-init | private-access | tunnel) ;; *) echo "$usage" >&2; exit 2 ;; esac
+case $cycle in all | cloud-init | private-access | tunnel | fixtures) ;; *) echo "$usage" >&2; exit 2 ;; esac
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 2; }
 
 cleanup() {
@@ -768,8 +769,46 @@ vm sudo cloud-init status --wait >/dev/null 2>&1 || true
 vm cat /etc/os-release | grep PRETTY_NAME
 vm uname -r
 
+if [ "$cycle" = fixtures ]; then
+  test/capture-host-fixtures.sh "$distro" "$sshcfg"
+  echo "OK [$distro]"
+  exit 0
+fi
+
 vm 'cat >/tmp/vps-ready' <"$bin"
 vm sudo install -m 755 /tmp/vps-ready /usr/local/bin/vps-ready
+
+# What vps-ready relies on from sudo (sudo-rs on Ubuntu 26.04): the session
+# found through sudo's process tree, SUDO_USER, `visudo -cf` on a drop-in,
+# and `sudo -n -l -U` exiting 0 for a user with or without rules.
+echo "== $distro: sudo"
+vm sudo -V | head -n 1
+vr detect --json >"$tmp/detect.json"
+jq -e '.session.user == "ci"' "$tmp/detect.json" >/dev/null ||
+  { jq .session "$tmp/detect.json"; die "detect under sudo does not find ci's session"; }
+[ "$(vm sudo printenv SUDO_USER)" = ci ] || die "sudo does not set SUDO_USER"
+vm "echo 'ci ALL=(ALL:ALL) NOPASSWD: ALL' >/tmp/vr-sudoers-ok"
+vm "echo 'ci ALL=(ALL:ALL NOPASSWD: ALL' >/tmp/vr-sudoers-bad"
+vm sudo visudo -cf /tmp/vr-sudoers-ok >/dev/null || die "visudo -cf rejects a valid drop-in"
+! vm sudo visudo -cf /tmp/vr-sudoers-bad >/dev/null 2>&1 || die "visudo -cf accepts a broken drop-in"
+vm rm -f /tmp/vr-sudoers-ok /tmp/vr-sudoers-bad
+# sudo_l <user>: `sudo -n -l -U <user>` as vps-ready runs it, into sudo-l.out.
+sudo_l() {
+  rc=0; vm sudo env LC_ALL=C sudo -n -l -U "$1" >"$tmp/sudo-l.out" 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || { cat "$tmp/sudo-l.out"; die "sudo -n -l -U $1 exited $rc, expected 0"; }
+}
+has_rules() { grep -q ' may run the following commands on ' "$tmp/sudo-l.out"; }
+sudo_l ci
+has_rules || { cat "$tmp/sudo-l.out"; die "sudo -l -U ci lists no rules"; }
+vm sudo useradd -m -s /bin/bash vr-sudo
+sudo_l vr-sudo
+! has_rules || { cat "$tmp/sudo-l.out"; die "a user without rules has rules"; }
+# The sudo group: user.admin's `sudo = "password"`.
+vm sudo usermod -aG sudo vr-sudo
+sudo_l vr-sudo
+has_rules || { cat "$tmp/sudo-l.out"; die "sudo -l -U lists no rules for a member of sudo"; }
+! vm sudo -u vr-sudo sudo -n true 2>/dev/null || die "sudo without a password for a member of sudo"
+vm sudo userdel -r vr-sudo 2>/dev/null
 
 echo "== $distro: vps-ready audit"
 rc=0; vr audit || rc=$?
