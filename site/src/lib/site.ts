@@ -7,8 +7,27 @@ export const VERSION = execFileSync('git', ['describe', '--tags', '--abbrev=0', 
   .trim()
   .replace(/^v/, '');
 
+// The date the release tag was made, or '' when git cannot say, so the page
+// leaves the date out rather than show a wrong one.
+function tagDate(tag: string): string {
+  try {
+    const out = execFileSync('git', ['for-each-ref', '--format=%(creatordate:short)', `refs/tags/${tag}`], { encoding: 'utf8' }).trim();
+    return /^\d{4}-\d{2}-\d{2}$/.test(out) ? out : '';
+  } catch {
+    return '';
+  }
+}
+export const RELEASE_DATE = tagDate(`v${VERSION}`);
+
 export const REPO = 'https://github.com/bhimrazy/vps-ready';
 export const INSTALL_URL = `${REPO}/releases/latest/download/install.sh`;
+// The assets of this version's release, named as the release workflow names them.
+export const RELEASE_BASE = `${REPO}/releases/download/v${VERSION}`;
+export const RELEASE_ASSETS = [
+  { arch: 'x86_64', deb: `vps-ready_${VERSION}_amd64.deb`, tarball: `vps-ready-${VERSION}-x86_64-unknown-linux-musl.tar.gz` },
+  { arch: 'aarch64', deb: `vps-ready_${VERSION}_arm64.deb`, tarball: `vps-ready-${VERSION}-aarch64-unknown-linux-musl.tar.gz` },
+];
+export const SBOM = `vps-ready-${VERSION}.cdx.json`;
 export const TAGLINE = 'Make a fresh VPS ready and secure, safely.';
 
 export const LINKS = {
@@ -20,7 +39,12 @@ export const LINKS = {
   security: `${REPO}/security/advisories/new`,
   releases: `${REPO}/releases`,
   crates: 'https://crates.io/crates/vps-ready',
+  verify: '/docs/install/#verify-a-release',
+  policy: '/docs/reference/security/',
 };
+// Shown in every footer; net.tailscale runs `tailscale up` only with an auth key.
+export const NO_TELEMETRY =
+  'No telemetry and no self-update. vps-ready itself reaches the network only through apt and, if you configure it, tailscale up.';
 export const EMAIL = 'contact@bhimraj.com.np';
 export const MAILTO = `mailto:${EMAIL}?subject=vps-ready%3A%20&body=Hi%20Bhimraj%2C%0A%0A%0A%0A---%0Avps-ready%20version%20(vps-ready%20--version)%3A%20%0AServer%20OS%3A%20`;
 
