@@ -83,8 +83,8 @@ jobs:
             url: https://cloud-images.ubuntu.com/releases/noble/release-20261017/ubuntu-24.04-server-cloudimg-amd64.img
             sum: sha256:04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f985b6c94
           - distro: ubuntu-26.04
-            url: https://cloud-images.ubuntu.com/releases/resolute/release-20261108/ubuntu-26.04-server-cloudimg-amd64.img
-            sum: sha256:7b90593f5532b49b7e3fe3d2743f0d1f0d822e5b07cebcd8e00c0df8069ecab9
+            url: https://cloud-images.ubuntu.com/releases/resolute/release-20261016/ubuntu-26.04-server-cloudimg-amd64.img
+            sum: sha256:5645d0318ad21f643ebb1ac4567514620e9893380b07b0201fda163baa5b7eb5
           - distro: debian-12
             url: https://cloud.debian.org/images/cloud/bookworm/20261021-2638/debian-12-genericcloud-amd64-20261021-2638.qcow2
             sum: sha512:9f181877006e8d9ca4f4554eba8729a829936f0f7d1db5e77f69b1ef0f6bc372b4d46f3dae39b10d84f9131496c2cc1d449264f26577fe934a79de5a5512a3dd
