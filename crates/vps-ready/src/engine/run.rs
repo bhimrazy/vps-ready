@@ -643,9 +643,9 @@ impl<'a> Engine<'a> {
     /// restored: the boot configuration set its running value. The reloads
     /// apply journaled run again, check first, after the restores of their
     /// module. Each restore is reported to `progress` before it runs. For an
-    /// armed transaction, the timer is stopped and the boot hook disabled
-    /// once the rollback finished; one whose deadline or boot passed keeps
-    /// that as its reason.
+    /// armed transaction, the timer is stopped once the rollback finished,
+    /// and the boot hook disabled unless another transaction still needs
+    /// it; one whose deadline or boot passed keeps that as its reason.
     ///
     /// # Errors
     ///
@@ -825,9 +825,10 @@ impl<'a> Engine<'a> {
     /// anyway if their module forces it (their bytes kept in
     /// `files/<n>.during` first, best effort), and skipped otherwise. The
     /// journal is best effort: a failed line does not stop a restore. Then
-    /// the boot hook is disabled. A rollback that did not complete is tried
-    /// again by a new timer a minute later, up to 5 times; `attempt` is this
-    /// try's number, 0 for the first.
+    /// the boot hook is disabled, unless another transaction still needs
+    /// it. A rollback that did not complete is tried again by a new timer a
+    /// minute later, up to 5 times; `attempt` is this try's number, 0 for
+    /// the first.
     ///
     /// # Errors
     ///
@@ -977,14 +978,10 @@ impl<'a> Engine<'a> {
         for txn in self.state.txns(fs)? {
             let result = (|| {
                 let records = txn.read(fs)?;
-                let unfinished = journal::is_unfinished(&records);
-                let state = journal::replay(&records)?;
                 let Some(switch) = deadman::switch(&records) else {
                     return Ok(None);
                 };
-                let due = matches!(state, TxnState::PendingConfirm { .. })
-                    || (state == TxnState::Planned && unfinished);
-                if !due {
+                if !due(&records)? {
                     return Ok(None);
                 }
                 if boot.as_deref() == Some(switch.boot_id.as_str()) {
@@ -1136,20 +1133,15 @@ impl<'a> Engine<'a> {
     }
 
     /// Whether an armed transaction is pending or unfinished, as the boot
-    /// hook would roll back. True if a journal cannot be read: a hook left
-    /// enabled disables itself at the next boot.
+    /// hook would roll back. True if a journal cannot be read, as the boot
+    /// hook also keeps itself then.
     fn any_due(&self) -> bool {
         let fs = self.sys.fs;
         let due = || -> Result<bool, EngineError> {
             for txn in self.state.txns(fs)? {
                 let records = txn.read(fs)?;
-                if deadman::switch(&records).is_none() {
-                    continue;
-                }
-                match journal::replay(&records)? {
-                    TxnState::PendingConfirm { .. } => return Ok(true),
-                    TxnState::Planned if journal::is_unfinished(&records) => return Ok(true),
-                    _ => {}
+                if deadman::switch(&records).is_some() && due(&records)? {
+                    return Ok(true);
                 }
             }
             Ok(false)
@@ -1587,6 +1579,16 @@ pub(crate) fn drops_peer(records: &[Record], client: IpAddr) -> bool {
                         .iter()
                         .any(|(key, ips)| holds(ips) && !before.peers.get(key).is_some_and(&holds)))
         }
+        _ => false,
+    })
+}
+
+/// Whether the boot hook rolls back an armed transaction with `records`:
+/// one pending a confirm, or one that stopped before apply finished.
+fn due(records: &[Record]) -> Result<bool, EngineError> {
+    Ok(match journal::replay(records)? {
+        TxnState::PendingConfirm { .. } => true,
+        TxnState::Planned => journal::is_unfinished(records),
         _ => false,
     })
 }

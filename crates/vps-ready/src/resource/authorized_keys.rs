@@ -388,13 +388,7 @@ pub(super) fn restore(
         return Ok(());
     };
     match sys.fs.remove_dir(dir) {
-        Ok(()) => {
-            if let Some(home) = dir.parent() {
-                sys.fs.sync_dir(home)?;
-            }
-            Ok(())
-        }
-        Err(SysError::NotFound(_)) => Ok(()),
+        Ok(()) | Err(SysError::NotFound(_)) => Ok(()),
         Err(SysError::Io { source, .. }) if source.kind() == io::ErrorKind::DirectoryNotEmpty => {
             tracing::warn!(dir = %dir.display(), "left in place: it holds other files");
             Ok(())
@@ -940,15 +934,17 @@ mod tests {
         );
     }
 
-    /// Reads like `FakeFs`, but its `metadata` of `swapped` answers as for
+    /// Reads like `inner`, but its `metadata` of `swapped` answers as for
     /// a regular file of the user's: what a check saw before the user put
-    /// a symlink in its place.
-    struct Swapped {
-        inner: FakeFs,
+    /// a symlink in its place. While `sync_fails`, every `sync_dir` fails,
+    /// as on a directory swapped for a FIFO.
+    struct Swapped<F = FakeFs> {
+        inner: F,
         swapped: &'static str,
+        sync_fails: std::cell::Cell<bool>,
     }
 
-    impl Fs for Swapped {
+    impl<F: Fs> Fs for Swapped<F> {
         fn read(&self, path: &Path) -> Result<Vec<u8>, SysError> {
             self.inner.read(path)
         }
@@ -1008,11 +1004,40 @@ mod tests {
             self.inner.remove_dir(path)
         }
         fn sync_dir(&self, path: &Path) -> Result<(), SysError> {
+            if self.sync_fails.get() {
+                return Err(SysError::from_io(
+                    path.display().to_string(),
+                    io::Error::from(io::ErrorKind::WouldBlock),
+                ));
+            }
             self.inner.sync_dir(path)
         }
         fn try_lock(&self, path: &Path) -> Result<crate::sys::FsLock, SysError> {
             self.inner.try_lock(path)
         }
+    }
+
+    /// The removals sync through the descriptors they hold, so a restore
+    /// never opens the user's `~/.ssh` or home by path.
+    #[test]
+    fn restoring_created_keys_needs_no_sync_by_path() {
+        let (dir, uid, gid) = real_home();
+        let fs = Swapped {
+            inner: RealFs::new(dir.path()),
+            swapped: "/nonexistent",
+            sync_fails: std::cell::Cell::new(false),
+        };
+        let runner = runner(uid, gid);
+        let sys = Sys {
+            fs: &fs,
+            runner: &runner,
+        };
+        let txn = Path::new(TXN);
+        let backup = keys(&[KEY]).snapshot(sys, txn, 1).unwrap();
+        keys(&[KEY]).apply(sys).unwrap();
+        fs.sync_fails.set(true);
+        restore(sys, txn, &backup).unwrap();
+        assert!(!dir.path().join("home/admin/.ssh").exists());
     }
 
     #[test]
@@ -1033,6 +1058,7 @@ mod tests {
                 .with_file(after_path(txn, 1), "secret\n")
                 .with_symlink(path, "/etc/shadow"),
             swapped: path,
+            sync_fails: std::cell::Cell::new(false),
         };
         let runner = runner(1001, 1001);
         let sys = Sys {
