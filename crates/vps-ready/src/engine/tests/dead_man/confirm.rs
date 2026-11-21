@@ -107,6 +107,46 @@ fn a_new_login_confirms_and_disarms() {
 }
 
 #[test]
+fn rolling_back_an_older_transaction_keeps_the_boot_hook_for_a_pending_one() {
+    let fs = armable();
+    let older = applied(&fs);
+    set_uptime(&fs, 1100);
+    confirm(&fs, &dm_runner(), None, &login(951, 1050)).unwrap();
+    let [_, keys, _] = locking();
+    let facts = facts();
+    let plan = plan_of(&fs, &facts, &[&keys]);
+    let (newer, _) = pending(&fs, &plan);
+
+    let run = dm_runner();
+    let state = state(&fs);
+    Engine::lock(
+        &state,
+        Sys {
+            fs: &fs,
+            runner: &run,
+        },
+    )
+    .unwrap()
+    .rollback(Target::Txn(&older), &mut |_| {})
+    .unwrap();
+    assert_eq!(state_of(&fs, &older), rolled_back(RollbackReason::Manual));
+    assert!(matches!(
+        state_of(&fs, &newer),
+        TxnState::PendingConfirm { .. }
+    ));
+    let made = calls(&run);
+    assert!(!made.iter().any(|c| c == DISABLE), "{made:?}");
+    let unit = format!("vps-ready-deadman-{newer}-");
+    assert!(!made.iter().any(|c| c.contains(&unit)), "{made:?}");
+
+    // Once the newer one is confirmed too, nothing needs the hook.
+    set_uptime(&fs, 1200);
+    let run = dm_runner();
+    confirm(&fs, &run, None, &login(960, 1150)).unwrap();
+    assert!(calls(&run).iter().any(|c| c == DISABLE));
+}
+
+#[test]
 fn only_a_new_login_through_the_hosts_sshd_confirms() {
     let fs = armable();
     let txn = applied(&fs);
