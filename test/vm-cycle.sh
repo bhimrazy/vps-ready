@@ -485,7 +485,8 @@ private_access_cycle() {
   # loaded? The result is printed; the drop-in stays either way.
   echo "== $distro: wg syncconf with a key-less config"
   pvm "sudo sh -c 'umask 077; wg genkey >/tmp/wgpre.key; printf \"%s\n\" \"[Interface]\" \"Address = 10.78.0.1/24\" \"ListenPort = 51830\" \"PostUp = wg set %i private-key /tmp/wgpre.key\" >/tmp/wgpre.conf'"
-  pvm sudo wg-quick up /tmp/wgpre.conf >/dev/null 2>&1 || die "wg-quick up wgpre failed"
+  pvm sudo wg-quick up /tmp/wgpre.conf >"$tmp/wgpre.out" 2>&1 ||
+    { cat "$tmp/wgpre.out"; die "wg-quick up wgpre failed"; }
   pre=$(pvm sudo wg show wgpre public-key)
   pvm "sudo bash -c 'wg syncconf wgpre <(wg-quick strip /tmp/wgpre.conf)'" || die "wg syncconf failed"
   post=$(pvm sudo wg show wgpre public-key)
@@ -802,6 +803,7 @@ sudo_l ci
 has_rules || { cat "$tmp/sudo-l.out"; die "sudo -l -U ci lists no rules"; }
 vm sudo useradd -m -s /bin/bash vr-sudo
 sudo_l vr-sudo
+cat "$tmp/sudo-l.out"
 ! has_rules || { cat "$tmp/sudo-l.out"; die "a user without rules has rules"; }
 # The sudo group: user.admin's `sudo = "password"`.
 vm sudo usermod -aG sudo vr-sudo

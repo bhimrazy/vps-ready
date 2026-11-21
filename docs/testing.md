@@ -25,7 +25,7 @@ The cheap layers run on every change; the slow, expensive ones run only where th
 - All system access goes through two traits in the `sys` module:
   - `Runner`: the real one spawns processes; `FakeRunner` matches argv and returns stdout and an exit code.
   - `Fs`: the real one touches `/`; `FakeFs` is an in-memory map of paths to contents, so tests never touch the real filesystem.
-- **Fixtures** captured from real images: `crates/vps-ready/testdata/os-release/<distro>/etc/os-release` and `crates/vps-ready/testdata/hosts/<distro>/` (ubuntu-24.04, debian-12, debian-13).
+- **Fixtures** captured from real images: `crates/vps-ready/testdata/os-release/<distro>/etc/os-release` and `crates/vps-ready/testdata/hosts/<distro>/` (ubuntu-24.04, debian-12 and debian-13 from containers; ubuntu-26.04 from a VM, with `test/vm-cycle.sh <distro> <binary> <image> fixtures`).
 - **Snapshot tests** with `insta`: run each module against each distro fixture and snapshot the plan. When output changes on purpose, `cargo insta review` shows the diff and you accept or reject it. The snapshots are committed, so reviewers see exactly how a rendered config changed.
 - **Property tests** with `proptest` (random inputs, shrunk to a minimal failing case):
   - plan → apply (to `FakeFs`) → plan must be **empty** (idempotency);
@@ -35,7 +35,7 @@ The cheap layers run on every change; the slow, expensive ones run only where th
 
 ## Layer 2: containers (every PR, minutes)
 
-**Today:** the `containers` CI job runs `test/container-audit.sh`, `test/container-apply.sh`, `test/container-bruteforce.sh`, `test/container-admin.sh`, `test/container-docker.sh`, `test/container-proxy.sh`, `test/container-tailscale.sh`, `test/container-tunnel.sh` and `test/container-wireguard.sh` on Ubuntu 22.04, Ubuntu 24.04, Debian 12 and Debian 13 (x86_64).
+**Today:** the `containers` CI job runs `test/container-audit.sh`, `test/container-apply.sh`, `test/container-bruteforce.sh`, `test/container-admin.sh`, `test/container-docker.sh`, `test/container-proxy.sh`, `test/container-tailscale.sh`, `test/container-tunnel.sh` and `test/container-wireguard.sh` on Ubuntu 22.04, Ubuntu 24.04, Ubuntu 26.04, Debian 12 and Debian 13 (x86_64).
 
 - **When:** pushes to `main` and every pull request that changes more than docs (`docs/`, `site/`, `.idea/`, `*.md`); a small `changes` job decides, and `ci-ok` accepts `build-musl` and `containers` as skipped.
 - The test image is cached per base image and `Containerfile` (`docker save`, zstd, `actions/cache`) and rebuilt every week, so it picks up the distro's updates. It carries `/etc/apt/apt.conf.d/80ci`, which makes apt retry a flaky mirror, both while building and in vps-ready's own apt calls; `UPD-001` reads only apt's `Periodic` settings, so the file does not change the audit.
@@ -53,7 +53,7 @@ The cheap layers run on every change; the slow, expensive ones run only where th
 
 **Planned:**
 
-- A Rust test harness starting containers with `testcontainers-rs` or the plain `docker`/`podman` CLI, with a wider matrix: Ubuntu 26, Rocky 9/10, Fedora, Alpine (OpenRC instead of systemd), and `ubuntu-24.04-arm` runners for arm64.
+- A Rust test harness starting containers with `testcontainers-rs` or the plain `docker`/`podman` CLI, with a wider matrix: Rocky 9/10, Fedora, Alpine (OpenRC instead of systemd), and `ubuntu-24.04-arm` runners for arm64.
 - **Covers:** packages, services, users, fail2ban/CrowdSec, Docker install, unattended-upgrades, templates.
 - **The full cycle:** apply → re-apply (no-op) → rollback → `diff -r /etc` against the snapshot.
 - nftables works inside the container's own network namespace, which is good enough to check rule syntax and that apply/restore work.
@@ -62,10 +62,11 @@ The cheap layers run on every change; the slow, expensive ones run only where th
 
 Containers can't test kernel sysctls, reboots, sshd socket activation, the host firewall, or the **dead-man switch**.
 
-**Today:** the `vm` workflow (`.github/workflows/vm.yml`) runs `test/vm-cycle.sh` on Ubuntu 22.04, Ubuntu 24.04, Debian 12 and Debian 13 (x86_64). It is not a required check.
+**Today:** the `vm` workflow (`.github/workflows/vm.yml`) runs `test/vm-cycle.sh` on Ubuntu 22.04, Ubuntu 24.04, Ubuntu 26.04, Debian 12 and Debian 13 (x86_64). It is not a required check.
 
 - **When:** pushes to `main`, nightly, by hand (`workflow_dispatch`), and pull requests that touch `crates/vps-ready/src/{engine,resource,modules,sys}/**`, `test/vm-*` or the workflow. It is a separate workflow so `ci` stays fast.
 - **How:** one job per distro and cycle, `vm (<distro>, <cycle>)`, where the cycle is `cycles` (everything below but the last two), `cloud-init` or `private-access`, so they run in parallel and can be rerun alone. Plain QEMU with KVM on `ubuntu-24.04` (a udev rule opens `/dev/kvm` to the runner user). Each job boots the distro's official cloud image, pinned by URL and checksum and cached with `actions/cache`, with 2 vCPUs, 2 GiB and a copy-on-write overlay. A cloud-init NoCloud seed adds a user with passwordless sudo and a throwaway SSH key made in the job, and the same `80ci` apt retry file as the container image; the script drives the VM over SSH forwarded to `127.0.0.1`.
+- **sudo**, which is sudo-rs on Ubuntu 26.04: `detect` under `sudo` finds the cycle user's session, `SUDO_USER` is set, `visudo -cf` accepts a valid drop-in and rejects a broken one, and `sudo -n -l -U` exits 0 and lists rules for a user with a `NOPASSWD` rule and for a member of `sudo` (who still needs a password), and none for a user without rules. The confirm, `user.admin`, the wizard and `--deadman=off` cycles below run under the same sudo.
 - **`kernel.sysctl`, same boot:** weaken five keys with `sysctl -w` (cloud images already pass), `apply --yes`, every control the module fixes passes, `rollback --last` puts the weak values back and removes the drop-in.
 - **`kernel.sysctl`, across a reboot:** weaken, `plan`, `apply --yes`, reboot, every control the module fixes passes and `plan` is empty, then `rollback --last` exits 0, removes the drop-in and leaves the kernel settings to the next boot; after a second reboot they are back to the image's defaults. On Ubuntu the boot sets `fs.protected_regular` to 2, neither the weak nor the applied value, which v0.2.0 refused to roll back.
 - **`updates.auto`:** the container cycle, with real apt and systemd.

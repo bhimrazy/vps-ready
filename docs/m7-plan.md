@@ -30,7 +30,7 @@ Only one piece changes the SSH path: security keys. It gets the same lockout car
 | v0.8.0 | `drift` | nothing; reports what changed since the last apply | |
 | v0.8.0 | `audit --format sarif\|junit` | nothing; new output formats | |
 | v0.8.0 | JSON Schema | nothing on the host; `vps-ready schema` and a release asset | |
-| v0.9.0 | Ubuntu 26.04 | data tables, the test matrix, the M3 and M6 session assumptions re-checked under sudo-rs | |
+| v0.8.0 | Ubuntu 26.04 | data tables, the test matrix, the M3 and M6 session assumptions re-checked under sudo-rs | |
 | v0.9.0 | `ssh.server` `security_keys` | the sshd drop-in accepts only security-key logins (with an exemption for `deploy.user`) | yes |
 | v1.0.0 | Stability | `docs/stability.md`, `sshd-config` fuzz targets, a review of every name before it freezes | |
 
