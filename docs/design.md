@@ -554,7 +554,7 @@ Each section below is one behavior the tool promises on real servers, with the t
 ### A lockout change rolls back unless a new login confirms
 
 - **Unit (fakes):** arming before the first change; a failed `systemd-run` ending the transaction before any backup; a crash after every journal line from `armed` on, finished by the timer or the boot hook; the timer firing mid-apply; confirm racing the timer under the lock; `--extend` and its caps; per-resource restore with `.during`; a full disk during the rollback.
-- **VMs** (`test/vm-cycle.sh`, on all four distros): with `--deadman 1m` and the test-only `test.deadman` module, an unconfirmed apply reverts within the deadline, reverts after an edit in the window, and after a reboot in the window rolls back before sshd starts; `systemd-analyze verify` finds no ordering cycle. With the `minimal` profile, a new root login is refused during the window and the drop-in, table and admin are back after rollback. An unconfirmed `--module ssh.server` refuses new root logins during the window, also through `ssh.socket` on Ubuntu 24.04, and reverts at its deadline after an edit. A `Match User` block that turns root login back on fails verify (`sshd -T -C`), and the apply rolls back.
+- **VMs** (`test/vm-cycle.sh`, on all five releases): with `--deadman 1m` and the test-only `test.deadman` module, an unconfirmed apply reverts within the deadline, reverts after an edit in the window, and after a reboot in the window rolls back before sshd starts; `systemd-analyze verify` finds no ordering cycle. With the `minimal` profile, a new root login is refused during the window and the drop-in, table and admin are back after rollback. An unconfirmed `--module ssh.server` refuses new root logins during the window, also through `ssh.socket` on Ubuntu 24.04 and 26.04, and reverts at its deadline after an edit. A `Match User` block that turns root login back on fails verify (`sshd -T -C`), and the apply rolls back.
 - **Containers** (`container-admin.sh`): an unconfirmed `user.admin` apply is rolled back by the timer and the boot hook ends disabled.
 
 ### Only a new SSH login as the admin can confirm
@@ -563,10 +563,17 @@ Each section below is one behavior the tool promises on real servers, with the t
 - **VMs:** over real logins to the VM's own sshd, confirm is refused from the applying session, an older session, a `ControlMaster` channel and a loopback login, and accepted from a new login to the VM's address.
 - **Containers:** a new login as another sudo user is refused.
 
+### The sudo rules hold under sudo-rs
+
+Ubuntu 26.04 ships sudo-rs as `sudo`, and the confirm, `user.admin` and `--deadman=off` all depend on how sudo behaves.
+
+- **Unit:** `user.admin` and `ssh.server` parse sudo-rs's real `sudo -n -l -U` output, with and without rules, so a change in its wording fails here first.
+- **VMs:** on every release, `detect` under `sudo` finds the login's session, `SUDO_USER` is set, `visudo -cf` accepts a valid drop-in and rejects a broken one, `sudo -n -l -U` lists rules only for users that have them, and `apply --deadman=off` refuses while someone is logged in. On 26.04 the cycle fails unless `sudo` and `visudo` are really sudo-rs's.
+
 ### An apply converges, and a rollback restores exactly
 
 - **Unit:** for every module, an `insta` snapshot of the plan and of every rendered file; apply, then the next plan is empty; apply, then rollback restores the tempdir tree byte for byte. Property tests do the same for random starting states (`kernel.sysctl`).
-- **Containers** (`container-*.sh`, on all four distros): each module's real cycle with real apt and systemd: apply, an empty `plan --json`, the fixed control passes, `rollback --last` removes what it added and keeps packages by design.
+- **Containers** (`container-*.sh`, on all five releases): each module's real cycle with real apt and systemd: apply, an empty `plan --json`, the fixed control passes, `rollback --last` removes what it added and keeps packages by design.
 - **VMs:** `kernel.sysctl` in the same boot and across reboots; the deploy modules end to end.
 
 ### A crash never leaves an unrecoverable state
@@ -613,7 +620,7 @@ Each section below is one behavior the tool promises on real servers, with the t
 
 ### The audit tells the truth
 
-- **Unit:** every catalog file parses and every `fix` names a registered module; after a module's apply, every control it fixes passes ("audit and fix agree"); the facts code replays commands captured from real images (`crates/vps-ready/testdata/hosts/`).
+- **Unit:** every catalog file parses and every `fix` names a registered module; after a module's apply, every control it fixes passes ("audit and fix agree"); the facts code replays commands captured from real hosts (`crates/vps-ready/testdata/hosts/`): from containers, and for Ubuntu 26.04 from a VM through `test/vm-cycle.sh`'s `fixtures` cycle.
 - **Containers** (`container-audit.sh`): `detect` exits 0, `audit` never exits 2, every `SSH-*` control is pass or fail, and kernel controls are skipped in a container.
 
 ### Untrusted text never crashes a parser
@@ -635,8 +642,8 @@ Each section below is one behavior the tool promises on real servers, with the t
 | Level | When | Platforms |
 |---|---|---|
 | Unit, snapshot, property and CLI tests | every pull request | any |
-| Containers (`ci.yml`, job `containers`) | pull requests that change more than docs, and `main` | Ubuntu 22.04, 24.04, Debian 12, 13 (x86_64) |
-| VMs (`vm.yml`: `cycles`, `cloud-init`, `private-access`, `tunnel`) | pull requests touching the CLI, engine, resources, modules, `sys` or the VM harness; `main`; nightly; by hand | the same four, official cloud images |
+| Containers (`ci.yml`, job `containers`) | pull requests that change more than docs, and `main` | Ubuntu 22.04, 24.04, 26.04, Debian 12, 13 (x86_64) |
+| VMs (`vm.yml`: `cycles`, `cloud-init`, `private-access`, `tunnel`, 20 jobs) | pull requests that change what goes into the binary (sources, templates, keys, manifests, `Cargo.lock`, the toolchain) or the VM harness; `main`; nightly; by hand | the same five, official cloud images |
 | Fuzzing (`fuzz.yml`) | weekly, and on fuzz target changes | x86_64 |
 | Manual release gates | before tagging a release with Tailscale or the tunnel | Debian 13 and Ubuntu 24.04 VMs |
 

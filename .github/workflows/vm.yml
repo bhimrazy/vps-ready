@@ -6,12 +6,19 @@ on:
   push:
     branches: [main]
   pull_request:
+    # Everything built into the binary the VMs run, and the cycle itself.
     paths:
-      - crates/vps-ready/src/cli/**
-      - crates/vps-ready/src/engine/**
-      - crates/vps-ready/src/resource/**
-      - crates/vps-ready/src/modules/**
-      - crates/vps-ready/src/sys/**
+      - crates/vps-ready/src/**
+      - crates/vps-ready/templates/**
+      - crates/vps-ready/keys/**
+      - crates/vps-ready/build.rs
+      - crates/vps-ready/Cargo.toml
+      - crates/sshd-config/src/**
+      - crates/sshd-config/Cargo.toml
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - .cargo/config.toml
       - test/vm-*
       - .github/workflows/vm.yml
   schedule:
@@ -65,7 +72,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        distro: [ubuntu-22.04, ubuntu-24.04, debian-12, debian-13]
+        distro: [ubuntu-22.04, ubuntu-24.04, ubuntu-26.04, debian-12, debian-13]
         cycle: [cycles, cloud-init, private-access, tunnel]
         # Pinned official cloud images. Bump the URL and the checksum together,
         # taken from the release's SHA256SUMS (Ubuntu) or SHA512SUMS (Debian).
@@ -76,6 +83,9 @@ jobs:
           - distro: ubuntu-24.04
             url: https://cloud-images.ubuntu.com/releases/noble/release-20261017/ubuntu-24.04-server-cloudimg-amd64.img
             sum: sha256:04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f985b6c94
+          - distro: ubuntu-26.04
+            url: https://cloud-images.ubuntu.com/releases/resolute/release-20261016/ubuntu-26.04-server-cloudimg-amd64.img
+            sum: sha256:5645d0318ad21f643ebb1ac4567514620e9893380b07b0201fda163baa5b7eb5
           - distro: debian-12
             url: https://cloud.debian.org/images/cloud/bookworm/20261021-2638/debian-12-genericcloud-amd64-20261021-2638.qcow2
             sum: sha512:9f181877006e8d9ca4f4554eba8729a829936f0f7d1db5e77f69b1ef0f6bc372b4d46f3dae39b10d84f9131496c2cc1d449264f26577fe934a79de5a5512a3dd

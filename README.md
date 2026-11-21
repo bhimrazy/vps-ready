@@ -17,7 +17,7 @@ One static binary: audit, a plan you read first, and a rollback timer that undoe
 </pre>
 
 <p>
-<a href="https://github.com/bhimrazy/vps-ready/actions/workflows/ci.yml"><img src="https://github.com/bhimrazy/vps-ready/actions/workflows/ci.yml/badge.svg" alt="CI"></a> <a href="https://crates.io/crates/vps-ready"><img src="https://img.shields.io/crates/v/vps-ready.svg" alt="crates.io"></a> <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="License: MIT OR Apache-2.0"></a> <img src="https://img.shields.io/badge/rust-stable%20(MSRV%201.98)-orange.svg" alt="Rust stable, MSRV 1.98"> <a href="#supported-platforms"><img src="https://img.shields.io/badge/Debian%2012%2F13%20%7C%20Ubuntu%2022.04%2F24.04-supported-green.svg" alt="Debian 12/13, Ubuntu 22.04/24.04"></a>
+<a href="https://github.com/bhimrazy/vps-ready/actions/workflows/ci.yml"><img src="https://github.com/bhimrazy/vps-ready/actions/workflows/ci.yml/badge.svg" alt="CI"></a> <a href="https://crates.io/crates/vps-ready"><img src="https://img.shields.io/crates/v/vps-ready.svg" alt="crates.io"></a> <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="License: MIT OR Apache-2.0"></a> <img src="https://img.shields.io/badge/rust-stable%20(MSRV%201.98)-orange.svg" alt="Rust stable, MSRV 1.98"> <a href="#supported-platforms"><img src="https://img.shields.io/badge/Debian%2012%2F13%20%7C%20Ubuntu%2022.04%2F24.04%2F26.04-supported-green.svg" alt="Debian 12/13, Ubuntu 22.04/24.04/26.04"></a>
 </p>
 
 <p>
@@ -27,7 +27,7 @@ One static binary: audit, a plan you read first, and a rollback timer that undoe
 </div>
 
 > [!NOTE]
-> vps-ready is at **v0.7** and works on Debian 12/13 and Ubuntu 22.04/24.04 with systemd: `detect` and `audit` (34 controls), and `plan`, `apply`, `confirm` and `rollback` for [twelve modules](#what-it-does). Expect breaking changes before 1.0.
+> vps-ready is at **v0.7** and works on Debian 12/13 and Ubuntu 22.04/24.04/26.04 with systemd: `detect` and `audit` (34 controls), and `plan`, `apply`, `confirm` and `rollback` for [twelve modules](#what-it-does). Expect breaking changes before 1.0.
 
 ## Quick start
 
@@ -144,7 +144,7 @@ The engine is built around these rules, so they hold for every module rather tha
 
 | Family | Distros | Firewall | Init | Status |
 |---|---|---|---|---|
-| Debian | Ubuntu 22.04, 24.04; Debian 12, 13 (26.04 next) | nftables (its own table; not applied while ufw or firewalld is active) | systemd | since v0.2 |
+| Debian | Ubuntu 22.04, 24.04, 26.04; Debian 12, 13 | nftables (its own table; not applied while ufw or firewalld is active) | systemd | since v0.2; Ubuntu 26.04 tested since v0.8 |
 | RHEL | Rocky and Alma 9, 10; Fedora | firewalld | systemd | later |
 | Alpine | 3.2x | nftables | OpenRC | later |
 

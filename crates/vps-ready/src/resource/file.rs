@@ -200,12 +200,7 @@ pub(super) fn restore(
         return Ok(());
     }
     match sys.fs.remove(path) {
-        Ok(()) => {
-            if let Some(dir) = path.parent() {
-                sys.fs.sync_dir(dir)?;
-            }
-            Ok(())
-        }
+        Ok(()) => Ok(()),
         // Already absent: apply never ran, or an earlier restore removed it.
         Err(SysError::NotFound(_)) => Ok(()),
         Err(e) => Err(e.into()),

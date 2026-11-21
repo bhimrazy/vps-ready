@@ -51,7 +51,7 @@ tried them on a throwaway VM.
 ## Tests
 
 - Unit tests and, where output is rendered, an `insta` snapshot.
-- Container tests run in CI on PRs that change more than docs, and VM tests on PRs that touch the CLI, engine, resources, modules or `sys` (see [Testing](docs/design.md#testing)). Say in the PR how you tried a change that touches the system.
+- Container tests run in CI on PRs that change more than docs, and VM tests on PRs that change what goes into the binary (see [Testing](docs/design.md#testing)). Say in the PR how you tried a change that touches the system.
 - Fuzz targets for the parsers live in `fuzz/` and need nightly and
   [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz):
   `cargo +nightly fuzz run -O facts -- -max_total_time=60`. `cargo +nightly fuzz list` shows the targets. CI runs each weekly.

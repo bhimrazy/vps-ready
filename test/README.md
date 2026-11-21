@@ -11,6 +11,8 @@ docker build -f test/images/Containerfile --build-arg BASE=debian:13 -t vps-read
 test/capture-host-fixtures.sh debian-13
 ```
 
+With an ssh config as the second argument, the script captures the VM whose `Host vm` reaches a user with passwordless sudo instead, and puts back the sshd drop-ins it changed when it exits. The Ubuntu 26.04 fixture comes from a VM this way, through `test/vm-cycle.sh`'s `fixtures` cycle.
+
 Re-capture when a probe's argv changes, then review the snapshot diff with `cargo insta review`.
 
 ## Container tests
@@ -24,11 +26,11 @@ test/container-audit.sh ubuntu-24.04 target/aarch64-unknown-linux-musl/release/v
 test/container-apply.sh ubuntu-24.04 target/aarch64-unknown-linux-musl/release/vps-ready
 ```
 
-CI runs every script on Ubuntu 22.04 and 24.04 and Debian 12 and 13 against the x86_64 musl build.
+CI runs every script on Ubuntu 22.04, 24.04 and 26.04 and Debian 12 and 13 against the x86_64 musl build. On Ubuntu 25.10 and later the image installs `sudo-rs`, as the cloud image has it.
 
 ## VM tests
 
-`test/vm-cycle.sh <distro> <binary> <image> [cycle]` boots a cloud image with QEMU and KVM (2 vCPUs, 2 GiB, a copy-on-write overlay), seeds a user and a throwaway SSH key with cloud-init, and drives the VM over SSH. Without a cycle it runs the default set; `cloud-init`, `private-access` and `tunnel` run one cycle on a fresh boot. The binary must be built with `--features vps-ready/testing`, which adds the `test.deadman` module the dead-man cycles apply.
+`test/vm-cycle.sh <distro> <binary> <image> [cycle]` boots a cloud image with QEMU and KVM (2 vCPUs, 2 GiB, a copy-on-write overlay), seeds a user and a throwaway SSH key with cloud-init, and drives the VM over SSH. Without a cycle it runs the default set; `cloud-init`, `private-access`, `tunnel` and `fixtures` run one cycle on a fresh boot. The binary must be built with `--features vps-ready/testing`, which adds the `test.deadman` module the dead-man cycles apply.
 
 It needs `/dev/kvm`, `qemu-system-x86_64`, `qemu-img`, `cloud-localds` (cloud-image-utils), `ssh` and `jq`, plus `python3` for the `cloud-init` cycle. It installs `expect` and `curl` in the VM, and the VM needs network access for the vendor repositories. The `private-access` cycle uses the runner as the WireGuard peer, so it needs the runner's sudo and WireGuard.
 
@@ -43,4 +45,4 @@ VM_SSH_CONFIG=/tmp/vm.ssh_config test/vm-cycle.sh ubuntu-24.04 target/aarch64-un
 limactl delete --force vpsr-dev
 ```
 
-The `vm` workflow pins the images by URL and checksum and runs each cycle as its own job on the four distros.
+The `vm` workflow pins the images by URL and checksum and runs `cycles`, `cloud-init`, `private-access` and `tunnel` as separate jobs on five releases, 20 jobs in all.
