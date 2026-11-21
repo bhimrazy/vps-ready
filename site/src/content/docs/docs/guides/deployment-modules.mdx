@@ -71,7 +71,7 @@ It says which of these it found, and changes nothing:
 
 If Docker is already installed, the module only manages `daemon.json`, merged key by key: keys it sets are added or changed, your other keys stay, and the plan shows the diff. An existing `docker-ce` keeps getting updates from Docker's repository.
 
-### Good to know
+### Notes on Docker
 
 - **Use `127.0.0.1`, not `localhost`.** With an IPv4 binding address Docker does not publish on IPv6, and `localhost` may resolve to `::1`. The plan says this, and `deploy.proxy` refuses a `localhost` upstream.
 - **`no-new-privileges`** means setuid programs such as `su` and `sudo` stop working inside new containers.
@@ -107,7 +107,7 @@ app.example.com {
 
 Caddy gets and renews the certificates by itself and redirects HTTP to HTTPS. There are no other directives; the module is for the common case of a few apps behind one server. `sites` is required, and a bad or repeated domain is refused with the reason. A domain is two or more lowercase labels (no wildcard, no IP address). An upstream is `host:port` with no scheme or path.
 
-The [guided setup](/docs/quick-start/#the-guided-way) asks for domains when Docker is in the profile, or when you tick `deploy.proxy` in the module list, and adds `deploy.proxy` if you give it one. Entering none is fine.
+The [guided setup](/docs/quick-start/#guided-setup) asks for domains when Docker is in the profile, or when you tick `deploy.proxy` in the module list, and adds `deploy.proxy` if you give it one. Entering none is fine.
 
 **Behind a tunnel.** With `behind_tunnel = true`, every site is served as plain HTTP on `127.0.0.1` (and `[::1]` where the host has it), with no certificate and no public port. TLS ends at the tunnel's edge, which forwards to Caddy over loopback. It needs a tunnel connector that forwards to `http://127.0.0.1`, which the [`net.tunnel`](/docs/guides/profiles-and-modules/#nettunnel-cloudflare-tunnel) module sets up (new in v0.7.0). Caddy takes the visitor's address from the `Cf-Connecting-Ip` header, trusted from loopback only, and passes it to the upstream as `X-Forwarded-For`; `X-Forwarded-Host` is set to the requested host, and a request marked `X-Forwarded-Proto: http` is redirected to HTTPS with a 308. The domains' DNS points at the tunnel's provider, so the plan skips the DNS notes. If `firewall.inbound` still opens 80 or 443, the plan says to drop them. Turning the setting on or off rewrites the Caddyfile and reloads Caddy in one apply; turning it off brings back automatic HTTPS, which needs 80 and 443 open. It applies to every site or none.
 

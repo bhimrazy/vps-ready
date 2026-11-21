@@ -20,10 +20,10 @@ const td =
 ---
 
 <Section id="compare">
-  <SectionHead label="Versus guides">
-    <Fragment slot="title">Guides tell you what to type. <span class="whitespace-nowrap">vps-ready</span> makes it safe to type it.</Fragment>
-    A guide is fine until one wrong SSH line locks you out. <span class="whitespace-nowrap">vps-ready</span> checks before it changes anything,
-    and rolls back on its own if you lose access.
+  <SectionHead label="Alternatives">
+    <Fragment slot="title"><span class="whitespace-nowrap">vps-ready</span> checks your way in before it changes SSH or the firewall.</Fragment>
+    With a copy-paste guide, one wrong SSH line can lock you out, and nothing puts it back. Config tools such as Ansible can show the changes
+    first, but they do not undo a lockout. <span class="whitespace-nowrap">vps-ready</span> rolls back on its own if you lose access.
   </SectionHead>
   <Panel>
     <table class="w-full border-collapse text-sm max-[640px]:block">

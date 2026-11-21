@@ -12,8 +12,8 @@ const layers = [
 
 <Section id="tested">
   <SectionHead label="Tested">
-    <Fragment slot="title">Tested where lockouts actually happen.</Fragment>
-    Unit tests can't prove you can still get in after a reboot. So the risky paths run against real systems.
+    <Fragment slot="title">The lockout paths run on real VMs, with real reboots.</Fragment>
+    Unit tests can't prove you can still log in after a reboot, so the SSH and firewall paths also run in containers and in nightly VMs.
   </SectionHead>
   <ul class="m-0 grid list-none p-0">
     {

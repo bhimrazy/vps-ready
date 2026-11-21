@@ -159,7 +159,7 @@ The `.deb` is not signed on its own, and apt does not check a signature on a fil
 
 There is no apt repository, so `apt upgrade` does not update it: download, verify and install the newer `.deb` the same way. There are no `.rpm` or `.apk` packages, because vps-ready runs only on Debian and Ubuntu.
 
-### Moving from the install script
+### Switch from the install script
 
 `/usr/local/bin` comes before `/usr/bin` on `PATH`, so a binary left by `install.sh` would keep running instead of the package. Remove it first:
 
