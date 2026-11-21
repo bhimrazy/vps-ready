@@ -30,7 +30,12 @@ const PAGES = {
     note: 'This is the design spec behind every module, including modules and distros that are planned but not built yet. What ships today is in [Profiles and modules](/docs/guides/profiles-and-modules/).',
   },
   'architecture.md': { slug: 'project/architecture', label: 'Architecture', order: 1 },
-  'decisions.md': { slug: 'project/decisions', label: 'Decisions', order: 2 },
+  'decisions.md': {
+    slug: 'project/decisions',
+    label: 'Decisions',
+    order: 2,
+    description: 'What is decided for vps-ready and why, from Rust and drop-in files to the default SSH port, and the questions that are still open.',
+  },
   'scope.md': { slug: 'project/scope', label: 'Vision and scope', order: 3 },
   'testing.md': {
     slug: 'project/testing',

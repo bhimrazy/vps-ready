@@ -148,7 +148,7 @@ It never touches `Port`, `ListenAddress`, `AllowGroups`, `AuthenticationMethods`
 
 ### `firewall.inbound`: the firewall
 
-**Changes:** installs `nftables` if it is missing, writes its own table `inet vps_ready` to `/etc/vps-ready/firewall.nft`, and loads it with its own `vps-ready-firewall.service`. The table is default-deny: it drops incoming traffic that no rule allows, and accepts replies, loopback, ICMP (including all of ICMPv6), DHCP, and the profile's ports.
+**Changes:** installs `nftables` if it is missing, writes its own table `inet vps_ready` to `/etc/vps-ready/firewall.nft`, and loads it with its own `vps-ready-firewall.service`. The table is default-deny, so it drops incoming traffic that no rule allows and accepts replies, loopback, ICMP (including all of ICMPv6), DHCP, and the profile's ports.
 
 It also drops incoming IPv4 TCP packets that carry IP options, in a `prerouting` chain that runs before connection tracking and also covers traffic forwarded to containers. This blunts [CVE-2026-98432](https://ubuntu.com/security/CVE-2026-98432), a kernel use-after-free in the TCP handshake; the fix is a kernel update and a reboot ([Debian](https://security-tracker.debian.org/tracker/CVE-2026-98432), [Ubuntu](https://ubuntu.com/security/CVE-2026-98432)). Other IPv4 protocols keep their options (IGMP uses one), and IPv6 is not affected by the bug. If you label traffic with CIPSO (NetLabel), TCP over IPv4 stops working. A host that keeps ufw or firewalld gets no such rule; follow your distro's guidance linked above instead.
 

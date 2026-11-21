@@ -9,7 +9,7 @@ import SectionHead from './ui/SectionHead.astro';
 const faqs: [string, string, [string, string]?][] = [
   [
     'Is it safe on a server that is already running things?',
-    'It audits first and shows the full plan. Nothing changes until you approve it. Every change is journaled, and `sudo vps-ready rollback --last` restores the previous state.',
+    'It audits first and shows the full plan. Nothing changes until you approve it. Every change is journaled, and `sudo vps-ready rollback --last` restores the previous state. More in',
     ['Harden a server that is already running services', '/docs/guides/existing-server/'],
   ],
   [
@@ -26,7 +26,7 @@ const faqs: [string, string, [string, string]?][] = [
   ],
   [
     'What if I lose access after confirming?',
-    "Run `sudo vps-ready rollback --last` from any working session, or from your provider's console.",
+    "Run `sudo vps-ready rollback --last` from any working session, or from your provider's console. More in",
     ['Undo changes and recover from an SSH lockout', '/docs/guides/undo-and-recover/'],
   ],
 ];
@@ -64,6 +64,7 @@ const faqs: [string, string, [string, string]?][] = [
                 <a class="text-brand no-underline hover:underline" href={more[1]}>
                   {more[0]}
                 </a>
+                .
               </>
             )}
           </p>

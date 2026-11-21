@@ -3,6 +3,7 @@ import starlight from '@astrojs/starlight';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'astro/config';
 import starlightLinksValidator from 'starlight-links-validator';
+import { DESCRIPTION, HEADLINE } from './src/lib/site.ts';
 
 export default defineConfig({
   site: 'https://vps-ready.bhimraj.com.np',
@@ -10,9 +11,7 @@ export default defineConfig({
   integrations: [
     starlight({
       title: 'vps-ready',
-      // The same text as DESCRIPTION in src/lib/site.ts.
-      description:
-        'Harden a fresh Debian or Ubuntu VPS: key-only SSH, a default-deny firewall and automatic updates. Every change is shown first and can be rolled back.',
+      description: DESCRIPTION,
       logo: {
         light: './src/assets/brand/logo-light.svg',
         dark: './src/assets/brand/logo-dark.svg',
@@ -24,7 +23,7 @@ export default defineConfig({
         { tag: 'meta', attrs: { property: 'og:image:width', content: '1200' } },
         { tag: 'meta', attrs: { property: 'og:image:height', content: '630' } },
         { tag: 'meta', attrs: { property: 'og:image:type', content: 'image/png' } },
-        { tag: 'meta', attrs: { property: 'og:image:alt', content: 'vps-ready: Secure a fresh server without locking yourself out.' } },
+        { tag: 'meta', attrs: { property: 'og:image:alt', content: `vps-ready: ${HEADLINE}` } },
         { tag: 'meta', attrs: { name: 'twitter:image', content: 'https://vps-ready.bhimraj.com.np/og.png' } },
       ],
       // Replaced by src/pages/404.astro, which also covers the landing page.

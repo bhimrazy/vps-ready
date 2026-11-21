@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/banner.svg">
-    <img src="assets/banner-light.svg" alt="vps-ready: make a fresh VPS ready and secure, safely" width="100%">
+    <img src="assets/banner-light.svg" alt="vps-ready: secure a fresh server without locking yourself out" width="100%">
   </picture>
 </p>
 
@@ -21,7 +21,7 @@ One static binary: audit, a plan you read first, and a rollback timer that undoe
 </p>
 
 <p>
-<a href="https://vps-ready.bhimraj.com.np/docs/"><b>User docs</b></a> &bull; <a href="#quick-start">Quick start</a> &bull; <a href="#how-a-run-works">How it works</a> &bull; <a href="#safety-guarantees">Safety</a> &bull; <a href="#supported-platforms">Platforms</a> &bull; <a href="#documentation">Docs</a> &bull; <a href="#contributing-and-security">Contributing</a>
+<a href="https://vps-ready.bhimraj.com.np/docs/"><b>User docs</b></a> &bull; <a href="#quick-start">Quick start</a> &bull; <a href="#how-a-run-works">How it works</a> &bull; <a href="#safety-guarantees">Safety</a> &bull; <a href="#supported-platforms">Platforms</a> &bull; <a href="#documentation">Design docs</a> &bull; <a href="#contributing-and-security">Contributing</a>
 </p>
 
 </div>
