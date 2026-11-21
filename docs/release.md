@@ -147,7 +147,7 @@ vps-ready never replaces itself or checks for updates ([why](design.md#foundatio
   - Later, optionally: `cargo vet` or `cargo crev` to record who audited which dependency version.
 - **Dependabot:** `cargo` and `github-actions` ecosystems, grouped, weekly. Its `cooldown` option delays PRs for brand-new releases by a few days, which is when malicious versions usually get caught. Switch to Renovate only if we outgrow that.
 - **OpenSSF Scorecard** action plus the Best Practices badge.
-- **CODEOWNERS:** one owner (`@bhimrazy`) for everything, with explicit entries for the engine, the `ssh.server`, `firewall.inbound` and `user.admin` modules, the config templates, `.github/` and `scripts/`. Two reviewers on these paths once there are two maintainers.
+- **CODEOWNERS:** a single global owner line (`* @bhimrazy`), since there is one maintainer.
 - **Why the pipeline is hand-written** rather than generated is in [Decisions](design.md#foundations); a generator stays an option if installers or targets multiply.
 - **License:** MIT OR Apache-2.0 with DCO sign-off and no CLA ([why](design.md#foundations)).
 - **SECURITY.md:** GitHub private vulnerability reporting, supported versions, how to verify releases, and which channels are official (GitHub Releases, crates.io `vps-ready`, its alias `vpsready` and the `sshd-config` library from v0.3.0; the package repos later).
