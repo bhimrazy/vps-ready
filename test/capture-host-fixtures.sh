@@ -103,9 +103,11 @@ x tar -C /etc/ssh -cf - sshd_config.d >"$tmp/dropins.tar"
 tar -C "$out/root/etc/ssh" -xf "$tmp/dropins.tar"
 
 # A VM has its own kernel: the settings in facts/sysctl.rs (KEYS, and
-# CONF_KEYS for each interface), the running release, and the names of the
-# kernels in /boot (as empty files).
+# CONF_KEYS for each interface), the running release, the names of the
+# kernels in /boot (as empty files), and whether AppArmor is on.
 if [ -n "$sshcfg" ]; then
+  mkdir -p "$out/root/sys/module/apparmor/parameters"
+  x cat /sys/module/apparmor/parameters/enabled >"$out/root/sys/module/apparmor/parameters/enabled"
   keys="fs/protected_fifos fs/protected_hardlinks fs/protected_regular fs/protected_symlinks
     fs/suid_dumpable kernel/dmesg_restrict kernel/kptr_restrict kernel/perf_event_paranoid
     kernel/randomize_va_space kernel/unprivileged_bpf_disabled kernel/yama/ptrace_scope
