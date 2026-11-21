@@ -11,7 +11,7 @@ use std::time::Duration;
 use anyhow::bail;
 use owo_colors::OwoColorize;
 
-use super::{EXIT_ERROR, EXIT_INCOMPLETE, EXIT_ROLLED_BACK, print_report};
+use super::{EXIT_ERROR, EXIT_INCOMPLETE, EXIT_ROLLED_BACK, print_report, printable};
 use crate::audit::{self, Outcome};
 use crate::config::Profile;
 use crate::engine::{
@@ -711,6 +711,7 @@ fn print_plan(
             writeln!(out, "{header}")?;
         }
         for note in &m.notes {
+            let note = printable(note);
             if color {
                 writeln!(out, "  {}", format!("note: {note}").yellow())?;
             } else {
@@ -746,7 +747,7 @@ fn print_plan(
                 Reversibility::Partial => "partial",
             };
             // Pad before coloring: escape codes would count towards the width.
-            let line = format!("{sign} {text}");
+            let line = format!("{sign} {}", printable(&text));
             let pad = " ".repeat(WIDTH.saturating_sub(line.chars().count()).max(2));
             if color {
                 let line = if sign == '+' {
@@ -758,7 +759,9 @@ fn print_plan(
             } else {
                 writeln!(out, "  {line}{pad}{rev}")?;
             }
+            // The diff shows bytes of files that others may own.
             for line in step.change.diff.iter().flat_map(|d| d.lines()) {
+                let line = printable(line);
                 match (color, line.chars().next()) {
                     (true, Some('+')) => writeln!(out, "      {}", line.green())?,
                     (true, Some('-')) => writeln!(out, "      {}", line.red())?,
@@ -1003,7 +1006,7 @@ fn print_progress(err: &mut dyn Write, progress: &Progress) {
             format!("skip {reload}, so the daemon keeps its config: {reason}")
         }
     };
-    let _ = writeln!(err, "{line}");
+    let _ = writeln!(err, "{}", printable(&line));
 }
 
 /// One line per transaction, e.g.

@@ -878,15 +878,18 @@ fn check_loaded(json: &[u8], want: &Ruleset) -> Result<(), String> {
         return Ok(());
     };
     // Public SSH is closed only if nothing but the `ssh_via` rule accepts
-    // the SSH ports. A rule that accepts all ports on one interface
-    // (`iifname "x" accept`) is not seen: the parser takes it as narrow.
+    // the SSH ports, besides the accepts for Docker's bridges, which reach
+    // only containers.
     let only_via = |p: &crate::facts::InterfacePorts| p.interfaces == [via.as_str()];
+    let bridge = |p: &&crate::facts::InterfacePorts| {
+        want.docker && p.interfaces.iter().all(|i| i == "docker0" || i == "br-*")
+    };
     let mut wrong = Vec::new();
     for &port in &want.ssh {
         let via_rules: Vec<_> = chain
             .interface_ports
             .iter()
-            .filter(|p| p.ports.contains("tcp", port))
+            .filter(|p| p.ports.contains("tcp", port) && !bridge(p))
             .collect();
         if chain.open_ports.iter().any(|p| p.contains("tcp", port))
             || chain.unread_ports.iter().any(|p| p == "tcp")

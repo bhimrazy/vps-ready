@@ -15,11 +15,15 @@
 //! that `return` only some traffic are not: ufw returns every packet for a
 //! local address before the `drop` that ends `ufw-not-local`.
 //!
-//! Both guesses can be wrong. An accept for a whole interface (firewalld's
-//! `iifname eth0 goto filter_IN_trusted`) is taken as narrow, so the chain
-//! may pass while that interface is open. A narrow return (`iifname lo
-//! return` before a `drop`) is taken as wide, so under an `accept` policy
-//! the chain fails though it drops everything else.
+//! A narrow accept with no port match (`iifname eth0 accept`, `ct state new
+//! accept`, firewalld's `iifname eth0 goto filter_IN_trusted`) opens every
+//! port of its protocols, on its interfaces if it names any. One for
+//! replies only (`ct state established,related`), for ICMP, or on `lo`
+//! alone opens none.
+//!
+//! The guesses can be wrong. A narrow return (`iifname lo return` before a
+//! `drop`) is taken as wide, so under an `accept` policy the chain fails
+//! though it drops everything else.
 
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
@@ -163,13 +167,37 @@ impl InputChain {
     /// only, or by a rule whose ports nft does not show.
     #[must_use]
     pub fn blocks(&self, proto: &str, port: u16) -> Option<bool> {
+        self.blocks_beyond(proto, port, |_| false)
+    }
+
+    /// Whether it accepts every TCP and UDP port from any source on any
+    /// interface, as `ct state new accept` does.
+    #[must_use]
+    pub fn opens_every_port(&self) -> bool {
+        ["tcp", "udp"].iter().all(|proto| {
+            self.open_ports
+                .iter()
+                .any(|p| p.proto == *proto && p.first == 0 && p.last == u16::MAX)
+        })
+    }
+
+    /// [`Self::blocks`], leaving out ports opened only on interfaces
+    /// `inside` accepts, such as Docker's bridges.
+    #[must_use]
+    pub fn blocks_beyond(
+        &self,
+        proto: &str,
+        port: u16,
+        inside: impl Fn(&str) -> bool,
+    ) -> Option<bool> {
+        let beyond = |p: &InterfacePorts| {
+            p.ports.contains(proto, port)
+                && (p.interfaces.is_empty() || !p.interfaces.iter().all(|i| inside(i)))
+        };
         if !self.drops_unmatched || self.open_ports.iter().any(|p| p.contains(proto, port)) {
             Some(false)
         } else if self.unread_ports.iter().any(|p| p == proto)
-            || self
-                .interface_ports
-                .iter()
-                .any(|p| p.ports.contains(proto, port))
+            || self.interface_ports.iter().any(beyond)
         {
             None
         } else {
@@ -694,7 +722,18 @@ impl Walk<'_, '_> {
                 }
                 None => scope.map(<[String]>::to_vec),
             };
+            if !rule.admits_new() {
+                continue;
+            }
             let opens = match v {
+                // With no port, every port, except on `lo` alone: its
+                // packets come from this host.
+                Verdict::Accept if rule.ports.is_empty() && rule.unread.is_empty() => {
+                    rule.ports = rule.every_port();
+                    !scope
+                        .as_ref()
+                        .is_some_and(|s| !s.is_empty() && s.iter().all(|i| i == "lo"))
+                }
                 Verdict::Accept => true,
                 Verdict::Jump(t) | Verdict::Goto(t) => {
                     let target = (chain.0.clone(), chain.1.clone(), t.to_owned());
@@ -725,6 +764,9 @@ impl Walk<'_, '_> {
     }
 }
 
+/// The protocols with ports.
+const PORT_PROTOS: [&str; 3] = ["tcp", "udp", "sctp"];
+
 /// A rule whose matches all still admit any source.
 struct Narrow {
     /// The ports it matches; empty if it matches no port.
@@ -735,15 +777,53 @@ struct Narrow {
     /// The names its input interface matches accept, if it has one; see
     /// [`InterfacePorts::interfaces`].
     interfaces: Option<Vec<String>>,
+    /// The protocols it matches, if it has a protocol match.
+    protos: Option<Vec<String>>,
+    /// Whether a connection state match admits only replies (`ct state
+    /// established,related`), which open no port.
+    replies_only: bool,
+}
+
+impl Narrow {
+    /// Whether it may admit a new connection to a port: not replies only,
+    /// nor only protocols without ports, such as ICMP.
+    fn admits_new(&self) -> bool {
+        !self.replies_only
+            && self
+                .protos
+                .as_ref()
+                .is_none_or(|p| p.iter().any(|p| PORT_PROTOS.contains(&p.as_str())))
+    }
+
+    /// Every port of its protocols, for an accept that matches no port.
+    fn every_port(&self) -> Vec<Ports> {
+        PORT_PROTOS
+            .iter()
+            .filter(|p| {
+                self.protos
+                    .as_ref()
+                    .is_none_or(|ps| ps.iter().any(|x| x == *p))
+            })
+            .map(|p| Ports {
+                proto: (*p).to_owned(),
+                first: 0,
+                last: u16::MAX,
+            })
+            .collect()
+    }
 }
 
 /// The rule given the statements `before` its verdict, if each is a port,
 /// protocol, connection state or input interface match, a counter or a
-/// log. iptables-nft shows `-m conntrack` and `-m multiport` as `xt`.
+/// log. iptables-nft shows `-m conntrack` and `-m multiport` as `xt`. An
+/// `xt` conntrack match does not show its states, so one with no port is
+/// taken as ufw's `--ctstate RELATED,ESTABLISHED`.
 fn narrow(before: &[Value]) -> Option<Narrow> {
     let mut ports = Vec::new();
-    let mut proto = None;
+    let mut protos: Option<Vec<String>> = None;
     let mut multiport = false;
+    let mut conntrack = false;
+    let mut replies_only = false;
     let mut interfaces: Option<Vec<String>> = None;
     for s in before {
         if s.get("counter").is_some() || s.get("log").is_some() {
@@ -755,7 +835,7 @@ fn narrow(before: &[Value]) -> Option<Narrow> {
             }
             match xt.get("name").and_then(Value::as_str) {
                 Some("multiport") => multiport = true,
-                Some("conntrack") => {}
+                Some("conntrack") => conntrack = true,
                 _ => return None,
             }
             continue;
@@ -774,27 +854,54 @@ fn narrow(before: &[Value]) -> Option<Narrow> {
         match (key("meta"), key("ct"), field) {
             // `meta l4proto tcp`, `ip protocol tcp`, `ip6 nexthdr tcp`.
             (Some("l4proto"), ..) | (_, _, Some("protocol" | "nexthdr")) => {
-                proto = m.get("right").and_then(Value::as_str);
+                protos = names(m);
             }
             (Some("iifname" | "iif"), ..) => {
                 interfaces
                     .get_or_insert_default()
                     .extend(interface_names(m));
             }
-            (Some("nfproto"), ..) | (_, Some("state"), _) => {}
+            (_, Some("state"), _) => {
+                replies_only |= names(m).is_some_and(|states| {
+                    states.iter().all(|s| s == "established" || s == "related")
+                });
+            }
+            (Some("nfproto"), ..) => {}
             _ => return None,
         }
     }
-    let unread = match (multiport, proto) {
+    replies_only |= conntrack && ports.is_empty() && !multiport;
+    let unread = match (multiport, &protos) {
         (false, _) => Vec::new(),
-        (true, Some(p)) => vec![p.to_owned()],
-        (true, None) => ["tcp", "udp", "sctp"].map(str::to_owned).to_vec(),
+        (true, Some(p)) => p.clone(),
+        (true, None) => PORT_PROTOS.map(str::to_owned).to_vec(),
     };
     Some(Narrow {
         ports,
         unread,
         interfaces,
+        protos,
+        replies_only,
     })
+}
+
+/// The names an `==` match `m` lists: one, a set, or the flags of `ct
+/// state established,related`. `None` for another operator.
+fn names(m: &Value) -> Option<Vec<String>> {
+    if !matches!(m.get("op").and_then(Value::as_str), Some("==" | "in")) {
+        return None;
+    }
+    let right = m.get("right")?;
+    if let Some(name) = right.as_str() {
+        return Some(vec![name.to_owned()]);
+    }
+    right
+        .get("set")
+        .unwrap_or(right)
+        .as_array()?
+        .iter()
+        .map(|n| n.as_str().map(str::to_owned))
+        .collect()
 }
 
 /// The names an `iifname` or `iif` match `m` accepts: `"wg0"` or a set of
@@ -1230,6 +1337,90 @@ mod tests {
             r#"[{"match": {"op": "==", "left": {"payload": {"protocol": "tcp", "field": "dport"}}, "right": 80}}, {"xt": {"type": "match", "name": "conntrack"}}, {"accept": null}]"#,
         );
         assert_eq!(new80[0].blocks("tcp", 80), Some(false));
+    }
+
+    /// A match statement on `left`, as `nft -j` prints it.
+    fn on(op: &str, left: &str, right: &str) -> String {
+        format!(r#"{{"match": {{"op": "{op}", "left": {left}, "right": {right}}}}}"#)
+    }
+
+    const IIFNAME: &str = r#"{"meta": {"key": "iifname"}}"#;
+    const L4PROTO: &str = r#"{"meta": {"key": "l4proto"}}"#;
+    const CT_STATE: &str = r#"{"ct": {"key": "state"}}"#;
+
+    #[test]
+    fn an_accept_without_a_port_opens_every_port() {
+        let accept = |m: &str| format!(r#"[{m}, {{"accept": null}}]"#);
+        let chain = |rules: &[(&str, &[&str])]| ruleset_of("drop", "", rules).input_chains;
+
+        // `ufw allow in on eth0`: every port, on eth0.
+        let eth0 = accept(&on("==", IIFNAME, r#""eth0""#));
+        let c = &chain(&[("in", &[&eth0])])[0];
+        for proto in ["tcp", "udp", "sctp"] {
+            assert_eq!(c.blocks(proto, 5432), None, "{proto}");
+            assert_eq!(c.blocks_public(proto, 5432, |_| false), Some(false));
+        }
+        assert_eq!(c.blocks_public("tcp", 5432, |i| i == "eth0"), Some(true));
+        assert!(!c.opens_every_port());
+
+        // `meta l4proto tcp accept`: every TCP port, to all.
+        let tcp = accept(&on("==", L4PROTO, r#""tcp""#));
+        let c = &chain(&[("in", &[&tcp])])[0];
+        assert_eq!(c.blocks("tcp", 5432), Some(false));
+        assert_eq!(c.blocks("udp", 5432), Some(true));
+
+        // `ct state new accept`: every port of every protocol.
+        let new = accept(&on("in", CT_STATE, r#""new""#));
+        let c = &chain(&[("in", &[&new])])[0];
+        assert_eq!(c.blocks("udp", 53), Some(false));
+        assert_eq!(c.blocks("sctp", 9), Some(false));
+        assert!(c.opens_every_port());
+
+        // firewalld's `iifname eth0 goto` to a zone that accepts all.
+        let goto = format!(
+            r#"[{}, {{"goto": {{"target": "trusted"}}}}]"#,
+            on("==", IIFNAME, r#""eth0""#)
+        );
+        let c = &chain(&[("in", &[&goto]), ("trusted", &[r#"[{"accept": null}]"#])])[0];
+        assert_eq!(c.blocks_public("tcp", 22, |_| false), Some(false));
+        assert_eq!(c.interface_ports[0].interfaces, ["eth0"]);
+    }
+
+    #[test]
+    fn replies_icmp_and_loopback_accepts_open_nothing() {
+        let accept = |m: &str| format!(r#"[{m}, {{"accept": null}}]"#);
+        let rules = [
+            accept(&on("in", CT_STATE, r#"["established", "related"]"#)),
+            accept(&on(
+                "==",
+                CT_STATE,
+                r#"{"set": ["established", "related"]}"#,
+            )),
+            // ufw's `-m conntrack --ctstate RELATED,ESTABLISHED`.
+            r#"[{"xt": {"type": "match", "name": "conntrack"}}, {"accept": null}]"#.to_owned(),
+            accept(&on("==", L4PROTO, r#""icmp""#)),
+            accept(&on("==", L4PROTO, r#"{"set": ["icmp", "ipv6-icmp"]}"#)),
+            accept(&on("==", r#"{"meta": {"key": "iif"}}"#, r#""lo""#)),
+            // A jump for replies does not open what its target accepts.
+            format!(
+                r#"[{}, {{"jump": {{"target": "all"}}}}]"#,
+                on("in", CT_STATE, r#""established""#)
+            ),
+        ];
+        for rule in &rules {
+            let fw = ruleset_of(
+                "drop",
+                "",
+                &[
+                    ("in", &[rule.as_str()]),
+                    ("all", &[r#"[{"accept": null}]"#]),
+                ],
+            );
+            let c = &fw.input_chains[0];
+            assert!(c.open_ports.is_empty(), "{rule}");
+            assert!(c.interface_ports.is_empty(), "{rule}");
+            assert_eq!(c.blocks("tcp", 22), Some(true), "{rule}");
+        }
     }
 
     #[test]

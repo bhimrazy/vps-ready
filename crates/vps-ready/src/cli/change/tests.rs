@@ -736,6 +736,38 @@ fn colors_only_when_asked() {
     assert!(colored.contains('\x1b'));
 }
 
+/// Terminal escapes in a file's current bytes show as text in the diff, so
+/// the file's owner cannot rewrite the screen before the prompt.
+#[test]
+fn a_plan_shows_escapes_in_a_diff_as_text() {
+    let fs = fixture().with_file(LOCKOUT, "old\x1b[1A\x1b[2Kspoofed\x07\x7f\u{9b}\n");
+    let modules: &[&dyn Module] = &[&Lockout];
+    for color in [false, true] {
+        let host = Host {
+            modules,
+            color,
+            ..host(&fs)
+        };
+        let out = plan_cmd(&host, &["test.lockout"]).1;
+        assert!(
+            out.contains(r"-old\x1b[1A\x1b[2Kspoofed\x07\x7f\x9b"),
+            "{out}"
+        );
+        if !color {
+            assert!(!out.contains('\x1b'), "{out}");
+        }
+    }
+}
+
+#[test]
+fn printable_escapes_control_characters_but_tab() {
+    use crate::cli::{printable, printable_lines};
+    assert_eq!(printable("a\tb c"), "a\tb c");
+    assert_eq!(printable("a\x1b[0m\nb\u{85}"), r"a\x1b[0m\x0ab\x85");
+    assert_eq!(printable_lines("a\x1b\nb"), "a\\x1b\nb");
+    assert!(matches!(printable("plain"), std::borrow::Cow::Borrowed(_)));
+}
+
 /// A second module that does not apply here.
 struct NoApt;
 

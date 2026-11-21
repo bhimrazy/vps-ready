@@ -14,7 +14,7 @@ use zeroize::Zeroizing;
 
 use super::change::{self, Applied, Host, Selection, plural};
 use super::export::{self, Refusal};
-use super::{EXIT_INTERRUPTED, wrap};
+use super::{EXIT_INTERRUPTED, printable, wrap};
 use crate::VERSION_INFO;
 use crate::audit::{self, Outcome, Severity};
 use crate::config::{Profile, ProfileBuilder, ProfileError, STAGED_VIA, VPNS};
@@ -1144,7 +1144,7 @@ fn ask_ports(
         let label = if l.processes.is_empty() {
             text.clone()
         } else {
-            format!("{text} ({})", l.processes.join(", "))
+            format!("{text} ({})", printable(&l.processes.join(", ")))
         };
         offered.push((text, label, false));
     }

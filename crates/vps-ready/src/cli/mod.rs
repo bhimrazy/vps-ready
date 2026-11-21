@@ -6,6 +6,7 @@
 
 //! GitHub milestones.
 
+use std::borrow::Cow;
 use std::cmp::Reverse;
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -321,7 +322,7 @@ pub fn main() -> ExitCode {
         Err(err) if is_broken_pipe(&err) => ExitCode::SUCCESS,
         Err(err) => {
             // `{:#}` prints the context chain on one line, without a backtrace.
-            eprintln!("error: {err:#}");
+            eprintln!("error: {}", printable_lines(&format!("{err:#}")));
             ExitCode::from(change::exit_code(&err))
         }
     }
@@ -679,9 +680,9 @@ fn log_notices(facts: &Facts, quiet: &[&str]) {
         .filter(|n| !quiet.iter().any(|q| n.starts_with(q)))
     {
         if PLAIN_NOTICES.load(Ordering::Relaxed) {
-            eprintln!("vps-ready: {notice}");
+            eprintln!("vps-ready: {}", printable_lines(notice));
         } else {
-            tracing::warn!("{notice}");
+            tracing::warn!("{}", printable_lines(notice));
         }
     }
 }
@@ -778,7 +779,8 @@ fn print_report(
     }
     let n = report.findings.len();
     let title = format!(
-        "Audit of {host}: {n} {}",
+        "Audit of {}: {n} {}",
+        printable(host),
         if n == 1 { "control" } else { "controls" }
     );
     if color {
@@ -826,7 +828,7 @@ fn print_report(
                 detail = format!("{detail}: {cause}");
             }
             for line in wrap(&detail, WIDTH - INDENT.len()) {
-                writeln!(out, "{INDENT}{line}")?;
+                writeln!(out, "{INDENT}{}", printable(&line))?;
             }
         }
         for line in finding
@@ -834,7 +836,7 @@ fn print_report(
             .iter()
             .flat_map(|n| wrap(n, WIDTH - INDENT.len()))
         {
-            writeln!(out, "{INDENT}{line}")?;
+            writeln!(out, "{INDENT}{}", printable(&line))?;
         }
         if matches!(finding.outcome, Outcome::Fail { .. }) {
             for line in wrap(&control.why, WIDTH - INDENT.len()) {
@@ -850,7 +852,7 @@ fn print_report(
                 }
                 (None, Some(how)) => {
                     for line in wrap(&format!("fix: {how}"), WIDTH - INDENT.len()) {
-                        writeln!(out, "{INDENT}{line}")?;
+                        writeln!(out, "{INDENT}{}", printable(&line))?;
                     }
                 }
                 (None, None) => writeln!(out, "{INDENT}fix: not automated yet")?,
@@ -886,7 +888,7 @@ fn print_report(
         }
     }
     for reason in reasons {
-        writeln!(out, "Skipped: {reason}.")?;
+        writeln!(out, "Skipped: {}.", printable(reason))?;
     }
     if s.unknown > 0 && root_hint {
         writeln!(out, "Run it with sudo: some checks need root.")?;
@@ -1008,13 +1010,13 @@ fn print_facts(out: &mut impl Write, facts: &Facts, color: bool) -> io::Result<(
     ];
     for (key, value) in rows {
         if color {
-            writeln!(out, "{:<8} {value}", key.bold())?;
+            writeln!(out, "{:<8} {}", key.bold(), printable(&value))?;
         } else {
-            writeln!(out, "{key:<8} {value}")?;
+            writeln!(out, "{key:<8} {}", printable(&value))?;
         }
     }
     if let Some(warning) = crate::audit::tailscale_expiry(facts) {
-        writeln!(out, "{warning}")?;
+        writeln!(out, "{}", printable(&warning))?;
     }
     Ok(())
 }
@@ -1111,6 +1113,34 @@ fn running_as_root() -> bool {
     })
 }
 
+/// `text` with each control character but tab (C0, DEL, C1) shown as an
+/// escape such as `\x1b`: text read from the host, such as a deploy
+/// account's own `authorized_keys`, must not drive root's terminal.
+pub(crate) fn printable(text: &str) -> Cow<'_, str> {
+    escape_controls(text, false)
+}
+
+/// [`printable`], keeping newlines: for output that is multi-line by design.
+pub(crate) fn printable_lines(text: &str) -> Cow<'_, str> {
+    escape_controls(text, true)
+}
+
+fn escape_controls(text: &str, newlines: bool) -> Cow<'_, str> {
+    let escaped = |c: char| c.is_control() && c != '\t' && !(newlines && c == '\n');
+    if !text.chars().any(escaped) {
+        return Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len() + 8);
+    for c in text.chars() {
+        if escaped(c) {
+            out.push_str(&format!("\\x{:02x}", u32::from(c)));
+        } else {
+            out.push(c);
+        }
+    }
+    Cow::Owned(out)
+}
+
 /// Splits `text` into lines of at most `width` characters at spaces. A word
 /// longer than `width` gets a line of its own.
 fn wrap(text: &str, width: usize) -> Vec<String> {
@@ -1155,6 +1185,23 @@ fn ports_line(listeners: &[Listener]) -> String {
 mod tests {
     use super::*;
     use crate::facts::fixtures::{HOSTS, host};
+
+    /// Any local user names their own process, and `detect` lists it.
+    #[test]
+    fn detect_shows_escapes_in_process_names_as_text() {
+        let mut facts = host("debian-12", &[]);
+        facts.listeners = vec![Listener {
+            proto: facts::Proto::Tcp,
+            addr: "0.0.0.0".into(),
+            port: 8080,
+            processes: vec!["app\x1b[2J".into()],
+        }];
+        let mut out = Vec::new();
+        print_facts(&mut out, &facts, false).unwrap();
+        let out = String::from_utf8(out).unwrap();
+        assert!(out.contains(r"tcp/8080 (app\x1b[2J)"), "{out}");
+        assert!(!out.contains('\x1b'), "{out}");
+    }
 
     #[test]
     fn vpn_line_names_interfaces_and_the_session_interface() {

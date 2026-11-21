@@ -137,8 +137,9 @@ pub enum Check {
     /// wireguard-tools (`wg`).
     ExposedListeners,
     /// SSH is accepted only through a VPN: the input chains drop every SSH
-    /// port unless it arrives on `lo`, `tailscale0`, a WireGuard interface
-    /// or the `ssh_via` interface of vps-ready's table (`nb0`). Skipped
+    /// port unless it arrives on `lo`, `tailscale0`, a WireGuard interface,
+    /// one of Docker's bridges or the `ssh_via` interface of vps-ready's
+    /// table (`nb0`). Skipped
     /// when the host has none of the last three. The
     /// finding's note warns when SSH depends on `tailscale0` and the node's
     /// key expires.
@@ -477,7 +478,9 @@ pub(crate) fn evaluate(check: &Check, facts: &Facts) -> Outcome {
         }
         Check::WireguardKeyFiles => wireguard_key_files(facts),
         Check::PublishedPorts => match &facts.firewall {
-            Some(firewall) => match published_ports(firewall, facts.ipv6, facts.docker) {
+            Some(firewall) => match published_ports(firewall, facts.ipv6, facts.docker, |i| {
+                docker_bridge(facts, i)
+            }) {
                 // Docker with iptables-legacy publishes ports in rules that
                 // nft does not show.
                 Outcome::Pass
@@ -678,8 +681,14 @@ fn docker_absent() -> Outcome {
 const LOOPBACK_HINT: &str = "with deploy.docker, a port published without an address binds to \
      127.0.0.1; one published with an address, or on a network created before, keeps it";
 
-/// Fails on ports Docker publishes that an input chain would otherwise block.
-fn published_ports(firewall: &Firewall, ipv6: bool, docker: bool) -> Outcome {
+/// Fails on ports Docker publishes that an input chain would otherwise
+/// block. Accepts on Docker's bridges (`bridge`) are not the internet's.
+fn published_ports(
+    firewall: &Firewall,
+    ipv6: bool,
+    docker: bool,
+    bridge: impl Fn(&str) -> bool + Copy,
+) -> Outcome {
     if firewall.published.is_empty() && !docker {
         return docker_absent();
     }
@@ -693,7 +702,7 @@ fn published_ports(firewall: &Firewall, ipv6: bool, docker: bool) -> Outcome {
             .input_chains
             .iter()
             .filter(|c| c.covers(p.family == "ip6"))
-            .map(|c| c.blocks(&p.proto, p.port))
+            .map(|c| c.blocks_beyond(&p.proto, p.port, bridge))
             .collect();
         let port = (p.proto.as_str(), p.port, p.address.as_deref());
         if verdicts.contains(&Some(true)) {
@@ -880,6 +889,24 @@ struct Exposed {
     anywhere: bool,
 }
 
+/// Whether the input interface `name`, as a rule writes it, is one of
+/// Docker's bridges, which reach only containers. `br-*` is while Docker
+/// is installed and every `br-*` interface is Docker's.
+fn docker_bridge(facts: &Facts, name: &str) -> bool {
+    match name.strip_suffix('*') {
+        Some(prefix) => {
+            prefix == "br-"
+                && facts.docker
+                && facts
+                    .bridges
+                    .iter()
+                    .filter(|b| b.name.starts_with(prefix))
+                    .all(|b| b.docker)
+        }
+        None => facts.bridges.iter().any(|b| b.docker && b.name == name),
+    }
+}
+
 /// FW-003's outcome, and the ports open to the internet.
 fn exposed_listeners(facts: &Facts) -> (Outcome, Option<String>) {
     let Some(firewall) = &facts.firewall else {
@@ -910,7 +937,7 @@ fn exposed_listeners(facts: &Facts) -> (Outcome, Option<String>) {
                 .interfaces
                 .iter()
                 .any(|i| i.name == name && i.is_vpn())
-            || facts.bridges.iter().any(|b| b.docker && b.name == name)
+            || docker_bridge(facts, name)
     };
     let ssh = crate::modules::firewall_inbound::ssh_ports(facts);
     let (mut open, mut maybe) = (BTreeMap::new(), BTreeMap::new());
@@ -1065,6 +1092,7 @@ fn ssh_private_only(facts: &Facts) -> Outcome {
                 .interfaces
                 .iter()
                 .any(|i| i.name == name && i.is_wireguard())
+            || docker_bridge(facts, name)
     };
     let (mut open, mut maybe) = (Vec::new(), Vec::new());
     for port in crate::modules::firewall_inbound::ssh_ports(facts) {
@@ -1102,7 +1130,7 @@ fn ssh_private_only(facts: &Facts) -> Outcome {
 }
 
 /// The interfaces that the loaded rules accept SSH ports on, by name; a
-/// wildcard and `lo` left out.
+/// wildcard, `lo` and Docker's bridges left out.
 fn ssh_interfaces(facts: &Facts) -> BTreeSet<String> {
     let ssh = crate::modules::firewall_inbound::ssh_ports(facts);
     facts
@@ -1112,7 +1140,7 @@ fn ssh_interfaces(facts: &Facts) -> BTreeSet<String> {
         .flat_map(|c| &c.interface_ports)
         .filter(|p| ssh.iter().any(|&port| p.ports.contains("tcp", port)))
         .flat_map(|p| &p.interfaces)
-        .filter(|n| *n != "lo" && !n.contains('*'))
+        .filter(|n| *n != "lo" && !n.contains('*') && !docker_bridge(facts, n))
         .cloned()
         .collect()
 }
@@ -1195,11 +1223,13 @@ pub(crate) fn tailscale_expiry(facts: &Facts) -> Option<String> {
 
 /// Which incoming traffic no chain drops by default, e.g. `IPv6`.
 fn inbound_default_deny(firewall: &Firewall, ipv6: bool) -> Outcome {
+    // A rule that accepts every port to all (`ct state new accept`) leaves
+    // nothing for the default to drop.
     let drops = |v6: bool| {
         firewall
             .input_chains
             .iter()
-            .any(|c| c.covers(v6) && c.drops_unmatched)
+            .any(|c| c.covers(v6) && c.drops_unmatched && !c.opens_every_port())
     };
     // A family whose iptables-legacy filter table is loaded may be filtered
     // by rules that are not read, so it is unknown rather than a failure.
@@ -1213,10 +1243,19 @@ fn inbound_default_deny(firewall: &Firewall, ipv6: bool) -> Outcome {
         }
     }
     let no_chains = firewall.input_chains.is_empty();
+    let every_port = firewall
+        .input_chains
+        .iter()
+        .any(InputChain::opens_every_port);
     if !accepted.is_empty() {
         Outcome::Fail {
             found: if no_chains {
                 "no firewall rules filter incoming traffic".to_owned()
+            } else if every_port {
+                format!(
+                    "a rule accepts incoming {} traffic to every port",
+                    accepted.join(" and ")
+                )
             } else {
                 format!(
                     "incoming {} traffic that no rule allows is accepted",
