@@ -2,6 +2,7 @@
 # (`rust-lld`) and the musl CRT/libc that ship with the Rust target. No system
 # cross toolchain is needed, so the same config works on macOS and on Linux CI
 # runners for both x86_64 and aarch64.
+# Release builds set CARGO_ENCODED_RUSTFLAGS, which replaces any rustflags here.
 [target.x86_64-unknown-linux-musl]
 linker = "rust-lld"
 
@@ -9,4 +10,5 @@ linker = "rust-lld"
 linker = "rust-lld"
 
 [alias]
+xtask = "run --locked --package xtask --"
 check-all = "clippy --workspace --all-targets --all-features -- -D warnings"
