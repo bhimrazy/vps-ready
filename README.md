@@ -81,7 +81,7 @@ The command is also installed as `vpsready`, without the hyphen. With Rust insta
 
 You buy a VPS, get `root@ip`, and want to deploy something. Before that you should do about fifteen setup steps: a sudo user with a key, SSH hardening, a firewall that also covers Docker, automatic security updates, sane kernel settings, logging. In practice people follow an old blog post, run a random script as root, lock themselves out of SSH, or end up with a firewall that silently ignores their containers.
 
-Auditors report problems and leave the fixes to you. Configuration management fixes them but assumes a control node and has no lockout timer or undo. vps-ready is for the single server in between, and its headline feature is that it proves you can still log in before it commits.
+Auditors report problems and leave the fixes to you. Configuration management fixes them but assumes a control node and has no lockout timer or undo. vps-ready is for the single server in between, and it proves you can still log in before it keeps a change.
 
 ## What it does
 
@@ -126,7 +126,7 @@ Profiles pick the modules: **minimal** is `user.admin`, `ssh.server`, `firewall.
   </picture>
 </p>
 
-If any step inside `apply` fails, the engine restores the snapshots in reverse order before it ever reaches the confirm step. For the modules that can lock you out, the dead-man timer is armed **before the first change**, so even a crash or a dropped connection mid-apply is rolled back. The full design is in [the design doc](docs/design.md#dead-man-switch).
+If any step inside `apply` fails, the engine restores the snapshots in reverse order before it ever reaches the confirm step. For the modules that can lock you out, the engine arms the dead-man timer **before the first change**, so even a crash or a dropped connection mid-apply is rolled back. The full design is in [the design doc](docs/design.md#dead-man-switch).
 
 ## Safety guarantees
 
@@ -137,7 +137,7 @@ The engine is built around these rules, so they hold for every module rather tha
 - **Show, then do.** Nothing changes without a plan you can read. Every change carries a reversibility label: reversible, or partial when rollback leaves part of it in place (an installed package, a created user's home).
 - **Effective state over file state.** Checks use `sshd -T`, `/proc/sys`, `apt-config`, `nft` and `ss`, not a guess at what a config file means.
 - **Drop-ins, not edits.** The tool owns files like `/etc/ssh/sshd_config.d/00-vps-ready.conf` and never rewrites your `sshd_config` in place. That is also what beats cloud-init re-enabling passwords.
-- **Docker- and cloud-aware.** Container ports bypass ufw and firewalld by default; `ip_forward=0` kills Docker; cloud metadata must stay reachable. These are handled, not just warned about.
+- **Docker- and cloud-aware.** Container ports bypass ufw and firewalld by default; `ip_forward=0` kills Docker; cloud metadata must stay reachable. vps-ready handles each of these instead of only warning about it.
 - **No network calls** except package installs. No telemetry, no self-update.
 
 ## Supported platforms

@@ -24,11 +24,11 @@ For what each command, module and control does, use the user docs instead: `vps-
 
 Someone buys a small VPS, gets `root@ip` with a password or one key, and wants to deploy an app. Before that they should do about fifteen setup steps. In practice they follow an old guide that conflicts with today's distro defaults (cloud-init drop-ins, `ssh.socket`, Debian 13 ignoring `/etc/sysctl.conf`), run a script as root without reading it, lock themselves out of SSH, or end up with a firewall that silently does not apply to Docker containers.
 
-Every single fix already exists somewhere. What is missing is one trusted tool that does them on one server, interactively or from a file, and proves the admin can still log in before it commits. So vps-ready competes on safety and quality, not on the length of its checklist:
+Each fix exists somewhere already. vps-ready puts them in one tool for one server, run interactively or from a file, and proves the admin can still log in before it keeps a change. It does a few things safely rather than many:
 
 - **Provisioning first.** The first minutes after `ssh root@new-vps`, plus deployment readiness: an admin user, SSH, a firewall, updates, Docker with safe defaults, a reverse proxy, a deploy user, private access.
-- **Lockout-safe by construction.** Root and password logins stay on until a keyed sudo user exists, the firewall always keeps the current SSH port, and changes that could lock someone out revert unless a new SSH login confirms them.
-- **Plan, apply, verify, roll back**, with a readable diff and an honest reversibility label on every change: reversible or partial.
+- **Lockout-safe.** Root and password logins stay on until a keyed sudo user exists, the firewall always keeps the current SSH port, and changes that could lock someone out revert unless a new SSH login confirms them.
+- **Plan, apply, verify, roll back**, with a readable diff and a reversibility label on every change: reversible or partial.
 - **Audit and fix share one rule set.** Controls have stable IDs, and a control a module fixes names that module.
 - **Export.** A profile used once interactively becomes cloud-init `user-data` for the next server.
 - **Trust.** Signed releases with provenance, a `.deb`, and no `curl | sh` required.
@@ -61,7 +61,7 @@ flowchart TB
   cli["CLI and wizard · src/cli, src/tui<br/>clap commands, the guided flow, dialoguer prompts"]
   engine["Engine · src/engine<br/>plan → snapshot → validate → apply → verify<br/>journal · dead-man · confirm · rollback · lock"]
   modules["Modules (policy) · src/modules<br/>user.admin, ssh.server, firewall.inbound, ..."]
-  resources["Resources (idempotent primitives) · src/resource<br/>File, Directory, Sysctl, Package, Service, User,<br/>AuthorizedKeys, TailscaleUp, WireguardKey, WireguardSync"]
+  resources["Resources (idempotent changes) · src/resource<br/>File, Directory, Sysctl, Package, Service, User,<br/>AuthorizedKeys, TailscaleUp, WireguardKey, WireguardSync"]
   facts["Facts (read-only) · src/facts<br/>os-release, virt, sshd -T, sockets, SSH session,<br/>firewall, Docker, interfaces, Tailscale, WireGuard"]
   sys["sys · src/sys<br/>Runner (exec) and Fs (rooted): real or fake"]
   cli --> engine --> modules --> resources --> facts --> sys
@@ -108,7 +108,7 @@ Detection runs once, read-only, into a plain `Facts` struct (`serde::Serialize`,
 
 #### Resources
 
-Idempotent primitives. The set of kinds is closed, so `Resource` is an enum: every `match` handles every kind, and it serializes for the journal and `plan --json`.
+A resource is one idempotent change, such as a file, a package or a service state. The set of kinds is closed, so `Resource` is an enum: every `match` handles every kind, and it serializes for the journal and `plan --json`.
 
 ```rust
 pub enum Resource { File, Directory, Sysctl, Package, Service, User, AuthorizedKeys, TailscaleUp, WireguardKey, WireguardSync }
@@ -181,7 +181,7 @@ fix      = "ssh.server"
 
 - Whole config files (the sshd drop-in, the nftables ruleset, the cloudflared unit and its restart script) are `askama` templates in `crates/vps-ready/templates/`, checked at compile time; short files are `format!` strings. `insta` snapshots pin every rendered file.
 - One `thiserror` enum per layer, each wrapping the one below with context. `anyhow` only at the binary's edge.
-- No `unwrap`, `expect` or `panic!` outside tests; the clippy lints for them are denied workspace-wide. A root tool that panics halfway through an edit is the bug the engine exists to prevent.
+- No `unwrap`, `expect` or `panic!` outside tests; the clippy lints for them are denied workspace-wide. A panic halfway through an edit would leave a half-written config on a server.
 
 #### The wizard
 
@@ -236,7 +236,7 @@ Every transition passes through one function that matches on `(state, event)`; a
 
 **The journal** is one JSON object per line, fsynced per line: `begin` (version and `format`), `armed`, `backup` (with `force_restore`), `applied`, `reloaded`, `extended`, `confirmed`, `rollback`, `restored`, `skipped`, `reload-skipped`, `retry` and `state`. A torn final line is a crash and is ignored; any other bad line is an error. Unknown fields are ignored. `begin` carries `format: 1` from 0.7.0, and a binary refuses a higher format by name ("use that version or newer") before parsing anything else, so a newer record kind never fails as a parse error.
 
-**Rollback** (`rollback --last` or `--txn`) journals `rollback` first, so a crash mid-way leaves an unfinished transaction that a rerun resumes. A manual rollback is all or nothing: every resource must still be at its applied or original state, or nothing is restored and the command prints each by-hand step. That also stops an older transaction from undoing a newer one on the same file. Exit codes: 0 rolled back, 2 refused or error, 3 incomplete.
+**Rollback** (`rollback --last` or `--txn`) journals `rollback` first, so a crash mid-way leaves an unfinished transaction that a rerun resumes. A manual rollback is all or nothing: every resource must still be at its applied or original state, or the engine restores nothing and prints each by-hand step. That also stops an older transaction from undoing a newer one on the same file. Exit codes: 0 rolled back, 2 refused or error, 3 incomplete.
 
 ### Dead-man switch
 
@@ -268,8 +268,8 @@ reboot:   the boot hook rolls back before sshd starts (reason deadman-reboot)
 - **The boot hook**, `/etc/systemd/system/vps-ready-deadman.service`, is written outside any transaction and enabled only while one is armed. It has `DefaultDependencies=no`, `After=local-fs.target vps-ready-firewall.service`, `Before=ssh.service ssh.socket docker.service caddy.service vps-ready-cloudflared.service shutdown.target` and `TimeoutStartSec=120`, and bounds every command to 20 seconds. It rolls back any transaction armed in an earlier boot, so sshd starts with the restored config; a reboot counts as not confirmed, since the user may have rebooted because they were locked out. If it times out, sshd starts anyway and the transaction stays pending for a manual rollback.
 - **The window** is 5 minutes, counted from when the changes are live (`apply --deadman 1m` to `30m`). `confirm --extend [DUR]` works from any session, since extending proves nothing, up to 30 minutes ahead and 2 hours after the changes went live.
 - **Waiting.** `apply` counts down and exits 0 when confirmed, 1 when rolled back, and 4 when Ctrl-C stopped the wait (the timer keeps running). `history` shows `pending-confirm (reverts in 3m12s)`.
-- **The dead-man rollback is per resource.** Resources of `ssh.server` and `firewall.inbound` (`force_restore`), and of a VPN module that asked for the timer through `ModuleSteps.deadman`, are restored even if edited during the window, and the edit is kept as `files/<n>.during`. Any other resource that changed is skipped and journaled with its by-hand step. Restores come first and the journal is best effort, so a full disk does not stop them. If a forced restore fails, the unforced ones after it (the admin `user.admin` made) wait for a rerun, so the way in stays while the lock-down does.
-- **Guarded manual rollbacks.** Under `ssh_via`, a manual rollback that would limit SSH to an interface again runs only from a login through it, since no timer covers it. One that would stop a `tailscaled` or `wg-quick@wg0` its transaction started, or run `tailscale down`, is refused when SSH afterwards depends on that interface or the session comes through it, and so is one that would take the session's own WireGuard peer off `wg0`. A pending or unfinished transaction is exempt from the `ssh_via` guard, since its rollback only does what the dead-man would. Removing an admin account `user.admin` created is refused while a later transaction is applied, confirmed or pending (it may rely on that account), and for the account running the rollback.
+- **The dead-man rollback is per resource.** Resources of `ssh.server` and `firewall.inbound` (`force_restore`), and of a VPN module that asked for the timer through `ModuleSteps.deadman`, are restored even if someone edited them during the window; the engine keeps the edit as `files/<n>.during`. It skips any other resource that changed and journals the by-hand step. Restores come first and the journal is best effort, so a full disk does not stop them. If a forced restore fails, the unforced ones after it (the admin `user.admin` made) wait for a rerun, so the admin account stays as long as the lock-down does.
+- **Guarded manual rollbacks.** Under `ssh_via`, a manual rollback that would limit SSH to an interface again runs only from a login through it, since no timer covers it. One that would stop a `tailscaled` or `wg-quick@wg0` its transaction started, or run `tailscale down`, is refused if SSH afterwards depends on that interface or the session comes through it, and so is one that would take the session's own WireGuard peer off `wg0`. A pending or unfinished transaction is exempt from the `ssh_via` guard, since its rollback only does what the dead-man would. Removing an admin account `user.admin` created is refused while a later transaction is applied, confirmed or pending (it may rely on that account), and for the account running the rollback.
 
 ```mermaid
 sequenceDiagram
@@ -294,7 +294,7 @@ sequenceDiagram
   end
 ```
 
-**Without the timer.** `apply --deadman=off` applies the dead-man modules without arming anything, for a first boot from `export cloud-init`, where nobody can confirm. The plan-time invariants still hold. It needs positive evidence that nobody is logged in: no per-session sshd process in `/proc` and no `loginctl` session of class `user`. It is refused with an explicit `ssh_via` and in the `private` profile's step 2, and `history` shows the transaction as applied without the timer. A crash mid-apply with the timer off leaves an unfinished transaction, with nothing to roll it back until `rollback --last`.
+**Without the timer.** `apply --deadman=off` applies the dead-man modules without arming anything, for a first boot from `export cloud-init`, where nobody can confirm. The plan-time invariants still hold. It needs positive evidence that nobody is logged in: no per-session sshd process in `/proc` and no `loginctl` session of class `user`. vps-ready refuses it with an explicit `ssh_via` and in the `private` profile's step 2, and `history` shows the transaction as applied without the timer. A crash mid-apply with the timer off leaves an unfinished transaction, with nothing to roll it back until `rollback --last`.
 
 The timer needs systemd. Planned: an OpenRC watchdog and firewalld runtime-only rules, with those distro families.
 
@@ -335,7 +335,7 @@ A new module follows the same rules: use the drop-in directory when there is one
 
 ### Profile format
 
-Profiles are TOML, which avoids YAML's surprises in a security config (`no` becoming `false`, indentation). Decoding is strict, with `schema = 1`: every module section is checked when the profile is parsed, even for a module that does not apply on this host.
+Profiles are TOML, which avoids YAML's surprises in a security config (`no` becoming `false`, indentation). Decoding is strict, with `schema = 1`. The parser checks every module section, even for a module that does not apply on this host.
 
 The built-in profiles are embedded from `crates/vps-ready/src/config/profiles/`:
 
@@ -402,7 +402,7 @@ site/                      the user docs and landing page
 The engine and the built-in profiles enforce this order:
 
 1. **Look first.** `detect` and `audit` are read-only. Take a provider snapshot before the first apply.
-2. **Admin, SSH and firewall, in one transaction with one confirm.** `user.admin` gives a non-root user keys and sudo; `ssh.server` turns off root and password logins; `firewall.inbound` drops unsolicited inbound traffic while keeping every current SSH port. The timer is armed before the first change, and the confirm is `sudo vps-ready confirm` from a new login as the admin, which proves the key, the sshd config, the firewall and sudo in one step. `--module user.admin` first, then the rest, shows which step fails.
+2. **Admin, SSH and firewall, in one transaction with one confirm.** `user.admin` gives a non-root user keys and sudo; `ssh.server` turns off root and password logins; `firewall.inbound` drops unsolicited inbound traffic while keeping every current SSH port. The engine arms the timer before the first change, and the confirm is `sudo vps-ready confirm` from a new login as the admin, which proves the key, the sshd config, the firewall and sudo in one step. `--module user.admin` first, then the rest, shows which step fails.
 3. **Changes that cannot lock anyone out:** `kernel.sysctl`, `updates.auto`, `ssh.bruteforce`.
 4. **Deployment modules:** `deploy.docker`, `deploy.proxy`, `deploy.user`. None touches sshd, the firewall's SSH rule or the admin's login.
 5. **Private access in two applies.** Set up a VPN (`net.tailscale` or `net.wireguard`) with public SSH still open, log in through it, and from that session apply `ssh_via` to close public SSH; the confirm must come from a new login through the VPN. A website then goes through `net.tunnel` so 80 and 443 can close too.
@@ -433,9 +433,9 @@ Each one has a rule in the code and a test (see [Testing](#testing)):
 2. **A `Match` block overrides the drop-in** for the connections it matches, and plain `sshd -T` does not show it. Verify runs `sshd -T -C` for the admin, and the audit reads `Match` blocks that set a checked keyword and fails the control, naming the file and line.
 3. **`ssh.socket` owns the port** on Ubuntu 22.10 and later. The port stays 22, and `ssh.socket`'s `Listen` ports count as current SSH ports for the firewall and the confirm.
 4. **The firewall loads before SSH is allowed, or forgets IPv6.** The ruleset always accepts every current SSH port, the `inet` table covers both families, and ICMPv6 is never blocked. A provider firewall is out of reach; `FW-001` sees only the host's.
-5. **Passwordless admin, sudo that needs a password, root off: no root.** A created admin gets `NOPASSWD`; `sudo = "password"` is refused unless the account already has a password hash; the confirm itself runs `sudo`.
+5. **An admin with no password whose sudo asks for one, with root logins off, leaves no way to root.** A created admin gets `NOPASSWD`, `user.admin` refuses `sudo = "password"` unless the account already has a password hash, and the confirm itself runs `sudo`.
 6. **A locked password blocks key logins with `UsePAM no`.** The module reads `usepam` and creates the user with password `*` then.
-7. **Root's keys on cloud images carry `command="echo Please login as ..."`.** Copied as is, they would make the new admin unusable, so key lines with options are skipped with a note.
+7. **Root's keys on cloud images carry `command="echo Please login as ..."`.** Copied as is, they would make the new admin unusable, so `user.admin` skips key lines with options and says so in a note.
 8. **Docker bypasses the host firewall,** and a firewall reset wipes Docker's chains. vps-ready owns one table and never flushes others, accepts input from Docker's bridges, and `deploy.docker` binds published ports to `127.0.0.1` by default. `FW-002` reports the ports still published publicly; no module fixes it.
 9. **Kernel settings that break networking:** `ip_forward=0` stops Docker and VPNs, `accept_ra=0` drops SLAAC IPv6, `rp_filter=1` breaks VPN routing, and Debian 13 ignores `/etc/sysctl.conf`. vps-ready never writes those keys and uses `sysctl.d`.
 10. **Updates that interrupt services.** `updates.auto` does not set `Automatic-Reboot`, and Docker's and Caddy's origins stay out of unattended upgrades, so they do not restart containers or the proxy on their own. Tailscale's and cloudflared's origins are added, since SSH or the website depends on them, and a path unit restarts the connector onto the new binary.
@@ -446,17 +446,17 @@ Each decision with its reason. Where the code later departed from a plan, this r
 
 ### Foundations
 
-- **Rust.** The dangerous bugs here are logic bugs (a lockout, a non-idempotent edit, a bad rollback). Exhaustive `match` on the transaction state and the reversibility labels means a new variant does not compile until every use handles it, errors are values, and a static musl binary is about 3 MB. The author also chose it to master the language. Accepted costs: a smaller contributor pool among sysadmins, slower compiles and a hand-written release pipeline. Go was the alternative, with the same architecture.
+- **Rust.** The dangerous bugs in this tool are logic bugs (a lockout, a non-idempotent edit, a bad rollback). Exhaustive `match` on the transaction state and the reversibility labels means a new variant does not compile until every use handles it, errors are values, and a static musl binary is about 3 MB. The author also chose it to master the language. Accepted costs: a smaller contributor pool among sysadmins, slower compiles and a hand-written release pipeline. Go was the alternative, with the same architecture.
 - **Modules declare resources; one engine applies and rolls back.** The risk lives in one heavily tested place instead of in every module.
 - **Restore needs only the journal.** A rollback may run in a later process or a newer binary, so restore is a function of the journaled `Backup`, never of what a module would plan today. This is also why `Resource` and `Reload` are closed enums journaled by name.
 - **Controls in TOML with a closed check vocabulary**, reviewable without Rust; a full DSL was rejected as scope creep.
 - **TOML profiles**, not YAML.
 - **Drop-in files only**, never edits of main config files.
-- **The SSH port stays 22.** Changing it touches the firewall, the provider firewall, `ssh.socket` and fail2ban, each a lockout surface, for less log noise. A private network with `ssh_via` is the real fix.
+- **The SSH port stays 22.** Changing it touches the firewall, the provider firewall, `ssh.socket` and fail2ban, and a mistake in any of them locks the admin out, all for less log noise. A private network with `ssh_via` takes the port off the internet instead.
 - **Read-only `audit` shipped first** (v0.1.0): useful at once, with no risk.
 - **Debian and Ubuntu first.** Most VPS images are one of the two. Other families come on demand (see the M7 plan).
 - **MIT OR Apache-2.0, DCO, no CLA**: Apache's patent grant, MIT's GPLv2 compatibility, and embeddable by hosting providers.
-- **Signed releases with provenance and no self-update.** For a root tool, trust is the product, and a binary that replaces itself is attack surface for a program that usually runs once per box.
+- **Signed releases with provenance and no self-update.** People run a root tool only if they can verify it, and a binary that replaces itself adds a way in for a program that usually runs once per server.
 - **A hand-written release pipeline.** With two musl targets, a generated workflow of several hundred lines is not justified, and every release step should be short enough to audit.
 - **`askama` templates**, so a typo in a config template is a build error, not a surprise on a server.
 - **No async runtime.** The tool is sequential: one transaction and a handful of subprocesses.
@@ -491,9 +491,9 @@ Each decision with its reason. Where the code later departed from a plan, this r
 - **The dead-man force-restores lock-down resources** (`ssh.server`, `firewall.inbound`, and a VPN module that asked for the timer through `ModuleSteps.deadman`) even if edited. An all-or-nothing rule there would mean "the admin edited the drop-in in the window, nothing reverted, locked out". `user.admin` is not forced: leaving an added key is not a lockout.
 - **The binary check before arming** (the binary and every parent directory root-owned and not group- or world-writable, nowhere under `/home`, `/tmp`, `/var/tmp` or `/dev/shm`): a root timer that runs a file a user can replace is a root shell for that user.
 - **`ssh.server` never writes `Port`, `ListenAddress`, `AllowGroups`, `AuthenticationMethods` or crypto lists.** Each can cut the admin off or break clients for little gain, and a unit test enforces the list. It manages only the keywords of `SSH-001` to `SSH-007`.
-- **`nftables` in vps-ready's own table and unit, not ufw.** One backend for Debian and Ubuntu, one file that `nft -c -f` validates and loads atomically, and a rollback that deletes only `inet vps_ready`, leaving Docker's, fail2ban's and the admin's rules. Not `nftables.service`, whose config starts with `flush ruleset`. Not applicable while ufw or firewalld is active. The cost: `ufw status` does not show these rules.
+- **`nftables` in vps-ready's own table and unit, not ufw.** One backend for Debian and Ubuntu, one file that `nft -c -f` validates and loads atomically, and a rollback that deletes only `inet vps_ready`, leaving Docker's, fail2ban's and the admin's rules. Not `nftables.service`, whose config starts with `flush ruleset`. Not applicable while ufw or firewalld is active. The cost is that `ufw status` does not show these rules.
 - **Accept input from Docker's bridges** when Docker is present, so containers that reach host services keep working; the plan says a compromised container can then reach them too.
-- **Drop IPv4 TCP with IP options** in a `prerouting` chain at `raw` priority, to blunt CVE-2026-98432 before conntrack, including for Docker's published ports. The real fix is the kernel update.
+- **Drop IPv4 TCP with IP options** in a `prerouting` chain at `raw` priority, so packets exploiting CVE-2026-98432 are dropped before conntrack, including on Docker's published ports. The kernel update is the fix.
 - **`sudo = "nopasswd"` by default** for a created admin, as cloud images do for their default user; an existing user with sudo keeps it untouched.
 - **fail2ban for brute force, in `web` and `private` only.** Local, packaged and without network calls; once SSH is key-only brute force is mostly noise, and OpenSSH 9.8 slows repeated failures itself. Its drop-in sets only `[sshd]`.
 - **VM tests on plain QEMU with KVM**, not a VM manager: a locked-out VM gets SSH back when the timer fires, so no side channel is needed.
@@ -549,7 +549,7 @@ The tunnel's decisions are recorded in [the M7 plan](m7-plan.md#decisions). In s
 
 ## Testing
 
-The tool's promise is "safe on real servers", so tests are organized around the behaviors that promise rests on. Each runs at the cheapest level that can catch a break: unit tests on fakes, containers for real packages and services, KVM VMs for the kernel, reboots, sshd and the timer.
+Each section below is one behavior the tool promises on real servers, with the tests that check it. Each runs at the cheapest level that can catch a break: unit tests on fakes, containers for real packages and services, KVM VMs for the kernel, reboots, sshd and the timer.
 
 ### A lockout change rolls back unless a new login confirms
 

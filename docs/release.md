@@ -1,6 +1,6 @@
 # Supply chain and release
 
-A hardening tool that runs as root is a prime supply-chain target. Users who care about security are exactly the ones who won't `curl | bash`, so trust is a feature.
+A hardening tool that runs as root is an obvious target for a supply-chain attack, and the users who care most about security are the ones least willing to pipe a script into a shell. This page covers how a release is built, signed and checked.
 
 ## Build
 
@@ -65,7 +65,7 @@ Only the last two steps need `contents: write`, and they run in the `release` en
 - Default to `permissions: {}`, granting `id-token`/`attestations`/`contents: write` only to the jobs that need them.
 - Use `release` and `crates-io` environments limited to `v*` tags, plus tag rulesets: `v*` tags cannot be updated or deleted, and only repository admins can create them.
 
-## Install paths (most → least trusted)
+## Install paths, most trusted first
 
 1. **Package repo:** apt `signed-by=` / dnf `gpgcheck=1` / apk keys. Updates come through the system package manager. Not built. v0.5.0 ships the `.deb` as a release asset, checked like the tarballs (see below); a repository waits until someone asks for it, and `.rpm` and `.apk` until vps-ready supports those distros.
 2. **Manual verification:**
@@ -89,7 +89,7 @@ Only the last two steps need `contents: write`, and they run in the `release` en
 cargo install vps-ready --locked   # compiles from source; add --version <version> for a pre-release
 ```
 
-- **`cargo install --locked`** builds on your machine from the source published to crates.io. `--locked` uses the `Cargo.lock` shipped in the crate; without it, cargo resolves the newest semver-compatible dependencies, which nobody has reviewed. Be honest about the trust model: this path is **only as trustworthy as crates.io and that lockfile**. No cosign signature or SLSA attestation covers it. (Publishing from CI with crates.io trusted publishing, so there is no long-lived token to steal, narrows the gap.) For the full chain of trust, use the release tarball and verify it with the commands above.
+- **`cargo install --locked`** builds on your machine from the source published to crates.io. `--locked` uses the `Cargo.lock` shipped in the crate; without it, cargo resolves the newest semver-compatible dependencies, which nobody has reviewed. This path is **only as trustworthy as crates.io and that lockfile**. No cosign signature or SLSA attestation covers it. (Publishing from CI with crates.io trusted publishing, so there is no long-lived token to steal, narrows the gap.) For the full chain of trust, use the release tarball and verify it with the commands above.
 
 ### Publishing to crates.io
 
