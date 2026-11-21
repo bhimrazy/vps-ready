@@ -1,5 +1,6 @@
 # nFPM config for the .deb. The release workflow sets ARCH (amd64 or arm64),
-# VERSION and BINARY (the musl binary for that architecture).
+# VERSION and BINARY (the musl binary for that architecture), and writes the
+# man pages, completions and changelog.gz under target/gen-docs first.
 # No maintainer scripts: installing the package changes nothing else.
 name: vps-ready
 arch: ${ARCH}
@@ -9,7 +10,7 @@ section: admin
 priority: optional
 maintainer: Bhimraj Yadav <bhimrajyadav977@gmail.com>
 description: |-
-  Harden a Debian or Ubuntu VPS with a journaled, reversible apply.
+  Harden a Debian or Ubuntu VPS with a journaled, reversible apply
   Each change is recorded and can be rolled back; a dead-man timer undoes
   changes that are not confirmed.
 homepage: https://github.com/bhimrazy/vps-ready
@@ -27,11 +28,32 @@ contents:
     dst: /usr/share/doc/vps-ready/copyright
     file_info:
       mode: 0644
-  - src: LICENSE-APACHE
-    dst: /usr/share/doc/vps-ready/LICENSE-APACHE
+  # The version has no Debian revision, so this is a native package and its
+  # changelog is changelog.gz, not changelog.Debian.gz.
+  - src: target/gen-docs/changelog.gz
+    dst: /usr/share/doc/vps-ready/changelog.gz
     file_info:
       mode: 0644
-  - src: LICENSE-MIT
-    dst: /usr/share/doc/vps-ready/LICENSE-MIT
+  - src: packaging/lintian-overrides
+    dst: /usr/share/lintian/overrides/vps-ready
+    file_info:
+      mode: 0644
+  - src: target/gen-docs/man/*.1.gz
+    dst: /usr/share/man/man1/
+    file_info:
+      mode: 0644
+  - src: vps-ready.1.gz
+    dst: /usr/share/man/man1/vpsready.1.gz
+    type: symlink
+  - src: target/gen-docs/completions/vps-ready.bash
+    dst: /usr/share/bash-completion/completions/vps-ready
+    file_info:
+      mode: 0644
+  - src: target/gen-docs/completions/_vps-ready
+    dst: /usr/share/zsh/vendor-completions/_vps-ready
+    file_info:
+      mode: 0644
+  - src: target/gen-docs/completions/vps-ready.fish
+    dst: /usr/share/fish/vendor_completions.d/vps-ready.fish
     file_info:
       mode: 0644
