@@ -937,7 +937,7 @@ mod tests {
     /// Reads like `inner`, but its `metadata` of `swapped` answers as for
     /// a regular file of the user's: what a check saw before the user put
     /// a symlink in its place. While `sync_fails`, every `sync_dir` fails,
-    /// as on a directory swapped for a FIFO.
+    /// so a restore that still synced a directory by path would show.
     struct Swapped<F = FakeFs> {
         inner: F,
         swapped: &'static str,

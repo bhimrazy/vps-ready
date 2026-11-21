@@ -829,6 +829,26 @@ fn the_boot_hook_leaves_a_transaction_of_this_boot() {
     assert_eq!(calls(&run), [DISABLE]);
 }
 
+/// A journal that does not replay fails the boot run and keeps the hook,
+/// even with no `armed` record to show it needs the hook.
+#[test]
+fn the_boot_hook_reports_a_journal_that_does_not_replay() {
+    let fs = armable();
+    let txn = state(&fs).create_txn(&fs, 1).unwrap();
+    for _ in 0..2 {
+        let event = Event::Begin {
+            format: crate::engine::journal::FORMAT,
+            version: "0.7.0".into(),
+            modules: Vec::new(),
+        };
+        txn.append(&fs, &Record { at: 1, event }).unwrap();
+    }
+    let run = dm_runner();
+    let err = boot_hook(&fs, &run).unwrap_err();
+    assert!(matches!(err, EngineError::Transition { .. }), "{err:?}");
+    assert!(calls(&run).is_empty());
+}
+
 /// sshd has not started when the hook runs, so it reads the restored
 /// config anyway; the hook neither checks nor reloads it.
 #[test]

@@ -978,10 +978,13 @@ impl<'a> Engine<'a> {
         for txn in self.state.txns(fs)? {
             let result = (|| {
                 let records = txn.read(fs)?;
+                // First: a journal that does not replay is an error, armed
+                // or not.
+                let due = due(&records)?;
                 let Some(switch) = deadman::switch(&records) else {
                     return Ok(None);
                 };
-                if !due(&records)? {
+                if !due {
                     return Ok(None);
                 }
                 if boot.as_deref() == Some(switch.boot_id.as_str()) {
