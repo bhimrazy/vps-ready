@@ -204,13 +204,15 @@ fn ruleset_snapshots() {
         ruleset_of(&steps(&facts, &web).unwrap())
     );
     // A bridge Docker did not name is left out of `br-*`.
-    facts.bridges = ["docker0", "br-0123456789ab", "br-lan", "br-wan"]
-        .iter()
-        .map(|name| crate::facts::Bridge {
-            name: (*name).to_owned(),
-            docker: !name.ends_with("an"),
-        })
-        .collect();
+    facts.bridges = Some(
+        ["docker0", "br-0123456789ab", "br-lan", "br-wan"]
+            .iter()
+            .map(|name| crate::facts::Bridge {
+                name: (*name).to_owned(),
+                docker: !name.ends_with("an"),
+            })
+            .collect(),
+    );
     insta::assert_snapshot!(
         "ruleset-web-docker-other-bridges",
         ruleset_of(&steps(&facts, &web).unwrap())
@@ -504,10 +506,13 @@ fn notes_what_it_leaves_alone() {
     // Docker's accept-policy INPUT is not worth a note; a dropping one is.
     fw.input_chains.push(chain("filter", "INPUT", false));
     fw.input_chains.push(chain("mine", "input", true));
-    facts.bridges.push(crate::facts::Bridge {
-        name: "br-lan".into(),
-        docker: false,
-    });
+    facts
+        .bridges
+        .get_or_insert_default()
+        .push(crate::facts::Bridge {
+            name: "br-lan".into(),
+            docker: false,
+        });
     insta::assert_yaml_snapshot!(FirewallInbound.notes(&facts));
     // Over IPv6 only 5432/tcp is proxied, and only until `allow` has it.
     let plan_notes = |facts: &Facts, allow: &str| {

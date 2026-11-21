@@ -11,7 +11,9 @@ use std::time::Duration;
 use anyhow::bail;
 use owo_colors::OwoColorize;
 
-use super::{EXIT_ERROR, EXIT_INCOMPLETE, EXIT_ROLLED_BACK, print_report, printable};
+use super::{
+    EXIT_ERROR, EXIT_INCOMPLETE, EXIT_ROLLED_BACK, print_report, printable, printable_lines,
+};
 use crate::audit::{self, Outcome};
 use crate::config::Profile;
 use crate::engine::{
@@ -391,15 +393,20 @@ pub(super) fn apply_profile(
             print_clients(host, &plan, &facts, out)?;
 
             if let Err(e) = audit_fixed(host, &plan, out) {
-                writeln!(err, "vps-ready: could not audit after apply: {e:#}")?;
+                writeln!(
+                    err,
+                    "vps-ready: could not audit after apply: {}",
+                    printable_lines(&format!("{e:#}"))
+                )?;
             }
         }
         ApplyOutcome::RolledBack { txn, reason, cause } => {
             let state = TxnState::RolledBack { reason };
             writeln!(
                 err,
-                "error: apply failed: {cause}. Every change was restored; \
-                 transaction {txn} is {state}."
+                "error: apply failed: {}. Every change was restored; \
+                 transaction {txn} is {state}.",
+                printable_lines(&cause.to_string())
             )?;
             return Ok(Applied::Ran(EXIT_ROLLED_BACK));
         }
@@ -534,7 +541,7 @@ fn print_rollback(out: &mut dyn Write, done: &Rollback) -> io::Result<()> {
             "Left as they are because they changed since apply; restore them by hand:"
         )?;
         for step in &done.skipped {
-            writeln!(out, "  {step}")?;
+            writeln!(out, "  {}", printable(&step.to_string()))?;
         }
     }
     Ok(())
@@ -695,7 +702,7 @@ fn print_plan(
     for m in &plan.modules {
         let header = match &m.status {
             ModuleStatus::NotApplicable { reason } => {
-                format!("{}: not applicable ({reason})", m.id)
+                format!("{}: not applicable ({})", m.id, printable(reason))
             }
             ModuleStatus::Applicable { changes, .. } if changes.is_empty() => {
                 format!("{}: {}: no changes", m.id, m.title)
@@ -1048,7 +1055,11 @@ fn print_history(out: &mut dyn Write, txns: &[TxnInfo]) -> io::Result<()> {
             plural(t.changes, "change")
         )?;
         for step in &t.skipped {
-            writeln!(out, "  left by the dead-man rollback: {step}")?;
+            writeln!(
+                out,
+                "  left by the dead-man rollback: {}",
+                printable(&step.to_string())
+            )?;
         }
     }
     Ok(())

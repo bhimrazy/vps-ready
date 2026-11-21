@@ -759,15 +759,6 @@ fn a_plan_shows_escapes_in_a_diff_as_text() {
     }
 }
 
-#[test]
-fn printable_escapes_control_characters_but_tab() {
-    use crate::cli::{printable, printable_lines};
-    assert_eq!(printable("a\tb c"), "a\tb c");
-    assert_eq!(printable("a\x1b[0m\nb\u{85}"), r"a\x1b[0m\x0ab\x85");
-    assert_eq!(printable_lines("a\x1b\nb"), "a\\x1b\nb");
-    assert!(matches!(printable("plain"), std::borrow::Cow::Borrowed(_)));
-}
-
 /// A second module that does not apply here.
 struct NoApt;
 

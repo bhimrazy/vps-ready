@@ -357,6 +357,7 @@ fn not_docker(facts: &Facts) -> Vec<String> {
     facts
         .bridges
         .iter()
+        .flatten()
         .filter(|b| !b.docker)
         .map(|b| b.name.clone())
         .collect()

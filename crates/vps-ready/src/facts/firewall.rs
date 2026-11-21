@@ -112,6 +112,12 @@ impl Ports {
     pub(crate) fn contains(&self, proto: &str, port: u16) -> bool {
         self.proto == proto && (self.first..=self.last).contains(&port)
     }
+
+    /// Whether it spans every port, as an accept with no port match does.
+    #[must_use]
+    pub fn is_every_port(&self) -> bool {
+        self.first == 0 && self.last == u16::MAX
+    }
 }
 
 /// Ports an input chain accepts only on some input interfaces.
@@ -119,13 +125,26 @@ impl Ports {
 pub struct InterfacePorts {
     /// The names that the rule's and its jumps' `iifname` and `iif` matches
     /// accept with `==`, as written (a wildcard stays `wg*`). A packet must
-    /// pass each match, so not every name may reach the rule. Empty when no
-    /// match lists plain names, e.g. `iifname != "eth0"`.
+    /// pass each match, so not every name may reach the rule. `*` when they
+    /// only leave names out (`iifname != "eth0"`); empty when no match
+    /// lists plain names.
     pub interfaces: Vec<String>,
+    /// The names those matches leave out with `!=`, as vps-ready's own
+    /// `iifname "br-*" iifname != "br-lan" accept` does.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub except: Vec<String>,
     /// The ports, flattened so `detect --json` keeps the shape of a
     /// [`Ports`] entry.
     #[serde(flatten)]
     pub ports: Ports,
+}
+
+impl InterfacePorts {
+    /// Whether it opens its ports only on interfaces that `inside` accepts.
+    /// `inside` gets each name with [`Self::except`], for a wildcard.
+    pub fn only_on(&self, inside: impl Fn(&str, &[String]) -> bool) -> bool {
+        !self.interfaces.is_empty() && self.interfaces.iter().all(|i| inside(i, &self.except))
+    }
 }
 
 /// A base chain that filters incoming packets.
@@ -167,7 +186,7 @@ impl InputChain {
     /// only, or by a rule whose ports nft does not show.
     #[must_use]
     pub fn blocks(&self, proto: &str, port: u16) -> Option<bool> {
-        self.blocks_beyond(proto, port, |_| false)
+        self.blocks_beyond(proto, port, |_, _| false)
     }
 
     /// Whether it accepts every TCP and UDP port from any source on any
@@ -177,23 +196,20 @@ impl InputChain {
         ["tcp", "udp"].iter().all(|proto| {
             self.open_ports
                 .iter()
-                .any(|p| p.proto == *proto && p.first == 0 && p.last == u16::MAX)
+                .any(|p| p.proto == *proto && p.is_every_port())
         })
     }
 
     /// [`Self::blocks`], leaving out ports opened only on interfaces
-    /// `inside` accepts, such as Docker's bridges.
+    /// `inside` accepts (see [`InterfacePorts::only_on`]).
     #[must_use]
     pub fn blocks_beyond(
         &self,
         proto: &str,
         port: u16,
-        inside: impl Fn(&str) -> bool,
+        inside: impl Fn(&str, &[String]) -> bool,
     ) -> Option<bool> {
-        let beyond = |p: &InterfacePorts| {
-            p.ports.contains(proto, port)
-                && (p.interfaces.is_empty() || !p.interfaces.iter().all(|i| inside(i)))
-        };
+        let beyond = |p: &InterfacePorts| p.ports.contains(proto, port) && !p.only_on(&inside);
         if !self.drops_unmatched || self.open_ports.iter().any(|p| p.contains(proto, port)) {
             Some(false)
         } else if self.unread_ports.iter().any(|p| p == proto)
@@ -206,21 +222,18 @@ impl InputChain {
     }
 
     /// Whether the chain drops packets to `port` that arrive on an interface
-    /// `private` does not accept. Unlike [`Self::blocks`], a port opened only
-    /// on interfaces that are all `private` is blocked, and one opened on
-    /// any other interface is open. `None` when a rule whose ports nft does
-    /// not show may open it.
+    /// `private` does not accept (see [`InterfacePorts::only_on`]). Unlike
+    /// [`Self::blocks`], a port opened only on interfaces that are all
+    /// `private` is blocked, and one opened on any other interface is open.
+    /// `None` when a rule whose ports nft does not show may open it.
     #[must_use]
     pub fn blocks_public(
         &self,
         proto: &str,
         port: u16,
-        private: impl Fn(&str) -> bool,
+        private: impl Fn(&str, &[String]) -> bool,
     ) -> Option<bool> {
-        let public = |p: &InterfacePorts| {
-            p.ports.contains(proto, port)
-                && (p.interfaces.is_empty() || !p.interfaces.iter().all(|i| private(i)))
-        };
+        let public = |p: &InterfacePorts| p.ports.contains(proto, port) && !p.only_on(&private);
         if !self.drops_unmatched
             || self.open_ports.iter().any(|p| p.contains(proto, port))
             || self.interface_ports.iter().any(public)
@@ -661,7 +674,8 @@ struct Walk<'a, 'r> {
     rules: &'a HashMap<ChainKey, Vec<&'r [Value]>>,
     multiport: &'a Multiport,
     /// Chains visited, per scope: firewalld jumps to a zone with
-    /// `iifname`, then without.
+    /// `iifname`, then without. A scope holds the names the path's
+    /// `iifname` matches accept, and those they leave out as `!name`.
     seen: HashSet<(ChainKey, Option<Vec<String>>)>,
     memo: &'a mut HashMap<ChainKey, Option<Fate>>,
 }
@@ -730,9 +744,8 @@ impl Walk<'_, '_> {
                 // packets come from this host.
                 Verdict::Accept if rule.ports.is_empty() && rule.unread.is_empty() => {
                     rule.ports = rule.every_port();
-                    !scope
-                        .as_ref()
-                        .is_some_and(|s| !s.is_empty() && s.iter().all(|i| i == "lo"))
+                    let named = || scope.iter().flatten().filter(|n| !n.starts_with('!'));
+                    !(named().next().is_some() && named().all(|i| i == "lo"))
                 }
                 Verdict::Accept => true,
                 Verdict::Jump(t) | Verdict::Goto(t) => {
@@ -748,10 +761,18 @@ impl Walk<'_, '_> {
             };
             if opens {
                 match scope {
-                    Some(interfaces) => {
+                    Some(names) => {
+                        let (except, mut interfaces): (Vec<String>, Vec<String>) =
+                            names.into_iter().partition(|n| n.starts_with('!'));
+                        let except: Vec<String> =
+                            except.iter().map(|n| n[1..].to_owned()).collect();
+                        if interfaces.is_empty() && !except.is_empty() {
+                            interfaces.push("*".to_owned());
+                        }
                         out.by_interface.extend(rule.ports.into_iter().map(|ports| {
                             InterfacePorts {
                                 interfaces: interfaces.clone(),
+                                except: except.clone(),
                                 ports,
                             }
                         }));
@@ -885,8 +906,8 @@ fn narrow(before: &[Value]) -> Option<Narrow> {
     })
 }
 
-/// The names an `==` match `m` lists: one, a set, or the flags of `ct
-/// state established,related`. `None` for another operator.
+/// The names an `==` or `in` match `m` lists: one, a set, or the flags of
+/// `ct state established,related`. `None` for another operator.
 fn names(m: &Value) -> Option<Vec<String>> {
     if !matches!(m.get("op").and_then(Value::as_str), Some("==" | "in")) {
         return None;
@@ -905,23 +926,29 @@ fn names(m: &Value) -> Option<Vec<String>> {
 }
 
 /// The names an `iifname` or `iif` match `m` accepts: `"wg0"` or a set of
-/// names with `==`, nothing for any other match.
+/// names with `==`, or those it leaves out with `!=` as `!wg0`; nothing for
+/// any other match.
 fn interface_names(m: &Value) -> Vec<String> {
-    if m.get("op").and_then(Value::as_str) != Some("==") {
-        return Vec::new();
-    }
+    let prefix = match m.get("op").and_then(Value::as_str) {
+        Some("==") => "",
+        Some("!=") => "!",
+        _ => return Vec::new(),
+    };
     let right = m.get("right");
-    if let Some(name) = right.and_then(Value::as_str) {
-        return vec![name.to_owned()];
-    }
-    let set = right.and_then(|r| r.get("set")).and_then(Value::as_array);
-    set.and_then(|names| {
-        names
-            .iter()
-            .map(|n| n.as_str().map(str::to_owned))
-            .collect::<Option<Vec<_>>>()
-    })
-    .unwrap_or_default()
+    let names = match right.and_then(Value::as_str) {
+        Some(name) => vec![name.to_owned()],
+        None => right
+            .and_then(|r| r.get("set"))
+            .and_then(Value::as_array)
+            .and_then(|names| {
+                names
+                    .iter()
+                    .map(|n| n.as_str().map(str::to_owned))
+                    .collect::<Option<Vec<_>>>()
+            })
+            .unwrap_or_default(),
+    };
+    names.into_iter().map(|n| format!("{prefix}{n}")).collect()
 }
 
 /// What a chain can do to a packet that no conditional rule matches. More
@@ -1226,11 +1253,11 @@ mod tests {
         assert_eq!(input.blocks("tcp", 3000), None);
         // From the internet it is open, unless eth0 is private; then the
         // multiport allows below may still open it.
-        assert_eq!(input.blocks_public("tcp", 3000, |_| false), Some(false));
-        assert_eq!(input.blocks_public("tcp", 3000, |i| i == "eth0"), None);
+        assert_eq!(input.blocks_public("tcp", 3000, |_, _| false), Some(false));
+        assert_eq!(input.blocks_public("tcp", 3000, |i, _| i == "eth0"), None);
         // The multiport allows: their ports are not in the JSON.
         assert_eq!(input.unread_ports, ["tcp", "udp"]);
-        assert_eq!(input.blocks_public("sctp", 3000, |_| false), Some(true));
+        assert_eq!(input.blocks_public("sctp", 3000, |_, _| false), Some(true));
         assert_eq!(input.blocks("tcp", 2222), Some(false));
         assert_eq!(input.blocks("tcp", 5555), None);
 
@@ -1325,10 +1352,23 @@ mod tests {
             ),
             ["lo", "wg0"]
         );
+        // Every interface but those left out.
+        let not_eth0 =
+            r#"{"match": {"op": "!=", "left": {"meta": {"key": "iifname"}}, "right": "eth0"}}"#;
+        assert_eq!(interfaces(not_eth0), ["*"]);
+        let both = format!(
+            r#"[{}, {not_eth0}, {{"accept": null}}]"#,
+            r#"{"match": {"op": "==", "left": {"meta": {"key": "iifname"}}, "right": "br-*"}}"#
+        );
+        let entry = &chain(&both)[0].interface_ports[0];
+        assert_eq!(
+            (&entry.interfaces[..], &entry.except[..]),
+            (&["br-*".to_owned()][..], &["eth0".to_owned()][..])
+        );
         // Not a list of names: no interface is known.
         assert!(
             interfaces(
-                r#"{"match": {"op": "!=", "left": {"meta": {"key": "iifname"}}, "right": "eth0"}}"#
+                r#"{"match": {"op": "<", "left": {"meta": {"key": "iifname"}}, "right": "eth0"}}"#
             )
             .is_empty()
         );
@@ -1358,9 +1398,9 @@ mod tests {
         let c = &chain(&[("in", &[&eth0])])[0];
         for proto in ["tcp", "udp", "sctp"] {
             assert_eq!(c.blocks(proto, 5432), None, "{proto}");
-            assert_eq!(c.blocks_public(proto, 5432, |_| false), Some(false));
+            assert_eq!(c.blocks_public(proto, 5432, |_, _| false), Some(false));
         }
-        assert_eq!(c.blocks_public("tcp", 5432, |i| i == "eth0"), Some(true));
+        assert_eq!(c.blocks_public("tcp", 5432, |i, _| i == "eth0"), Some(true));
         assert!(!c.opens_every_port());
 
         // `meta l4proto tcp accept`: every TCP port, to all.
@@ -1382,7 +1422,7 @@ mod tests {
             on("==", IIFNAME, r#""eth0""#)
         );
         let c = &chain(&[("in", &[&goto]), ("trusted", &[r#"[{"accept": null}]"#])])[0];
-        assert_eq!(c.blocks_public("tcp", 22, |_| false), Some(false));
+        assert_eq!(c.blocks_public("tcp", 22, |_, _| false), Some(false));
         assert_eq!(c.interface_ports[0].interfaces, ["eth0"]);
     }
 

@@ -90,8 +90,9 @@ pub struct Facts {
     /// the Debian family, or when dpkg could not be asked.
     pub docker_engine: Option<DockerEngine>,
     /// `docker0` and the interfaces named `br-*`: Docker's bridges, and
-    /// others a firewall rule for `br-*` would also match.
-    pub bridges: Vec<Bridge>,
+    /// others a firewall rule for `br-*` would also match. `None` when
+    /// `/sys/class/net` could not be read.
+    pub bridges: Option<Vec<Bridge>>,
     /// Whether the kernel has AppArmor enabled. `None` when that could not
     /// be read.
     pub apparmor: Option<bool>,

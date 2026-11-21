@@ -1113,9 +1113,11 @@ fn running_as_root() -> bool {
     })
 }
 
-/// `text` with each control character but tab (C0, DEL, C1) shown as an
-/// escape such as `\x1b`: text read from the host, such as a deploy
-/// account's own `authorized_keys`, must not drive root's terminal.
+/// `text` with each control character but tab (C0, DEL, C1), and each bidi
+/// control, direction mark and line or paragraph separator, shown as an
+/// escape such as `\x1b` or `\u{202e}`: text read from the host, such as a
+/// deploy account's own `authorized_keys`, must not drive or reorder
+/// root's terminal.
 pub(crate) fn printable(text: &str) -> Cow<'_, str> {
     escape_controls(text, false)
 }
@@ -1126,16 +1128,25 @@ pub(crate) fn printable_lines(text: &str) -> Cow<'_, str> {
 }
 
 fn escape_controls(text: &str, newlines: bool) -> Cow<'_, str> {
-    let escaped = |c: char| c.is_control() && c != '\t' && !(newlines && c == '\n');
+    let escaped = |c: char| {
+        (c.is_control() && c != '\t' && !(newlines && c == '\n'))
+            || matches!(
+                c,
+                '\u{200e}' | '\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+            )
+    };
     if !text.chars().any(escaped) {
         return Cow::Borrowed(text);
     }
     let mut out = String::with_capacity(text.len() + 8);
     for c in text.chars() {
-        if escaped(c) {
-            out.push_str(&format!("\\x{:02x}", u32::from(c)));
-        } else {
+        let n = u32::from(c);
+        if !escaped(c) {
             out.push(c);
+        } else if n <= 0xff {
+            out.push_str(&format!("\\x{n:02x}"));
+        } else {
+            out.push_str(&format!("\\u{{{n:x}}}"));
         }
     }
     Cow::Owned(out)
@@ -1185,6 +1196,19 @@ fn ports_line(listeners: &[Listener]) -> String {
 mod tests {
     use super::*;
     use crate::facts::fixtures::{HOSTS, host};
+
+    #[test]
+    fn printable_escapes_control_characters_but_tab() {
+        assert_eq!(printable("a\tb c"), "a\tb c");
+        assert_eq!(printable("a\x1b[0m\nb\u{85}"), r"a\x1b[0m\x0ab\x85");
+        assert_eq!(printable_lines("a\x1b\nb"), "a\\x1b\nb");
+        assert!(matches!(printable("plain é"), Cow::Borrowed(_)));
+        // Bidi controls and marks, and the Unicode line separators.
+        assert_eq!(
+            printable("a\u{202e}b\u{2066}c\u{200f}d\u{2028}e"),
+            r"a\u{202e}b\u{2066}c\u{200f}d\u{2028}e"
+        );
+    }
 
     /// Any local user names their own process, and `detect` lists it.
     #[test]
