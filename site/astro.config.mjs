@@ -3,6 +3,7 @@ import starlight from '@astrojs/starlight';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'astro/config';
 import starlightLinksValidator from 'starlight-links-validator';
+import { DESCRIPTION, HEADLINE } from './src/lib/site.ts';
 
 // The site once carried the maintainers' design notes under /docs/project/;
 // they now live only in the repo. Pages that still exist there keep their
@@ -22,7 +23,7 @@ export default defineConfig({
   integrations: [
     starlight({
       title: 'vps-ready',
-      description: 'Make a fresh VPS ready and secure, safely.',
+      description: DESCRIPTION,
       logo: {
         light: './src/assets/brand/logo-light.svg',
         dark: './src/assets/brand/logo-dark.svg',
@@ -31,7 +32,10 @@ export default defineConfig({
       favicon: '/favicon.svg',
       head: [
         { tag: 'meta', attrs: { property: 'og:image', content: 'https://vps-ready.bhimraj.com.np/og.png' } },
-        { tag: 'meta', attrs: { property: 'og:image:alt', content: 'vps-ready: Make a fresh VPS ready and secure, safely.' } },
+        { tag: 'meta', attrs: { property: 'og:image:width', content: '1200' } },
+        { tag: 'meta', attrs: { property: 'og:image:height', content: '630' } },
+        { tag: 'meta', attrs: { property: 'og:image:type', content: 'image/png' } },
+        { tag: 'meta', attrs: { property: 'og:image:alt', content: `vps-ready: ${HEADLINE}` } },
         { tag: 'meta', attrs: { name: 'twitter:image', content: 'https://vps-ready.bhimraj.com.np/og.png' } },
       ],
       // Replaced by src/pages/404.astro, which also covers the landing page.
@@ -41,7 +45,6 @@ export default defineConfig({
       customCss: ['./src/styles/docs.css'],
       components: {
         Footer: './src/components/docs/Footer.astro',
-        Head: './src/components/docs/Head.astro',
         MarkdownContent: './src/components/docs/MarkdownContent.astro',
         Sidebar: './src/components/docs/Sidebar.astro',
         SiteTitle: './src/components/docs/SiteTitle.astro',
@@ -88,7 +91,5 @@ export default defineConfig({
   ],
   vite: {
     plugins: [tailwindcss()],
-    // Mermaid's diagram chunks are large but load lazily, only on pages with a diagram.
-    build: { chunkSizeWarningLimit: 1600 },
   },
 });

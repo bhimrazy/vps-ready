@@ -163,10 +163,9 @@ h1#_top {
 
 /* Sideways scroll with a shadow on each edge that hides more content: the
    page-colored covers scroll with the content, the shadows stay put. Used by
-   tables, mermaid diagrams and the safety timeline. */
+   tables and the safety timeline. */
 .scroll-x,
-.sl-markdown-content table,
-.sl-markdown-content pre.mermaid {
+.sl-markdown-content table {
   --fade-bg: var(--sl-color-black);
   --fade-shadow: color-mix(in srgb, var(--sl-color-gray-4) 35%, transparent);
   overflow-x: auto;
@@ -332,29 +331,6 @@ footer .meta {
   cursor: pointer;
   font-weight: 600;
   color: var(--sl-color-white);
-}
-
-/* Mermaid diagrams (internals pages): hidden until rendered, then centered.
-   Head.astro gives each a minimum width, so a phone scrolls it instead of
-   shrinking its text. */
-.sl-markdown-content pre.mermaid {
-  margin-block: 1.5rem;
-  padding: 1rem;
-  border: 1px solid var(--sl-color-gray-5);
-  border-radius: 10px;
-  text-align: center;
-  font-size: var(--sl-text-xs);
-  white-space: pre;
-}
-.sl-markdown-content pre.mermaid:not([data-rendered]) {
-  color: var(--sl-color-gray-3);
-  text-align: left;
-}
-.sl-markdown-content pre.mermaid svg {
-  display: block;
-  margin-inline: auto;
-  max-width: 100%;
-  height: auto;
 }
 
 /* Header on a phone: 44px touch targets, and a flat menu button instead of

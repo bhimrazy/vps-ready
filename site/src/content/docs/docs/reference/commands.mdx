@@ -12,16 +12,16 @@ The command is installed as `vps-ready` and also as `vpsready`. Run `vps-ready -
 | Command | What it does | Root | `--json` |
 |---|---|---|---|
 | [`vps-ready`](#vps-ready-with-no-command) | The guided setup, on a terminal | yes | no |
-| [`detect`](#detect) | Prints facts about the server | no | yes |
-| [`audit`](#audit) | Checks the server against the controls | for some checks | yes |
-| [`plan`](#plan) | Shows what `apply` would change | for some reads | yes |
-| [`apply`](#apply) | Makes the changes, after asking | yes | no |
-| [`confirm`](#confirm) | Keeps changes that wait for a confirm | yes | no |
-| [`rollback`](#rollback) | Undoes a transaction | yes | no |
-| [`history`](#history) | Lists transactions | yes | yes |
-| [`modules`](#modules) | Lists the modules, or explains one | no | yes |
-| [`export cloud-init`](#export-cloud-init) | Prints user-data that hardens a new server at first boot | no | no |
-| [`wireguard-config`](#wireguard-config) | Prints the client config of each `net.wireguard` peer | yes | no |
+| [`detect`](#vps-ready-detect) | Prints facts about the server | no | yes |
+| [`audit`](#vps-ready-audit) | Checks the server against the controls | for some checks | yes |
+| [`plan`](#vps-ready-plan) | Shows what `apply` would change | for some reads | yes |
+| [`apply`](#vps-ready-apply) | Makes the changes, after asking | yes | no |
+| [`confirm`](#vps-ready-confirm) | Keeps changes that wait for a confirm | yes | no |
+| [`rollback`](#vps-ready-rollback) | Undoes a transaction | yes | no |
+| [`history`](#vps-ready-history) | Lists transactions | yes | yes |
+| [`modules`](#vps-ready-modules) | Lists the modules, or explains one | no | yes |
+| [`export cloud-init`](#vps-ready-export-cloud-init) | Prints user-data that hardens a new server at first boot | no | no |
+| [`wireguard-config`](#vps-ready-wireguard-config) | Prints the client config of each `net.wireguard` peer | yes | no |
 | `version` | Prints version and build information, and warns when another `vps-ready` is on `PATH` | no | yes |
 
 ## Global flags
@@ -49,11 +49,11 @@ It starts only when stdin and stdout are both terminals. Otherwise it prints hel
 | Exit code | Meaning |
 |---|---|
 | 0 | Applied, confirmed, nothing to do, or you answered no at `Apply N changes?` |
-| 1, 3, 4 | As for [`apply`](#apply) |
+| 1, 3, 4 | As for [`apply`](#vps-ready-apply) |
 | 2 | Error, or no terminal |
 | 130 | Ctrl-C at a question. Nothing was changed |
 
-## detect
+## vps-ready detect
 
 ```sh
 vps-ready detect [--root PATH]
@@ -65,7 +65,7 @@ Read-only facts: distro, init system, virtualization or container, the effective
 |---|---|
 | `--root PATH` | Read files from a tree mounted at `PATH` instead of `/`. Commands such as `sshd -T` still run on this machine |
 
-## audit
+## vps-ready audit
 
 ```sh
 sudo vps-ready audit [--all]
@@ -85,7 +85,7 @@ Checks the server against every [security control](/docs/reference/security-cont
 | 1 | A control failed or could not be checked |
 | 2 | Error |
 
-## plan
+## vps-ready plan
 
 ```sh
 sudo vps-ready plan [--profile NAME|PATH] [--module ID]...
@@ -102,7 +102,7 @@ Without either flag, it plans `kernel.sysctl` and `updates.auto` only. Module ID
 
 Exits 0, or 2 on error.
 
-## apply
+## vps-ready apply
 
 ```sh
 sudo vps-ready apply [--profile NAME|PATH] [--module ID]... [--deadman DUR|off] [--yes | --dry-run]
@@ -114,7 +114,7 @@ Plans, shows the plan, asks `Apply N changes? [y/N]`, then snapshots each origin
 |---|---|
 | `--profile NAME\|PATH` | As for `plan` |
 | `--module ID` | As for `plan`. A named module that does not apply to this server is an error |
-| `--deadman DUR\|off` | How long a confirm has: `90s`, `5m`, `2m30s`, from 1m to 30m. Default `5m`. `off` applies without the safety timer, for a first boot from [`export cloud-init`](#export-cloud-init); when a module needs the timer, it is refused with `ssh_via` and while anyone is logged in (an SSH session, or a console login that `loginctl` lists), since a confirm is possible then. A module that does not apply to the server is an error with `off`, as with `--module`. `history` marks a transaction applied without the timer |
+| `--deadman DUR\|off` | How long a confirm has: `90s`, `5m`, `2m30s`, from 1m to 30m. Default `5m`. `off` applies without the safety timer, for a first boot from [`export cloud-init`](#vps-ready-export-cloud-init); when a module needs the timer, it is refused with `ssh_via` and while anyone is logged in (an SSH session, or a console login that `loginctl` lists), since a confirm is possible then. A module that does not apply to the server is an error with `off`, as with `--module`. `history` marks a transaction applied without the timer |
 | `-y`, `--yes` | Do not ask. Required when stdin is not a terminal |
 | `-n`, `--dry-run` | Show the plan and change nothing, like `plan` |
 
@@ -126,7 +126,7 @@ Plans, shows the plan, asks `Apply N changes? [y/N]`, then snapshots each origin
 | 3 | A rollback did not complete |
 | 4 | Stopped waiting, and the change still waits for a confirm: you pressed Ctrl-C, or the deadline passed a minute ago and the timer's rollback has not finished yet. The timer keeps running |
 
-## confirm
+## vps-ready confirm
 
 ```sh
 sudo vps-ready confirm [--txn ID] [--extend [DUR]]
@@ -144,7 +144,7 @@ Run it from a **new** SSH login, as the admin user, to keep changes that wait fo
 | 0 | Confirmed, or extended |
 | 2 | Refused (nothing waiting, deadline passed, not a new SSH login, not the admin user, not through the `ssh_via` interface) or error |
 
-## rollback
+## vps-ready rollback
 
 ```sh
 sudo vps-ready rollback --last
@@ -166,7 +166,7 @@ If the server rebooted since `apply`, kernel settings keep their running values 
 | 2 | Error, including a refusal because something changed since `apply` |
 | 3 | The rollback did not complete |
 
-## history
+## vps-ready history
 
 ```sh
 sudo vps-ready history
@@ -174,7 +174,7 @@ sudo vps-ready history
 
 Lists every transaction, newest first, with its state, modules and number of changes. A transaction applied with `--deadman=off` shows `applied (without the timer)`. Exits 0, or 2 on error.
 
-## modules
+## vps-ready modules
 
 ```sh
 vps-ready modules [ID]
@@ -184,7 +184,7 @@ Without an ID, lists every module with its title, whether it applies to this ser
 
 Exits 0, or 2 on error, including an unknown ID.
 
-## export cloud-init
+## vps-ready export cloud-init
 
 ```sh
 vps-ready export cloud-init --profile NAME|PATH --checksums checksums.txt [--base-url URL] > user-data.yaml
@@ -204,7 +204,7 @@ A step-by-step walkthrough: [Private access](/docs/guides/private-access/#harden
 
 Exits 0, or 2 on error.
 
-## wireguard-config
+## vps-ready wireguard-config
 
 ```sh
 sudo vps-ready wireguard-config [PEER]
@@ -212,7 +212,7 @@ sudo vps-ready wireguard-config [PEER]
 
 Prints the client config of each peer of [`net.wireguard`](/docs/guides/profiles-and-modules/#netwireguard-wireguard), or only of `PEER`, the name in the profile. Paste it into the device's WireGuard app and replace the `PrivateKey` placeholder with the key the device made: the server never sees it. Reads `/etc/wireguard`, so it needs root. `--json` is an error.
 
-`apply` prints the same configs after it changes `net.wireguard`. With no peers it prints nothing and says so on stderr; an unknown `PEER` is an error that lists the peers. A note on stderr says when the server has no public address and `endpoint` is not set. A walkthrough: [Private access](/docs/guides/private-access/#wireguard).
+`apply` prints the same configs after it changes `net.wireguard`. With no peers it prints nothing and says so on stderr; an unknown `PEER` is an error that lists the peers. A note on stderr says when the server has no public address and `endpoint` is not set. A walkthrough: [Private access](/docs/guides/private-access/#ssh-over-wireguard).
 
 Exits 0, or 2 on error, including `net.wireguard` not applied yet.
 

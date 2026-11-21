@@ -1,5 +1,5 @@
 ---
-title: Use it on a server that's already running things
+title: Harden a server that is already running services
 description: Read the plan first, keep your services reachable, and how vps-ready gets along with ufw, firewalld, Docker, fail2ban and your own SSH server config.
 sidebar:
   label: Use it on a busy server
@@ -50,7 +50,7 @@ sudo vps-ready plan --profile ./busy-server.toml
 
 Your current SSH ports are always allowed, whatever `allow` says. The profile format is in [Write your own profile](/docs/guides/profiles-and-modules/#write-your-own-profile).
 
-## Firewalls
+## ufw and firewalld
 
 | You already use | What vps-ready does |
 |---|---|
@@ -63,7 +63,7 @@ Your current SSH ports are always allowed, whatever `allow` says. The profile fo
 
 vps-ready's rules do not show in `ufw status`. Use `sudo nft list table inet vps_ready`. A rollback deletes only that table.
 
-## Docker
+## Docker ports and the firewall
 
 Docker and the firewall get along, with one thing you must know.
 

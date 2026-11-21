@@ -7,6 +7,6 @@
   <rect x="84" y="96" width="34" height="10" rx="2" fill="#e6edf3"/></g>
   <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
     <text x="320" y="150" font-size="72" font-weight="600" fill="#e6edf3" letter-spacing="-1">vps<tspan fill="#3fb950">-</tspan>ready</text>
-    <text x="322" y="204" font-size="26" fill="#8b949e">Make a fresh VPS ready and secure, safely.</text>
+    <text x="322" y="204" font-size="26" fill="#8b949e">Secure a fresh server without locking yourself out.</text>
   </g>
 </svg>

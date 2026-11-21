@@ -60,8 +60,8 @@ const sections = AREAS.map(([file, name]) => {
 });
 const controlsPage = [
   '---',
-  'title: Security controls',
-  'sidebar:\n  order: 2',
+  'title: "Security controls: every audit check"',
+  'sidebar:\n  label: Security controls\n  order: 2',
   `description: ${JSON.stringify(`Every control vps-ready audit checks: its stable ID, severity, why it matters and the module that fixes it.`)}`,
   `editUrl: ${JSON.stringify(`${REPO_URL}/tree/main/crates/vps-ready/src/audit/controls`)}`,
   '---',

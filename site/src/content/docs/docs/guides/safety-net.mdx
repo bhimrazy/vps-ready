@@ -1,14 +1,15 @@
 ---
-title: How the safety net works
+title: "Avoid SSH lockouts: the safety timer and auto-rollback"
 description: The safety timer, confirm from a new login, automatic rollback even across a reboot, extending the timer, and what counts as a new login.
 sidebar:
+  label: How the safety net works
   order: 1
 ---
 
 import { Steps } from '@astrojs/starlight/components';
 import SafetyTimeline from '../../../../components/docs/diagrams/SafetyTimeline.astro';
 
-Three modules can cut you off from your own server: `user.admin` (the admin user), `ssh.server` (the SSH server config) and `firewall.inbound` (the firewall). When an `apply` includes any of them, the safety net is on. vps-ready keeps the changes only after a **new** SSH login proves they work, and puts everything back on its own if that proof never comes.
+Three modules can cut you off from your own server: `user.admin` (the admin user), `ssh.server` (the SSH server config) and `firewall.inbound` (the firewall). When an `apply` includes any of them, the safety net is on. vps-ready keeps the changes only after a **new** SSH login proves they work, and puts everything back on its own if that proof never comes. It works like a dead-man switch: the rollback runs unless you act.
 
 ## The short version
 
@@ -96,7 +97,7 @@ It moves the deadline to that long from now, at most 30 minutes ahead and at mos
 sudo vps-ready apply --profile minimal --deadman 10m   # from 1m to 30m, default 5m
 ```
 
-`--deadman=off` is for a server's first boot, through [`export cloud-init`](/docs/reference/commands/#export-cloud-init), where nobody is logged in to confirm. It is refused while anyone is logged in.
+`--deadman=off` is for a server's first boot, through [`export cloud-init`](/docs/reference/commands/#vps-ready-export-cloud-init), where nobody is logged in to confirm. It is refused while anyone is logged in.
 
 ## What the safety net does not cover
 

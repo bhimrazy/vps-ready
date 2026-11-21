@@ -1,7 +1,7 @@
 ---
 import '../styles/landing.css';
 import FeedbackWidget from '../components/FeedbackWidget.astro';
-import { TAGLINE } from '../lib/site';
+import { HEADLINE } from '../lib/site';
 // The hero's fonts, preloaded so the heading and terminal don't reflow when they arrive.
 import mono400 from '@fontsource/jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2?url';
 import mono700 from '@fontsource/jetbrains-mono/files/jetbrains-mono-latin-700-normal.woff2?url';
@@ -10,8 +10,10 @@ import sans400 from '@fontsource/public-sans/files/public-sans-latin-400-normal.
 interface Props {
   title: string;
   description: string;
+  /** Structured data for search engines, rendered as JSON-LD. */
+  jsonLd?: object;
 }
-const { title, description } = Astro.props;
+const { title, description, jsonLd } = Astro.props;
 const canonical = new URL(Astro.url.pathname, Astro.site);
 const ogImage = new URL('/og.png', Astro.site);
 ---
@@ -36,11 +38,13 @@ const ogImage = new URL('/og.png', Astro.site);
     <meta property="og:image" content={ogImage} />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content={`vps-ready: ${TAGLINE}`} />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:alt" content={`vps-ready: ${HEADLINE}`} />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content={title} />
     <meta name="twitter:description" content={description} />
     <meta name="twitter:image" content={ogImage} />
+    {jsonLd && <script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />}
   </head>
   <body>
     <a

@@ -28,7 +28,10 @@ export const RELEASE_ASSETS = [
   { arch: 'aarch64', deb: `vps-ready_${VERSION}_arm64.deb`, tarball: `vps-ready-${VERSION}-aarch64-unknown-linux-musl.tar.gz` },
 ];
 export const SBOM = `vps-ready-${VERSION}.cdx.json`;
-export const TAGLINE = 'Make a fresh VPS ready and secure, safely.';
+export const TAGLINE = 'Open source VPS hardening for Debian and Ubuntu';
+export const HEADLINE = 'Secure a fresh server without locking yourself out.';
+export const DESCRIPTION =
+  'Harden a fresh Debian or Ubuntu VPS: key-only SSH, a default-deny firewall and automatic updates. Every change is shown first and can be rolled back.';
 
 export const LINKS = {
   issues: `${REPO}/issues`,

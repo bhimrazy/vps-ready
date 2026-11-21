@@ -1,6 +1,8 @@
 ---
-title: Introduction
-description: vps-ready audits a fresh Linux server and hardens it, with a plan you review first, a journal you can undo, and a safety net that rolls back changes that cut off your access.
+title: "vps-ready: audit and harden a Debian or Ubuntu VPS"
+description: vps-ready audits a fresh server and hardens it, with a plan you review first, a journal you can undo, and a safety net that rolls back lockouts.
+sidebar:
+  label: Introduction
 ---
 
 import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -26,7 +28,7 @@ Every command before `apply` only reads. `apply` shows the plan again and asks b
 
 ## What it promises
 
-- **Never lock you out.** Root and password logins stay on until an admin user with an SSH key and sudo exists. The firewall always allows the SSH port that is actually in use.
+- **Guard against lockouts.** Root and password logins stay on until an admin user with an SSH key and sudo exists. The firewall always allows the SSH port that is actually in use.
 - **Prove it from a new login.** Risky changes roll back on their own unless a new SSH login runs `confirm` in time, even if your terminal is gone or the server reboots.
 - **Show, then do.** Nothing changes without a plan you can read. Every change is labeled reversible or partial.
 - **Your files stay yours.** vps-ready writes its own drop-in files and never rewrites your `sshd_config` in place. No telemetry and no self-update. vps-ready itself reaches the network only through apt and, if you configure it, `tailscale up`.
@@ -41,4 +43,7 @@ Checks read the live state (`sshd -T`, `/proc/sys`, `apt-config`, `nft`, `ss`), 
   <LinkCard title="How the safety net works" description="The safety timer, confirm, and rollback across a reboot." href="/docs/guides/safety-net/" />
   <LinkCard title="Private access" description="Reach SSH only through Tailscale or WireGuard, and get back in if the VPN stops." href="/docs/guides/private-access/" />
   <LinkCard title="Profiles and modules" description="What minimal, web and private change, and how to undo each part." href="/docs/guides/profiles-and-modules/" />
+  <LinkCard title="Undo and recover" description="Roll back any apply, read the history, and get back into a server after a lockout." href="/docs/guides/undo-and-recover/" />
+  <LinkCard title="Use it on a busy server" description="Keep your services reachable, and work alongside ufw, firewalld, Docker and fail2ban." href="/docs/guides/existing-server/" />
+  <LinkCard title="Deploy an app" description="Docker with ports on loopback, Caddy with automatic HTTPS, and a deploy user for CI." href="/docs/guides/deployment-modules/" />
 </CardGrid>

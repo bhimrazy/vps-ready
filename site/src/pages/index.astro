@@ -12,12 +12,35 @@ import Safety from '../components/landing/Safety.astro';
 import Tested from '../components/landing/Tested.astro';
 import Why from '../components/landing/Why.astro';
 import Landing from '../layouts/Landing.astro';
+import { AUTHOR, DESCRIPTION, LINKS, REPO, VERSION } from '../lib/site';
+
+const url = 'https://vps-ready.bhimraj.com.np/';
+const author = { '@type': 'Person', name: AUTHOR.name, url: AUTHOR.site, sameAs: [AUTHOR.github] };
+// Facts only: no ratings or reviews.
+const jsonLd = {
+  '@context': 'https://schema.org',
+  '@graph': [
+    {
+      '@type': 'SoftwareApplication',
+      name: 'vps-ready',
+      description: DESCRIPTION,
+      url,
+      applicationCategory: 'SecurityApplication',
+      operatingSystem: 'Debian 12, Debian 13, Ubuntu 22.04, Ubuntu 24.04, Ubuntu 26.04',
+      softwareVersion: VERSION,
+      downloadUrl: `${REPO}/releases/tag/v${VERSION}`,
+      installUrl: `${url}docs/install/`,
+      license: ['https://opensource.org/licenses/MIT', 'https://opensource.org/licenses/Apache-2.0'],
+      offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+      author,
+      sameAs: [REPO, LINKS.crates],
+    },
+    { '@type': 'WebSite', name: 'vps-ready', url, description: DESCRIPTION, author },
+  ],
+};
 ---
 
-<Landing
-  title="vps-ready: harden a fresh Linux VPS without locking yourself out"
-  description="Harden a Debian or Ubuntu server: key-only SSH, a firewall and updates, rollback if you are locked out, and optional SSH only over Tailscale or WireGuard."
->
+<Landing title="vps-ready: secure a fresh Debian or Ubuntu VPS without lockouts" description={DESCRIPTION} jsonLd={jsonLd}>
   <Nav />
   <main id="main">
     <Hero />

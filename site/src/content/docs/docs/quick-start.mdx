@@ -1,6 +1,8 @@
 ---
-title: Quick start
+title: "Quick start: harden a new VPS step by step"
 description: Run the guided setup, or audit, plan, apply, confirm and undo step by step, behind the safety net.
+sidebar:
+  label: Quick start
 ---
 
 import { Steps } from '@astrojs/starlight/components';
@@ -50,7 +52,7 @@ needs a DNS record for this server.
 
 Then it shows the same plan as `apply`, asks `Apply N changes? [y/N]` and applies behind the safety timer. Confirm from a new login, as in [step 4](#step-by-step) below. It ends with the `sudo vps-ready apply --profile ...` command that repeats the setup without questions, and offers to save your answers to `vps-ready.toml` when they differ from a built-in profile.
 
-Ctrl-C at a question stops with `Nothing was changed.` To read what a module does first, run `vps-ready modules ssh.server` ([reference](/docs/reference/commands/#modules)).
+Ctrl-C at a question stops with `Nothing was changed.` To read what a module does first, run `vps-ready modules ssh.server` ([reference](/docs/reference/commands/#vps-ready-modules)).
 
 ## Step by step
 

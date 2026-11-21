@@ -1,5 +1,5 @@
 ---
-title: Undo changes and recover from a lockout
+title: Undo changes and recover from an SSH lockout
 description: Undo any apply with rollback, read the history, and get back into a server you can no longer log in to.
 sidebar:
   label: Undo and recover
@@ -76,7 +76,7 @@ A manual rollback is all or nothing, so it refuses (exit code 2) rather than und
 
 If a rollback starts but cannot finish, it exits 3 and says what is left to do by hand, for example when `userdel` fails because the admin user still has processes running.
 
-## Get back in after a lockout
+## Locked out of SSH: get back in
 
 If you cannot log in, work down this list. **If you just ran `apply` with a profile and have not confirmed yet, the safety net is still armed**, so the first step may be all you need:
 
