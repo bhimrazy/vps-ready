@@ -30,7 +30,7 @@ Only one piece changes the SSH path: security keys. It gets the same lockout car
 | v0.8.0 | `drift` | nothing; reports what changed since the last apply | |
 | v0.8.0 | `audit --format sarif\|junit` | nothing; new output formats | |
 | v0.8.0 | JSON Schema | nothing on the host; `vps-ready schema` and a release asset | |
-| v0.9.0 | Ubuntu 26.04 | data tables, the test matrix, the M3 and M6 session assumptions re-checked under sudo-rs | |
+| v0.8.0 | Ubuntu 26.04 | data tables, the test matrix, the M3 and M6 session assumptions re-checked under sudo-rs | |
 | v0.9.0 | `ssh.server` `security_keys` | the sshd drop-in accepts only security-key logins (with an exemption for `deploy.user`) | yes |
 | v1.0.0 | Stability | `docs/stability.md`, `sshd-config` fuzz targets, a review of every name before it freezes | |
 
@@ -469,10 +469,10 @@ Wave 2, v0.8.0:
 7. **`feat(config): record the applied profile in config.toml`**. *Parallel.*
 8. **`feat(cli): drift`** (needs 7).
 9. **`feat(config): JSON Schema for profiles`**. *Parallel.*
+10. **`feat(platform): Ubuntu 26.04`**, with the sudo-rs checks. *Parallel.*
 
 Wave 3, v0.9.0:
 
-10. **`feat(platform): Ubuntu 26.04`**, with the sudo-rs checks.
 11. **`feat(modules): security-key logins in ssh.server`** (needs 10): starts with the `Match` VM diff; then the param, refusals, `SSH-010`, verify, the VM cycle.
 
 Wave 4, v1.0.0:
@@ -522,7 +522,7 @@ Checked against upstream docs and sources while writing this plan; items marked 
 
 ## Decisions
 
-1. **Releases: v0.7.0 the tunnel and the journal `format` field, v0.8.0 `drift`, `config.toml`, SARIF/JUnit and the JSON Schema, v0.9.0 Ubuntu 26.04 then security keys, then v1.0.0.** Accepted: the owner's split, with the schema next to `config.toml`, the journal field early, and auditd out.
+1. **Releases: v0.7.0 the tunnel and the journal `format` field, v0.8.0 `drift`, `config.toml`, SARIF/JUnit, the JSON Schema and Ubuntu 26.04, v0.9.0 security keys, then v1.0.0.** Accepted: the owner's split, with the schema next to `config.toml`, the journal field early, and auditd out. The owner later moved Ubuntu 26.04 from v0.9.0 into v0.8.0; it still lands before security keys.
 2. **Cloudflare Tunnel, remotely-managed tunnels only, with the trust model stated.** Accepted: the host needs only a token for one tunnel, not the account-wide `cert.pem`; the account's control over routes is stated in the plan's note, the docs and `SSH-009`'s finding.
 3. **vps-ready's own connector unit with `LoadCredential=`, `DynamicUser=yes`, sandboxing, `IPAddressDeny=` (noted when not enforced) and its own config file,** not `cloudflared service install`. Accepted: Cloudflare's unit also uses `--token-file` now, but runs as root without sandboxing and under the name the dashboard's own instructions use.
 4. **The token only through a root-only file the user creates (or the wizard writes outside the transaction); without it, install only with a note; `export` refuses `token_file`.** Accepted: the same rules as Tailscale's auth key.

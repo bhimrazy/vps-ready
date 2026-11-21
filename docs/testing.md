@@ -25,7 +25,7 @@ The cheap layers run on every change; the slow, expensive ones run only where th
 - All system access goes through two traits in the `sys` module:
   - `Runner`: the real one spawns processes; `FakeRunner` matches argv and returns stdout and an exit code.
   - `Fs`: the real one touches `/`; `FakeFs` is an in-memory map of paths to contents, so tests never touch the real filesystem.
-- **Fixtures** captured from real images: `crates/vps-ready/testdata/os-release/<distro>/etc/os-release` and `crates/vps-ready/testdata/hosts/<distro>/` (ubuntu-24.04, debian-12, debian-13).
+- **Fixtures** captured from real images: `crates/vps-ready/testdata/os-release/<distro>/etc/os-release` and `crates/vps-ready/testdata/hosts/<distro>/` (ubuntu-24.04, debian-12 and debian-13 from containers; ubuntu-26.04 from a VM, with `test/vm-cycle.sh <distro> <binary> <image> fixtures`).
 - **Snapshot tests** with `insta`: run each module against each distro fixture and snapshot the plan. When output changes on purpose, `cargo insta review` shows the diff and you accept or reject it. The snapshots are committed, so reviewers see exactly how a rendered config changed.
 - **Property tests** with `proptest` (random inputs, shrunk to a minimal failing case):
   - plan → apply (to `FakeFs`) → plan must be **empty** (idempotency);
@@ -35,11 +35,11 @@ The cheap layers run on every change; the slow, expensive ones run only where th
 
 ## Layer 2: containers (every PR, minutes)
 
-**Today:** the `containers` CI job runs `test/container-audit.sh`, `test/container-apply.sh`, `test/container-bruteforce.sh`, `test/container-admin.sh`, `test/container-docker.sh`, `test/container-proxy.sh`, `test/container-tailscale.sh`, `test/container-tunnel.sh` and `test/container-wireguard.sh` on Ubuntu 22.04, Ubuntu 24.04, Debian 12 and Debian 13 (x86_64).
+**Today:** the `containers` CI job runs `test/container-audit.sh`, `test/container-apply.sh`, `test/container-bruteforce.sh`, `test/container-admin.sh`, `test/container-docker.sh`, `test/container-proxy.sh`, `test/container-tailscale.sh`, `test/container-tunnel.sh` and `test/container-wireguard.sh` on Ubuntu 22.04, Ubuntu 24.04, Ubuntu 26.04, Debian 12 and Debian 13 (x86_64).
 
 - **When:** pushes to `main` and every pull request that changes more than docs (`docs/`, `site/`, `.idea/`, `*.md`); a small `changes` job decides, and `ci-ok` accepts `build-musl` and `containers` as skipped.
 - The test image is cached per base image and `Containerfile` (`docker save`, zstd, `actions/cache`) and rebuilt every week, so it picks up the distro's updates. It carries `/etc/apt/apt.conf.d/80ci`, which makes apt retry a flaky mirror, both while building and in vps-ready's own apt calls; `UPD-001` reads only apt's `Periodic` settings, so the file does not change the audit.
-- The script boots the systemd test image (`--privileged --cgroupns=private`, 512 MB, 1 CPU), copies in the static musl binary built by `build-musl`, logs in over SSH once (which starts sshd on Ubuntu 24.04, where `ssh.socket` starts it on demand), and runs `detect` and `audit` as root, in human and `--json` form.
+- The script boots the systemd test image (`--privileged --cgroupns=private`, 512 MB, 1 CPU), copies in the static musl binary built by `build-musl`, logs in over SSH once (which starts sshd on Ubuntu 24.04 and 26.04, where `ssh.socket` starts it on demand), and runs `detect` and `audit` as root, in human and `--json` form.
 - It asserts that `detect` exits 0 and `audit` exits 0 or 1, never 2; that every `SSH-*` finding is pass or fail (so `sshd -T` worked); that every `KRN-*` and `NET-*` finding is skipped, since kernel settings belong to the host; and that a container is detected. It does not assert a total control count, so adding controls does not break it.
 - `test/container-apply.sh` first checks every `firewall.inbound` ruleset snapshot with that distro's `nft -c`, then runs the `updates.auto` cycle in a fresh container: `apply --yes` exits 0, `plan --json` shows no changes, `UPD-001` passes, `history` shows the transaction as applied, and `rollback --last` restores the managed files (`52vps-ready` is gone; `unattended-upgrades` stays installed by design). `apply` runs `apt-get`, so the container needs network access. The image removes Docker's `/etc/apt/apt.conf.d/docker-*` files, which would otherwise disable periodic updates, as a cloud image does not have them.
 - `test/container-bruteforce.sh` runs the `ssh.bruteforce` cycle the same way, with 1 GB: after `apply --yes`, `plan --json` shows no changes, fail2ban's `sshd` jail runs on the systemd backend and counts failed logins from the journal, a `banip` lands in nftables' `inet f2b-table`, `SSH-008` passes and `detect` sees the jail; `rollback --last` removes the drop-in, and the packages stay installed. The image has `netbase`, as cloud images do: nft before 1.1 needs `/etc/services` to resolve a jail's `port = ssh` (the drop-in's `sshd` jail lists port numbers).
@@ -53,7 +53,7 @@ The cheap layers run on every change; the slow, expensive ones run only where th
 
 **Planned:**
 
-- A Rust test harness starting containers with `testcontainers-rs` or the plain `docker`/`podman` CLI, with a wider matrix: Ubuntu 26, Rocky 9/10, Fedora, Alpine (OpenRC instead of systemd), and `ubuntu-24.04-arm` runners for arm64.
+- A Rust test harness starting containers with `testcontainers-rs` or the plain `docker`/`podman` CLI, with a wider matrix: Rocky 9/10, Fedora, Alpine (OpenRC instead of systemd), and `ubuntu-24.04-arm` runners for arm64.
 - **Covers:** packages, services, users, fail2ban/CrowdSec, Docker install, unattended-upgrades, templates.
 - **The full cycle:** apply → re-apply (no-op) → rollback → `diff -r /etc` against the snapshot.
 - nftables works inside the container's own network namespace, which is good enough to check rule syntax and that apply/restore work.
@@ -62,10 +62,11 @@ The cheap layers run on every change; the slow, expensive ones run only where th
 
 Containers can't test kernel sysctls, reboots, sshd socket activation, the host firewall, or the **dead-man switch**.
 
-**Today:** the `vm` workflow (`.github/workflows/vm.yml`) runs `test/vm-cycle.sh` on Ubuntu 22.04, Ubuntu 24.04, Debian 12 and Debian 13 (x86_64). It is not a required check.
+**Today:** the `vm` workflow (`.github/workflows/vm.yml`) runs `test/vm-cycle.sh` on Ubuntu 22.04, Ubuntu 24.04, Ubuntu 26.04, Debian 12 and Debian 13 (x86_64). It is not a required check.
 
-- **When:** pushes to `main`, nightly, by hand (`workflow_dispatch`), and pull requests that touch `crates/vps-ready/src/{engine,resource,modules,sys}/**`, `test/vm-*` or the workflow. It is a separate workflow so `ci` stays fast.
+- **When:** pushes to `main`, nightly, by hand (`workflow_dispatch`), and pull requests that touch what goes into the binary (`crates/vps-ready/{src,templates,keys}/**`, `crates/sshd-config/src/**`, the manifests, `Cargo.lock`, `rust-toolchain.toml`), `test/vm-*` or the workflow; docs-only ones skip it. It is a separate workflow so `ci` stays fast.
 - **How:** one job per distro and cycle, `vm (<distro>, <cycle>)`, where the cycle is `cycles` (everything below but the last two), `cloud-init` or `private-access`, so they run in parallel and can be rerun alone. Plain QEMU with KVM on `ubuntu-24.04` (a udev rule opens `/dev/kvm` to the runner user). Each job boots the distro's official cloud image, pinned by URL and checksum and cached with `actions/cache`, with 2 vCPUs, 2 GiB and a copy-on-write overlay. A cloud-init NoCloud seed adds a user with passwordless sudo and a throwaway SSH key made in the job, and the same `80ci` apt retry file as the container image; the script drives the VM over SSH forwarded to `127.0.0.1`.
+- **sudo**, which is sudo-rs on Ubuntu 26.04: `detect` under `sudo` finds the cycle user's session, `SUDO_USER` is set, `visudo -cf` accepts a valid drop-in and rejects a broken one, and `sudo -n -l -U` exits 0 and lists rules for a user with a `NOPASSWD` rule and for a member of `sudo` (who still needs a password), and none for a user without rules; `apply --deadman=off` of `ssh.server` from the cycle's login is refused and names it. The confirm, `user.admin`, wizard and deploy cycles below run under the same sudo.
 - **`kernel.sysctl`, same boot:** weaken five keys with `sysctl -w` (cloud images already pass), `apply --yes`, every control the module fixes passes, `rollback --last` puts the weak values back and removes the drop-in.
 - **`kernel.sysctl`, across a reboot:** weaken, `plan`, `apply --yes`, reboot, every control the module fixes passes and `plan` is empty, then `rollback --last` exits 0, removes the drop-in and leaves the kernel settings to the next boot; after a second reboot they are back to the image's defaults. On Ubuntu the boot sets `fs.protected_regular` to 2, neither the weak nor the applied value, which v0.2.0 refused to roll back.
 - **`updates.auto`:** the container cycle, with real apt and systemd.
@@ -77,7 +78,7 @@ Containers can't test kernel sysctls, reboots, sshd socket activation, the host 
   - **reboot:** `systemd-analyze verify` of the boot hook finds no ordering cycle; apply, reboot during the window → rolled back with `deadman-reboot`, and the hook finished before sshd started.
 - **`ssh.server`**, over real logins to the VM's own sshd:
   - the `minimal` profile (`user.admin`, `ssh.server`, `firewall.inbound` and the rest) with a new admin: during the window a new root login is refused and sshd offers no password method → confirm as the admin → `SSH-001` to `SSH-007` and `FW-001` pass, the admin logs in and root does not, and a SYN with IPv4 options to sshd is dropped → `rollback --last` removes the drop-in, the table and the admin, root logs in again and a SYN with options connects;
-  - `--module ssh.server`, not confirmed: a new root login is refused (the reload reached new logins, also through `ssh.socket` on Ubuntu 24.04); the drop-in is edited → at the deadline it is gone and the edit is in `files/1.during`;
+  - `--module ssh.server`, not confirmed: a new root login is refused (the reload reached new logins, also through `ssh.socket` on Ubuntu 24.04 and 26.04); the drop-in is edited → at the deadline it is gone and the edit is in `files/1.during`;
   - a `Match User` block with `PermitRootLogin yes` read before the drop-in → verify (`sshd -T -C`) fails and apply rolls back.
 - **The wizard**, `sudo vps-ready` over a real login with a terminal, driven by `expect` (installed in the VM only, script in `test/vm-wizard.exp`): Enter at every question, `y` to apply, a new login as the admin confirms, the wizard exits 0, and the `--profile` its "Next time" line prints plans no changes:
   - as the cycle's user: the session user is offered and becomes the admin (an existing account), then `rollback --last`;

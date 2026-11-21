@@ -349,8 +349,9 @@ pub(crate) mod fixtures {
     use crate::sys::RealFs;
     use crate::sys::fake::FakeRunner;
 
-    /// Hosts captured by `test/capture-host-fixtures.sh`.
-    pub(crate) const HOSTS: [&str; 3] = ["ubuntu-24.04", "debian-12", "debian-13"];
+    /// Hosts captured by `test/capture-host-fixtures.sh`: ubuntu-26.04 from a
+    /// VM (`test/vm-cycle.sh ... fixtures`), the others from containers.
+    pub(crate) const HOSTS: [&str; 4] = ["ubuntu-24.04", "ubuntu-26.04", "debian-12", "debian-13"];
 
     pub(crate) fn testdata(path: &str) -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -512,7 +513,12 @@ mod tests {
             let facts = host(name, &[]);
             assert_eq!(facts.os.family, OsFamily::Debian, "{name}");
             assert_eq!(facts.init, Init::Systemd, "{name}");
-            assert!(facts.virtualization.in_container(), "{name}");
+            let virt = if name == "ubuntu-26.04" {
+                &facts.virtualization.vm
+            } else {
+                &facts.virtualization.container
+            };
+            assert!(matches!(virt, Virt::Detected(_)), "{name}");
             assert!(facts.ssh.version.is_some(), "{name}");
             assert!(facts.ssh.effective.is_some(), "{name}");
             assert!(
@@ -530,6 +536,10 @@ mod tests {
     fn ubuntu_uses_socket_activation_and_debian_does_not() {
         assert_eq!(
             host("ubuntu-24.04", &[]).ssh.activation,
+            SshActivation::Socket
+        );
+        assert_eq!(
+            host("ubuntu-26.04", &[]).ssh.activation,
             SshActivation::Socket
         );
         assert_eq!(

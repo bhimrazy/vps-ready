@@ -809,3 +809,31 @@ fn match_blocks_are_noted_and_not_claimed() {
     assert_eq!(failed[0].control.id, "SSH-002");
     assert_eq!(failed[0].control.fix, None);
 }
+
+/// `sudo -n -l -U` as sudo-rs 0.2.13 prints it on Ubuntu 26.04, with and
+/// without rules, both with exit status 0.
+#[test]
+fn reads_sudo_rs_rules() {
+    let fs = FakeFs::new();
+    for (stdout, rules) in [
+        (
+            "User ci may run the following commands on vps-ready-vm:\n    (ALL) NOPASSWD: ALL\n",
+            true,
+        ),
+        (
+            "User ci is not allowed to run sudo on vps-ready-vm.\n",
+            false,
+        ),
+    ] {
+        let runner = crate::sys::fake::FakeRunner::new().on(
+            "sudo",
+            ["-n", "-l", "-U", "ci"],
+            Output::success(stdout),
+        );
+        let sys = Sys {
+            fs: &fs,
+            runner: &runner,
+        };
+        assert_eq!(has_sudo(sys, "ci").unwrap(), rules, "{stdout}");
+    }
+}
