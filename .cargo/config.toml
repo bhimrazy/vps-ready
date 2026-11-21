@@ -9,4 +9,5 @@ linker = "rust-lld"
 linker = "rust-lld"
 
 [alias]
+xtask = "run --package xtask --"
 check-all = "clippy --workspace --all-targets --all-features -- -D warnings"
