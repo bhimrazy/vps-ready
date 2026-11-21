@@ -27,7 +27,7 @@ One static binary: audit, a plan you read first, and a rollback timer that undoe
 </div>
 
 > [!NOTE]
-> vps-ready is at **v0.7** and works on Debian 12/13 and Ubuntu 22.04/24.04 with systemd: `detect` and `audit` (34 controls), and `plan`, `apply`, `confirm` and `rollback` for [twelve modules](#what-it-does). Expect breaking changes before 1.0.
+> vps-ready is at **v0.7** and works on Debian 12/13 and Ubuntu 22.04/24.04/26.04 with systemd: `detect` and `audit` (34 controls), and `plan`, `apply`, `confirm` and `rollback` for [twelve modules](#what-it-does). Expect breaking changes before 1.0.
 
 ## Quick start
 
@@ -144,7 +144,7 @@ The engine is built around these rules, so they hold for every module rather tha
 
 | Family | Distros | Firewall | Init | Status |
 |---|---|---|---|---|
-| Debian | Ubuntu 22.04, 24.04; Debian 12, 13 (26.04 next) | nftables (its own table; not applied while ufw or firewalld is active) | systemd | since v0.2 |
+| Debian | Ubuntu 22.04, 24.04, 26.04; Debian 12, 13 | nftables (its own table; not applied while ufw or firewalld is active) | systemd | since v0.2; Ubuntu 26.04 tested since v0.8 |
 | RHEL | Rocky and Alma 9, 10; Fedora | firewalld | systemd | later |
 | Alpine | 3.2x | nftables | OpenRC | later |
 
