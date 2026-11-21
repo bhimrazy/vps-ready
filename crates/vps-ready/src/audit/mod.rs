@@ -947,9 +947,10 @@ fn docker_bridge(facts: &Facts, name: &str, except: &[String]) -> bool {
     if name == "docker0" && facts.docker {
         return true;
     }
-    let Some(bridges) = &facts.bridges else {
+    if !facts.bridges_known {
         return false;
-    };
+    }
+    let bridges = &facts.bridges;
     match name.strip_suffix('*') {
         Some(prefix) => {
             prefix == "br-"
@@ -2911,6 +2912,71 @@ mod tests {
         }
     }
 
+    /// `iifname != "x"` alone opens its ports on every known interface but
+    /// `x`: private only when all of those are.
+    #[test]
+    fn an_exclusion_only_accept_is_open_on_every_other_interface() {
+        let mut facts = host("debian-13", &[]);
+        facts.ipv6 = false;
+        facts.ssh.listening = vec![22];
+        facts.listeners = vec![
+            listening(Proto::Tcp, "0.0.0.0", 22, "sshd"),
+            listening(Proto::Tcp, "0.0.0.0", 5432, "postgres"),
+        ];
+        let ruleset = |except: &str| {
+            let json = format!(
+                r#"{{"nftables": [
+                    {{"table": {{"family": "inet", "name": "t"}}}},
+                    {{"chain": {{"family": "inet", "table": "t", "name": "in", "type": "filter", "hook": "input", "policy": "drop"}}}},
+                    {{"rule": {{"family": "inet", "table": "t", "chain": "in", "expr": [
+                        {{"match": {{"op": "!=", "left": {{"meta": {{"key": "iifname"}}}}, "right": "{except}"}}}},
+                        {{"match": {{"op": "==", "left": {{"payload": {{"protocol": "tcp", "field": "dport"}}}}, "right": {{"set": [22, 5432]}}}}}},
+                        {{"accept": null}}
+                    ]}}}}
+                ]}}"#
+            );
+            crate::facts::firewall::parse_json(json.as_bytes())
+        };
+        let ssh_009 = |facts: &Facts| evaluate(&Check::SshPrivateOnly, facts);
+        let fail_on = |on: &str| Outcome::Fail {
+            found: format!("SSH is accepted beyond a VPN: tcp/22 on {on}"),
+        };
+        let fw_003_on = |facts: &Facts, on: &str| {
+            matches!(
+                exposed(facts).outcome,
+                Outcome::Fail { found } if found.ends_with(&format!("tcp/5432 (postgres) on {on}"))
+            )
+        };
+
+        facts.interfaces = vec![
+            interface("lo", None, "127.0.0.1"),
+            interface("eth0", None, "203.0.113.5"),
+            interface("wg0", Some("wireguard"), "10.8.0.1"),
+        ];
+        facts.firewall = ruleset("eth0");
+        assert_eq!(ssh_009(&facts), Outcome::Pass);
+        assert_eq!(exposed(&facts).outcome, Outcome::Pass);
+
+        facts
+            .interfaces
+            .push(interface("eth1", None, "198.51.100.9"));
+        assert_eq!(ssh_009(&facts), fail_on("eth1"));
+        assert!(fw_003_on(&facts, "eth1"));
+
+        // A wildcard exclusion is not resolved to interfaces.
+        facts.firewall = ruleset("eth*");
+        assert_eq!(ssh_009(&facts), fail_on("eth0 and eth1"));
+        assert!(fw_003_on(&facts, "eth0 and eth1"));
+
+        // With no interfaces known, it is open from anywhere.
+        facts.interfaces.clear();
+        facts.firewall = ruleset("eth0");
+        assert!(matches!(
+            exposed(&facts).outcome,
+            Outcome::Fail { found } if found.ends_with("tcp/5432 (postgres)")
+        ));
+    }
+
     /// The plan's cases: a WireGuard port passes, and a port reachable only
     /// on wg0 does not count, whether a rule, a `%wg0` bind or the address
     /// limits it. Docker's bridges count as private too.
@@ -2924,10 +2990,10 @@ mod tests {
             interface("wg0", Some("wireguard"), "10.8.0.1"),
             interface("docker0", Some("bridge"), "172.17.0.1"),
         ];
-        facts.bridges = Some(vec![crate::facts::Bridge {
+        facts.bridges = vec![crate::facts::Bridge {
             name: "docker0".to_owned(),
             docker: true,
-        }]);
+        }];
         facts.wireguard.listen_ports = [("wg0".to_owned(), 51820)].into();
         facts.listeners = vec![
             listening(Proto::Tcp, "0.0.0.0", 22, "sshd"),

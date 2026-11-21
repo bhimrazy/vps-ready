@@ -577,21 +577,18 @@ fn docker_bridge_accepts_keep_ssh_limited_to_the_interface() {
     );
     facts.firewall = crate::facts::firewall::parse_json(&json);
     facts.docker = true;
-    facts.bridges = Some(vec![crate::facts::Bridge {
+    facts.bridges = vec![crate::facts::Bridge {
         name: "docker0".to_owned(),
         docker: true,
-    }]);
+    }];
     assert_eq!(finding(&facts, "SSH-009").outcome, Outcome::Pass);
     assert_eq!(finding(&facts, "FW-003").outcome, Outcome::Pass);
     // A bridge Docker did not name: `br-*` may face the internet, unless
     // the rule leaves it out, as the template does.
-    facts
-        .bridges
-        .get_or_insert_default()
-        .push(crate::facts::Bridge {
-            name: "br-lan".to_owned(),
-            docker: false,
-        });
+    facts.bridges.push(crate::facts::Bridge {
+        name: "br-lan".to_owned(),
+        docker: false,
+    });
     assert_eq!(
         finding(&facts, "SSH-009").outcome,
         Outcome::Fail {
@@ -610,7 +607,7 @@ fn docker_bridge_accepts_keep_ssh_limited_to_the_interface() {
     assert_eq!(finding(&facts, "SSH-009").outcome, Outcome::Pass);
     assert_eq!(finding(&facts, "FW-003").outcome, Outcome::Pass);
     // Unknown bridges: `br-*` may be anything.
-    facts.bridges = None;
+    facts.bridges_known = false;
     assert!(matches!(
         finding(&facts, "SSH-009").outcome,
         Outcome::Fail { found } if found.ends_with("on br-*")

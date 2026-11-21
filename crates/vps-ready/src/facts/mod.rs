@@ -90,9 +90,11 @@ pub struct Facts {
     /// the Debian family, or when dpkg could not be asked.
     pub docker_engine: Option<DockerEngine>,
     /// `docker0` and the interfaces named `br-*`: Docker's bridges, and
-    /// others a firewall rule for `br-*` would also match. `None` when
-    /// `/sys/class/net` could not be read.
-    pub bridges: Option<Vec<Bridge>>,
+    /// others a firewall rule for `br-*` would also match. Empty when
+    /// unknown.
+    pub bridges: Vec<Bridge>,
+    /// Whether [`Self::bridges`] is known: `/sys/class/net` could be read.
+    pub bridges_known: bool,
     /// Whether the kernel has AppArmor enabled. `None` when that could not
     /// be read.
     pub apparmor: Option<bool>,
@@ -181,6 +183,8 @@ pub fn collect(fs: &dyn Fs, runner: &dyn Runner, env: &Env) -> Result<Facts, Fac
         None
     };
     let bridges = bridges::detect(fs, &mut notices);
+    let bridges_known = bridges.is_some();
+    let bridges = bridges.unwrap_or_default();
     let apparmor = apparmor(fs, &mut notices);
     let interfaces = network::interfaces(runner, &mut notices);
     let routes = network::routes(runner, &mut notices);
@@ -203,6 +207,7 @@ pub fn collect(fs: &dyn Fs, runner: &dyn Runner, env: &Env) -> Result<Facts, Fac
         docker,
         docker_engine,
         bridges,
+        bridges_known,
         apparmor,
         interfaces,
         routes,
