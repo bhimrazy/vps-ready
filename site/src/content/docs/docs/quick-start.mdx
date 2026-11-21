@@ -69,8 +69,10 @@ This is the same flow without the questions. The first two steps change nothing,
    Each one comes with the reason it matters and, when a module can fix it, the command that does. `--all` also lists the passing ones, and `--json` prints everything for CI. The end of a real run:
 
    ```text
-   5 passed, 5 failed (1 high, 3 medium, 1 low), 0 unknown, 19 skipped
+   6 passed, 5 failed (1 high, 3 medium, 1 low), 0 unknown, 23 skipped
+   Skipped: there is no VPN interface (WireGuard or tailscale0) and no `ssh_via` rule.
    Skipped: kernel settings are not checked inside a container.
+   Skipped: /etc/wireguard does not exist.
    Skipped: Docker is not installed.
    vps-ready can fix all 5 (SSH-002, FW-001, SSH-001, UPD-001, SSH-005): run `sudo
    vps-ready plan --module ssh.server --module firewall.inbound --module

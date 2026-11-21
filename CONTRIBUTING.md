@@ -58,7 +58,7 @@ tried them on a throwaway VM.
 
 ## Working on the site
 
-The website (landing page and docs) lives in `site/` and needs Node 22.22 or later (CI uses 24):
+The website (landing page and docs) lives in `site/` and needs Node 22.23.4 or later (CI uses 24):
 
 ```sh
 cd site

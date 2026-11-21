@@ -5,7 +5,7 @@
 // (crates/vps-ready/src/cli): the audit FAIL rows from the audit_shows_fix
 // snapshot, the plan and apply lines from a Debian 13 VM run (assets/demo.png)
 // in today's format, the confirm block from cli/change/confirm.rs and its
-// pending tests. The counts are made consistent for one example host (33
+// pending tests. The counts are made consistent for one example host (34
 // controls). Long runs are cut, never reworded.
 import { sp, type Step } from './motion';
 
@@ -96,7 +96,8 @@ export const heroScenes: Record<'audit' | 'plan' | 'apply' | 'confirm', Step[]> 
     { o: 'Apply 16 changes? [y/N] ' },
     { a: 'y' },
     { o: `Applied 16 changes (transaction ${TX}). Undo them now with \`sudo vps-ready rollback --last\`.`, d: 300 },
-    { o: 'Changes are live. Open a NEW terminal and run:', d: 200 },
+    { o: 'Changes are live. To keep them, open a NEW terminal on your computer and run', d: 200 },
+    { o: 'this to show you can still log in:' },
     { o: '' },
     { o: '    ssh -t -o ControlPath=none -p 22 admin@203.0.113.10 sudo vps-ready confirm' },
     { o: '' },
@@ -126,7 +127,7 @@ export const heroScenes: Record<'audit' | 'plan' | 'apply' | 'confirm', Step[]> 
 // cli/wizard.rs. Long runs are cut, marked with a dim "...", never reworded.
 export const wizardSnippet: Step[] = [
   { c: 'sudo vps-ready' },
-  { o: 'Audit: 13 passed, 12 failed (1 high, 5 medium, 6 low), 4 unknown. vps-ready can fix 11 of them.' },
+  { o: 'Audit: 15 passed, 12 failed (1 high, 5 medium, 6 low), 5 unknown. vps-ready can fix 11 of them.' },
   { o: '' },
   { o: `${sp('ask', '?')} What will this server run?` },
   { o: `  ${sp('sel', '&gt; Web apps or Docker: opens ports 80 and 443 (recommended: Docker is installed)')}` },
@@ -144,8 +145,8 @@ export const wizardSnippet: Step[] = [
   { o: 'After you apply, you have 5 minutes to log in from a new terminal and confirm.' },
   { o: "If you don't, every change is undone." },
   { o: sp('dim', '...') },
-  { o: '18 changes in 6 modules: 8 files, 1 directory, 6 kernel settings, 2 services, 1 user.' },
-  { o: 'Apply 18 changes? [y/N] y' },
+  { o: '20 changes in 7 modules: 9 files, 2 directories, 6 kernel settings, 2 services, 1 user.' },
+  { o: 'Apply 20 changes? [y/N] y' },
   { o: sp('dim', '...') },
   { o: '' },
   { o: 'Next time, without questions:' },

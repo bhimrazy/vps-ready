@@ -8,7 +8,7 @@ sidebar:
 
 import { Aside } from '@astrojs/starlight/components';
 
-Hardening a server is half the job; the other half is getting an app onto it. Three modules do that: `deploy.docker` installs Docker with safe defaults, `deploy.proxy` puts Caddy in front of your apps with HTTPS, and `deploy.user` gives your CI a login that can do one thing. They work like every other module: `plan` shows the diff, `apply` journals it, `rollback` undoes it.
+After hardening, the next job is getting an app onto the server. Three modules do that: `deploy.docker` installs Docker with safe defaults, `deploy.proxy` puts Caddy in front of your apps with HTTPS, and `deploy.user` gives your CI a login that can do one thing. They work like every other module: `plan` shows the diff, `apply` journals it, `rollback` undoes it.
 
 <Aside type="note" title="New in v0.5.0">
 These modules ship from v0.5.0.

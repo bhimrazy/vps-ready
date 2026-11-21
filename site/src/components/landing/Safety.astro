@@ -138,10 +138,10 @@ const ticks = ['0:00', '1:00', '2:00', '3:00', '4:00', '5:00'];
     <div class="mt-9 grid grid-cols-2 gap-7 max-[820px]:grid-cols-1 max-[820px]:gap-[18px]">
       <div class="grid content-start gap-1.5 text-sm text-muted">
         <b class="font-mono text-sm font-bold text-ink">Only a new login counts.</b>The confirming session must start after the change, on a
-        port the SSH server listens on, as one of the admin users in the plan.
+        port the SSH server listens on, as the plan's admin user or another user it gives SSH keys.
       </div>
       <div class="grid content-start gap-1.5 text-sm text-muted">
-        <b class="font-mono text-sm font-bold text-ink">Refuses to lock you out.</b>It won't turn off root or password login unless an admin
+        <b class="font-mono text-sm font-bold text-ink">Checks for a way in first.</b>It won't turn off root or password login unless an admin
         user with SSH keys and sudo exists, and it checks that user against the live SSH server config.
       </div>
     </div>

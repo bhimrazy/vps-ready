@@ -5,8 +5,8 @@ import SectionHead from './ui/SectionHead.astro';
 
 const layers = [
   ['Unit', 'Every module planned and verified against a fake filesystem.', 'every change'],
-  ['Containers', 'The real binary in systemd containers on Ubuntu 22.04, 24.04 and 26.04 and Debian 12 and 13: audit, apply and rollback, and the admin, fail2ban, Docker, Caddy and Tailscale modules. WireGuard is checked for install and for refusing to apply without kernel support.', 'every change'],
-  ['Real VMs', 'x86_64 VMs on QEMU/KVM on the same five releases: a real SSH server, real reboots and real second SSH logins, a first boot from cloud-init, and SSH closed through a real WireGuard tunnel. arm64 is built but not run in VMs.', 'nightly'],
+  ['Containers', 'The real binary in systemd containers on Ubuntu 22.04, 24.04 and 26.04 and Debian 12 and 13: audit, apply and rollback, and the admin, fail2ban, Docker, Caddy, Tailscale and Cloudflare Tunnel modules. WireGuard is checked for install and for refusing to apply without kernel support.', 'every change'],
+  ['Real VMs', 'x86_64 VMs on QEMU/KVM on the same five releases: a real SSH server, real reboots and real second SSH logins, a first boot from cloud-init, SSH closed through a real WireGuard tunnel, and the tunnel connector\'s sandbox. arm64 is built but not run in VMs.', 'nightly'],
 ];
 ---
 

@@ -184,7 +184,7 @@ authorized_keys = ["ssh-ed25519 AAAAC3Nza... me@laptop"]
 
 Apply the same file twice. The first apply, from a public SSH login (or at first boot from `export cloud-init`), sets up the VPN and keeps SSH public, with the note "step 1 of 2: SSH stays public until you apply this profile again from a login through tailscale0". Then log in through the VPN and run the same command: from that session, `ssh_via = "vpn"` closes public SSH exactly like an explicit `ssh_via`, with its checks, the safety timer and the confirm through the VPN. After that, applying the file again changes nothing. If SSH is already limited to another interface, the first step is refused rather than reopening SSH publicly. Add `"80/tcp", "443/tcp", "443/udp"` to `allow` for a web app, or keep `allow` empty and serve it through a tunnel, with `net.tunnel` and `deploy.proxy`'s `behind_tunnel = true`: [A website with no public port](/docs/guides/private-access/#a-website-with-no-public-port).
 
-### `ssh.bruteforce`: fail2ban (web profile)
+### `ssh.bruteforce`: fail2ban
 
 **Changes:** installs `nftables`, `python3-systemd` and `fail2ban`, writes `/etc/fail2ban/jail.d/90-vps-ready.local` to turn on the `sshd` jail (reading the systemd journal, banning in nftables on the ports sshd listens on), and restarts fail2ban. It sets nothing for your other jails.
 
@@ -192,7 +192,7 @@ Apply the same file twice. The first apply, from a public SSH login (or at first
 
 **Undo:** the jail file is restored, but packages are never removed, so fail2ban stays installed and enabled and runs the distro's own jails. `systemctl disable --now fail2ban` turns it off.
 
-fail2ban is only in the web profile because, once SSH takes keys only, brute-force attempts are mostly log noise, and OpenSSH 9.8 and later already slows them down with `PerSourcePenalties`.
+fail2ban is in the `web` and `private` profiles but not in `minimal` because, once SSH takes keys only, brute-force attempts are mostly log noise, and OpenSSH 9.8 and later already slows them down with `PerSourcePenalties`.
 
 ### `kernel.sysctl`: kernel settings
 

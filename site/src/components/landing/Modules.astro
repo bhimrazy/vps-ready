@@ -11,7 +11,7 @@ const anchors: Record<string, string> = {
   'user.admin': 'useradmin-the-admin-user',
   'ssh.server': 'sshserver-the-ssh-server-config',
   'firewall.inbound': 'firewallinbound-the-firewall',
-  'ssh.bruteforce': 'sshbruteforce-fail2ban-web-profile',
+  'ssh.bruteforce': 'sshbruteforce-fail2ban',
   'kernel.sysctl': 'kernelsysctl-kernel-settings',
   'updates.auto': 'updatesauto-automatic-security-updates',
   'net.tailscale': 'nettailscale-tailscale',
@@ -28,6 +28,7 @@ const mods = [
     id: 'user.admin',
     text: 'Creates a non-root admin user with sudo and installs your SSH keys. Refuses system accounts.',
     profiles: ['minimal', 'web', 'private'],
+    timer: true,
     icon: '<circle cx="12" cy="8" r="4"/><path d="M4 21c.7-4.5 4-7 8-7s7.3 2.5 8 7"/>',
   },
   {
