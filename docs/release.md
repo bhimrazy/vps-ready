@@ -1,6 +1,6 @@
 # Supply chain and release
 
-A hardening tool that runs as root is a prime supply-chain target. Users who care about security are exactly the ones who won't `curl | bash`, so trust is a feature.
+A hardening tool that runs as root is an obvious target for a supply-chain attack, and the users who care most about security are the ones least willing to pipe a script into a shell. This page covers how a release is built, signed and checked.
 
 ## Build
 
@@ -17,7 +17,7 @@ A hardening tool that runs as root is a prime supply-chain target. Users who car
   strip = true         # drop symbols; smaller artifact
   ```
 
-  Why `panic = "abort"` is safe here: the engine never relies on `Drop` running during a panic to clean up. A crash mid-transaction is handled the same way as a power cut, by the on-disk journal and the dead-man timer ([the architecture doc](architecture.md)).
+  Why `panic = "abort"` is safe here: the engine never relies on `Drop` running during a panic to clean up. A crash mid-transaction is handled the same way as a power cut, by the on-disk journal and the dead-man timer ([the engine flow](design.md#engine-flow)).
 - **Reproducible builds** (the target). CI builds each release binary twice, from different paths and cargo homes, and fails if the hashes differ. That shows two builds match; it does not yet show that a published asset rebuilds to the same bytes. The steps:
   1. `--locked` plus the pinned toolchain: same inputs, same compiler.
   2. `SOURCE_DATE_EPOCH` set to the tag's commit timestamp, used for anything that would otherwise embed "now" (tarball mtimes, build metadata).
@@ -65,7 +65,7 @@ Only the last two steps need `contents: write`, and they run in the `release` en
 - Default to `permissions: {}`, granting `id-token`/`attestations`/`contents: write` only to the jobs that need them.
 - Use `release` and `crates-io` environments limited to `v*` tags, plus tag rulesets: `v*` tags cannot be updated or deleted, and only repository admins can create them.
 
-## Install paths (most → least trusted)
+## Install paths, most trusted first
 
 1. **Package repo:** apt `signed-by=` / dnf `gpgcheck=1` / apk keys. Updates come through the system package manager. Not built. v0.5.0 ships the `.deb` as a release asset, checked like the tarballs (see below); a repository waits until someone asks for it, and `.rpm` and `.apk` until vps-ready supports those distros.
 2. **Manual verification:**
@@ -89,7 +89,7 @@ Only the last two steps need `contents: write`, and they run in the `release` en
 cargo install vps-ready --locked   # compiles from source; add --version <version> for a pre-release
 ```
 
-- **`cargo install --locked`** builds on your machine from the source published to crates.io. `--locked` uses the `Cargo.lock` shipped in the crate; without it, cargo resolves the newest semver-compatible dependencies, which nobody has reviewed. Be honest about the trust model: this path is **only as trustworthy as crates.io and that lockfile**. No cosign signature or SLSA attestation covers it. (Publishing from CI with crates.io trusted publishing, so there is no long-lived token to steal, narrows the gap.) For the full chain of trust, use the release tarball and verify it with the commands above.
+- **`cargo install --locked`** builds on your machine from the source published to crates.io. `--locked` uses the `Cargo.lock` shipped in the crate; without it, cargo resolves the newest semver-compatible dependencies, which nobody has reviewed. This path is **only as trustworthy as crates.io and that lockfile**. No cosign signature or SLSA attestation covers it. (Publishing from CI with crates.io trusted publishing, so there is no long-lived token to steal, narrows the gap.) For the full chain of trust, use the release tarball and verify it with the commands above.
 
 ### Publishing to crates.io
 
@@ -118,7 +118,7 @@ CI cannot join a tailnet, so before tagging a release that includes `net.tailsca
 - [ ] Reboot: `tailscaled` comes back and SSH through the tailnet works (and, with `ssh_via`, public SSH stays closed).
 - [ ] `rollback --last` until the start: the source, key and origin file are gone, `tailscale` is still installed, and the node is down but still logged in. Remove it from the tailnet with `sudo tailscale logout`.
 
-CI cannot use a real Cloudflare account either, so before tagging a release that includes `net.tunnel`, the maintainer runs this on one fresh Debian 13 and one fresh Ubuntu 24.04 VM and pastes the result into the release PR. The VM job checks the unit's credential with a placeholder token (see [testing](testing.md)), so this is the only check of a real connection and a site served through it. Use the wizard's hidden token prompt on one VM and a pre-saved token file on the other.
+CI cannot use a real Cloudflare account either, so before tagging a release that includes `net.tunnel`, the maintainer runs this on one fresh Debian 13 and one fresh Ubuntu 24.04 VM and pastes the result into the release PR. The VM job checks the unit's credential with a placeholder token (see [Testing](design.md#secrets-never-reach-argv-the-plan-or-the-journal)), so this is the only check of a real connection and a site served through it. Use the wizard's hidden token prompt on one VM and a pre-saved token file on the other.
 
 - [ ] In the Cloudflare dashboard, create a remotely-managed tunnel on a test domain and add a published route from a test hostname to `http://127.0.0.1:80`. On the VM, run a known upstream: `echo hello > /tmp/hello.txt; cd /tmp && python3 -m http.server --bind 127.0.0.1 8080` (keep it running).
 - [ ] Token file: for the pre-saved case, `sudo install -d -m 0755 /etc/vps-ready`, then `sudo sh -c 'umask 077; cat > /etc/vps-ready/cloudflared-token'` and paste the token. For the wizard case, paste it at the hidden prompt.
@@ -134,20 +134,20 @@ CI cannot use a real Cloudflare account either, so before tagging a release that
 
 ## No self-update
 
-A root tool that replaces itself is extra attack surface for a program that usually runs once per box. Provide `vps-ready version --check` (notify only) and let packages handle upgrades.
+vps-ready never replaces itself or checks for updates ([why](design.md#foundations)). Upgrade with the `.deb`, `install.sh` or `cargo install`.
 
 ## Repo hygiene
 
-- **Dependencies:** a short allowlist (see [the architecture doc](architecture.md)). Review every new crate with `cargo tree` (what does it pull in?) and `cargo tree -d` (duplicate versions). CI runs:
-  - `ci.yml`: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, `cargo doc`, an MSRV check, musl builds, and `cargo deny check` (advisories from the RustSec database, licenses, banned crates and allowed sources, configured in `deny.toml`);
+- **Dependencies:** a short list (see [Repo layout](design.md#repo-layout)). Review every new crate with `cargo tree` (what does it pull in?) and `cargo tree -d` (duplicate versions). CI runs:
+  - `ci.yml`: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, `cargo doc`, an MSRV check, musl builds, the release build and packaging run twice to compare hashes, and `cargo deny check` (advisories from the RustSec database, licenses, banned crates and allowed sources, configured in `deny.toml`);
   - `codeql.yml`: CodeQL analysis;
-  - `scorecard.yml`: OpenSSF Scorecard.
+  - `scorecard.yml`: OpenSSF Scorecard;
+  - `fuzz.yml`: the cargo-fuzz targets, weekly;
+  - `apt-keys.yml`: the embedded vendor apt keys against the vendors' published ones, weekly.
   - Later, optionally: `cargo vet` or `cargo crev` to record who audited which dependency version.
 - **Dependabot:** `cargo` and `github-actions` ecosystems, grouped, weekly. Its `cooldown` option delays PRs for brand-new releases by a few days, which is when malicious versions usually get caught. Switch to Renovate only if we outgrow that.
 - **OpenSSF Scorecard** action plus the Best Practices badge.
-- **CODEOWNERS:** one owner (`@bhimrazy`) for everything, with explicit entries for `crates/vps-ready/src/engine/`, `crates/vps-ready/src/modules/ssh/`, `crates/vps-ready/src/modules/firewall/`, `.github/` and `scripts/`. Two reviewers on these paths once there are two maintainers.
-- **Why not cargo-dist (for now):** with only two musl targets and one tarball format, a generated workflow of several hundred lines isn't justified.
-  For a tool whose pitch is "trust the release", we want every release step short enough to audit by reading it.
-  cargo-dist stays a valid option to revisit if installers or targets multiply.
-- **License: MIT OR Apache-2.0** (the Rust-standard dual license). Apache-2.0 brings a patent grant, MIT keeps it usable by GPLv2 projects; both are friendly to hosting providers and panels that might bundle it. GPL-licensed competitors (hostveil, hardbox) are less embeddable. Use DCO sign-off, no CLA.
+- **CODEOWNERS:** a single global owner line (`* @bhimrazy`), since there is one maintainer.
+- **Why the pipeline is hand-written** rather than generated is in [Decisions](design.md#foundations); a generator stays an option if installers or targets multiply.
+- **License:** MIT OR Apache-2.0 with DCO sign-off and no CLA ([why](design.md#foundations)).
 - **SECURITY.md:** GitHub private vulnerability reporting, supported versions, how to verify releases, and which channels are official (GitHub Releases, crates.io `vps-ready`, its alias `vpsready` and the `sshd-config` library from v0.3.0; the package repos later).

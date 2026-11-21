@@ -1,6 +1,6 @@
 # M7 plan: web through a tunnel, depth, and v1.0
 
-> **Status: accepted (2026-11-20); wave 1 shipped in v0.7.0.** `net.tunnel`, `deploy.proxy` `behind_tunnel`, the tunnel in the `private` profile and the wizard, and the journal `format` field are built; the rest is not. Every recommendation in [Decisions](#decisions) was accepted as written.
+> **Status: accepted (2026-11-20); wave 1 shipped in v0.7.0.** `net.tunnel`, `deploy.proxy` `behind_tunnel`, the tunnel in the `private` profile and the wizard, and the journal `format` field are built; the rest is not. Every recommendation in [Accepted recommendations](#accepted-recommendations) was accepted as written.
 
 M7 lets a web app run with no public port through a Cloudflare Tunnel, adds drift detection, CI-friendly audit output and security-key SSH logins, and then makes the tool stable as v1.0.
 
@@ -37,7 +37,7 @@ Only one piece changes the SSH path: security keys. It gets the same lockout car
 The split follows the owner's suggestion, with three changes:
 - The JSON Schema moves into v0.8.0 with `config.toml`. Both describe the same format, and the schema should ship in a release before 1.0 freezes it.
 - The journal `format` field moves to v0.7.0. Every journal written from then on carries it, so the 1.x promise ("reads every journal since 0.7.0") has a field to check from the start.
-- auditd is not in v0.9.0 (decision 16). After 1.0, a new opt-in module is an additive change, so it does not need to land before the freeze.
+- auditd is not in v0.9.0 ([decision 16](#accepted-recommendations)). After 1.0, a new opt-in module is an additive change, so it does not need to land before the freeze.
 
 SARIF and JUnit depend on nothing else, so they can move into v0.7.0 if the tunnel slips.
 
@@ -249,7 +249,7 @@ net.tunnel  verify: vps-ready-cloudflared.service is not active
 
 `vps-ready schema` prints a JSON Schema (draft 2020-12) for the profile format, generated with `schemars` from the same `deny_unknown_fields` structs, so it cannot drift from the parser. Each release attaches it as `vps-ready-profile.schema.json`, and the site serves it at a stable URL. A profile can name it on its first line (`#:schema <url>`) for editors that read that comment.
 
-`schemars` is the one new dependency in M7, already listed as "later" in the architecture doc. Params parsed by hand into a newtype (`Domain`, `Upstream`, WireGuard keys) get a `pattern` or a description, not their full rules; the parser stays the authority. A test walks the registry and fails when a registered module has no entry in the schema, so a new module cannot be left out.
+`schemars` is the one new dependency in M7, not yet a dependency. Params parsed by hand into a newtype (`Domain`, `Upstream`, WireGuard keys) get a `pattern` or a description, not their full rules; the parser stays the authority. A test walks the registry and fails when a registered module has no entry in the schema, so a new module cannot be left out.
 
 ### `audit` output: SARIF and JUnit
 
@@ -304,7 +304,7 @@ A list that starts with `+` is appended to sshd's built-in default set (sshd_con
 
 Before the PR merges, a VM check on all five releases captures the full `sshd -T -C user=<u>,host=<h>,addr=<a>` output for the admin and for the deploy account, before and after the drop-in, and diffs them. The only differences allowed are `pubkeyacceptedalgorithms` (and `pubkeyauthoptions` with `pin`) for the admin; the deploy account's output must not change at all. **If the `+` form does not restore the default** on some release, the fallback there is an explicit list: the deploy account's `pubkeyacceptedalgorithms` row becomes the one allowed difference, and the plan refuses while a deploy key's type (a certificate type, or ECDSA P-384 or P-521, for example) is outside that list. The deploy account's keys are already `restrict`ed (and optionally forced to one command), which is why it alone is exempt.
 
-This narrows an M3 invariant: `ssh.server` "never writes ... crypto lists" ([the M3 plan](m3-plan.md)), enforced by the unit test `never_writes_ports_listeners_groups_methods_or_crypto`. With `security_keys = "required"` it writes `PubkeyAcceptedAlgorithms`, and only then; the test changes to allow exactly that keyword under that param.
+This narrows an M3 invariant: `ssh.server` "never writes ... crypto lists" (see [Decisions](design.md#lockout-safe-changes-v030)), enforced by the unit test `never_writes_ports_listeners_groups_methods_or_crypto`. With `security_keys = "required"` it writes `PubkeyAcceptedAlgorithms`, and only then; the test changes to allow exactly that keyword under that param.
 
 **Refused at plan time when `PubkeyAcceptedAlgorithms` would change:**
 1. The plan's admin has no `sk-` key in `authorized_keys` (on the host or in the plan).
@@ -324,7 +324,7 @@ This narrows an M3 invariant: `ssh.server` "never writes ... crypto lists" ([the
 
 **Audit:** `SSH-010` (low), "Admin logins need a security key", a new check kind `sshd_effective_for` (`sshd -T -C` per sudo user). Skipped when no sudo user has an `sk-` key, so no host gains a failure from it. Fix: `ssh.server`.
 
-**TOTP is not in M7** (decision 15). It needs a third-party PAM module, `KbdInteractiveAuthentication yes`, `AuthenticationMethods publickey,keyboard-interactive:pam`, a per-user secret on the host and a correct clock. A mistake in the PAM stack can refuse every login, including the console's. A security key is the stronger second factor and changes one sshd keyword.
+**TOTP is not in M7** ([decision 15](#accepted-recommendations)). It needs a third-party PAM module, `KbdInteractiveAuthentication yes`, `AuthenticationMethods publickey,keyboard-interactive:pam`, a per-user secret on the host and a correct clock. A mistake in the PAM stack can refuse every login, including the console's. A security key is the stronger second factor and changes one sshd keyword.
 
 ### v1.0: what stable means
 
@@ -379,13 +379,10 @@ No new resource kinds. `net.tunnel` is `File`s (the units, the origin), `apt_sou
 ### Changes to earlier docs
 
 - `README.md`: the platforms table (RHEL and Alpine "on demand", not "v0.7"); the roadmap line (M7 is the tunnel, depth and v1.0); `audit` formats; the modules table gains `net.tunnel`.
-- `architecture.md`: `drift` and `config.toml` as built, `state.json` dropped; `src/report` formats; `schemars` as a dependency; the registry order; OpenRC and firewalld no longer "M7".
-- `decisions.md`: D9 (distro order) becomes "on demand, Rocky and Alma first"; D19's "CrowdSec later" becomes "if asked for"; new decisions for remotely-managed tunnels only and for the 1.x stability promise.
-- `scope.md`: backups move to non-goals, with the pairing note below; the wedge's "backups" removed.
-- `security-baseline.md`: the `ops.backup` row marked out of scope; FIDO2 marked as built, TOTP as deferred; the order's step 7 gains the tunnel.
-- `m6-plan.md`: the tunnel section points here.
-- `m3-plan.md`: `ssh.server`'s "never writes crypto lists" invariant gains "except `PubkeyAcceptedAlgorithms` under `security_keys = "required"`", with the matching change to its unit test.
-- `testing.md`, `release.md`: the new cycles and the manual tunnel gate.
+- `design.md`, how it works: `drift` and `config.toml` as built, `state.json` dropped; the audit output formats; `schemars` as a dependency; the registry order; OpenRC and firewalld no longer "M7".
+- `design.md`, decisions: the distro order becomes "on demand, Rocky and Alma first"; "CrowdSec later" becomes "if asked for"; new decisions for remotely-managed tunnels only and for the 1.x stability promise; `ssh.server`'s "never writes crypto lists" gains "except `PubkeyAcceptedAlgorithms` under `security_keys = "required"`", with the matching change to its unit test.
+- `design.md`, scope: backups are a non-goal, with the pairing note below.
+- `design.md`, testing, and `release.md`: the new cycles and the manual tunnel gate.
 
 **Backups, out of scope.** vps-ready hardens and then gets out of the way; backups need storage, credentials and a restore story that belong to a backup tool. The docs gain a short "Pairing with a backup tool" page:
 - Back up the app's data, the profile file you apply, and `/etc/vps-ready/config.toml`.
@@ -520,7 +517,7 @@ Checked against upstream docs and sources while writing this plan; items marked 
 | SARIF 2.1.0 only; a result needs a location; `security-severity` bands; only `primaryLocationLineHash` is used; `automationDetails.id`; per-run limits | GitHub docs, SARIF support for code scanning |
 | Debian 12 regular security support ended June 2026, LTS to June 2028; Ubuntu 22.04 standard support ends 2027 | Debian security and LTS pages; Ubuntu release cycle page |
 
-## Decisions
+## Accepted recommendations
 
 1. **Releases: v0.7.0 the tunnel and the journal `format` field, v0.8.0 `drift`, `config.toml`, SARIF/JUnit, the JSON Schema and Ubuntu 26.04, v0.9.0 security keys, then v1.0.0.** Accepted: the owner's split, with the schema next to `config.toml`, the journal field early, and auditd out. The owner later moved Ubuntu 26.04 from v0.9.0 into v0.8.0; it still lands before security keys.
 2. **Cloudflare Tunnel, remotely-managed tunnels only, with the trust model stated.** Accepted: the host needs only a token for one tunnel, not the account-wide `cert.pem`; the account's control over routes is stated in the plan's note, the docs and `SSH-009`'s finding.
