@@ -1,4 +1,5 @@
-# Layer 3: the real static binary in KVM virtual machines (see docs/testing.md).
+# The real static binary in KVM virtual machines: kernel settings, reboots,
+# sshd and the dead-man timer, which containers cannot exercise.
 name: vm
 
 on:

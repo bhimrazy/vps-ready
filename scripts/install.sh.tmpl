@@ -92,7 +92,7 @@ verify_signature() {
 		say "signature verified with cosign"
 		return 0
 	fi
-	say "note: no usable gh (installed and logged in) or cosign, so the binary was checked only against the checksums embedded in this script; install one and rerun to verify the signature (see docs/release.md)"
+	say "note: no usable gh (installed and logged in) or cosign, so the binary was checked only against the checksums embedded in this script; install one and rerun to verify the signature"
 }
 
 # A group- or world-writable directory lets another user swap files in it.

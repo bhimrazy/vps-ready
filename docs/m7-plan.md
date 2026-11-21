@@ -249,7 +249,7 @@ net.tunnel  verify: vps-ready-cloudflared.service is not active
 
 `vps-ready schema` prints a JSON Schema (draft 2020-12) for the profile format, generated with `schemars` from the same `deny_unknown_fields` structs, so it cannot drift from the parser. Each release attaches it as `vps-ready-profile.schema.json`, and the site serves it at a stable URL. A profile can name it on its first line (`#:schema <url>`) for editors that read that comment.
 
-`schemars` is the one new dependency in M7, already listed as "later" in the architecture doc. Params parsed by hand into a newtype (`Domain`, `Upstream`, WireGuard keys) get a `pattern` or a description, not their full rules; the parser stays the authority. A test walks the registry and fails when a registered module has no entry in the schema, so a new module cannot be left out.
+`schemars` is the one new dependency in M7, not yet a dependency. Params parsed by hand into a newtype (`Domain`, `Upstream`, WireGuard keys) get a `pattern` or a description, not their full rules; the parser stays the authority. A test walks the registry and fails when a registered module has no entry in the schema, so a new module cannot be left out.
 
 ### `audit` output: SARIF and JUnit
 
@@ -304,7 +304,7 @@ A list that starts with `+` is appended to sshd's built-in default set (sshd_con
 
 Before the PR merges, a VM check on all five releases captures the full `sshd -T -C user=<u>,host=<h>,addr=<a>` output for the admin and for the deploy account, before and after the drop-in, and diffs them. The only differences allowed are `pubkeyacceptedalgorithms` (and `pubkeyauthoptions` with `pin`) for the admin; the deploy account's output must not change at all. **If the `+` form does not restore the default** on some release, the fallback there is an explicit list: the deploy account's `pubkeyacceptedalgorithms` row becomes the one allowed difference, and the plan refuses while a deploy key's type (a certificate type, or ECDSA P-384 or P-521, for example) is outside that list. The deploy account's keys are already `restrict`ed (and optionally forced to one command), which is why it alone is exempt.
 
-This narrows an M3 invariant: `ssh.server` "never writes ... crypto lists" ([the M3 plan](m3-plan.md)), enforced by the unit test `never_writes_ports_listeners_groups_methods_or_crypto`. With `security_keys = "required"` it writes `PubkeyAcceptedAlgorithms`, and only then; the test changes to allow exactly that keyword under that param.
+This narrows an M3 invariant: `ssh.server` "never writes ... crypto lists" (see [Decisions](design.md#lockout-safe-changes-v030)), enforced by the unit test `never_writes_ports_listeners_groups_methods_or_crypto`. With `security_keys = "required"` it writes `PubkeyAcceptedAlgorithms`, and only then; the test changes to allow exactly that keyword under that param.
 
 **Refused at plan time when `PubkeyAcceptedAlgorithms` would change:**
 1. The plan's admin has no `sk-` key in `authorized_keys` (on the host or in the plan).
@@ -379,13 +379,10 @@ No new resource kinds. `net.tunnel` is `File`s (the units, the origin), `apt_sou
 ### Changes to earlier docs
 
 - `README.md`: the platforms table (RHEL and Alpine "on demand", not "v0.7"); the roadmap line (M7 is the tunnel, depth and v1.0); `audit` formats; the modules table gains `net.tunnel`.
-- `architecture.md`: `drift` and `config.toml` as built, `state.json` dropped; `src/report` formats; `schemars` as a dependency; the registry order; OpenRC and firewalld no longer "M7".
-- `decisions.md`: D9 (distro order) becomes "on demand, Rocky and Alma first"; D19's "CrowdSec later" becomes "if asked for"; new decisions for remotely-managed tunnels only and for the 1.x stability promise.
-- `scope.md`: backups move to non-goals, with the pairing note below; the wedge's "backups" removed.
-- `security-baseline.md`: the `ops.backup` row marked out of scope; FIDO2 marked as built, TOTP as deferred; the order's step 7 gains the tunnel.
-- `m6-plan.md`: the tunnel section points here.
-- `m3-plan.md`: `ssh.server`'s "never writes crypto lists" invariant gains "except `PubkeyAcceptedAlgorithms` under `security_keys = "required"`", with the matching change to its unit test.
-- `testing.md`, `release.md`: the new cycles and the manual tunnel gate.
+- `design.md`, how it works: `drift` and `config.toml` as built, `state.json` dropped; the audit output formats; `schemars` as a dependency; the registry order; OpenRC and firewalld no longer "M7".
+- `design.md`, decisions: the distro order becomes "on demand, Rocky and Alma first"; "CrowdSec later" becomes "if asked for"; new decisions for remotely-managed tunnels only and for the 1.x stability promise; `ssh.server`'s "never writes crypto lists" gains "except `PubkeyAcceptedAlgorithms` under `security_keys = "required"`", with the matching change to its unit test.
+- `design.md`, scope: backups are a non-goal, with the pairing note below.
+- `design.md`, testing, and `release.md`: the new cycles and the manual tunnel gate.
 
 **Backups, out of scope.** vps-ready hardens and then gets out of the way; backups need storage, credentials and a restore story that belong to a backup tool. The docs gain a short "Pairing with a backup tool" page:
 - Back up the app's data, the profile file you apply, and `/etc/vps-ready/config.toml`.

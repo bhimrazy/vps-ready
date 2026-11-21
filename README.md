@@ -111,11 +111,11 @@ Hardening is grouped into modules:
 | `net.tailscale` | Tailscale from its own apt repository, `tailscaled` running, and a tailnet login from a root-only auth key file (never Tailscale SSH, never the tailnet's DNS) | none | no |
 | `net.wireguard` | A WireGuard interface, `wg0`, for admin access to this host only: a private key generated on the host that never leaves it, peers by public key, the client config printed for each device | `NET-008` | under `ssh_via = "wg0"` |
 | `net.tunnel` | A Cloudflare Tunnel connector for a remotely-managed tunnel: `cloudflared` from Cloudflare's apt repository, run as vps-ready's own sandboxed unit with the tunnel's token from a root-only file, so a website needs no inbound port | none | no |
-| `deploy.docker` | Docker Engine from Docker's own apt repository, with safer defaults: published ports bind to 127.0.0.1, `live-restore`, local log rotation | `FW-002` | no |
+| `deploy.docker` | Docker Engine from Docker's own apt repository, with safer defaults: published ports bind to 127.0.0.1, `live-restore`, local log rotation | none (`FW-002` reports ports still published publicly) | no |
 | `deploy.proxy` | Caddy from its official apt repository as a reverse proxy with automatic HTTPS for the sites you list; with `behind_tunnel = true`, plain HTTP on loopback only for a Cloudflare Tunnel, with no certificate and no public port | none | no |
 | `deploy.user` | A login for CI that can run one command, with your keys | none | no |
 
-Profiles pick the modules: **minimal** is `user.admin`, `ssh.server`, `firewall.inbound` (SSH only), `kernel.sysctl` and `updates.auto`; **web** adds ports 80 and 443 (TCP, and UDP for HTTP/3) and `ssh.bruteforce` and `deploy.docker`; **private** is the `web` hardening without Docker and with no open port, and `ssh_via = "vpn"`: you extend it with `net.tailscale` or `net.wireguard`, apply it once to set up the VPN, then again from a login through the VPN to close public SSH. For a website, the wizard can add `net.tunnel` and `deploy.proxy`'s `behind_tunnel` to it, so no port is open at all. A profile file can extend any of them and set your own admin name and keys. A plain `apply`, without `--profile` or `--module`, leaves the modules that can lock you out (and `ssh.bruteforce`, which installs packages) out, so it changes only kernel settings and automatic updates. `net.tailscale`, `net.wireguard`, `net.tunnel`, `deploy.proxy` and `deploy.user` are in no built-in profile: you add them in a profile file. `firewall.inbound`'s `ssh_via` accepts SSH only on one interface (`tailscale0`, `wg0` or one you set up), and the confirm must then come through it. Logging, a **paranoid** profile and backups come later.
+Profiles pick the modules: **minimal** is `user.admin`, `ssh.server`, `firewall.inbound` (SSH only), `kernel.sysctl` and `updates.auto`; **web** adds ports 80 and 443 (TCP, and UDP for HTTP/3) and `ssh.bruteforce` and `deploy.docker`; **private** is the `web` hardening without Docker and with no open port, and `ssh_via = "vpn"`: you extend it with `net.tailscale` or `net.wireguard`, apply it once to set up the VPN, then again from a login through the VPN to close public SSH. For a website, the wizard can add `net.tunnel` and `deploy.proxy`'s `behind_tunnel` to it, so no port is open at all. A profile file can extend any of them and set your own admin name and keys. A plain `apply`, without `--profile` or `--module`, leaves the modules that can lock you out (and `ssh.bruteforce`, which installs packages) out, so it changes only kernel settings and automatic updates. `net.tailscale`, `net.wireguard`, `net.tunnel`, `deploy.proxy` and `deploy.user` are in no built-in profile: you add them in a profile file. `firewall.inbound`'s `ssh_via` accepts SSH only on one interface (`tailscale0`, `wg0` or one you set up), and the confirm must then come through it. A **paranoid** profile may come after 1.0; backups are out of scope.
 
 ## How a run works
 
@@ -126,7 +126,7 @@ Profiles pick the modules: **minimal** is `user.admin`, `ssh.server`, `firewall.
   </picture>
 </p>
 
-If any step inside `apply` fails, the engine restores the snapshots in reverse order before it ever reaches the confirm step. For the modules that can lock you out, the dead-man timer is armed **before the first change**, so even a crash or a dropped connection mid-apply is rolled back. The full design is in [the architecture doc](docs/architecture.md).
+If any step inside `apply` fails, the engine restores the snapshots in reverse order before it ever reaches the confirm step. For the modules that can lock you out, the dead-man timer is armed **before the first change**, so even a crash or a dropped connection mid-apply is rolled back. The full design is in [the design doc](docs/design.md#dead-man-switch).
 
 ## Safety guarantees
 
@@ -154,12 +154,10 @@ Architectures: x86_64 and aarch64, as static musl binaries. Windows, BSD, Kubern
 
 | Doc | What is inside |
 |---|---|
-| [Vision and scope](docs/scope.md) | The problem, the gap, principles, non-goals, and the threat model of the tool itself |
-| [Security baseline](docs/security-baseline.md) | What a fresh VPS needs and why, per distro, with check and rollback commands. The spec for every module |
-| [Architecture](docs/architecture.md) | Why Rust, the engine and module design, core traits, the dead-man switch, state layout, config format |
-| [Supply chain and release](docs/release.md) | How users can trust a root tool: signing, provenance, reproducible builds, install script |
-| [Testing strategy](docs/testing.md) | Unit tests with fakes, systemd containers, real VMs, nightly cloud runs |
-| [Decisions](docs/decisions.md) | What is decided and why, and what is still open |
+| [User docs](https://vps-ready.bhimraj.com.np/docs/) | Install, quick start, guides, and the commands and security controls reference |
+| [Design](docs/design.md) | Scope and principles, how the engine and the dead-man switch work, the security model, the decisions and their reasons, and how it is tested |
+| [Supply chain and release](docs/release.md) | How users can trust a root tool: signing, provenance, reproducible builds, install script; the release checklist |
+| [M7 plan](docs/m7-plan.md) | The accepted plan from v0.7.0 to v1.0.0 |
 
 The roadmap lives in the [GitHub milestones](https://github.com/bhimrazy/vps-ready/milestones): M0 skeleton, M1 read-only `detect` and `audit` (v0.1.0), M2 engine and safe modules (v0.2.0), M3 SSH, firewall and dead-man switch (v0.3.0), M4 interactive wizard (v0.4.0), M5 deployment readiness (v0.5.0), M6 private access (v0.6.0), M7 web through a tunnel (v0.7.0) and more depth.
 
@@ -181,7 +179,7 @@ cargo run -p vps-ready -- detect
 | `make build-musl` | Static release builds for `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` |
 | `make deny` | Dependency checks: advisories, licenses, banned crates and allowed sources |
 
-The code is a Cargo workspace with three crates: `crates/vps-ready` (library plus thin binary), `crates/vpsready` (the same command under the alias name) and `crates/sshd-config` (a standalone reader for `sshd_config` and `sshd -T`, [published on crates.io](https://crates.io/crates/sshd-config)). All system access goes through two traits, `Runner` and `Fs`, so every module is tested against fakes before it ever touches a real machine. The layout and the reasoning are in [the architecture doc](docs/architecture.md#repo-layout).
+The code is a Cargo workspace with three crates: `crates/vps-ready` (library plus thin binary), `crates/vpsready` (the same command under the alias name) and `crates/sshd-config` (a standalone reader for `sshd_config` and `sshd -T`, [published on crates.io](https://crates.io/crates/sshd-config)). All system access goes through two traits, `Runner` and `Fs`, so every module is tested against fakes before it ever touches a real machine. The layout and the reasoning are in [the design doc](docs/design.md#repo-layout).
 
 ## Contributing and security
 
