@@ -28,7 +28,7 @@ Each step works on its own. If the server is already running, skip the first.
 
 <Steps>
 
-1. **Download and verify `checksums.txt`** from the release that matches your `vps-ready version`, as in [Verify a release by hand](/docs/install/#verify-a-release-by-hand). The hashes in the user-data come from this file, so verify it first.
+1. **Download and verify `checksums.txt`** from the release that matches your `vps-ready version`, as in [Verify a release](/docs/install/#verify-a-release). The hashes in the user-data come from this file, so verify it first.
 
 2. **Write a profile that lists your SSH keys.** At first boot there is no SSH session to copy keys from.
 
@@ -348,7 +348,7 @@ While SSH depends on the VPN, any change to it is as risky as closing public SSH
 Three controls show the result. `FW-003` and `SSH-009` are low severity with no automatic fix; `NET-008` is medium and `net.wireguard` fixes it.
 
 - **`FW-003` Only expected ports are open to the internet.** It lists every port the server's firewall lets in from outside, with its process. It fails only on ports other than SSH, 80 and 443, the DHCP clients and WireGuard. Ports open only on a VPN or a Docker bridge do not count. It cannot see a firewall at your provider.
-- **`SSH-009` SSH reachable only through a private network.** It passes when the firewall drops by default and accepts SSH only on a VPN interface. It is skipped on servers without a VPN interface. It fails when SSH is limited to an interface that is missing or down, and whenever a VPN interface exists but SSH is still accepted elsewhere: after step 1 (VPN joined, SSH public), that failure is expected and clears after the close step. When SSH is limited to Tailscale, it carries a warning when the node's key expires (with the date), when Tailscale is not running, or when its state is unknown. `detect` shows the same warning.
+- **`SSH-009` SSH reachable only through a private network.** It passes when the firewall drops by default and accepts SSH only on a VPN interface; a Docker bridge, which reaches only containers, does not count. It is skipped on servers without a VPN interface. It fails when SSH is limited to an interface that is missing or down, and whenever a VPN interface exists but SSH is still accepted elsewhere: after step 1 (VPN joined, SSH public), that failure is expected and clears after the close step. When SSH is limited to Tailscale, it carries a warning when the node's key expires (with the date), when Tailscale is not running, or when its state is unknown. `detect` shows the same warning.
 
 - **`NET-008` WireGuard private keys readable only by root.** It fails when a file in `/etc/wireguard` is readable by anyone but root. It is skipped when that directory does not exist.
 

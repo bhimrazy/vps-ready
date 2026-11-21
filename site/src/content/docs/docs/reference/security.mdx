@@ -1,0 +1,42 @@
+---
+title: Security policy
+description: How to report a vulnerability in vps-ready privately, what counts as a security bug, which versions get fixes, and how to verify a release.
+sidebar:
+  order: 5
+---
+
+import { LINKS, VERSION } from '../../../../lib/site';
+
+export const minor = VERSION.split('.').slice(0, 2).join('.');
+
+vps-ready runs as root and changes the SSH server and firewall configuration, so its bugs get more care than usual. This page follows the repository's [`SECURITY.md`](https://github.com/bhimrazy/vps-ready/blob/main/SECURITY.md), which is the authoritative copy.
+
+## Report a vulnerability
+
+Report it privately through a <a href={LINKS.security}>GitHub security advisory</a>. Do not open a public issue for a security problem.
+
+You should get an acknowledgement within 72 hours, and a fix or a mitigation plan within 14 days. The advisory credits you unless you prefer otherwise.
+
+## What counts as a security bug
+
+- **Lockout bugs.** Any way vps-ready can leave a server unreachable is a security bug: an SSH or firewall change applied without a working way back, a dead-man switch that fails to revert, or a `confirm` accepted from the old session.
+- Privilege or integrity problems: unsafe file writes, symlink or TOCTOU races, command injection, or weakened settings reported as hardened.
+- Rollback or snapshot failures that lose the previous configuration.
+- The release pipeline: checksums, signatures, attestations and `install.sh`.
+
+Weaknesses in the distributions themselves are out of scope, and so are findings that need an attacker who is already root.
+
+## Supported versions
+
+The latest minor version gets security fixes, on a best-effort basis, in its next patch release. Today that is <strong>{minor}.x</strong>. Older versions get no fixes, so upgrade to the latest release.
+
+## Verify a release
+
+Every release is signed and attested by its release workflow. [Verify a release](/docs/install/#verify-a-release) shows how to check `checksums.txt`, the tarballs, the `.deb` files, `install.sh` and the SBOM before you install.
+
+## Official channels
+
+- GitHub Releases: <a href={LINKS.releases}>{LINKS.releases}</a>
+- crates.io: the `vps-ready` crate, `vpsready` (an alias) and `sshd-config` (the library that reads the SSH server configuration), all published from this repository by the same release workflow.
+
+Anything else, such as other download sites, container images or packages under other names, is unofficial.

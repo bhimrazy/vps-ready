@@ -23,6 +23,13 @@ on:
 
 permissions: {}
 
+env:
+  # The exact compiler for every release job, so a rebuild can use the same
+  # one. At least rust-version in Cargo.toml. RUSTUP_TOOLCHAIN overrides the
+  # floating channel in rust-toolchain.toml; ci.yml rebuilds with the same
+  # version.
+  RUSTUP_TOOLCHAIN: 1.100.0
+
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -38,15 +45,13 @@ jobs:
     env:
       TARGET: ${{ matrix.target }}
       DEB_ARCH: ${{ matrix.deb_arch }}
-      # Pinned nFPM release; its checksums.txt is checked below.
-      NFPM_VERSION: 2.48.0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master 2026-10-16
         with:
-          toolchain: stable
+          toolchain: ${{ env.RUSTUP_TOOLCHAIN }}
           targets: ${{ matrix.target }}
 
       - name: Set build metadata
@@ -64,46 +69,16 @@ jobs:
           crate=$(cargo pkgid -p vps-ready | sed 's/.*[#@]//')
           [ "$crate" = "$VERSION" ] || { echo "tag v$VERSION != crate $crate"; exit 1; }
 
+      - run: scripts/install-cargo-auditable.sh
+
       # Linked with rust-lld and the musl CRT bundled with the Rust target
-      # (see .cargo/config.toml).
-      - run: cargo build --release --locked --target "$TARGET"
+      # (see .cargo/config.toml). Also checks the binary is static and
+      # carries its dependency list.
+      - run: scripts/release-build.sh "$TARGET"
 
-      - name: Check the binary is static
-        run: |
-          file "target/$TARGET/release/vps-ready" | tee /dev/stderr \
-            | grep -Eq 'statically linked|static-pie linked'
-
-      - name: Package
-        run: |
-          name="vps-ready-$VERSION-$TARGET"
-          mkdir -p "dist/$name"
-          cp "target/$TARGET/release/vps-ready" LICENSE-APACHE LICENSE-MIT NOTICE README.md "dist/$name/"
-          tar --sort=name --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner \
-            -C dist -cf - "$name" | gzip -n > "dist/$name.tar.gz"
-
-      # The runner is x86_64 whatever the target, so the Linux x86_64 nFPM is
-      # the one to run. The tarball must match its line in the release's
-      # checksums.txt, or the job fails.
-      - name: Install nFPM
-        run: |
-          file="nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
-          base="https://github.com/goreleaser/nfpm/releases/download/v$NFPM_VERSION"
-          mkdir -p "$RUNNER_TEMP/nfpm"
-          cd "$RUNNER_TEMP/nfpm"
-          curl --proto '=https' --tlsv1.2 -fsSLO "$base/checksums.txt"
-          curl --proto '=https' --tlsv1.2 -fsSLO "$base/$file"
-          grep -E "^[0-9a-f]{64}  $file\$" checksums.txt | sha256sum -c -
-          tar -xzf "$file" nfpm
-          echo "$PWD" >> "$GITHUB_PATH"
-
-      - name: Build the .deb
-        run: |
-          deb="vps-ready_${VERSION}_${DEB_ARCH}.deb"
-          ARCH="$DEB_ARCH" BINARY="target/$TARGET/release/vps-ready" \
-            nfpm package -f packaging/nfpm.yaml -p deb -t "dist/$deb"
-          dpkg-deb --info "dist/$deb"
-          dpkg-deb --contents "dist/$deb"
-          [ "$(dpkg-deb --field "dist/$deb" Architecture)" = "$DEB_ARCH" ]
+      # The tarball and the .deb, with the man pages, completions and
+      # changelog; checks the .deb's version and contents.
+      - run: scripts/package.sh "$TARGET" "$DEB_ARCH"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -125,7 +100,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master 2026-10-16
         with:
-          toolchain: stable
+          toolchain: ${{ env.RUSTUP_TOOLCHAIN }}
       - run: cargo install --locked --version 0.5.9 cargo-cyclonedx
       # One SBOM for the binary's crate, covering the dependencies of every
       # target, built from Cargo.lock.
@@ -216,7 +191,7 @@ jobs:
 
   # crates.io trusted publishing: the auth action trades GitHub's OIDC identity
   # for a short-lived token, so no secret is stored. It cannot create a crate;
-  # each crate's first version was published by hand (see docs/release.md).
+  # each crate's first version was published by hand with a short-lived token.
   crates:
     needs: release
     runs-on: ubuntu-24.04
@@ -230,7 +205,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master 2026-10-16
         with:
-          toolchain: stable
+          toolchain: ${{ env.RUSTUP_TOOLCHAIN }}
       - uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
         id: auth
       # One crate at a time, in dependency order. A version already on

@@ -246,7 +246,11 @@ pub(super) fn wait(
                      `sudo vps-ready rollback --last`."
                 )?;
                 if let Err(e) = audit_fixed(host, plan, out) {
-                    writeln!(err, "vps-ready: could not audit after apply: {e:#}")?;
+                    writeln!(
+                        err,
+                        "vps-ready: could not audit after apply: {}",
+                        crate::cli::printable_lines(&format!("{e:#}"))
+                    )?;
                 }
                 return Ok(0);
             }

@@ -222,6 +222,32 @@ fn ruleset_snapshots() {
     );
 }
 
+/// When the bridges cannot be read, `br-*` may match one Docker did not
+/// name, so only `docker0` is accepted, and a note says why.
+#[test]
+fn unknown_bridges_accept_only_docker0() {
+    let mut facts = facts();
+    facts.docker = true;
+    facts.bridges_known = false;
+    let web = params("allow = [\"22/tcp\", \"80/tcp\", \"443/tcp\", \"443/udp\"]");
+    let ruleset = ruleset_of(&steps(&facts, &web).unwrap());
+    assert!(ruleset.contains("iifname \"docker0\" accept"), "{ruleset}");
+    assert!(!ruleset.contains("iifname \"br-*\""), "{ruleset}");
+    let notes = FirewallInbound.notes(&facts);
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.contains("input from docker0 is accepted")),
+        "{notes:?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.starts_with("user-defined Docker networks")),
+        "{notes:?}"
+    );
+}
+
 /// On a host without Docker, `deploy.docker` before it in the same plan
 /// installs Docker: the bridges are accepted as if Docker were present.
 #[test]

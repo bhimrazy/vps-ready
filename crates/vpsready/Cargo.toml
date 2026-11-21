@@ -17,5 +17,10 @@ path = "src/main.rs"
 [dependencies]
 vps-ready.workspace = true
 
+# cargo-binstall: no release asset carries this binary name, so binstall
+# builds it from source; never take third-party prebuilt binaries.
+[package.metadata.binstall]
+disabled-strategies = ["quick-install"]
+
 [lints]
 workspace = true

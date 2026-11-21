@@ -137,11 +137,12 @@ pub enum Check {
     /// wireguard-tools (`wg`).
     ExposedListeners,
     /// SSH is accepted only through a VPN: the input chains drop every SSH
-    /// port unless it arrives on `lo`, `tailscale0`, a WireGuard interface
-    /// or the `ssh_via` interface of vps-ready's table (`nb0`). Skipped
-    /// when the host has none of the last three. The
-    /// finding's note warns when SSH depends on `tailscale0` and the node's
-    /// key expires.
+    /// port unless it arrives on `lo`, `tailscale0`, a WireGuard interface,
+    /// one of Docker's bridges or the `ssh_via` interface of vps-ready's
+    /// table (`nb0`). Skipped when the host has no `tailscale0`, no
+    /// WireGuard interface and no such `ssh_via` interface. The finding's
+    /// note warns when SSH depends on `tailscale0` and the node's key
+    /// expires.
     SshPrivateOnly,
     /// The kernel has AppArmor enabled. Debian and Ubuntu only so far;
     /// skipped elsewhere and inside a container.
@@ -477,7 +478,9 @@ pub(crate) fn evaluate(check: &Check, facts: &Facts) -> Outcome {
         }
         Check::WireguardKeyFiles => wireguard_key_files(facts),
         Check::PublishedPorts => match &facts.firewall {
-            Some(firewall) => match published_ports(firewall, facts.ipv6, facts.docker) {
+            Some(firewall) => match published_ports(firewall, facts.ipv6, facts.docker, |i, e| {
+                on_private(facts, i, e, |n| internal(facts, n))
+            }) {
                 // Docker with iptables-legacy publishes ports in rules that
                 // nft does not show.
                 Outcome::Pass
@@ -678,8 +681,14 @@ fn docker_absent() -> Outcome {
 const LOOPBACK_HINT: &str = "with deploy.docker, a port published without an address binds to \
      127.0.0.1; one published with an address, or on a network created before, keeps it";
 
-/// Fails on ports Docker publishes that an input chain would otherwise block.
-fn published_ports(firewall: &Firewall, ipv6: bool, docker: bool) -> Outcome {
+/// Fails on ports Docker publishes that an input chain would otherwise
+/// block. Accepts only on `private` interfaces are not the internet's.
+fn published_ports(
+    firewall: &Firewall,
+    ipv6: bool,
+    docker: bool,
+    private: impl Fn(&str, &[String]) -> bool + Copy,
+) -> Outcome {
     if firewall.published.is_empty() && !docker {
         return docker_absent();
     }
@@ -693,7 +702,7 @@ fn published_ports(firewall: &Firewall, ipv6: bool, docker: bool) -> Outcome {
             .input_chains
             .iter()
             .filter(|c| c.covers(p.family == "ip6"))
-            .map(|c| c.blocks(&p.proto, p.port))
+            .map(|c| c.blocks_beyond(&p.proto, p.port, private))
             .collect();
         let port = (p.proto.as_str(), p.port, p.address.as_deref());
         if verdicts.contains(&Some(true)) {
@@ -816,12 +825,15 @@ enum Reach {
     Open(BTreeSet<String>),
 }
 
+/// `private` is as for [`InterfacePorts::only_on`]; `interfaces` name
+/// where a rule for `*` is open.
 fn admitted(
     firewall: &Firewall,
+    interfaces: &[Interface],
     proto: Proto,
     port: u16,
     v6: bool,
-    private: impl Fn(&str) -> bool + Copy,
+    private: impl Fn(&str, &[String]) -> bool + Copy,
 ) -> Reach {
     let proto = proto.to_string();
     let chains: Vec<&InputChain> = firewall
@@ -854,18 +866,31 @@ fn admitted(
         let public: Vec<&InterfacePorts> = c
             .interface_ports
             .iter()
-            .filter(|p| p.ports.contains(&proto, port))
-            .filter(|p| p.interfaces.is_empty() || !p.interfaces.iter().all(|i| private(i)))
+            .filter(|p| p.ports.contains(&proto, port) && !p.only_on(private))
             .collect();
-        if public.iter().any(|p| p.interfaces.is_empty()) {
+        let any = |p: &&InterfacePorts| {
+            p.interfaces.is_empty() || (p.interfaces == ["*"] && interfaces.is_empty())
+        };
+        if public.iter().any(any) {
             return BTreeSet::new();
         }
-        public
-            .iter()
-            .flat_map(|p| &p.interfaces)
-            .filter(|i| !private(i))
-            .cloned()
-            .collect()
+        let mut names = BTreeSet::new();
+        for p in public {
+            for name in &p.interfaces {
+                if name == "*" {
+                    names.extend(
+                        interfaces
+                            .iter()
+                            .map(|i| &i.name)
+                            .filter(|n| !p.except.contains(n) && !private(n, &[]))
+                            .cloned(),
+                    );
+                } else if !private(name, &p.except) {
+                    names.insert(name.clone());
+                }
+            }
+        }
+        names
     });
     Reach::Open(names)
 }
@@ -878,6 +903,65 @@ struct Exposed {
     interfaces: BTreeSet<String>,
     /// Open on any interface through one of its sockets.
     anywhere: bool,
+}
+
+/// Whether the interface `name` is known not to face the internet, for
+/// FW-002 and FW-003: `lo`, a VPN's, the counted `ssh_via` interface, or
+/// one of Docker's bridges, which carry its containers' traffic. The names
+/// stand in when `ip` is missing.
+fn internal(facts: &Facts, name: &str) -> bool {
+    matches!(name, "lo" | "tailscale0")
+        || crate::modules::firewall_inbound::private_via(facts).as_deref() == Some(name)
+        || facts
+            .interfaces
+            .iter()
+            .any(|i| i.name == name && i.is_vpn())
+        || docker_bridge(facts, name, &[])
+}
+
+/// Whether every interface that a rule for `name` and not `except` may see
+/// packets from is `private`: for `*`, every known interface but those;
+/// for `br-*`, Docker's bridges (see [`docker_bridge`]).
+fn on_private(
+    facts: &Facts,
+    name: &str,
+    except: &[String],
+    private: impl Fn(&str) -> bool,
+) -> bool {
+    if name == "*" {
+        return !facts.interfaces.is_empty()
+            && facts
+                .interfaces
+                .iter()
+                .filter(|i| !except.contains(&i.name))
+                .all(|i| private(&i.name));
+    }
+    private(name) || docker_bridge(facts, name, except)
+}
+
+/// Whether the input interface `name`, as a rule writes it, is one of
+/// Docker's bridges, which reach only containers: `docker0` while Docker is
+/// installed, and `br-*` while also every `br-*` interface but `except` is
+/// Docker's. Not when the bridges are unknown.
+fn docker_bridge(facts: &Facts, name: &str, except: &[String]) -> bool {
+    if name == "docker0" && facts.docker {
+        return true;
+    }
+    if !facts.bridges_known {
+        return false;
+    }
+    let bridges = &facts.bridges;
+    match name.strip_suffix('*') {
+        Some(prefix) => {
+            prefix == "br-"
+                && facts.docker
+                && bridges
+                    .iter()
+                    .filter(|b| b.name.starts_with(prefix) && !except.contains(&b.name))
+                    .all(|b| b.docker)
+        }
+        None => bridges.iter().any(|b| b.docker && b.name == name),
+    }
 }
 
 /// FW-003's outcome, and the ports open to the internet.
@@ -900,29 +984,19 @@ fn exposed_listeners(facts: &Facts) -> (Outcome, Option<String>) {
         };
         return (Outcome::Unknown { reason }, None);
     }
-    // Interfaces known not to face the internet; the names stand in when
-    // `ip` is missing. Docker's bridges carry its containers' traffic.
-    let via = crate::modules::firewall_inbound::private_via(facts);
-    let private = |name: &str| {
-        matches!(name, "lo" | "tailscale0")
-            || via.as_deref() == Some(name)
-            || facts
-                .interfaces
-                .iter()
-                .any(|i| i.name == name && i.is_vpn())
-            || facts.bridges.iter().any(|b| b.docker && b.name == name)
-    };
+    let exact = |name: &str| internal(facts, name);
+    let private = |name: &str, except: &[String]| on_private(facts, name, except, exact);
     let ssh = crate::modules::firewall_inbound::ssh_ports(facts);
     let (mut open, mut maybe) = (BTreeMap::new(), BTreeMap::new());
     for l in &facts.listeners {
         if l.processes.iter().any(|p| p == "docker-proxy") {
             continue;
         }
-        let (v4, v6) = public_families(&l.addr, &facts.interfaces, private);
+        let (v4, v6) = public_families(&l.addr, &facts.interfaces, exact);
         let reaches: Vec<Reach> = [(v4, false), (v6 && facts.ipv6, true)]
             .into_iter()
             .filter(|&(public, _)| public)
-            .map(|(_, v6)| admitted(firewall, l.proto, l.port, v6, private))
+            .map(|(_, v6)| admitted(firewall, &facts.interfaces, l.proto, l.port, v6, private))
             .collect();
         let opened: Vec<&BTreeSet<String>> = reaches
             .iter()
@@ -1058,18 +1132,20 @@ fn ssh_private_only(facts: &Facts) -> Outcome {
         let reason = "the firewall ruleset could not be read".to_owned();
         return Outcome::Unknown { reason };
     };
-    let vpn = |name: &str| {
+    let exact = |name: &str| {
         matches!(name, "lo" | "tailscale0")
             || via.as_deref() == Some(name)
             || facts
                 .interfaces
                 .iter()
                 .any(|i| i.name == name && i.is_wireguard())
+            || docker_bridge(facts, name, &[])
     };
+    let vpn = |name: &str, except: &[String]| on_private(facts, name, except, exact);
     let (mut open, mut maybe) = (Vec::new(), Vec::new());
     for port in crate::modules::firewall_inbound::ssh_ports(facts) {
         for v6 in [false, true].into_iter().filter(|&v6| !v6 || facts.ipv6) {
-            match admitted(firewall, Proto::Tcp, port, v6, vpn) {
+            match admitted(firewall, &facts.interfaces, Proto::Tcp, port, v6, vpn) {
                 Reach::Blocked => {}
                 Reach::Maybe => maybe.push(format!("tcp/{port}")),
                 Reach::Open(names) if names.is_empty() => {
@@ -1102,7 +1178,7 @@ fn ssh_private_only(facts: &Facts) -> Outcome {
 }
 
 /// The interfaces that the loaded rules accept SSH ports on, by name; a
-/// wildcard and `lo` left out.
+/// wildcard, `lo` and Docker's bridges left out.
 fn ssh_interfaces(facts: &Facts) -> BTreeSet<String> {
     let ssh = crate::modules::firewall_inbound::ssh_ports(facts);
     facts
@@ -1110,9 +1186,12 @@ fn ssh_interfaces(facts: &Facts) -> BTreeSet<String> {
         .iter()
         .flat_map(|f| &f.input_chains)
         .flat_map(|c| &c.interface_ports)
-        .filter(|p| ssh.iter().any(|&port| p.ports.contains("tcp", port)))
+        // A whole-interface accept is not a rule for SSH.
+        .filter(|p| {
+            !p.ports.is_every_port() && ssh.iter().any(|&port| p.ports.contains("tcp", port))
+        })
         .flat_map(|p| &p.interfaces)
-        .filter(|n| *n != "lo" && !n.contains('*'))
+        .filter(|n| *n != "lo" && !n.contains('*') && !docker_bridge(facts, n, &[]))
         .cloned()
         .collect()
 }
@@ -1195,11 +1274,13 @@ pub(crate) fn tailscale_expiry(facts: &Facts) -> Option<String> {
 
 /// Which incoming traffic no chain drops by default, e.g. `IPv6`.
 fn inbound_default_deny(firewall: &Firewall, ipv6: bool) -> Outcome {
+    // A rule that accepts every port to all (`ct state new accept`) leaves
+    // nothing for the default to drop.
     let drops = |v6: bool| {
         firewall
             .input_chains
             .iter()
-            .any(|c| c.covers(v6) && c.drops_unmatched)
+            .any(|c| c.covers(v6) && c.drops_unmatched && !c.opens_every_port())
     };
     // A family whose iptables-legacy filter table is loaded may be filtered
     // by rules that are not read, so it is unknown rather than a failure.
@@ -1213,10 +1294,19 @@ fn inbound_default_deny(firewall: &Firewall, ipv6: bool) -> Outcome {
         }
     }
     let no_chains = firewall.input_chains.is_empty();
+    let every_port = firewall
+        .input_chains
+        .iter()
+        .any(InputChain::opens_every_port);
     if !accepted.is_empty() {
         Outcome::Fail {
             found: if no_chains {
                 "no firewall rules filter incoming traffic".to_owned()
+            } else if every_port {
+                format!(
+                    "a rule accepts incoming {} traffic to every port",
+                    accepted.join(" and ")
+                )
             } else {
                 format!(
                     "incoming {} traffic that no rule allows is accepted",
@@ -2464,6 +2554,82 @@ mod tests {
         ));
     }
 
+    /// A chain that drops all but `open`, and accepts every port on `on`.
+    fn whole_interface(open: &[(&str, u16)], on: &[&str]) -> crate::facts::InputChain {
+        let mut chain = deny_but(open, &[]);
+        chain.interface_ports = ["tcp", "udp", "sctp"]
+            .iter()
+            .map(|proto| crate::facts::InterfacePorts {
+                interfaces: on.iter().map(|i| (*i).to_owned()).collect(),
+                except: Vec::new(),
+                ports: crate::facts::Ports {
+                    proto: (*proto).to_owned(),
+                    first: 0,
+                    last: u16::MAX,
+                },
+            })
+            .collect();
+        chain
+    }
+
+    /// An accept of every port on a VPN or loopback is not the internet's,
+    /// so a port Docker publishes still bypasses the firewall.
+    #[test]
+    fn a_private_interface_accept_keeps_a_published_port_bypassing() {
+        let mut facts = host("debian-13", &[]);
+        facts.docker = true;
+        for on in [&["tailscale0"][..], &["lo"], &["docker0"]] {
+            facts.firewall = Some(Firewall {
+                input_chains: vec![whole_interface(&[("tcp", 22)], on)],
+                published: vec![PublishedPort {
+                    family: "ip".to_owned(),
+                    proto: "tcp".to_owned(),
+                    port: 5432,
+                    address: None,
+                    filtered: false,
+                }],
+                ..Firewall::default()
+            });
+            assert!(
+                matches!(
+                    evaluate(&Check::PublishedPorts, &facts),
+                    Outcome::Fail { found } if found.contains("tcp/5432")
+                ),
+                "{on:?}"
+            );
+        }
+        // On a public interface it may let the port in anyway.
+        facts.firewall.as_mut().unwrap().input_chains = vec![whole_interface(&[], &["eth0"])];
+        assert!(matches!(
+            evaluate(&Check::PublishedPorts, &facts),
+            Outcome::Unknown { .. }
+        ));
+    }
+
+    /// The Tailscale warning is for SSH limited to Tailscale, not for a
+    /// rule that accepts everything on `tailscale0` beside public SSH.
+    #[test]
+    fn a_whole_interface_accept_does_not_tie_ssh_to_tailscale() {
+        let mut facts = host("debian-13", &[]);
+        facts.ssh.listening = vec![22];
+        facts.tailscale = Some(crate::facts::Tailscale {
+            backend_state: "Running".to_owned(),
+            ips: Vec::new(),
+            key_expiry: Some("2027-01-01T00:00:00Z".to_owned()),
+            have_node_key: true,
+        });
+        facts.firewall = Some(Firewall {
+            input_chains: vec![whole_interface(&[("tcp", 22)], &["tailscale0"])],
+            ..Firewall::default()
+        });
+        assert_eq!(tailscale_expiry(&facts), None);
+        facts.firewall = Some(Firewall {
+            input_chains: vec![deny_but(&[], &[("tcp", 22, &["tailscale0"])])],
+            ..Firewall::default()
+        });
+        assert!(tailscale_expiry(&facts).is_some_and(|w| w.contains("expires")));
+    }
+
     #[test]
     fn evaluates_published_ports() {
         // An input chain that drops all but tcp/22, as `ufw allow 22/tcp`.
@@ -2591,6 +2757,7 @@ mod tests {
                 .iter()
                 .map(|&(proto, port, interfaces)| crate::facts::InterfacePorts {
                     interfaces: interfaces.iter().map(|i| (*i).to_owned()).collect(),
+                    except: Vec::new(),
                     ports: ports(proto, port),
                 })
                 .collect(),
@@ -2743,6 +2910,71 @@ mod tests {
             }],
             up: true,
         }
+    }
+
+    /// `iifname != "x"` alone opens its ports on every known interface but
+    /// `x`: private only when all of those are.
+    #[test]
+    fn an_exclusion_only_accept_is_open_on_every_other_interface() {
+        let mut facts = host("debian-13", &[]);
+        facts.ipv6 = false;
+        facts.ssh.listening = vec![22];
+        facts.listeners = vec![
+            listening(Proto::Tcp, "0.0.0.0", 22, "sshd"),
+            listening(Proto::Tcp, "0.0.0.0", 5432, "postgres"),
+        ];
+        let ruleset = |except: &str| {
+            let json = format!(
+                r#"{{"nftables": [
+                    {{"table": {{"family": "inet", "name": "t"}}}},
+                    {{"chain": {{"family": "inet", "table": "t", "name": "in", "type": "filter", "hook": "input", "policy": "drop"}}}},
+                    {{"rule": {{"family": "inet", "table": "t", "chain": "in", "expr": [
+                        {{"match": {{"op": "!=", "left": {{"meta": {{"key": "iifname"}}}}, "right": "{except}"}}}},
+                        {{"match": {{"op": "==", "left": {{"payload": {{"protocol": "tcp", "field": "dport"}}}}, "right": {{"set": [22, 5432]}}}}}},
+                        {{"accept": null}}
+                    ]}}}}
+                ]}}"#
+            );
+            crate::facts::firewall::parse_json(json.as_bytes())
+        };
+        let ssh_009 = |facts: &Facts| evaluate(&Check::SshPrivateOnly, facts);
+        let fail_on = |on: &str| Outcome::Fail {
+            found: format!("SSH is accepted beyond a VPN: tcp/22 on {on}"),
+        };
+        let fw_003_on = |facts: &Facts, on: &str| {
+            matches!(
+                exposed(facts).outcome,
+                Outcome::Fail { found } if found.ends_with(&format!("tcp/5432 (postgres) on {on}"))
+            )
+        };
+
+        facts.interfaces = vec![
+            interface("lo", None, "127.0.0.1"),
+            interface("eth0", None, "203.0.113.5"),
+            interface("wg0", Some("wireguard"), "10.8.0.1"),
+        ];
+        facts.firewall = ruleset("eth0");
+        assert_eq!(ssh_009(&facts), Outcome::Pass);
+        assert_eq!(exposed(&facts).outcome, Outcome::Pass);
+
+        facts
+            .interfaces
+            .push(interface("eth1", None, "198.51.100.9"));
+        assert_eq!(ssh_009(&facts), fail_on("eth1"));
+        assert!(fw_003_on(&facts, "eth1"));
+
+        // A wildcard exclusion is not resolved to interfaces.
+        facts.firewall = ruleset("eth*");
+        assert_eq!(ssh_009(&facts), fail_on("eth0 and eth1"));
+        assert!(fw_003_on(&facts, "eth0 and eth1"));
+
+        // With no interfaces known, it is open from anywhere.
+        facts.interfaces.clear();
+        facts.firewall = ruleset("eth0");
+        assert!(matches!(
+            exposed(&facts).outcome,
+            Outcome::Fail { found } if found.ends_with("tcp/5432 (postgres)")
+        ));
     }
 
     /// The plan's cases: a WireGuard port passes, and a port reachable only

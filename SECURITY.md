@@ -45,23 +45,41 @@ The latest minor version receives security fixes.
 
 ## Verifying a release
 
-Every release ships `checksums.txt`, a Sigstore bundle for it, and a GitHub
-build-provenance attestation for each tarball and for `install.sh`.
+Every release ships `checksums.txt`, which lists the tarballs, the `.deb`
+files, `install.sh` and the SBOM (`vps-ready-<version>.cdx.json`). The
+release workflow signs it with Sigstore and attests the build provenance of
+each of those files. The `.deb` files are not signed on their own:
+`checksums.txt` and the attestations cover them.
+
+Check the signature first, then each file against `checksums.txt`. Set `V` to
+the version you downloaded, for example `V=0.7.0`:
 
 ```sh
-# 1. Checksums
-sha256sum --check --ignore-missing checksums.txt
-
-# 2. Signature on the checksums (keyless, signed by the release workflow)
+# 1. Signature on the checksums: signed by the release workflow for this tag
 cosign verify-blob \
   --bundle checksums.txt.sigstore.json \
-  --certificate-identity-regexp '^https://github.com/bhimrazy/vps-ready/\.github/workflows/release\.yml@refs/tags/v' \
+  --certificate-identity "https://github.com/bhimrazy/vps-ready/.github/workflows/release.yml@refs/tags/v$V" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   checksums.txt
 
-# 3. Build provenance for a tarball
-gh attestation verify vps-ready-<version>-<target>.tar.gz --repo bhimrazy/vps-ready
+# 2. Each downloaded file against the signed checksums
+sha256sum --check --ignore-missing checksums.txt
+
+# 3. Build provenance of a tarball, a .deb, install.sh or the SBOM
+gh attestation verify vps-ready_${V}_amd64.deb \
+  --repo bhimrazy/vps-ready \
+  --signer-workflow bhimrazy/vps-ready/.github/workflows/release.yml \
+  --source-ref "refs/tags/v$V"
+
+# 4. The SBOM attestation on a tarball or a .deb
+gh attestation verify vps-ready_${V}_amd64.deb \
+  --repo bhimrazy/vps-ready \
+  --signer-workflow bhimrazy/vps-ready/.github/workflows/release.yml \
+  --source-ref "refs/tags/v$V" \
+  --predicate-type https://cyclonedx.org/bom
 ```
+
+Without `cosign`, step 3 on each file you downloaded replaces steps 1 and 2.
 
 ## Official channels
 
@@ -69,7 +87,6 @@ gh attestation verify vps-ready-<version>-<target>.tar.gz --repo bhimrazy/vps-re
 - crates.io: the `vps-ready` crate; `vpsready`, an alias; and `sshd-config`,
   the library that reads the SSH server configuration (from v0.3.0). All three
   are published from this repository by the same release workflow
-- Later: apt, rpm and apk repositories announced in the README
 
 Anything else (other download sites, container images, packages under other
 names) is unofficial.

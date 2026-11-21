@@ -51,7 +51,7 @@ tried them on a throwaway VM.
 ## Tests
 
 - Unit tests and, where output is rendered, an `insta` snapshot.
-- Container tests run in CI on every PR, and VM tests on PRs that touch the engine or modules (see [docs/testing.md](docs/testing.md)). Say in the PR how you tried a change that touches the system.
+- Container tests run in CI on PRs that change more than docs, and VM tests on PRs that change what goes into the binary (see [Testing](docs/design.md#testing)). Say in the PR how you tried a change that touches the system.
 - Fuzz targets for the parsers live in `fuzz/` and need nightly and
   [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz):
   `cargo +nightly fuzz run -O facts -- -max_total_time=60`. `cargo +nightly fuzz list` shows the targets. CI runs each weekly.
@@ -66,7 +66,7 @@ npm ci
 npm run dev    # or `npm run build`, which also checks internal links
 ```
 
-Most docs pages are generated from `docs/*.md` (and the controls catalog) by `site/scripts/sync-docs.mjs` before every dev or build run. Edit the source in `docs/`, never the generated files under `site/src/content/docs/docs/` (they are listed in `site/.gitignore`). A new `docs/*.md` needs an entry in the script's page map, or the build fails.
+The site is for users: its pages live in `site/src/content/docs/docs/`. The Security controls page is generated from the controls catalog by `site/scripts/sync-docs.mjs` before every dev or build run, so edit the catalog, not the generated file (it is listed in `site/.gitignore`). The contributor docs in `docs/` (the [design](docs/design.md), the release process and plans) stay in the repo and are not part of the site.
 
 A pull request that touches the site uploads the built site as a `site-preview` artifact, kept for 7 days. To view it, download it from the `pages` run's summary page and serve it with any static server:
 
