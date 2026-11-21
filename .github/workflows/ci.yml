@@ -169,6 +169,45 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # The release build, twice: from another checkout path with another cargo
+  # home, so the hashes match only if no build-machine path or other host
+  # detail reaches the binary.
+  reproducible:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      # The same pins as release.yml.
+      RUSTUP_TOOLCHAIN: 1.100.0
+      CARGO_AUDITABLE_VERSION: 0.7.7
+      TARGET: x86_64-unknown-linux-musl
+      # Fixed build metadata, as the release sets it from the tag.
+      SOURCE_DATE_EPOCH: "1795000000"
+      VPS_READY_COMMIT: 000000000000
+      VPS_READY_BUILD_DATE: 2026-11-18
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master 2026-10-16
+        with:
+          toolchain: ${{ env.RUSTUP_TOOLCHAIN }}
+          targets: ${{ env.TARGET }}
+      - name: Check the pins match release.yml
+        run: |
+          grep -qx "  RUSTUP_TOOLCHAIN: $RUSTUP_TOOLCHAIN" .github/workflows/release.yml
+          grep -qx "      CARGO_AUDITABLE_VERSION: $CARGO_AUDITABLE_VERSION" .github/workflows/release.yml
+      - run: cargo install --locked --version "$CARGO_AUDITABLE_VERSION" cargo-auditable
+      - name: Build, rebuild elsewhere, compare
+        run: |
+          scripts/release-build.sh "$TARGET"
+          other="$RUNNER_TEMP/rebuild"
+          mkdir -p "$other/src"
+          git archive HEAD | tar -x -C "$other/src"
+          CARGO_HOME="$other/cargo" "$other/src/scripts/release-build.sh" "$TARGET"
+          sha256sum "target/$TARGET/release/vps-ready" "$other/src/target/$TARGET/release/vps-ready" \
+            | tee /dev/stderr | awk '{print $1}' | uniq | wc -l | grep -qx 1
+
   # Layer 2: the real static binary inside systemd containers (see docs/testing.md).
   containers:
     needs: [changes, build-musl]
@@ -238,11 +277,11 @@ jobs:
       - name: Install wireguard-tools; net.wireguard needs the kernel module
         run: test/container-wireguard.sh "$DISTRO" bin/vps-ready
 
-  # Single required check for branch protection. build-musl and containers
-  # may be skipped (a docs-only PR); every other result must be success.
+  # Single required check for branch protection. build-musl, reproducible and
+  # containers may be skipped (a docs-only PR); every other result must be success.
   ci-ok:
     if: always()
-    needs: [changes, fmt, clippy, test, doc, deny, msrv, build-musl, containers]
+    needs: [changes, fmt, clippy, test, doc, deny, msrv, build-musl, reproducible, containers]
     runs-on: ubuntu-24.04
     steps:
       - name: All jobs passed
@@ -251,4 +290,4 @@ jobs:
         run: |
           echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
           echo "$NEEDS" | jq -e 'to_entries | all(.value.result == "success"
-            or (.value.result == "skipped" and (.key == "build-musl" or .key == "containers")))' >/dev/null
+            or (.value.result == "skipped" and (.key == "build-musl" or .key == "reproducible" or .key == "containers")))' >/dev/null

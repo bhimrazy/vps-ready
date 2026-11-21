@@ -23,6 +23,13 @@ on:
 
 permissions: {}
 
+env:
+  # The exact compiler for every release job, so a rebuild can use the same
+  # one. At least rust-version in Cargo.toml. RUSTUP_TOOLCHAIN overrides the
+  # floating channel in rust-toolchain.toml; ci.yml rebuilds with the same
+  # version.
+  RUSTUP_TOOLCHAIN: 1.100.0
+
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -40,13 +47,14 @@ jobs:
       DEB_ARCH: ${{ matrix.deb_arch }}
       # Pinned nFPM release; its checksums.txt is checked below.
       NFPM_VERSION: 2.48.0
+      CARGO_AUDITABLE_VERSION: 0.7.7
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master 2026-10-16
         with:
-          toolchain: stable
+          toolchain: ${{ env.RUSTUP_TOOLCHAIN }}
           targets: ${{ matrix.target }}
 
       - name: Set build metadata
@@ -64,20 +72,40 @@ jobs:
           crate=$(cargo pkgid -p vps-ready | sed 's/.*[#@]//')
           [ "$crate" = "$VERSION" ] || { echo "tag v$VERSION != crate $crate"; exit 1; }
 
+      - run: cargo install --locked --version "$CARGO_AUDITABLE_VERSION" cargo-auditable
+
       # Linked with rust-lld and the musl CRT bundled with the Rust target
       # (see .cargo/config.toml).
-      - run: cargo build --release --locked --target "$TARGET"
+      - run: scripts/release-build.sh "$TARGET"
 
-      - name: Check the binary is static
+      - name: Check the binary is static and carries its dependency list
         run: |
-          file "target/$TARGET/release/vps-ready" | tee /dev/stderr \
-            | grep -Eq 'statically linked|static-pie linked'
+          bin="target/$TARGET/release/vps-ready"
+          file "$bin" | tee /dev/stderr | grep -Eq 'statically linked|static-pie linked'
+          readelf -S "$bin" | grep -q '\.dep-v0'
+
+      # Generated from the clap definitions, so they match this build's CLI.
+      - name: Man pages, completions and the Debian changelog
+        run: |
+          gen=target/gen-docs
+          cargo xtask gen-docs "$gen"
+          for f in "$gen"/man/*.1; do gzip -9n < "$f" > "$f.gz"; done
+          maintainer=$(sed -n 's/^maintainer: //p' packaging/nfpm.yaml)
+          {
+            echo "vps-ready ($VERSION) unstable; urgency=medium"
+            echo
+            echo "  * Release notes: https://github.com/$GITHUB_REPOSITORY/releases/tag/v$VERSION"
+            echo
+            echo " -- $maintainer  $(date -u -R -d "@$SOURCE_DATE_EPOCH")"
+          } | gzip -9n > "$gen/changelog.gz"
 
       - name: Package
         run: |
           name="vps-ready-$VERSION-$TARGET"
           mkdir -p "dist/$name"
           cp "target/$TARGET/release/vps-ready" LICENSE-APACHE LICENSE-MIT NOTICE README.md "dist/$name/"
+          cp -R target/gen-docs/man target/gen-docs/completions "dist/$name/"
+          rm "dist/$name"/man/*.gz
           tar --sort=name --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner \
             -C dist -cf - "$name" | gzip -n > "dist/$name.tar.gz"
 
@@ -102,8 +130,9 @@ jobs:
           ARCH="$DEB_ARCH" BINARY="target/$TARGET/release/vps-ready" \
             nfpm package -f packaging/nfpm.yaml -p deb -t "dist/$deb"
           dpkg-deb --info "dist/$deb"
-          dpkg-deb --contents "dist/$deb"
+          dpkg-deb --contents "dist/$deb" | tee "$RUNNER_TEMP/contents"
           [ "$(dpkg-deb --field "dist/$deb" Architecture)" = "$DEB_ARCH" ]
+          grep -q ' ./usr/share/man/man1/vps-ready.1.gz$' "$RUNNER_TEMP/contents"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -125,7 +154,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master 2026-10-16
         with:
-          toolchain: stable
+          toolchain: ${{ env.RUSTUP_TOOLCHAIN }}
       - run: cargo install --locked --version 0.5.9 cargo-cyclonedx
       # One SBOM for the binary's crate, covering the dependencies of every
       # target, built from Cargo.lock.
@@ -230,7 +259,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master 2026-10-16
         with:
-          toolchain: stable
+          toolchain: ${{ env.RUSTUP_TOOLCHAIN }}
       - uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
         id: auth
       # One crate at a time, in dependency order. A version already on
