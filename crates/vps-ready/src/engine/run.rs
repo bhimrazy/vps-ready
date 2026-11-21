@@ -1118,17 +1118,46 @@ impl<'a> Engine<'a> {
     }
 
     /// Stops the timer `unit`, with its service if `service`, and disables
-    /// the boot hook, best effort: a timer that fires anyway finds the
-    /// transaction finished, and so does the hook.
+    /// the boot hook unless another transaction still needs it, best
+    /// effort: a timer that fires anyway finds the transaction finished,
+    /// and so does the hook.
     pub(super) fn disarm(&self, unit: Option<&str>, service: bool) {
         if let Some(unit) = unit
             && let Err(e) = deadman::stop(self.sys, unit, service)
         {
             tracing::info!("stopping the dead-man timer {unit}: {e}");
         }
+        if self.any_due() {
+            return;
+        }
         if let Err(e) = deadman::disable_hook(self.sys) {
             tracing::warn!("disabling the dead-man boot hook: {e}");
         }
+    }
+
+    /// Whether an armed transaction is pending or unfinished, as the boot
+    /// hook would roll back. True if a journal cannot be read: a hook left
+    /// enabled disables itself at the next boot.
+    fn any_due(&self) -> bool {
+        let fs = self.sys.fs;
+        let due = || -> Result<bool, EngineError> {
+            for txn in self.state.txns(fs)? {
+                let records = txn.read(fs)?;
+                if deadman::switch(&records).is_none() {
+                    continue;
+                }
+                match journal::replay(&records)? {
+                    TxnState::PendingConfirm { .. } => return Ok(true),
+                    TxnState::Planned if journal::is_unfinished(&records) => return Ok(true),
+                    _ => {}
+                }
+            }
+            Ok(false)
+        };
+        due().unwrap_or_else(|e| {
+            tracing::warn!("keeping the dead-man boot hook: {e}");
+            true
+        })
     }
 
     /// Restores every backup without a `restored` line, newest first, with
