@@ -891,3 +891,31 @@ fn keys_need_sshd_to_read_authorized_keys() {
         plan_with(ok).unwrap();
     }
 }
+
+/// `sudo -n -l -U` as sudo-rs 0.2.13 prints it on Ubuntu 26.04, with and
+/// without rules, both with exit status 0.
+#[test]
+fn reads_sudo_rs_rules() {
+    let fs = FakeFs::new();
+    for (stdout, rules) in [
+        (
+            "User ci may run the following commands on vps-ready-vm:\n    (ALL) NOPASSWD: ALL\n",
+            true,
+        ),
+        (
+            "User ci is not allowed to run sudo on vps-ready-vm.\n",
+            false,
+        ),
+    ] {
+        let runner = crate::sys::fake::FakeRunner::new().on(
+            "sudo",
+            ["-n", "-l", "-U", "ci"],
+            Output::success(stdout),
+        );
+        let sys = Sys {
+            fs: &fs,
+            runner: &runner,
+        };
+        assert_eq!(has_sudo_rules(sys, "ci").unwrap(), rules, "{stdout}");
+    }
+}

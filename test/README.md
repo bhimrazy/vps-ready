@@ -26,7 +26,7 @@ Linux binary, logs in over SSH once, and runs `detect` and `audit` as root,
 asserting on the `--json` output with `jq`. The binary comes from the second
 argument, then `$VPS_READY_BIN`, then `target/release/vps-ready`. It must match the
 container's CPU architecture; the static musl build runs on every distro. CI runs
-it for four distros against the x86_64 musl artifact.
+it for five releases against the x86_64 musl artifact.
 
 `test/container-apply.sh <distro> [binary]` runs the `updates.auto` cycle in a
 fresh container: `apply --yes`, `plan --json` shows no changes, `UPD-001`
@@ -116,7 +116,7 @@ cloud-init cycle); it installs `expect` and
 `curl` in the VM, and the VM needs network access for Docker's and Caddy's
 repositories. The `vm` workflow pins the images and
 runs each cycle (the default run, `cloud-init` and `private-access`) as its
-own job on four distros. The seed also writes `/etc/apt/apt.conf.d/80ci` so
+own job on five releases. The seed also writes `/etc/apt/apt.conf.d/80ci` so
 apt in the VM retries a flaky mirror, as the container image does.
 
 Without KVM, for example on a Mac, pass `-` as the image and point
