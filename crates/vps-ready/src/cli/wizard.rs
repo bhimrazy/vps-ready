@@ -14,7 +14,7 @@ use zeroize::Zeroizing;
 
 use super::change::{self, Applied, Host, Selection, plural};
 use super::export::{self, Refusal};
-use super::{EXIT_INTERRUPTED, wrap};
+use super::{EXIT_INTERRUPTED, printable, printable_lines, wrap};
 use crate::VERSION_INFO;
 use crate::audit::{self, Outcome, Severity};
 use crate::config::{Profile, ProfileBuilder, ProfileError, STAGED_VIA, VPNS};
@@ -146,7 +146,7 @@ pub(super) fn run<R: BufRead>(
         // Now that the key is gone and the outcome is printed, an error
         // too.
         if let Err(e) = &applied {
-            writeln!(err, "error: {e:#}")?;
+            writeln!(err, "error: {}", printable_lines(&format!("{e:#}")))?;
         }
         writeln!(out, "Stopped by signal {sig}.")?;
         return Ok(u8::try_from(128 + sig).unwrap_or(EXIT_INTERRUPTED));
@@ -1144,7 +1144,7 @@ fn ask_ports(
         let label = if l.processes.is_empty() {
             text.clone()
         } else {
-            format!("{text} ({})", l.processes.join(", "))
+            format!("{text} ({})", printable(&l.processes.join(", ")))
         };
         offered.push((text, label, false));
     }

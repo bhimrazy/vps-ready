@@ -187,7 +187,8 @@ pub(crate) fn uncounted_via(facts: &Facts) -> Option<(String, String)> {
 }
 
 /// The one interface that a rule of the loaded `vps_ready` table accepts
-/// SSH on.
+/// SSH on. An accept of every port, such as Docker's `iifname "docker0"
+/// accept` before it, is not that rule.
 fn ssh_rule(facts: &Facts) -> Option<&String> {
     let ssh = super::ssh_ports(facts);
     facts
@@ -198,7 +199,13 @@ fn ssh_rule(facts: &Facts) -> Option<&String> {
         .filter(|c| c.family == "inet" && c.table == "vps_ready")
         .flat_map(|c| &c.interface_ports)
         .find_map(|p| match p.interfaces.as_slice() {
-            [name] if ssh.iter().any(|&port| p.ports.contains("tcp", port)) => Some(name),
+            [name]
+                if name != "*"
+                    && !p.ports.is_every_port()
+                    && ssh.iter().any(|&port| p.ports.contains("tcp", port)) =>
+            {
+                Some(name)
+            }
             _ => None,
         })
 }

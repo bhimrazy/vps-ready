@@ -11,7 +11,9 @@ use std::time::Duration;
 use anyhow::bail;
 use owo_colors::OwoColorize;
 
-use super::{EXIT_ERROR, EXIT_INCOMPLETE, EXIT_ROLLED_BACK, print_report};
+use super::{
+    EXIT_ERROR, EXIT_INCOMPLETE, EXIT_ROLLED_BACK, print_report, printable, printable_lines,
+};
 use crate::audit::{self, Outcome};
 use crate::config::Profile;
 use crate::engine::{
@@ -391,15 +393,20 @@ pub(super) fn apply_profile(
             print_clients(host, &plan, &facts, out)?;
 
             if let Err(e) = audit_fixed(host, &plan, out) {
-                writeln!(err, "vps-ready: could not audit after apply: {e:#}")?;
+                writeln!(
+                    err,
+                    "vps-ready: could not audit after apply: {}",
+                    printable_lines(&format!("{e:#}"))
+                )?;
             }
         }
         ApplyOutcome::RolledBack { txn, reason, cause } => {
             let state = TxnState::RolledBack { reason };
             writeln!(
                 err,
-                "error: apply failed: {cause}. Every change was restored; \
-                 transaction {txn} is {state}."
+                "error: apply failed: {}. Every change was restored; \
+                 transaction {txn} is {state}.",
+                printable_lines(&cause.to_string())
             )?;
             return Ok(Applied::Ran(EXIT_ROLLED_BACK));
         }
@@ -534,7 +541,7 @@ fn print_rollback(out: &mut dyn Write, done: &Rollback) -> io::Result<()> {
             "Left as they are because they changed since apply; restore them by hand:"
         )?;
         for step in &done.skipped {
-            writeln!(out, "  {step}")?;
+            writeln!(out, "  {}", printable(&step.to_string()))?;
         }
     }
     Ok(())
@@ -695,7 +702,7 @@ fn print_plan(
     for m in &plan.modules {
         let header = match &m.status {
             ModuleStatus::NotApplicable { reason } => {
-                format!("{}: not applicable ({reason})", m.id)
+                format!("{}: not applicable ({})", m.id, printable(reason))
             }
             ModuleStatus::Applicable { changes, .. } if changes.is_empty() => {
                 format!("{}: {}: no changes", m.id, m.title)
@@ -711,6 +718,7 @@ fn print_plan(
             writeln!(out, "{header}")?;
         }
         for note in &m.notes {
+            let note = printable(note);
             if color {
                 writeln!(out, "  {}", format!("note: {note}").yellow())?;
             } else {
@@ -746,7 +754,7 @@ fn print_plan(
                 Reversibility::Partial => "partial",
             };
             // Pad before coloring: escape codes would count towards the width.
-            let line = format!("{sign} {text}");
+            let line = format!("{sign} {}", printable(&text));
             let pad = " ".repeat(WIDTH.saturating_sub(line.chars().count()).max(2));
             if color {
                 let line = if sign == '+' {
@@ -758,7 +766,9 @@ fn print_plan(
             } else {
                 writeln!(out, "  {line}{pad}{rev}")?;
             }
+            // The diff shows bytes of files that others may own.
             for line in step.change.diff.iter().flat_map(|d| d.lines()) {
+                let line = printable(line);
                 match (color, line.chars().next()) {
                     (true, Some('+')) => writeln!(out, "      {}", line.green())?,
                     (true, Some('-')) => writeln!(out, "      {}", line.red())?,
@@ -1003,7 +1013,7 @@ fn print_progress(err: &mut dyn Write, progress: &Progress) {
             format!("skip {reload}, so the daemon keeps its config: {reason}")
         }
     };
-    let _ = writeln!(err, "{line}");
+    let _ = writeln!(err, "{}", printable(&line));
 }
 
 /// One line per transaction, e.g.
@@ -1045,7 +1055,11 @@ fn print_history(out: &mut dyn Write, txns: &[TxnInfo]) -> io::Result<()> {
             plural(t.changes, "change")
         )?;
         for step in &t.skipped {
-            writeln!(out, "  left by the dead-man rollback: {step}")?;
+            writeln!(
+                out,
+                "  left by the dead-man rollback: {}",
+                printable(&step.to_string())
+            )?;
         }
     }
     Ok(())
