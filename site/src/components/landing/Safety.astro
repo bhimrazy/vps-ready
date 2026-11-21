@@ -35,7 +35,7 @@ const ticks = ['0:00', '1:00', '2:00', '3:00', '4:00', '5:00'];
 ---
 <Section id="safety" alt>
   <SectionHead label="Safety net">
-    <Fragment slot="title">If a change locks you out, it rolls back on its own.</Fragment>
+    <Fragment slot="title">If a change locks you out, the safety timer rolls it back.</Fragment>
     Before changing SSH or the firewall, <span class="whitespace-nowrap">vps-ready</span> starts a safety timer (5 minutes by default).
     Log in again from a new terminal and run <Code>vps-ready confirm</Code> to keep the changes. If you can't get back in, everything
     rolls back, even if the server reboots. See <a class="text-brand no-underline hover:underline" href="/docs/guides/safety-net/">how the safety net works</a>.
@@ -141,7 +141,7 @@ const ticks = ['0:00', '1:00', '2:00', '3:00', '4:00', '5:00'];
         port the SSH server listens on, as the plan's admin user or another user it gives SSH keys.
       </div>
       <div class="grid content-start gap-1.5 text-sm text-muted">
-        <b class="font-mono text-sm font-bold text-ink">Checks for a way in first.</b>It won't turn off root or password login unless an admin
+        <b class="font-mono text-sm font-bold text-ink">It checks for a way in first.</b>It won't turn off root or password login unless an admin
         user with SSH keys and sudo exists, and it checks that user against the live SSH server config.
       </div>
     </div>

@@ -8,7 +8,7 @@ import SectionHead from './ui/SectionHead.astro';
 // with the long answer.
 const faqs: [string, string, [string, string]?][] = [
   [
-    'Is it safe on a server that is already running things?',
+    'Can I run it on a server that already runs services?',
     'It audits first and shows the full plan. Nothing changes until you approve it. Every change is journaled, and `sudo vps-ready rollback --last` restores the previous state. More in',
     ['Harden a server that is already running services', '/docs/guides/existing-server/'],
   ],
@@ -17,7 +17,7 @@ const faqs: [string, string, [string, string]?][] = [
     'Debian 12 and 13 and Ubuntu 22.04, 24.04 and 26.04, with systemd, on x86_64 and arm64. Both architectures are built, but only x86_64 runs in the VM tests (nightly, on all five releases). On other Linux distros, detect and audit still run. More distros are on the roadmap.',
   ],
   [
-    'Will it fight with ufw, firewalld or Docker?',
+    'Does it conflict with ufw, firewalld or Docker?',
     'The firewall module stays out of the way when ufw or firewalld is in use. The audit checks whether container ports bypass the firewall.',
   ],
   [

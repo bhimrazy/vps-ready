@@ -18,7 +18,7 @@ The `net.tunnel` module, `deploy.proxy`'s `behind_tunnel`, and the wizard's tunn
 
 A new server answers SSH to the whole internet. This guide narrows that to your own devices in three steps, and shows how to get back in if the private network fails.
 
-First, [harden the server at first boot](#harden-at-first-boot), before anyone logs in. Next, [join a private network](#join-a-private-network) such as Tailscale or WireGuard, so you can reach the same SSH server through it. Last, [close public SSH](#close-public-ssh-port-22-to-the-internet) from a login that already comes through that network.
+First, [harden the server at first boot](#harden-at-first-boot), before anyone logs in. Next, [join a private network](#join-a-private-network) such as Tailscale or WireGuard, so you can reach the same SSH server through it. Last, [close public SSH](#close-public-ssh) from a login that already comes through that network.
 
 Each step works on its own. If the server is already running, skip the first.
 
@@ -176,7 +176,7 @@ Add `net.wireguard` to run a WireGuard interface, `wg0`, on the server. It insta
 
 </Steps>
 
-Then close public SSH as in [Close public SSH](#close-public-ssh-port-22-to-the-internet), from the session you just opened, with `ssh_via = "wg0"` and the server's tunnel address (`10.86.12.1` here) in the confirm command:
+Then close public SSH as in [Close public SSH](#close-public-ssh), from the session you just opened, with `ssh_via = "wg0"` and the server's tunnel address (`10.86.12.1` here) in the confirm command:
 
 ```toml
 [modules."firewall.inbound"]
@@ -190,7 +190,7 @@ vps-ready refuses `ssh_via = "wg0"` unless `wg-quick@wg0` is enabled, which `net
 
 Any interface works: a `wg0` you set up with `wg-quick`, or the interface of another mesh VPN. Make sure it comes back after a reboot (for `wg0`, `sudo systemctl enable wg-quick@wg0`). For `tailscaled` and `wg-quick@<interface>`, vps-ready checks that; for other interfaces it cannot tell, and the plan says so.
 
-## Close public SSH (port 22) to the internet
+## Close public SSH
 
 `ssh_via` limits the firewall's SSH rule to one interface. Everything else in `firewall.inbound` stays the same, and the SSH server itself is not changed. It takes two applies, so that the private path carries a real login before public SSH closes.
 
@@ -402,6 +402,6 @@ A manual rollback can refuse while SSH depends on the VPN:
 
 ## Next
 
-- More ways back in: [Undo changes and recover](/docs/guides/undo-and-recover/#locked-out-of-ssh-get-back-in).
+- More ways back in: [Undo changes and recover](/docs/guides/undo-and-recover/#get-back-in-after-an-ssh-lockout).
 - What each VPN module writes and undoes: [`net.tailscale`](/docs/guides/profiles-and-modules/#nettailscale-tailscale) and [`net.wireguard`](/docs/guides/profiles-and-modules/#netwireguard-wireguard).
 - What the tunnel writes and undoes: [`net.tunnel`](/docs/guides/profiles-and-modules/#nettunnel-cloudflare-tunnel).

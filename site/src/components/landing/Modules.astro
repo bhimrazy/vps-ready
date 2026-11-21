@@ -103,8 +103,8 @@ const mods = [
 ---
 
 <Section id="modules" alt>
-  <SectionHead label="Under the hood">
-    <Fragment slot="title">Twelve modules, always run in a safe order.</Fragment>
+  <SectionHead label="Modules">
+    <Fragment slot="title">Twelve modules, run in an order that keeps SSH reachable.</Fragment>
     The admin user exists before SSH logins are restricted, and SSH ports are open before the firewall closes everything else. The audit
     checks 34 controls, and the modules fix 26 of them.
   </SectionHead>
