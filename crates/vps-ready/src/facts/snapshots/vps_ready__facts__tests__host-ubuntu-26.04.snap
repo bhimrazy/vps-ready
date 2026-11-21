@@ -1,0 +1,443 @@
+---
+source: crates/vps-ready/src/facts/mod.rs
+expression: "host(name, &[])"
+---
+os:
+  id: ubuntu
+  id_like:
+    - debian
+  version_id: "26.04"
+  codename: resolute
+  pretty_name: Ubuntu 26.04.1 LTS
+  family: debian
+init: systemd
+virtualization:
+  container: none
+  vm: kvm
+ssh:
+  version: 10.2p1
+  activation: socket
+  effective:
+    acceptenv:
+      - LANG
+      - LC_*
+      - COLORTERM
+      - NO_COLOR
+    addressfamily:
+      - any
+    allowagentforwarding:
+      - "yes"
+    allowstreamlocalforwarding:
+      - "yes"
+    allowtcpforwarding:
+      - "yes"
+    authenticationmethods:
+      - any
+    authorizedkeyscommand:
+      - none
+    authorizedkeyscommanduser:
+      - none
+    authorizedkeysfile:
+      - ".ssh/authorized_keys .ssh/authorized_keys2"
+    authorizedprincipalscommand:
+      - none
+    authorizedprincipalscommanduser:
+      - none
+    authorizedprincipalsfile:
+      - none
+    banner:
+      - none
+    casignaturealgorithms:
+      - "ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,sk-ssh-ed25519@openssh.com,sk-ecdsa-sha2-nistp256@openssh.com,rsa-sha2-512,rsa-sha2-256"
+    channeltimeout:
+      - none
+    chrootdirectory:
+      - none
+    ciphers:
+      - "chacha20-poly1305@openssh.com,aes128-gcm@openssh.com,aes256-gcm@openssh.com,aes128-ctr,aes192-ctr,aes256-ctr"
+    clientalivecountmax:
+      - "3"
+    clientaliveinterval:
+      - "0"
+    compression:
+      - "yes"
+    debianbanner:
+      - "yes"
+    disableforwarding:
+      - "no"
+    exposeauthinfo:
+      - "no"
+    fingerprinthash:
+      - SHA256
+    forcecommand:
+      - none
+    gatewayports:
+      - "no"
+    gssapiauthentication:
+      - "no"
+    gssapicleanupcredentials:
+      - "yes"
+    gssapikexalgorithms:
+      - "gss-group14-sha256-,gss-group16-sha512-,gss-nistp256-sha256-,gss-curve25519-sha256-"
+    gssapikeyexchange:
+      - "no"
+    gssapistorecredentialsonrekey:
+      - "no"
+    gssapistrictacceptorcheck:
+      - "yes"
+    hostbasedacceptedalgorithms:
+      - "ssh-ed25519-cert-v01@openssh.com,ecdsa-sha2-nistp256-cert-v01@openssh.com,ecdsa-sha2-nistp384-cert-v01@openssh.com,ecdsa-sha2-nistp521-cert-v01@openssh.com,sk-ssh-ed25519-cert-v01@openssh.com,sk-ecdsa-sha2-nistp256-cert-v01@openssh.com,rsa-sha2-512-cert-v01@openssh.com,rsa-sha2-256-cert-v01@openssh.com,ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,sk-ssh-ed25519@openssh.com,sk-ecdsa-sha2-nistp256@openssh.com,rsa-sha2-512,rsa-sha2-256"
+    hostbasedauthentication:
+      - "no"
+    hostbasedusesnamefrompacketonly:
+      - "no"
+    hostkey:
+      - /etc/ssh/ssh_host_rsa_key
+      - /etc/ssh/ssh_host_ecdsa_key
+      - /etc/ssh/ssh_host_ed25519_key
+    hostkeyagent:
+      - none
+    hostkeyalgorithms:
+      - "ssh-ed25519-cert-v01@openssh.com,ecdsa-sha2-nistp256-cert-v01@openssh.com,ecdsa-sha2-nistp384-cert-v01@openssh.com,ecdsa-sha2-nistp521-cert-v01@openssh.com,sk-ssh-ed25519-cert-v01@openssh.com,sk-ecdsa-sha2-nistp256-cert-v01@openssh.com,rsa-sha2-512-cert-v01@openssh.com,rsa-sha2-256-cert-v01@openssh.com,ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,sk-ssh-ed25519@openssh.com,sk-ecdsa-sha2-nistp256@openssh.com,rsa-sha2-512,rsa-sha2-256"
+    ignorerhosts:
+      - "yes"
+    ignoreuserknownhosts:
+      - "no"
+    ipqos:
+      - ef cs0
+    kbdinteractiveauthentication:
+      - "no"
+    kerberosauthentication:
+      - "no"
+    kerberosorlocalpasswd:
+      - "yes"
+    kerberosticketcleanup:
+      - "yes"
+    kexalgorithms:
+      - "mlkem768x25519-sha256,sntrup761x25519-sha512,sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521"
+    listenaddress:
+      - "[::]:22"
+      - "0.0.0.0:22"
+    logingracetime:
+      - "120"
+    loglevel:
+      - INFO
+    macs:
+      - "umac-64-etm@openssh.com,umac-128-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,hmac-sha1-etm@openssh.com,umac-64@openssh.com,umac-128@openssh.com,hmac-sha2-256,hmac-sha2-512,hmac-sha1"
+    maxauthtries:
+      - "6"
+    maxsessions:
+      - "10"
+    maxstartups:
+      - "10:30:100"
+    modulifile:
+      - /etc/ssh/moduli
+    pamservicename:
+      - sshd
+    passwordauthentication:
+      - "no"
+    permitemptypasswords:
+      - "no"
+    permitlisten:
+      - any
+    permitopen:
+      - any
+    permitrootlogin:
+      - prohibit-password
+    permittty:
+      - "yes"
+    permittunnel:
+      - "no"
+    permituserenvironment:
+      - "no"
+    permituserrc:
+      - "yes"
+    persourcemaxstartups:
+      - none
+    persourcenetblocksize:
+      - "32:128"
+    persourcepenalties:
+      - "crash:90 authfail:5 noauth:1 grace-exceeded:10 refuseconnection:10 max:600 min:15 max-sources4:65536 max-sources6:65536 overflow:permissive overflow6:permissive"
+    persourcepenaltyexemptlist:
+      - none
+    pidfile:
+      - /run/sshd.pid
+    port:
+      - "22"
+    printlastlog:
+      - "yes"
+    printmotd:
+      - "no"
+    pubkeyacceptedalgorithms:
+      - "ssh-ed25519-cert-v01@openssh.com,ecdsa-sha2-nistp256-cert-v01@openssh.com,ecdsa-sha2-nistp384-cert-v01@openssh.com,ecdsa-sha2-nistp521-cert-v01@openssh.com,sk-ssh-ed25519-cert-v01@openssh.com,sk-ecdsa-sha2-nistp256-cert-v01@openssh.com,rsa-sha2-512-cert-v01@openssh.com,rsa-sha2-256-cert-v01@openssh.com,ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,sk-ssh-ed25519@openssh.com,sk-ecdsa-sha2-nistp256@openssh.com,rsa-sha2-512,rsa-sha2-256"
+    pubkeyauthentication:
+      - "yes"
+    pubkeyauthoptions:
+      - none
+    refuseconnection:
+      - "no"
+    rekeylimit:
+      - 0 0
+    requiredrsasize:
+      - "1024"
+    revokedkeys:
+      - none
+    securitykeyprovider:
+      - internal
+    sshdauthpath:
+      - /usr/lib/openssh/sshd-auth
+    sshdsessionpath:
+      - /usr/lib/openssh/sshd-session
+    streamlocalbindmask:
+      - "0177"
+    streamlocalbindunlink:
+      - "no"
+    strictmodes:
+      - "yes"
+    subsystem:
+      - sftp /usr/lib/openssh/sftp-server
+    syslogfacility:
+      - AUTH
+    tcpkeepalive:
+      - "yes"
+    trustedusercakeys:
+      - none
+    unusedconnectiontimeout:
+      - none
+    usedns:
+      - "no"
+    usepam:
+      - "yes"
+    versionaddendum:
+      - none
+    x11displayoffset:
+      - "10"
+    x11forwarding:
+      - "yes"
+    x11uselocalhost:
+      - "yes"
+    xauthlocation:
+      - /usr/bin/xauth
+  socket_ports:
+    - 22
+  listening: []
+  fail2ban: false
+listeners:
+  - proto: udp
+    addr: 127.0.0.54
+    port: 53
+    processes:
+      - systemd-resolve
+  - proto: udp
+    addr: 127.0.0.53%lo
+    port: 53
+    processes:
+      - systemd-resolve
+  - proto: udp
+    addr: 10.0.2.15%ens3
+    port: 68
+    processes:
+      - systemd-network
+  - proto: udp
+    addr: 127.0.0.1
+    port: 323
+    processes:
+      - chronyd
+  - proto: udp
+    addr: "::1"
+    port: 323
+    processes:
+      - chronyd
+  - proto: tcp
+    addr: 127.0.0.54
+    port: 53
+    processes:
+      - systemd-resolve
+  - proto: tcp
+    addr: 0.0.0.0
+    port: 22
+    processes:
+      - sshd
+      - systemd
+  - proto: tcp
+    addr: 127.0.0.53%lo
+    port: 53
+    processes:
+      - systemd-resolve
+  - proto: tcp
+    addr: "::"
+    port: 22
+    processes:
+      - sshd
+      - systemd
+firewall:
+  input_chains: []
+  published: []
+  legacy_filter_v4: false
+  legacy_filter_v6: false
+firewall_tools:
+  nft: true
+  ufw: ~
+  firewalld: false
+  nftables_service: false
+  legacy_filter: false
+ipv6: false
+session: ~
+sysctl:
+  values:
+    fs.protected_fifos: "1"
+    fs.protected_hardlinks: "1"
+    fs.protected_regular: "2"
+    fs.protected_symlinks: "1"
+    fs.suid_dumpable: "2"
+    kernel.dmesg_restrict: "1"
+    kernel.kptr_restrict: "1"
+    kernel.perf_event_paranoid: "4"
+    kernel.randomize_va_space: "2"
+    kernel.unprivileged_bpf_disabled: "2"
+    kernel.yama.ptrace_scope: "1"
+    net.ipv4.conf.all.accept_source_route: "0"
+    net.ipv4.icmp_echo_ignore_broadcasts: "1"
+    net.ipv4.tcp_syncookies: "1"
+    net.mptcp.enabled: "1"
+  unreadable: []
+  ipv4_conf:
+    all:
+      accept_redirects: "1"
+      forwarding: "0"
+      rp_filter: "2"
+      send_redirects: "1"
+    default:
+      accept_redirects: "1"
+      forwarding: "0"
+      rp_filter: "2"
+      send_redirects: "1"
+    ens3:
+      accept_redirects: "1"
+      forwarding: "0"
+      rp_filter: "2"
+      send_redirects: "1"
+updates:
+  unattended_upgrades: false
+  periodic:
+    AutocleanInterval: "0"
+    Download-Upgradeable-Packages: "0"
+    Unattended-Upgrade: "1"
+    Update-Package-Lists: "1"
+  units:
+    apt-daily-upgrade.service: ok
+    apt-daily-upgrade.timer: ok
+    apt-daily.service: ok
+    apt-daily.timer: ok
+reboot:
+  flagged: false
+  running: 7.0.0-43-generic
+  installed:
+    - 7.0.0-43-generic
+  image_replaced: ~
+docker: false
+docker_engine:
+  packages: []
+  docker_ce_version: ~
+  service: ~
+  daemon_json:
+    state: missing
+  daemon: ~
+bridges: []
+apparmor: true
+interfaces:
+  - name: lo
+    kind: ~
+    addresses:
+      - ip: 127.0.0.1
+        prefix: 8
+      - ip: "::1"
+        prefix: 128
+    up: true
+  - name: ens3
+    kind: ~
+    addresses:
+      - ip: 10.0.2.15
+        prefix: 24
+      - ip: "fec0::5054:ff:fe12:3456"
+        prefix: 64
+      - ip: "fe80::5054:ff:fe12:3456"
+        prefix: 64
+    up: true
+routes:
+  - dst: default
+    dev: ens3
+    gateway: 10.0.2.2
+    table: ~
+  - dst: 10.0.2.0/24
+    dev: ens3
+    gateway: ~
+    table: ~
+  - dst: 10.0.2.2
+    dev: ens3
+    gateway: ~
+    table: ~
+  - dst: 10.0.2.3
+    dev: ens3
+    gateway: ~
+    table: ~
+  - dst: 10.0.2.15
+    dev: ens3
+    gateway: ~
+    table: local
+  - dst: 10.0.2.255
+    dev: ens3
+    gateway: ~
+    table: local
+  - dst: 127.0.0.0/8
+    dev: lo
+    gateway: ~
+    table: local
+  - dst: 127.0.0.1
+    dev: lo
+    gateway: ~
+    table: local
+  - dst: 127.255.255.255
+    dev: lo
+    gateway: ~
+    table: local
+  - dst: "fe80::/64"
+    dev: ens3
+    gateway: ~
+    table: ~
+  - dst: "fec0::/64"
+    dev: ens3
+    gateway: ~
+    table: ~
+  - dst: default
+    dev: ens3
+    gateway: "fe80::2"
+    table: ~
+  - dst: "::1"
+    dev: lo
+    gateway: ~
+    table: local
+  - dst: "fe80::5054:ff:fe12:3456"
+    dev: ens3
+    gateway: ~
+    table: local
+  - dst: "fec0::5054:ff:fe12:3456"
+    dev: ens3
+    gateway: ~
+    table: local
+  - dst: "ff00::/8"
+    dev: ens3
+    gateway: ~
+    table: local
+wireguard:
+  module: ~
+  listen_ports: {}
+  dir:
+    state: missing
+tailscale: ~
+cloudflared:
+  version: ~
+  units: []
+  active: []
+  configs: []
+notices: []

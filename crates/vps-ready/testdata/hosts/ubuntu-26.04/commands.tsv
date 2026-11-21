@@ -1,0 +1,16 @@
+virt-container	1	systemd-detect-virt	--container
+virt-vm	0	systemd-detect-virt	--vm
+ssh-version	0	ssh	-V
+sshd-T	0	sshd	-T
+ssh-units	0	systemctl	show	--property=Id,LoadState,ActiveState,UnitFileState	ssh.socket	sshd.socket	ssh.service	sshd.service
+ssh-socket-listen	0	systemctl	show	--property=Listen	ssh.socket
+listeners	0	ss	-tulnpH
+nft	0	nft	-j	list	ruleset
+firewall-units	0	systemctl	show	--property=Id,LoadState,ActiveState,UnitFileState	firewalld.service	nftables.service
+apt-periodic	0	apt-config	dump	APT::Periodic
+apt-units	0	systemctl	show	--property=Id,LoadState,ActiveState,UnitFileState	apt-daily.timer	apt-daily-upgrade.timer	apt-daily.service	apt-daily-upgrade.service
+ip-addr	0	ip	-j	-d	addr
+ip-route	0	ip	-j	route	show	table	all
+docker-packages	1	dpkg-query	-W	--showformat=${Package} ${db:Status-Status} ${Version}\n	docker-ce	docker.io	podman-docker	containerd	runc
+sshd-T-dropin-99	0	sshd	-T
+sshd-T-dropin-00	0	sshd	-T

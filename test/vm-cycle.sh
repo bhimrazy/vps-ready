@@ -1,7 +1,7 @@
 #!/bin/sh
 # Apply, reboot and roll back with the real binary in a KVM virtual machine.
 #
-# Usage: test/vm-cycle.sh <distro> <binary> <image> [cloud-init|private-access|tunnel]
+# Usage: test/vm-cycle.sh <distro> <binary> <image> [cloud-init|private-access|tunnel|fixtures]
 #   e.g. ubuntu-24.04
 #   <image> is a cloud image (qcow2). The script boots it with QEMU and KVM
 #   (2 vCPUs, 2 GiB, a copy-on-write overlay, so the image is not changed),
@@ -9,7 +9,8 @@
 #   and drives the VM over SSH on 127.0.0.1:$VM_SSH_PORT (default 2222).
 #   The binary must match the VM's CPU; CI uses the x86_64 musl build.
 #   With `cloud-init`, `private-access` or `tunnel`, it runs only that cycle
-#   below.
+#   below. With `fixtures`, it only captures the fresh VM with
+#   test/capture-host-fixtures.sh, into crates/vps-ready/testdata/hosts/<distro>.
 # Needs: qemu-system-x86_64, qemu-img, cloud-localds, ssh, jq, and /dev/kvm;
 #   python3 for the cloud-init cycle.
 #
@@ -19,6 +20,11 @@
 #   cycle needs an image, since it boots fresh overlays.
 #
 # Cycles:
+#   sudo (sudo-rs on Ubuntu 26.04): detect under sudo finds the session and
+#     SUDO_USER is set; visudo -cf accepts a valid drop-in and rejects a
+#     broken one; sudo -n -l -U exits 0 and lists rules for a NOPASSWD user
+#     and a member of sudo (who needs a password), none for a user without;
+#     apply --deadman=off of ssh.server is refused, naming this login.
 #   kernel.sysctl, same boot: weaken five keys -> apply -> the controls pass
 #     -> rollback --last -> the keys are weak again and the drop-in is gone.
 #   kernel.sysctl, across a reboot: weaken -> plan -> apply -> reboot -> every
@@ -126,7 +132,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 
-usage="usage: $0 <distro> <binary> <image|-> [cloud-init|private-access|tunnel]"
+usage="usage: $0 <distro> <binary> <image|-> [cloud-init|private-access|tunnel|fixtures]"
 distro=${1:?$usage}
 bin=${2:?$usage}
 image=${3:?$usage}
@@ -140,7 +146,7 @@ www_pid=
 wg_link=
 
 [ -f "$bin" ] || { echo "binary not found: $bin" >&2; exit 2; }
-case $cycle in all | cloud-init | private-access | tunnel) ;; *) echo "$usage" >&2; exit 2 ;; esac
+case $cycle in all | cloud-init | private-access | tunnel | fixtures) ;; *) echo "$usage" >&2; exit 2 ;; esac
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 2; }
 
 cleanup() {
@@ -481,20 +487,23 @@ private_access_cycle() {
 
   # Precondition of the drop-in, on a separate interface: does `wg
   # syncconf` with a file that has no PrivateKey keep the key PostUp
-  # loaded? The result is printed; the drop-in stays either way.
+  # loaded? The result is printed; the drop-in stays either way. The files
+  # are in /etc/wireguard: on Ubuntu 26.04, wg-quick run as root gets
+  # "Permission denied" reading a config in /tmp.
   echo "== $distro: wg syncconf with a key-less config"
-  pvm "sudo sh -c 'umask 077; wg genkey >/tmp/wgpre.key; printf \"%s\n\" \"[Interface]\" \"Address = 10.78.0.1/24\" \"ListenPort = 51830\" \"PostUp = wg set %i private-key /tmp/wgpre.key\" >/tmp/wgpre.conf'"
-  pvm sudo wg-quick up /tmp/wgpre.conf >/dev/null 2>&1 || die "wg-quick up wgpre failed"
+  pvm "sudo sh -c 'umask 077; wg genkey >/etc/wireguard/wgpre.key; printf \"%s\n\" \"[Interface]\" \"Address = 10.78.0.1/24\" \"ListenPort = 51830\" \"PostUp = wg set %i private-key /etc/wireguard/wgpre.key\" >/etc/wireguard/wgpre.conf'"
+  pvm sudo wg-quick up /etc/wireguard/wgpre.conf >"$tmp/wgpre.out" 2>&1 ||
+    { cat "$tmp/wgpre.out"; die "wg-quick up wgpre failed"; }
   pre=$(pvm sudo wg show wgpre public-key)
-  pvm "sudo bash -c 'wg syncconf wgpre <(wg-quick strip /tmp/wgpre.conf)'" || die "wg syncconf failed"
+  pvm "sudo bash -c 'wg syncconf wgpre <(wg-quick strip /etc/wireguard/wgpre.conf)'" || die "wg syncconf failed"
   post=$(pvm sudo wg show wgpre public-key)
   if [ "$post" = "$pre" ]; then
     echo "syncconf precondition [$distro]: the key is KEPT"
   else
     echo "syncconf precondition [$distro]: the key is CLEARED ($post)"
   fi
-  pvm sudo wg-quick down /tmp/wgpre.conf >/dev/null 2>&1 || true
-  pvm sudo rm -f /tmp/wgpre.conf /tmp/wgpre.key
+  pvm sudo wg-quick down /etc/wireguard/wgpre.conf >/dev/null 2>&1 || true
+  pvm sudo rm -f /etc/wireguard/wgpre.conf /etc/wireguard/wgpre.key
 
   echo "== $distro: the runner's side of the tunnel"
   wg_link=vrwg
@@ -767,9 +776,66 @@ wait_ssh 300
 vm sudo cloud-init status --wait >/dev/null 2>&1 || true
 vm cat /etc/os-release | grep PRETTY_NAME
 vm uname -r
+vm systemctl --version | head -n 1
+vm ssh -V
+
+if [ "$cycle" = fixtures ]; then
+  test/capture-host-fixtures.sh "$distro" "$sshcfg"
+  echo "OK [$distro]"
+  exit 0
+fi
 
 vm 'cat >/tmp/vps-ready' <"$bin"
 vm sudo install -m 755 /tmp/vps-ready /usr/local/bin/vps-ready
+
+# What vps-ready relies on from sudo (sudo-rs on Ubuntu 26.04): the session
+# found through sudo's process tree, SUDO_USER, `visudo -cf` on a drop-in,
+# and `sudo -n -l -U` exiting 0 for a user with or without rules.
+echo "== $distro: sudo"
+sudo_version=$(vm sudo -V | head -n 1)
+echo "$sudo_version"
+# One string, so the remote shell sees the quotes.
+visudo_path=$(vm 'readlink -f "$(PATH=$PATH:/usr/sbin command -v visudo)"')
+echo "visudo: $visudo_path"
+# Ubuntu 26.04's cloud image must really run sudo-rs, or this checks nothing new.
+if [ "$distro" = ubuntu-26.04 ]; then
+  case $sudo_version in "sudo-rs "*) ;; *) die "sudo is not sudo-rs: $sudo_version" ;; esac
+  case $visudo_path in */cargo/bin/visudo | *visudo-rs) ;; *) die "visudo is not sudo-rs's: $visudo_path" ;; esac
+fi
+vr detect --json >"$tmp/detect.json"
+jq -e '.session.user == "ci"' "$tmp/detect.json" >/dev/null ||
+  { jq .session "$tmp/detect.json"; die "detect under sudo does not find ci's session"; }
+[ "$(vm sudo printenv SUDO_USER)" = ci ] || die "sudo does not set SUDO_USER"
+vm "echo 'ci ALL=(ALL:ALL) NOPASSWD: ALL' >/tmp/vr-sudoers-ok"
+vm "echo 'ci ALL=(ALL:ALL NOPASSWD: ALL' >/tmp/vr-sudoers-bad"
+vm sudo visudo -cf /tmp/vr-sudoers-ok >/dev/null || die "visudo -cf rejects a valid drop-in"
+! vm sudo visudo -cf /tmp/vr-sudoers-bad >/dev/null 2>&1 || die "visudo -cf accepts a broken drop-in"
+vm rm -f /tmp/vr-sudoers-ok /tmp/vr-sudoers-bad
+# sudo_l <user>: `sudo -n -l -U <user>` as vps-ready runs it. Its stdout,
+# which is what vps-ready reads, goes to sudo-l.out.
+sudo_l() {
+  rc=0; vm sudo env LC_ALL=C sudo -n -l -U "$1" >"$tmp/sudo-l.out" 2>"$tmp/sudo-l.err" || rc=$?
+  [ "$rc" -eq 0 ] || { cat "$tmp/sudo-l.out" "$tmp/sudo-l.err"; die "sudo -n -l -U $1 exited $rc, expected 0"; }
+}
+has_rules() { grep -q ' may run the following commands on ' "$tmp/sudo-l.out"; }
+sudo_l ci
+cat "$tmp/sudo-l.out"
+has_rules || { cat "$tmp/sudo-l.out"; die "sudo -l -U ci lists no rules"; }
+vm sudo useradd -m -s /bin/bash vr-sudo
+sudo_l vr-sudo
+cat "$tmp/sudo-l.out"
+! has_rules || { cat "$tmp/sudo-l.out"; die "a user without rules has rules"; }
+# The sudo group: user.admin's `sudo = "password"`.
+vm sudo usermod -aG sudo vr-sudo
+sudo_l vr-sudo
+has_rules || { cat "$tmp/sudo-l.out"; die "sudo -l -U lists no rules for a member of sudo"; }
+! vm sudo -u vr-sudo sudo -n true 2>/dev/null || die "sudo without a password for a member of sudo"
+vm sudo userdel -r vr-sudo 2>/dev/null || die "userdel vr-sudo failed"
+# `--deadman=off` on a change that arms the timer sees this login.
+rc=0; vr apply --yes --module ssh.server --deadman=off >"$tmp/off.out" 2>&1 || rc=$?
+cat "$tmp/off.out"
+[ "$rc" -eq 2 ] || die "apply --deadman=off from a login exited $rc, expected 2"
+grep -q 'someone is logged in (.*ci@' "$tmp/off.out" || die "apply --deadman=off did not name this login"
 
 echo "== $distro: vps-ready audit"
 rc=0; vr audit || rc=$?
