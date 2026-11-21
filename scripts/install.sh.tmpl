@@ -6,7 +6,8 @@
 # aarch64). It downloads the release tarball, checks it against the SHA-256
 # embedded below, verifies the release signature with gh or cosign when one
 # is installed (a failed check stops the install unless --skip-verify), and
-# copies the binary into place. It changes nothing else on the system.
+# copies the binary into place, creating the install directory if needed,
+# with a vpsready symlink next to it. It changes nothing else on the system.
 #
 # Usage: download it, read it, then run it as root:
 #
@@ -17,20 +18,20 @@
 # Flags:
 #   --dry-run      show what would be done, change nothing
 #   --prefix DIR   install directory (default: /usr/local/bin)
-#   --skip-verify  install even if the signature check fails (the SHA-256
-#                  check still runs)
+#   --skip-verify  install without the signature check (the SHA-256 check
+#                  still runs)
 #   --version      print the version this script installs and exit
 #
 # Needs: a POSIX sh, uname, curl or wget, sha256sum or shasum or openssl,
-# tar, gzip, mktemp, find, awk, install and ln. Optional, to verify the
-# signature: gh (logged in) or cosign.
+# tar, gzip, mktemp, find, awk, cut, grep, cat, mkdir, install, mv, ln and
+# rm. Optional, to verify the signature: gh (logged in) or cosign.
 set -eu
 umask 022
 
 VERSION="__VERSION__"
 REPO="bhimrazy/vps-ready"
 BASE_URL="https://github.com/$REPO/releases/download/v$VERSION"
-IDENTITY='^https://github.com/bhimrazy/vps-ready/\.github/workflows/release\.yml@refs/tags/v'
+IDENTITY="https://github.com/$REPO/.github/workflows/release.yml@refs/tags/v$VERSION"
 ISSUER="https://token.actions.githubusercontent.com"
 CHECKSUMS=$(cat <<'EOF'
 __CHECKSUMS__
@@ -49,8 +50,8 @@ Usage: sh install.sh [--dry-run] [--prefix DIR] [--skip-verify] [--version]
 
   --dry-run     show what would be done, change nothing
   --prefix DIR  install directory (default: /usr/local/bin)
-  --skip-verify install even if the signature check fails (the SHA-256
-                check still runs)
+  --skip-verify install without the signature check (the SHA-256 check
+                still runs)
   --version     print the version this script installs and exit
 EOF
 }
@@ -99,7 +100,7 @@ verify_signature() {
 		download "$BASE_URL/checksums.txt" "$tmp/checksums.txt"
 		download "$BASE_URL/checksums.txt.sigstore.json" "$tmp/checksums.txt.sigstore.json"
 		cosign verify-blob --bundle "$tmp/checksums.txt.sigstore.json" \
-			--certificate-identity-regexp "$IDENTITY" --certificate-oidc-issuer "$ISSUER" \
+			--certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER" \
 			"$tmp/checksums.txt" >/dev/null 2>&1 ||
 			die "cosign signature verification FAILED; pass --skip-verify to install anyway"
 		grep -q "^$expected  $tarball\$" "$tmp/checksums.txt" ||
@@ -107,7 +108,7 @@ verify_signature() {
 		say "signature verified with cosign"
 		return 0
 	fi
-	say "note: no usable gh (installed and logged in) or cosign, so the binary was checked only against the checksums embedded in this script; install one and rerun to verify the signature (see docs/release.md)"
+	say "note: no usable gh (installed and logged in) or cosign, so the binary was checked only against the checksums embedded in this script; install one and rerun to verify the signature"
 }
 
 # Removes the download directory and a half-written binary.
@@ -183,6 +184,7 @@ main() {
 	# On a signal, clean up and exit too, rather than carry on after the
 	# interrupted command.
 	trap cleanup EXIT
+	trap 'exit 129' HUP
 	trap 'exit 130' INT
 	trap 'exit 143' TERM
 	say "downloading $tarball"

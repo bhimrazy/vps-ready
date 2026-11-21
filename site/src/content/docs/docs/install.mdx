@@ -9,7 +9,22 @@ import { RELEASE_ASSETS, RELEASE_BASE, RELEASE_DATE, REPO, SBOM, VERSION } from 
 
 export const script = `${RELEASE_BASE}/install.sh`;
 export const identity = `${REPO}/.github/workflows/release.yml@refs/tags/v${VERSION}`;
-export const attest = `--repo bhimrazy/vps-ready --signer-workflow bhimrazy/vps-ready/.github/workflows/release.yml --source-ref refs/tags/v${VERSION}`;
+export const attest = (file, ...extra) => [
+  `gh attestation verify ${file} \\`,
+  '  --repo bhimrazy/vps-ready \\',
+  '  --signer-workflow bhimrazy/vps-ready/.github/workflows/release.yml \\',
+  `  --source-ref refs/tags/v${VERSION}${extra.length ? ' \\' : ''}`,
+  ...extra.map((e) => `  ${e}`),
+];
+export const files = [
+  ...RELEASE_ASSETS.flatMap((a) => [
+    { name: a.deb, arch: a.arch },
+    { name: a.tarball, arch: a.arch },
+  ]),
+  { name: 'install.sh', arch: 'any' },
+  { name: SBOM, arch: 'any' },
+  { name: 'checksums.txt', arch: 'any' },
+];
 
 vps-ready is one static binary for Linux on x86_64 and arm64, with nothing else to install. The install script is the common way; a `.deb` package and `cargo` work too. Run these on the server. The install script is three steps on purpose: download, read, run.
 
@@ -18,7 +33,12 @@ vps-ready is one static binary for Linux on x86_64 and arm64, with nothing else 
     <Command lines={[`curl -fsSLO ${script}`, 'less install.sh', 'sudo sh install.sh']} />
   </TabItem>
   <TabItem label=".deb">
-    <Command lines={[`curl -fsSLO ${RELEASE_BASE}/${RELEASE_ASSETS[0].deb}`, `sudo apt install ./${RELEASE_ASSETS[0].deb}`]} />
+    <Command scroll lines={[
+      `B=${RELEASE_BASE}`,
+      `curl -fsSLO $B/${RELEASE_ASSETS[0].deb} -O $B/checksums.txt`,
+      'sha256sum --check --ignore-missing checksums.txt',
+      `sudo apt install ./${RELEASE_ASSETS[0].deb}`,
+    ]} />
   </TabItem>
   <TabItem label="cargo">
     <Command lines={['cargo install vps-ready --locked']} />
@@ -29,7 +49,7 @@ Then try it read-only. `audit` reports what fails, and `plan` shows what would c
 
 <Command lines={['sudo vps-ready audit', 'sudo vps-ready plan']} />
 
-The install script downloads the release tarball for the machine, checks it against the SHA-256 embedded in the script, verifies the release signature when `gh` or `cosign` is installed, and copies the binary to `/usr/local/bin`. <a href={script}>View the install script</a>. The `.deb` tab is for x86_64; the [download table](#download-a-release) has the arm64 package.
+The install script downloads the release tarball for the machine, checks it against the SHA-256 embedded in the script, verifies the release signature when `gh` or `cosign` is installed, and copies the binary to `/usr/local/bin`. <a href={script}>View the install script</a>. The `.deb` tab is for x86_64 and checks the file against `checksums.txt`; [verify the signature](#verify-a-release) on `checksums.txt` too, and find the arm64 package in the [download table](#download-a-release).
 
 If `cosign`, or `gh` while logged in (`gh auth status`), is installed and the signature check fails, the install stops (use `--skip-verify` to override). A `gh` that is not logged in is skipped. With no usable tool, the script says so and continues: the binary is then checked only against the checksums embedded in the script, so [verify the script itself](#verify-a-release) if that matters to you.
 
@@ -37,7 +57,7 @@ If `cosign`, or `gh` while logged in (`gh auth status`), is installed and the si
 |---|---|
 | `--dry-run` | Show what would be done, change nothing |
 | `--prefix DIR` | Install directory (default: `/usr/local/bin`). Refused when group- or other-writable |
-| `--skip-verify` | Install even if the signature check fails; the SHA-256 check still runs |
+| `--skip-verify` | Install without the signature check; the SHA-256 check still runs |
 | `--version` | Print the version the script installs and exit |
 
 The command is also installed as `vpsready`, without the hyphen.
@@ -50,20 +70,19 @@ The latest release is <strong>v{VERSION}</strong>{RELEASE_DATE && <>, tagged {RE
 
 <table>
   <thead>
-    <tr><th>Architecture</th><th>Debian package</th><th>Tarball</th></tr>
+    <tr><th>File</th><th>Architecture</th></tr>
   </thead>
   <tbody>
-    {RELEASE_ASSETS.map((a) => (
+    {files.map((f) => (
       <tr>
-        <td>{a.arch}</td>
-        <td><a href={`${RELEASE_BASE}/${a.deb}`}><code>{a.deb}</code></a></td>
-        <td><a href={`${RELEASE_BASE}/${a.tarball}`}><code>{a.tarball}</code></a></td>
+        <td><a href={`${RELEASE_BASE}/${f.name}`}><code class="whitespace-nowrap">{f.name}</code></a></td>
+        <td>{f.arch}</td>
       </tr>
     ))}
   </tbody>
 </table>
 
-The release also has <a href={script}><code>install.sh</code></a>, the SBOM <a href={`${RELEASE_BASE}/${SBOM}`}><code>{SBOM}</code></a>, and <a href={`${RELEASE_BASE}/checksums.txt`}><code>checksums.txt</code></a> with its Sigstore bundle. Older versions are on the [releases page](https://github.com/bhimrazy/vps-ready/releases). Verify a file before you install it, as the next section shows.
+`checksums.txt` has a Sigstore bundle, `checksums.txt.sigstore.json`, next to it. Older versions are on the [releases page](https://github.com/bhimrazy/vps-ready/releases). Verify a file before you install it, as the next section shows.
 
 ## Verify a release
 
@@ -71,35 +90,39 @@ Every release ships `checksums.txt`, which lists the tarballs, the `.deb` files,
 
 Download `checksums.txt`, its bundle and the files you want from the same release, here `install.sh` and the x86_64 `.deb`:
 
-<Command lines={[
+<Command scroll lines={[
   `B=${RELEASE_BASE}`,
-  `curl -fsSLO $B/checksums.txt -O $B/checksums.txt.sigstore.json -O $B/install.sh -O $B/${RELEASE_ASSETS[0].deb}`,
+  'curl -fsSLO $B/checksums.txt \\',
+  '  -O $B/checksums.txt.sigstore.json \\',
+  '  -O $B/install.sh \\',
+  `  -O $B/${RELEASE_ASSETS[0].deb}`,
 ]} />
 
 To check that `checksums.txt` was signed by the release workflow for this exact tag, run:
 
-<Command lines={[
-  `cosign verify-blob --bundle checksums.txt.sigstore.json --certificate-identity ${identity} --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt`,
+<Command scroll lines={[
+  'cosign verify-blob \\',
+  '  --bundle checksums.txt.sigstore.json \\',
+  `  --certificate-identity ${identity} \\`,
+  '  --certificate-oidc-issuer https://token.actions.githubusercontent.com \\',
+  '  checksums.txt',
 ]} />
 
 Then check every file you downloaded against it. Each prints `OK`:
 
-<Command lines={['sha256sum --check --ignore-missing checksums.txt']} />
+<Command scroll lines={['sha256sum --check --ignore-missing checksums.txt']} />
 
 With `gh`, you can also check each file's build provenance. The flags pin it to this repository's release workflow and the tag, so a file built by any other workflow or from any other ref fails:
 
-<Command lines={[
-  `gh attestation verify install.sh ${attest}`,
-  `gh attestation verify ${RELEASE_ASSETS[0].deb} ${attest}`,
-]} />
+<Command scroll lines={[...attest('install.sh'), '', ...attest(RELEASE_ASSETS[0].deb)]} />
 
 The same command works for a tarball or the SBOM. Without `cosign`, run it on each file you downloaded instead of the two steps above.
 
 ### Check the SBOM
 
-Each release also has `vps-ready-<version>.cdx.json`, a CycloneDX 1.5 list of the crates the binary is built from. It is listed in `checksums.txt`, and attested as a second attestation on the tarballs and `.deb` files, with the SBOM as its predicate. `gh` checks the SLSA provenance by default, so name the CycloneDX predicate type to check the SBOM's attestation:
+Each release also has `vps-ready-<version>.cdx.json`, a CycloneDX 1.5 list of the crates the binary is built from. The release workflow lists it in `checksums.txt` and attaches it to each tarball and `.deb` as a second attestation. `gh` checks the SLSA provenance by default, so name the CycloneDX predicate type to check the SBOM's attestation:
 
-<Command lines={[`gh attestation verify ${RELEASE_ASSETS[0].deb} ${attest} --predicate-type https://cyclonedx.org/bom`]} />
+<Command scroll lines={attest(RELEASE_ASSETS[0].deb, '--predicate-type https://cyclonedx.org/bom')} />
 
 Add `--format json` to print what the attestation carries and compare it with the SBOM you downloaded. The trust model of each install channel is in [Supply chain and release](/docs/project/release/).
 
@@ -116,7 +139,7 @@ sudo vps-ready detect
 
 ## Upgrade
 
-vps-ready never updates itself, since it makes no network calls except package installs. To upgrade, download, read and run the new release's installer:
+vps-ready never updates itself. To upgrade, download, read and run the new release's installer:
 
 <Command lines={[`curl -fsSLO ${script}`, 'less install.sh', 'sudo sh install.sh']} />
 

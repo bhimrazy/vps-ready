@@ -42,9 +42,9 @@ export const LINKS = {
   verify: '/docs/install/#verify-a-release',
   policy: '/docs/reference/security/',
 };
-// Shown in every footer. vps-ready opens no connection itself: apt-get fetches
-// packages, and net.tailscale runs `tailscale up` when given an auth key.
-export const NO_TELEMETRY = 'No telemetry. The only network calls are package installs and a VPN login you set up.';
+// Shown in every footer; net.tailscale runs `tailscale up` only with an auth key.
+export const NO_TELEMETRY =
+  'No telemetry and no self-update. vps-ready itself reaches the network only through apt and, if you configure it, tailscale up.';
 export const EMAIL = 'contact@bhimraj.com.np';
 export const MAILTO = `mailto:${EMAIL}?subject=vps-ready%3A%20&body=Hi%20Bhimraj%2C%0A%0A%0A%0A---%0Avps-ready%20version%20(vps-ready%20--version)%3A%20%0AServer%20OS%3A%20`;
 

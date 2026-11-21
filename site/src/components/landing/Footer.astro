@@ -27,14 +27,14 @@ const projectLinks = [
   ['Issues', LINKS.issues],
   ['Releases', LINKS.releases],
   ['Verify', LINKS.verify],
-  ['Security', LINKS.policy],
+  ['Security policy', LINKS.policy],
   ['crates.io', LINKS.crates],
 ];
 const row =
   'group/row -mx-2.5 grid min-w-0 flex-1 grid-cols-[20px_minmax(0,1fr)] items-center gap-3 rounded-md px-2.5 py-1.5 text-ink no-underline hover:bg-surface';
 ---
 
-<footer class="bg-bg pt-14 pb-8 text-sm text-muted">
+<footer class="bg-bg pt-14 pb-24 text-sm text-muted">
   <div class="mx-auto w-full max-w-[1160px] px-4 grid gap-10">
     <div class="grid grid-cols-2 items-stretch gap-4 max-[900px]:grid-cols-1">
       <Card bare class="flex flex-col justify-center gap-4 p-6">
@@ -49,7 +49,7 @@ const row =
             class="block size-16 flex-none rounded-full border-2 border-bg shadow-[0_0_0_1px_var(--color-line)]"
           />
           <div class="grid min-w-0 gap-1">
-            <a href={AUTHOR.site} class="justify-self-start font-mono text-lg font-bold tracking-[-0.01em] text-ink no-underline hover:text-brand"
+            <a href={AUTHOR.site} rel="author" class="justify-self-start font-mono text-lg font-bold tracking-[-0.01em] text-ink no-underline hover:text-brand"
               >{AUTHOR.name}</a
             >
             <p class="text-sm text-muted">Software engineer and open-source contributor.</p>
@@ -145,10 +145,7 @@ const row =
         }
       </nav>
     </div>
-    <div class="flex flex-wrap justify-between gap-x-6 gap-y-2 font-mono text-xs text-subtle">
-      <span>MIT or Apache-2.0 &middot; {NO_TELEMETRY}</span>
-      <span>A tool by <a href={AUTHOR.site} rel="author" class="text-subtle underline-offset-2 hover:text-ink hover:underline">{AUTHOR.name}</a></span>
-    </div>
+    <div class="font-mono text-xs text-muted">MIT or Apache-2.0 &middot; {NO_TELEMETRY}</div>
     </div>
   </div>
 </footer>
