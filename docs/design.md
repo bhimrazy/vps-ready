@@ -28,7 +28,7 @@ Every single fix already exists somewhere. What is missing is one trusted tool t
 
 - **Provisioning first.** The first minutes after `ssh root@new-vps`, plus deployment readiness: an admin user, SSH, a firewall, updates, Docker with safe defaults, a reverse proxy, a deploy user, private access.
 - **Lockout-safe by construction.** Root and password logins stay on until a keyed sudo user exists, the firewall always keeps the current SSH port, and changes that could lock someone out revert unless a new SSH login confirms them.
-- **Plan, apply, verify, roll back**, with a readable diff and an honest reversibility label on every change: reversible, partial or irreversible.
+- **Plan, apply, verify, roll back**, with a readable diff and an honest reversibility label on every change: reversible or partial.
 - **Audit and fix share one rule set.** Controls have stable IDs, and a control a module fixes names that module.
 - **Export.** A profile used once interactively becomes cloud-init `user-data` for the next server.
 - **Trust.** Signed releases with provenance, a `.deb`, and no `curl | sh` required.
@@ -78,7 +78,7 @@ pub trait Runner {
     fn run(&self, cmd: &Cmd) -> Result<Output, SysError>;  // program, args, env, timeout, stdin file, stdout to a new file
 }
 
-pub trait Fs {                                             // every path resolved under a base directory
+pub trait Fs {                                             // abridged; every path resolved under a base directory
     fn read(&self, path: &Path) -> Result<Vec<u8>, SysError>;
     fn exists(&self, path: &Path) -> bool;
     fn read_dir(&self, path: &Path) -> Result<Vec<PathBuf>, SysError>;
@@ -115,19 +115,19 @@ pub enum Resource { File, Directory, Sysctl, Package, Service, User, AuthorizedK
 
 impl Resource {
     pub fn id(&self) -> String;                              // "file:/etc/sysctl.d/90-vps-ready.conf"
-    pub fn reversibility(&self) -> Reversibility;            // Reversible | Partial | Irreversible
+    pub fn reversibility(&self) -> Reversibility;            // Reversible | Partial
     pub fn diff(&self, sys: Sys) -> Result<Option<Change>>;  // None: nothing to do
-    pub fn snapshot(&self, sys: Sys) -> Result<Backup>;
-    pub fn apply(&self, sys: Sys) -> Result<()>;
+    pub fn snapshot(&self, sys: Sys, txn_dir: &Path, n: u32) -> Result<Backup>;  // writes files/<n>.before and .after
+    pub fn apply(&self, sys: Sys) -> Result<Applied>;
 }
-pub fn restore(sys: Sys, backup: &Backup) -> Result<()>;     // needs only the journaled Backup
+pub fn restore(sys: Sys, txn_dir: &Path, backup: &Backup) -> Result<()>;  // the journaled Backup and files/
 ```
 
-- **Restore needs only the journal**, so `rollback` works in a later process, perhaps a newer binary, without rebuilding any module's plan.
+- **Restore needs only the journaled `Backup` and the transaction's `files/`**, so `rollback` works in a later process, perhaps a newer binary, without rebuilding any module's plan.
 - A `File` is a whole file vps-ready owns, optionally validated on its `.after` copy before it is written (`sshd -t -f`, `nft -c -f`, `visudo -cf`, `apt-config`), and may carry a one-line `describe` instead of a diff (vendor keys show their fingerprint). It refuses a symlink or a missing parent.
 - `Package` installs what is missing with one `apt-get update` and one `apt-get install --no-install-recommends` per module (`Partial`: rollback leaves packages installed).
 - `Directory` removes on rollback only what it created and only when empty. `User` is `Partial` (a created user's home stays). `AuthorizedKeys` appends missing lines and never removes one.
-- `WireguardKey` runs `wg genkey` with stdout opened by vps-ready as a new 0600 file, so the key never passes through vps-ready; its backup holds only a public key, and rollback keeps the key. `WireguardSync` diffs the running `wg0` against `wg0.conf` and applies only `wg set` commands, never `wg syncconf`.
+- `WireguardKey` runs `wg genkey` with stdout opened by vps-ready as a new 0600 file, so the key never passes through vps-ready; its backup holds only a public key, and rollback keeps the key. `WireguardSync` diffs the running `wg0` against `wg0.conf` and applies only `wg set` commands, never `wg syncconf`; it is a resource rather than a reload because the engine skips the reloads of a module with no resource change, so a drifted `wg0` behind unchanged files would never be put back. vps-ready never runs `wg showconf`, and a `wg0.conf` holding a `PrivateKey` is not managed, so it is never copied into `files/`.
 - The firewall is two `File`s and a `Service`, not a ruleset resource: the unit's `ExecStart`, `ExecReload` and `ExecStop` load and delete vps-ready's table.
 
 #### Modules
@@ -147,6 +147,7 @@ pub trait Module {
     fn check_params(&self, params: &toml::Table) -> Result<(), ModuleError>;
     fn plan(&self, cx: &PlanCx, sys: Sys) -> Result<ModuleSteps, ModuleError>;
     fn verify(&self, cx: &PlanCx, sys: Sys) -> Result<(), String> { Ok(()) }
+    fn verify_timeout(&self) -> Duration;                    // counted into the timer's first deadline
 }
 pub struct ModuleSteps { pub resources: Vec<Resource>, pub reloads: Vec<Reload>, pub notes: Vec<String>, pub deadman: bool }
 pub enum Reload { SshdReload, FirewallReload, Fail2banRestart, DaemonReload, DockerRestart, CaddyReload, CloudflaredRestart }
@@ -155,7 +156,7 @@ pub enum Reload { SshdReload, FirewallReload, Fail2banRestart, DaemonReload, Doc
 - Each module parses its params into a `deny_unknown_fields` struct, so a typo names the module.
 - A `Reload` is a closed enum with a fixed check and command (`sshd -t`, then `systemctl try-reload-or-restart ssh.service`), journaled by name. A rollback replays it after the restore, check first; a failed check skips it (`reload-skipped`), so a listener keeps its running config rather than dying on a broken one.
 - `ModuleSteps.deadman` lets a module ask for the timer on this host only: a VPN module does when the loaded ruleset limits SSH to its interface.
-- The registry order is fixed: `user.admin`, `ssh.server`, `net.tailscale`, `net.wireguard`, `net.tunnel`, `deploy.docker`, `firewall.inbound`, `ssh.bruteforce`, `kernel.sysctl`, `updates.auto`, `deploy.proxy`, `deploy.user`. A module sees what earlier modules planned (`PlanCx.planned`): `firewall.inbound` opens Docker's bridges and the WireGuard port for modules planned before it, and `deploy.proxy` reads the ruleset and whether a tunnel is planned. `ssh.server`'s need for an admin is a plan-time check, so there is no `requires` or topological sort.
+- The registry order is fixed: `user.admin`, `ssh.server`, `net.tailscale`, `net.wireguard`, `net.tunnel`, `deploy.docker`, `firewall.inbound`, `ssh.bruteforce`, `kernel.sysctl`, `updates.auto`, `deploy.proxy`, `deploy.user`. A module sees what earlier modules planned (`PlanCx.planned`): `firewall.inbound` opens Docker's bridges and the WireGuard port for modules planned before it, and the WireGuard port of the `ssh_via` interface, and `deploy.proxy` reads the ruleset and whether a tunnel is planned. `ssh.server`'s need for an admin is a plan-time check, so there is no `requires` or topological sort.
 
 #### Controls catalog
 
@@ -166,7 +167,7 @@ Controls live in `src/audit/controls/<area>.toml`, separate from modules because
 id       = "SSH-002"
 severity = "high"
 title    = "Password authentication disabled"
-why      = "Passwords can be brute-forced; keys cannot."
+why      = "Passwords can be guessed or reused from leaks; SSH keys cannot be brute-forced."
 check    = { kind = "sshd_effective", key = "passwordauthentication", equals = "no" }
 fix      = "ssh.server"
 ```
@@ -178,7 +179,7 @@ fix      = "ssh.server"
 
 #### Templates and errors
 
-- Whole config files (the sshd drop-in, the nftables ruleset, the cloudflared units) are `askama` templates in `crates/vps-ready/templates/`, checked at compile time; short files are `format!` strings. `insta` snapshots pin every rendered file.
+- Whole config files (the sshd drop-in, the nftables ruleset, the cloudflared unit and its restart script) are `askama` templates in `crates/vps-ready/templates/`, checked at compile time; short files are `format!` strings. `insta` snapshots pin every rendered file.
 - One `thiserror` enum per layer, each wrapping the one below with context. `anyhow` only at the binary's edge.
 - No `unwrap`, `expect` or `panic!` outside tests; the clippy lints for them are denied workspace-wide. A root tool that panics halfway through an edit is the bug the engine exists to prevent.
 
@@ -191,19 +192,18 @@ With no subcommand on a terminal, `vps-ready` runs the wizard (`src/cli/wizard.r
 1. **Plan.** Collect facts, plan every selected module in registry order, render a unified diff for files and one line for everything else.
 2. **Preflight invariants**, enforced by the modules at plan time:
    - root and password logins are not turned off unless a non-root user with keys and sudo exists (the plan's admin);
-   - the firewall always accepts every current SSH port: the applying session's, every port sshd listens on, and `ssh.socket`'s;
+   - the firewall always accepts every current SSH port: the applying session's, every port sshd listens on, and `ssh.socket`'s. `ct state established` alone is not enough, since a flow that predates conntrack is dropped without a rule for its port;
    - outbound traffic is never filtered, so cloud metadata stays reachable;
    - `ip_forward`, `accept_ra` and `rp_filter` are never written.
 3. **Apply**, as one transaction:
    1. take the lock (`flock`, never waiting) and refuse if any transaction is unfinished or pending;
    2. print the plan, ask, then re-run every `diff()` and abort if the changes differ from what was shown;
    3. journal `begin`; if any module needs the dead-man, arm it now, before the first change;
-   4. for each resource: snapshot (`.before`, `.after`, fsynced), validate, journal `backup`, apply, journal `applied`;
-   5. run each module's reloads, check first;
-   6. verify: every `diff()` is empty again, plus each module's `verify` (`sshd -T -C` for the admin, the table read back);
-   7. on any failure, restore in reverse journal order;
-   8. with the dead-man: re-arm to the confirm window and wait (`PendingConfirm`); otherwise journal `state applied`;
-   9. re-run the audit for the controls the plan fixes, for information.
+   4. for each module in order: each of its resources (snapshot to `.before` and `.after`, fsynced; validate; journal `backup`; apply; journal `applied`), then that module's reloads, check first;
+   5. verify: every `diff()` is empty again, plus each module's `verify` (`sshd -T -C` for the admin, the table read back);
+   6. on any failure, restore in reverse journal order;
+   7. with the dead-man: re-arm to the confirm window and wait (`PendingConfirm`); otherwise journal `state applied`;
+   8. re-run the audit for the controls the plan fixes, for information.
 4. **Idempotency.** A second apply plans nothing.
 
 The `backup` record is fsynced before its resource is touched, so after a crash every resource that may have changed has a backup on disk.
@@ -243,7 +243,8 @@ Every transition passes through one function that matches on `(state, event)`; a
 The modules that can lock someone out (`user.admin`, `ssh.server`, `firewall.inbound`), and a VPN module whose interface SSH depends on, run behind a timer. Several in one apply share one transaction and one confirm: a single new login proves the user, the sshd config and the firewall together.
 
 ```
-arm:      check the binary: root-owned, not group- or world-writable, not under /home or /tmp
+arm:      check the binary and every parent: root-owned, not group- or world-writable,
+          not under /home, /tmp, /var/tmp or /dev/shm
           copy it to /var/lib/vps-ready/bin/vps-ready (root, 0755)
           enable the boot hook vps-ready-deadman.service, which runs the copy
           systemd-run --unit=vps-ready-deadman-<txn>-1 --on-active=<window + every step's timeout> \
@@ -264,11 +265,11 @@ reboot:   the boot hook rolls back before sshd starts (reason deadman-reboot)
 - **Arm before the change.** The timer exists before the first backup, so a crash at any point after a change has something to revert it. The first deadline covers the window plus every step's command timeout, so it cannot fire while apply is within its limits; if it does (a hung step), the rollback waits for the lock.
 - **A transient systemd timer**, handed to PID 1, outside the user's session, so it fires when the SSH connection and the apply process are gone, including with logind's `KillUserProcesses=yes`.
 - **Deadlines** are `CLOCK_BOOTTIME` seconds plus the boot ID, so an NTP step in the window changes nothing.
-- **The boot hook**, `/etc/systemd/system/vps-ready-deadman.service`, is written outside any transaction and enabled only while one is armed. It has `DefaultDependencies=no`, `After=local-fs.target vps-ready-firewall.service`, `Before=ssh.service ssh.socket docker.service caddy.service vps-ready-cloudflared.service shutdown.target` and `TimeoutStartSec=120`, and bounds every command to 20 seconds. It rolls back any transaction armed in an earlier boot, so sshd starts with the restored config. If it times out, sshd starts anyway and the transaction stays pending for a manual rollback.
+- **The boot hook**, `/etc/systemd/system/vps-ready-deadman.service`, is written outside any transaction and enabled only while one is armed. It has `DefaultDependencies=no`, `After=local-fs.target vps-ready-firewall.service`, `Before=ssh.service ssh.socket docker.service caddy.service vps-ready-cloudflared.service shutdown.target` and `TimeoutStartSec=120`, and bounds every command to 20 seconds. It rolls back any transaction armed in an earlier boot, so sshd starts with the restored config; a reboot counts as not confirmed, since the user may have rebooted because they were locked out. If it times out, sshd starts anyway and the transaction stays pending for a manual rollback.
 - **The window** is 5 minutes, counted from when the changes are live (`apply --deadman 1m` to `30m`). `confirm --extend [DUR]` works from any session, since extending proves nothing, up to 30 minutes ahead and 2 hours after the changes went live.
 - **Waiting.** `apply` counts down and exits 0 when confirmed, 1 when rolled back, and 4 when Ctrl-C stopped the wait (the timer keeps running). `history` shows `pending-confirm (reverts in 3m12s)`.
-- **The dead-man rollback is per resource.** Resources of `ssh.server` and `firewall.inbound` (`force_restore`) are restored even if edited during the window, and the edit is kept as `files/<n>.during`. Any other resource that changed is skipped and journaled with its by-hand step. Restores come first and the journal is best effort, so a full disk does not stop them. If a forced restore fails, the unforced ones after it (the admin `user.admin` made) wait for a rerun, so the way in stays while the lock-down does.
-- **Guarded manual rollbacks.** Under `ssh_via`, a manual rollback that would limit SSH to an interface again runs only from a login through it, since no timer covers it. One that would stop a `tailscaled` or `wg-quick@wg0` its transaction started, or run `tailscale down`, is refused when SSH afterwards depends on that interface or the session comes through it, and so is one that would take the session's own WireGuard peer off `wg0`.
+- **The dead-man rollback is per resource.** Resources of `ssh.server` and `firewall.inbound` (`force_restore`), and of a VPN module that asked for the timer through `ModuleSteps.deadman`, are restored even if edited during the window, and the edit is kept as `files/<n>.during`. Any other resource that changed is skipped and journaled with its by-hand step. Restores come first and the journal is best effort, so a full disk does not stop them. If a forced restore fails, the unforced ones after it (the admin `user.admin` made) wait for a rerun, so the way in stays while the lock-down does.
+- **Guarded manual rollbacks.** Under `ssh_via`, a manual rollback that would limit SSH to an interface again runs only from a login through it, since no timer covers it. One that would stop a `tailscaled` or `wg-quick@wg0` its transaction started, or run `tailscale down`, is refused when SSH afterwards depends on that interface or the session comes through it, and so is one that would take the session's own WireGuard peer off `wg0`. A pending or unfinished transaction is exempt from the `ssh_via` guard, since its rollback only does what the dead-man would. Removing an admin account `user.admin` created is refused while a later transaction is applied, confirmed or pending (it may rely on that account), and for the account running the rollback.
 
 ```mermaid
 sequenceDiagram
@@ -293,7 +294,7 @@ sequenceDiagram
   end
 ```
 
-**Without the timer.** `apply --deadman=off` applies the dead-man modules without arming anything, for a first boot from `export cloud-init`, where nobody can confirm. The plan-time invariants still hold. It needs positive evidence that nobody is logged in: no per-session sshd process in `/proc` and no `loginctl` session of class `user`. It is refused with an explicit `ssh_via`, and `history` shows the transaction as applied without the timer.
+**Without the timer.** `apply --deadman=off` applies the dead-man modules without arming anything, for a first boot from `export cloud-init`, where nobody can confirm. The plan-time invariants still hold. It needs positive evidence that nobody is logged in: no per-session sshd process in `/proc` and no `loginctl` session of class `user`. It is refused with an explicit `ssh_via` and in the `private` profile's step 2, and `history` shows the transaction as applied without the timer. A crash mid-apply with the timer off leaves an unfinished transaction, with nothing to roll it back until `rollback --last`.
 
 The timer needs systemd. Planned: an OpenRC watchdog and firewalld runtime-only rules, with those distro families.
 
@@ -309,7 +310,8 @@ The timer needs systemd. Planned: an OpenRC watchdog and firewalld runtime-only 
         files/<n>.after            bytes vps-ready wrote, and what validate checked
         files/<n>.during           an edit made in the window, kept when the dead-man restored the file
 /etc/systemd/system/vps-ready-deadman.service   the boot hook
-/etc/vps-ready/                    firewall.nft, profile.toml (from export), cloudflared.yml
+/etc/vps-ready/                    firewall.nft, profile.toml (from export), cloudflared.yml,
+                                   cloudflared-restart.sh, cloudflared-token (written by the wizard)
 ```
 
 `history`, `rollback` and `confirm` read this. Planned for v0.8.0: `/etc/vps-ready/config.toml` with `drift`.
@@ -391,7 +393,7 @@ site/                      the user docs and landing page
 
 - **Library plus thin binary:** `main.rs` parses arguments and maps errors to exit codes; tests call the library directly.
 - **Adding a module** is one file plus a directory, and one line in the registry.
-- **Direct dependencies** stay short: `clap`, `serde`, `serde_json`, `toml`, `thiserror`, `anyhow` (binary edge only), `similar`, `tracing`, `askama`, `owo-colors`, `rustix`, `signal-hook` and `dialoguer` (in `src/tui` only). Dev only: `insta`, `proptest`, `tempfile`, `assert_cmd`, `predicates`. `std` covers `flock`, `fsync` and `fchown`.
+- **Direct dependencies** stay short: `clap`, `serde`, `serde_json`, `toml`, `thiserror`, `anyhow` (binary edge only), `similar`, `tracing`, `tracing-subscriber`, `askama`, `owo-colors`, `rustix`, `signal-hook`, `dialoguer` (in `src/tui` only), `zeroize` (for pasted secrets) and the workspace's own `sshd-config`. Dev only: `insta`, `proptest`, `tempfile`, `assert_cmd`, `predicates`. `std` covers `flock`, `fsync` and `fchown`.
 
 ## Security model
 
@@ -419,7 +421,7 @@ vps-ready runs as root on a fresh server, so the question is also how it could h
 | A compromised dependency | A short dependency list, `cargo deny` (RustSec advisories, licenses, sources) in CI, Dependabot with a cooldown, vendor apt keys embedded and checked weekly |
 | The tool locks the user out | The plan-time invariants, the dead-man switch, and VM tests of every revert path |
 | The tool weakens security by mistake | The post-apply audit, and snapshot tests of every rendered config |
-| Secrets in logs, plans or backups | Secrets are passed as root-only files the tool never opens (Tailscale's `file:`, the tunnel's `LoadCredential=`, `wg genkey` to a file); none reaches argv, the plan, the journal or `files/<n>` |
+| Secrets in logs, plans or backups | Modules take secrets as root-only files the engine never opens (Tailscale's `file:`, the tunnel's `LoadCredential=`, `wg genkey` to a file); none reaches argv, the plan, the journal or `files/<n>`. The wizard holds a pasted auth key or tunnel token, zeroized, only long enough to write that file after the yes, with signals held back, and never writes it to `vps-ready.toml` |
 | Privilege escalation through state | Root-owned 0700 state, refused when its permissions are wrong; atomic writes with `O_EXCL`; the timer runs a root-owned copy of the binary, never a path a user can replace |
 | A root timer running a user-writable binary | The binary-path check before arming, and the private copy under `/var/lib/vps-ready/bin` |
 
@@ -480,20 +482,20 @@ Each decision with its reason. Where the code later departed from a plan, this r
 - **One transaction and one confirm** for `user.admin`, `ssh.server` and `firewall.inbound`, rather than three challenges: one new login proves all three, and step by step stays possible with `--module`.
 - **Arm before the change.** An earlier design armed after apply; a crash between a change and the arm would have left nothing to revert it.
 - **No confirm code.** At most one transaction is pending, so a code would pick between one choice, and a code printed in the old terminal proves nothing about the new one. The new-session check is the protection.
-- **What counts as a new login.** A different sshd session from apply's (PID plus start time), started after the changes went live (a terminal opened before apply survives the reload too), on a port the host's sshd listens on (a rescue sshd proves nothing about the applied config), as the plan's admin, and from a client that is not this host (loopback traffic passes any firewall). tmux, screen, mosh, the console and `ControlMaster` channels have no new sshd session, so they count as old. The printed line has `-o ControlPath=none` for that reason.
+- **Why each confirm rule.** The session must start after the changes went live, because a terminal opened before apply survives the reload too; on a port the host's sshd listens on, because a rescue sshd proves nothing about the applied config; and from a client that is not this host, because loopback traffic passes any firewall. Confirming from the same or any session, as other confirm-or-revert tools do, catches a change that kills the connection but not the common lockout where open connections survive and new ones fail.
 - **The process tree, not `SSH_CONNECTION`.** sudo's `env_reset` drops it on every supported distro, and asking users for `--preserve-env` is fragile. `loginctl` and utmp were rejected: another source to parse for the same answer, and utmp has no entry for `ssh host cmd`.
 - **No special sudo rule for confirm.** A `NOPASSWD` rule scoped to `vps-ready confirm` would let the confirm pass while the admin's real sudo is broken, which is the lockout it exists to catch.
-- **Dead-man defaults:** a 5-minute window (3 minutes was short for opening a terminal, finding the key and typing a command), `1m` to `30m`, extend capped at 30 minutes ahead and 2 hours in total, exit 4 for "still pending".
+- **A 5-minute default window**: 3 minutes was short for opening a terminal, finding the key and typing a command. The extend caps keep a forgotten window from staying open for hours.
 - **A transient systemd timer**, not a detached process, which a session teardown, the OOM killer or a reboot can take with it.
 - **The boot hook has only the ordering edges it needs.** Every extra edge is a chance for a cycle, and systemd breaks a cycle by dropping a unit, which may be `ssh.socket`. An earlier draft's `After=network-pre.target` formed one on hosts with firewalld.
-- **The dead-man restores `ssh.server`'s and `firewall.inbound`'s files even if edited,** keeping the edit as `.during`. An all-or-nothing rule there would mean "the admin edited the drop-in in the window, nothing reverted, locked out". `user.admin` is not forced: leaving an added key is not a lockout.
-- **The binary must be root-owned and outside `/home` and `/tmp`**, since a root timer that runs a file a user can replace is a root shell for that user.
+- **The dead-man force-restores lock-down resources** (`ssh.server`, `firewall.inbound`, and a VPN module that asked for the timer through `ModuleSteps.deadman`) even if edited. An all-or-nothing rule there would mean "the admin edited the drop-in in the window, nothing reverted, locked out". `user.admin` is not forced: leaving an added key is not a lockout.
+- **The binary check before arming** (the binary and every parent directory root-owned and not group- or world-writable, nowhere under `/home`, `/tmp`, `/var/tmp` or `/dev/shm`): a root timer that runs a file a user can replace is a root shell for that user.
+- **`ssh.server` never writes `Port`, `ListenAddress`, `AllowGroups`, `AuthenticationMethods` or crypto lists.** Each can cut the admin off or break clients for little gain, and a unit test enforces the list. It manages only the keywords of `SSH-001` to `SSH-007`.
 - **`nftables` in vps-ready's own table and unit, not ufw.** One backend for Debian and Ubuntu, one file that `nft -c -f` validates and loads atomically, and a rollback that deletes only `inet vps_ready`, leaving Docker's, fail2ban's and the admin's rules. Not `nftables.service`, whose config starts with `flush ruleset`. Not applicable while ufw or firewalld is active. The cost: `ufw status` does not show these rules.
 - **Accept input from Docker's bridges** when Docker is present, so containers that reach host services keep working; the plan says a compromised container can then reach them too.
 - **Drop IPv4 TCP with IP options** in a `prerouting` chain at `raw` priority, to blunt CVE-2026-98432 before conntrack, including for Docker's published ports. The real fix is the kernel update.
 - **`sudo = "nopasswd"` by default** for a created admin, as cloud images do for their default user; an existing user with sudo keeps it untouched.
-- **Reload, not restart,** for sshd: sessions survive a reload.
-- **fail2ban for brute force, only in `web`.** Local, packaged and without network calls; once SSH is key-only brute force is mostly noise, and OpenSSH 9.8 slows repeated failures itself. Its drop-in sets only `[sshd]`.
+- **fail2ban for brute force, in `web` and `private` only.** Local, packaged and without network calls; once SSH is key-only brute force is mostly noise, and OpenSSH 9.8 slows repeated failures itself. Its drop-in sets only `[sshd]`.
 - **VM tests on plain QEMU with KVM**, not a VM manager: a locked-out VM gets SSH back when the timer fires, so no side channel is needed.
 
 ### The wizard (v0.4.0)
@@ -520,6 +522,7 @@ Each decision with its reason. Where the code later departed from a plan, this r
 ### Private access (v0.6.0)
 
 - **Public SSH closes only from a session that already comes through the private interface.** After `ssh_via`, a broken VPN means no SSH at all, so closing public SSH is always a second apply, after the private path has carried a real login. The confirm must then be a new login through it. One apply that brings up the VPN and closes 22, relying on the timer alone, was rejected.
+- **`ssh_via` is refused at plan time** when the interface is down or has no address, when the VPN's unit is not enabled at boot, or when the interface can never be private (`lo`, container and VM bridges, the interface of the default route), since each closes SSH with no working path behind it.
 - **Staged `ssh_via = "vpn"` in the `private` profile.** It resolves to the profile's one VPN module, keeps SSH public with a note in step 1, and closes it in step 2, so both steps are the same command with the same file, and the export can carry it (at first boot it stays in step 1).
 - **Under `ssh_via`, any change to that VPN arms the timer** with the stricter confirm, and a change that would cut the applying session (its own peer, `tailscaled`) is refused: once SSH depends on the interface, changing it is the close step again.
 - **When the loaded ruleset already has the same `ssh_via`, the session refusals become notes,** so an apply from the console still works while the VPN is down.
@@ -528,7 +531,7 @@ Each decision with its reason. Where the code later departed from a plan, this r
 - **SSH ports in `allow` are left out with a note** when `ssh_via` is set, so profiles that extend `minimal` or `web` keep working.
 - **A console password is a note, not a refusal.** Rescue mode exists at every major provider, and setting a password is the admin's choice.
 - **Refuse `ssh_via = "tailscale0"` while the node key expires,** since SSH would otherwise close on a date months away.
-- **Tailscale joins with `--auth-key=file:<path>`** from a root-only file, so the key never reaches vps-ready's memory, argv or the journal; `--accept-dns=false`, since a server does not need the tailnet's DNS and rollback could not cleanly restore the resolver; **never `--ssh`**, which would replace sshd's authentication and leave `confirm` nothing to check; rollback runs `tailscale down`, never `logout`, which would spend a one-off key.
+- **Tailscale joins with `--auth-key=file:<path>`** from a root-only file, so the key never reaches the engine's memory, argv or the journal; `--accept-dns=false`, since a server does not need the tailnet's DNS and rollback could not cleanly restore the resolver; **never `--ssh`**, which would replace sshd's authentication and leave `confirm` nothing to check; rollback runs `tailscale down`, never `logout`, which would spend a one-off key.
 - **Tailscale and cloudflared update through unattended-upgrades**, since a host that depends on them for access must get their fixes.
 - **WireGuard's subnet is a `/24` in `10.0.0.0/8` derived from the machine ID**, collision-checked, with `address` to override: stable without stored state and different per server, so one laptop can reach several. Each peer sets an explicit `host`, so removing a peer never moves another.
 - **`wg set`, never `wg syncconf`,** plus an empty `ExecReload=`: a VM check showed `syncconf` with a key-less config clears the key that `PostUp` loaded, which would cut every tunnel.
@@ -551,7 +554,7 @@ The tool's promise is "safe on real servers", so tests are organized around the 
 ### A lockout change rolls back unless a new login confirms
 
 - **Unit (fakes):** arming before the first change; a failed `systemd-run` ending the transaction before any backup; a crash after every journal line from `armed` on, finished by the timer or the boot hook; the timer firing mid-apply; confirm racing the timer under the lock; `--extend` and its caps; per-resource restore with `.during`; a full disk during the rollback.
-- **VMs** (`test/vm-cycle.sh`, on all four distros): with `--deadman 1m` and the test-only `test.deadman` module, an unconfirmed apply reverts within the deadline, reverts after an edit in the window, and after a reboot in the window rolls back before sshd starts; `systemd-analyze verify` finds no ordering cycle. With the `minimal` profile, a new root login is refused during the window and the drop-in, table and admin are back after rollback.
+- **VMs** (`test/vm-cycle.sh`, on all four distros): with `--deadman 1m` and the test-only `test.deadman` module, an unconfirmed apply reverts within the deadline, reverts after an edit in the window, and after a reboot in the window rolls back before sshd starts; `systemd-analyze verify` finds no ordering cycle. With the `minimal` profile, a new root login is refused during the window and the drop-in, table and admin are back after rollback. An unconfirmed `--module ssh.server` refuses new root logins during the window, also through `ssh.socket` on Ubuntu 24.04, and reverts at its deadline after an edit. A `Match User` block that turns root login back on fails verify (`sshd -T -C`), and the apply rolls back.
 - **Containers** (`container-admin.sh`): an unconfirmed `user.admin` apply is rolled back by the timer and the boot hook ends disabled.
 
 ### Only a new SSH login as the admin can confirm
@@ -599,6 +602,11 @@ The tool's promise is "safe on real servers", so tests are organized around the 
 - **Containers:** `docker run -p 8080:80` answers on `127.0.0.1` only; Caddy keeps vps-ready's Caddyfile through dpkg and proxies HTTPS to an upstream; behind the tunnel, forged `X-Forwarded-For` and `X-Forwarded-Host` headers do not reach the upstream.
 - **VMs:** the same through the `web` profile, with nothing answering on the VM's own address.
 
+### A deploy key runs only its command
+
+- **Containers** (`container-admin.sh`): with `deploy.user` and a forced command, the key line is `restrict,command="..."`, a login runs only that command (which re-runs itself as root with `sudo`), sudo refuses it with an argument, and the sudoers drop-in passes `visudo -cf`. A second apply with another command leaves only that one forced, and rollbacks restore the first and then remove the account.
+- **VMs:** the same through the deploy cycle, whatever command the login asks for.
+
 ### Vendor upgrades keep services on the new binary
 
 - **Containers:** ten `apt-get install --reinstall cloudflared` runs each end with the connector on the new binary's inode, and a stale binary fails the restart script with its message.
@@ -632,4 +640,4 @@ The tool's promise is "safe on real servers", so tests are organized around the 
 | Fuzzing (`fuzz.yml`) | weekly, and on fuzz target changes | x86_64 |
 | Manual release gates | before tagging a release with Tailscale or the tunnel | Debian 13 and Ubuntu 24.04 VMs |
 
-There are no real-cloud runs yet. The M7 plan (decision 20) chose a manual `workflow_dispatch` run before each release, which exports a profile, boots a provider server, checks its open ports from outside and destroys it. How to run each level locally, and how to re-capture fixtures, is in [test/README.md](../test/README.md).
+There are no real-cloud runs yet. The M7 plan ([decision 20](m7-plan.md#accepted-recommendations)) chose a manual `workflow_dispatch` run before each release, which exports a profile, boots a provider server, checks its open ports from outside and destroys it. How to run each level locally, and how to re-capture fixtures, is in [test/README.md](../test/README.md).

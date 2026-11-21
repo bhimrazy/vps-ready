@@ -1,6 +1,6 @@
 # M7 plan: web through a tunnel, depth, and v1.0
 
-> **Status: accepted (2026-11-20); wave 1 shipped in v0.7.0.** `net.tunnel`, `deploy.proxy` `behind_tunnel`, the tunnel in the `private` profile and the wizard, and the journal `format` field are built; the rest is not. Every recommendation in [Decisions](#decisions) was accepted as written.
+> **Status: accepted (2026-11-20); wave 1 shipped in v0.7.0.** `net.tunnel`, `deploy.proxy` `behind_tunnel`, the tunnel in the `private` profile and the wizard, and the journal `format` field are built; the rest is not. Every recommendation in [Accepted recommendations](#accepted-recommendations) was accepted as written.
 
 M7 lets a web app run with no public port through a Cloudflare Tunnel, adds drift detection, CI-friendly audit output and security-key SSH logins, and then makes the tool stable as v1.0.
 
@@ -37,7 +37,7 @@ Only one piece changes the SSH path: security keys. It gets the same lockout car
 The split follows the owner's suggestion, with three changes:
 - The JSON Schema moves into v0.8.0 with `config.toml`. Both describe the same format, and the schema should ship in a release before 1.0 freezes it.
 - The journal `format` field moves to v0.7.0. Every journal written from then on carries it, so the 1.x promise ("reads every journal since 0.7.0") has a field to check from the start.
-- auditd is not in v0.9.0 (decision 16). After 1.0, a new opt-in module is an additive change, so it does not need to land before the freeze.
+- auditd is not in v0.9.0 ([decision 16](#accepted-recommendations)). After 1.0, a new opt-in module is an additive change, so it does not need to land before the freeze.
 
 SARIF and JUnit depend on nothing else, so they can move into v0.7.0 if the tunnel slips.
 
@@ -324,7 +324,7 @@ This narrows an M3 invariant: `ssh.server` "never writes ... crypto lists" (see 
 
 **Audit:** `SSH-010` (low), "Admin logins need a security key", a new check kind `sshd_effective_for` (`sshd -T -C` per sudo user). Skipped when no sudo user has an `sk-` key, so no host gains a failure from it. Fix: `ssh.server`.
 
-**TOTP is not in M7** (decision 15). It needs a third-party PAM module, `KbdInteractiveAuthentication yes`, `AuthenticationMethods publickey,keyboard-interactive:pam`, a per-user secret on the host and a correct clock. A mistake in the PAM stack can refuse every login, including the console's. A security key is the stronger second factor and changes one sshd keyword.
+**TOTP is not in M7** ([decision 15](#accepted-recommendations)). It needs a third-party PAM module, `KbdInteractiveAuthentication yes`, `AuthenticationMethods publickey,keyboard-interactive:pam`, a per-user secret on the host and a correct clock. A mistake in the PAM stack can refuse every login, including the console's. A security key is the stronger second factor and changes one sshd keyword.
 
 ### v1.0: what stable means
 
@@ -517,7 +517,7 @@ Checked against upstream docs and sources while writing this plan; items marked 
 | SARIF 2.1.0 only; a result needs a location; `security-severity` bands; only `primaryLocationLineHash` is used; `automationDetails.id`; per-run limits | GitHub docs, SARIF support for code scanning |
 | Debian 12 regular security support ended June 2026, LTS to June 2028; Ubuntu 22.04 standard support ends 2027 | Debian security and LTS pages; Ubuntu release cycle page |
 
-## Decisions
+## Accepted recommendations
 
 1. **Releases: v0.7.0 the tunnel and the journal `format` field, v0.8.0 `drift`, `config.toml`, SARIF/JUnit and the JSON Schema, v0.9.0 Ubuntu 26.04 then security keys, then v1.0.0.** Accepted: the owner's split, with the schema next to `config.toml`, the journal field early, and auditd out.
 2. **Cloudflare Tunnel, remotely-managed tunnels only, with the trust model stated.** Accepted: the host needs only a token for one tunnel, not the account-wide `cert.pem`; the account's control over routes is stated in the plan's note, the docs and `SSH-009`'s finding.

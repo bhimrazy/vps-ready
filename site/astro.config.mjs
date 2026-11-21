@@ -5,16 +5,18 @@ import { defineConfig } from 'astro/config';
 import starlightLinksValidator from 'starlight-links-validator';
 
 // The site once carried the maintainers' design notes under /docs/project/;
-// they now live only in the repo, as one design document.
-const DESIGN_DOC = 'https://github.com/bhimrazy/vps-ready/blob/main/docs/design.md';
-const oldProjectPages = ['architecture', 'decisions', 'scope', 'testing', 'release']
-  .concat(['m2', 'm3', 'm4', 'm5', 'm6', 'm7'].map((m) => `${m}-plan`));
+// they now live only in the repo. Pages that still exist there keep their
+// own target; the rest were merged into the design document.
+const REPO_DOCS = 'https://github.com/bhimrazy/vps-ready/blob/main/docs';
+const keptPages = ['release', 'm7-plan'];
+const mergedPages = ['architecture', 'decisions', 'scope', 'testing', 'm2-plan', 'm3-plan', 'm4-plan', 'm5-plan', 'm6-plan'];
 
 export default defineConfig({
   site: 'https://vps-ready.bhimraj.com.np',
   trailingSlash: 'always',
   redirects: {
-    ...Object.fromEntries(oldProjectPages.map((p) => [`/docs/project/${p}/`, DESIGN_DOC])),
+    ...Object.fromEntries(mergedPages.map((p) => [`/docs/project/${p}/`, `${REPO_DOCS}/design.md`])),
+    ...Object.fromEntries(keptPages.map((p) => [`/docs/project/${p}/`, `${REPO_DOCS}/${p}.md`])),
     '/docs/reference/security-baseline/': '/docs/reference/security-controls/',
   },
   integrations: [

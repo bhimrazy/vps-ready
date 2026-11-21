@@ -134,7 +134,7 @@ The engine is built around these rules, so they hold for every module rather tha
 
 - **Never lock the user out.** Passwords and root login are not disabled until a keyed sudo user has logged in from a fresh session. The firewall always allows the SSH port that is actually in use.
 - **Confirm from a new connection.** Your open terminal proves nothing, because sshd reloads and conntrack keep existing sessions alive. The dead-man timer reverts the admin user, SSH and firewall changes unless you confirm from a new SSH login within 5 minutes (`--deadman 1m` to `30m`), even if the tool or the terminal is gone, and even across a reboot. tmux, screen, mosh and connections shared through `ControlMaster` count as old.
-- **Show, then do.** Nothing changes without a plan you can read. Every change carries a reversibility label: reversible, partial, or irreversible.
+- **Show, then do.** Nothing changes without a plan you can read. Every change carries a reversibility label: reversible, or partial when rollback leaves part of it in place (an installed package, a created user's home).
 - **Effective state over file state.** Checks use `sshd -T`, `/proc/sys`, `apt-config`, `nft` and `ss`, not a guess at what a config file means.
 - **Drop-ins, not edits.** The tool owns files like `/etc/ssh/sshd_config.d/00-vps-ready.conf` and never rewrites your `sshd_config` in place. That is also what beats cloud-init re-enabling passwords.
 - **Docker- and cloud-aware.** Container ports bypass ufw and firewalld by default; `ip_forward=0` kills Docker; cloud metadata must stay reachable. These are handled, not just warned about.
