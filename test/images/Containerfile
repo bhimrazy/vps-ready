@@ -13,8 +13,14 @@ ENV DEBIAN_FRONTEND=noninteractive
 # UPD-001 reads apt's Periodic settings, which this file does not touch.
 RUN printf '%s\n' 'Acquire::Retries "5";' 'Acquire::http::Timeout "30";' 'Acquire::https::Timeout "30";' \
       >/etc/apt/apt.conf.d/80ci
-RUN apt-get update \
- && apt-get install -y --no-install-recommends systemd systemd-sysv dbus openssh-server openssh-client iproute2 nftables netbase sudo ca-certificates \
+# Ubuntu's cloud images run sudo-rs as `sudo` from 25.10 on (the original
+# stays as sudo.ws); its Docker image has no sudo at all.
+RUN . /etc/os-release \
+ && sudo_rs= \
+ && if [ "$ID" = ubuntu ] && dpkg --compare-versions "$VERSION_ID" ge 25.10; then sudo_rs=sudo-rs; fi \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends systemd systemd-sysv dbus openssh-server openssh-client iproute2 nftables netbase sudo $sudo_rs ca-certificates \
+ && { [ -z "$sudo_rs" ] || sudo -V | grep -q '^sudo-rs '; } \
  && rm -rf /var/lib/apt/lists/* \
  && rm -f /etc/machine-id && touch /etc/machine-id
 

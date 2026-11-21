@@ -1,0 +1,53 @@
+---
+source: crates/vps-ready/src/cli/mod.rs
+expression: "String::from_utf8(text).unwrap()"
+---
+Audit of Ubuntu 26.04.1 LTS: 34 controls
+
+STATUS   ID       SEVERITY  CONTROL
+FAIL     FW-001   medium    Incoming traffic denied by default
+         no firewall rules filter incoming traffic
+         Without it, any service listening on all addresses, such as a database
+         left at its defaults, is reachable from the internet. A firewall at
+         your provider also protects the server, but this check cannot see it.
+         fix: sudo vps-ready apply --module firewall.inbound
+FAIL     NET-005  medium    IPv4 ICMP redirects not accepted
+         ICMP redirects are accepted on new interfaces (default) and ens3:
+         accept_redirects 1 in all and on each, forwarding 0 on each
+         Accepted ICMP redirects change the server's routes, so a forged
+         redirect can send its traffic through another machine on the local
+         network.
+         fix: not automated yet
+FAIL     SSH-001  medium    Root login disabled
+         permitrootlogin is prohibit-password, expected no
+         Root is the one account name every scanner tries, and its actions are
+         not tied to a person. Log in as a named user and use sudo.
+         fix: sudo vps-ready apply --module ssh.server
+FAIL     UPD-001  medium    Security updates installed automatically
+         unattended-upgrades is not installed
+         Attackers scan for a flaw soon after its fix is published. Unattended
+         upgrades install security fixes on their own, so a server nobody logs
+         into still gets them.
+         fix: sudo vps-ready apply --module updates.auto
+FAIL     NET-007  low       Multipath TCP disabled
+         net.mptcp.enabled is 1, expected 0
+         Multipath TCP is rarely needed on a server and adds kernel code to
+         every TCP handshake. Go 1.24+ programs such as Caddy, Docker and
+         tailscaled open MPTCP listeners by default, so a flaw in it is
+         reachable from the network without any setup.
+         fix: sudo vps-ready apply --module kernel.sysctl
+FAIL     SSH-005  low       X11 forwarding disabled
+         x11forwarding is yes, expected no
+         A server has no use for graphical apps, and a forwarded display lets
+         the server reach into your desktop session.
+         fix: sudo vps-ready apply --module ssh.server
+
+25 passed, 6 failed (4 medium, 2 low), 0 unknown, 3 skipped
+Skipped: there is no VPN interface (WireGuard or tailscale0) and no `ssh_via` rule.
+Skipped: /etc/wireguard does not exist.
+Skipped: Docker is not installed.
+vps-ready can fix 5 of the 6 (FW-001, SSH-001, UPD-001, NET-007, SSH-005): run
+`sudo vps-ready plan --module firewall.inbound --module ssh.server --module
+updates.auto --module kernel.sysctl`.
+The other one needs a manual fix for now; it says so above.
+Run `vps-ready audit --all` to list the 25 passing controls too.

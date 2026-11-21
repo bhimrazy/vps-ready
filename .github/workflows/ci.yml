@@ -234,6 +234,7 @@ jobs:
         include:
           - { distro: ubuntu-22.04, base: "ubuntu:22.04" }
           - { distro: ubuntu-24.04, base: "ubuntu:24.04" }
+          - { distro: ubuntu-26.04, base: "ubuntu:26.04" }
           - { distro: debian-12, base: "debian:12" }
           - { distro: debian-13, base: "debian:13" }
     env:
