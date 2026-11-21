@@ -1,9 +1,2 @@
 # Default owner for everything.
 * @bhimrazy
-
-# Security-relevant paths: changes here need an explicit owner review.
-/crates/vps-ready/src/engine/ @bhimrazy
-/crates/vps-ready/src/modules/ssh/ @bhimrazy
-/crates/vps-ready/src/modules/firewall/ @bhimrazy
-/.github/ @bhimrazy
-/scripts/ @bhimrazy

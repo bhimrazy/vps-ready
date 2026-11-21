@@ -191,7 +191,7 @@ jobs:
 
   # crates.io trusted publishing: the auth action trades GitHub's OIDC identity
   # for a short-lived token, so no secret is stored. It cannot create a crate;
-  # each crate's first version was published by hand (see docs/release.md).
+  # each crate's first version was published by hand with a short-lived token.
   crates:
     needs: release
     runs-on: ubuntu-24.04

@@ -222,7 +222,8 @@ jobs:
             scripts/package.sh "$TARGET" "$DEB_ARCH"
           ls -l dist
 
-  # Layer 2: the real static binary inside systemd containers (see docs/testing.md).
+  # The real static binary in systemd containers: real apt, systemd and
+  # vendor repositories, which the unit tests fake.
   containers:
     needs: [changes, build-musl]
     if: needs.changes.outputs.code == 'true'
